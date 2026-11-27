@@ -19,6 +19,7 @@ from pydantic import ConfigDict, TypeAdapter, field_validator
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BudgetExceededError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.llm_judge import judge_target
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -918,11 +919,12 @@ def _strategy_router_key(deployment: object) -> tuple[str, str] | None:
     they can never own a session row, and ``AutoRouterBenchmarkGroup.router_type`` has no
     value for them. A permanent zero would read as "no traffic" rather than "not instrumented".
     """
-    if not isinstance(deployment, Mapping):
+    deployment_fields: Final = as_str_mapping(deployment)
+    if deployment_fields is None:
         return None
-    litellm_params: Final = deployment.get("litellm_params")
-    router_name: Final = deployment.get("model_name")
-    if not (isinstance(litellm_params, Mapping) and isinstance(router_name, str) and router_name):
+    litellm_params: Final = as_str_mapping(deployment_fields.get("litellm_params"))
+    router_name: Final = deployment_fields.get("model_name")
+    if not (litellm_params is not None and isinstance(router_name, str) and router_name):
         return None
     model: Final = litellm_params.get("model")
     if not isinstance(model, str):

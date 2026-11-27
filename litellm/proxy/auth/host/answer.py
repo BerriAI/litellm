@@ -158,6 +158,8 @@ async def _jwt_reads(call: RustAuth, step: RustAuthStep, host: PythonAuthHost) -
             call.team_alias(*_team_read(await host.team_by_alias(alias)))
         case RustAuthStep.GrantingTeam(team_id=team_id):
             call.team(*_team_read(await host.granting_team(team_id)))
+        case RustAuthStep.BindTeamMember(team=team, roster=roster, user_id=user_id):
+            call.team(*_team_read(await host.bind_team_member(team, roster, user_id)))
         case RustAuthStep.LoadTeamMembership(user_id=user_id, team_id=team_id):
             call.found_row(await host.load_team_membership(user_id, team_id))
         case RustAuthStep.User(

@@ -8,13 +8,17 @@
 //! | [`literal`] | `ast.literal_eval(text)` |
 //! | [`repr`] | `repr(value)` and `str(value)`, also of one `str` |
 //! | [`reprlib`] | `reprlib.repr(value)` |
-//! | [`json`] | `json.dumps(value)`, `json.loads(text)`, `type(json.loads(text)).__name__`, and `str()` and `==` of loaded values |
+//! | [`json`] | `json.dumps(value)`, compact `json.dumps`, `len(json.dumps(value))` of a serde value, `json.loads(text)`, `type(json.loads(text)).__name__`, and `str()` and `==` of loaded values |
 //! | [`pickle`] | `pickle.loads(data)` and `pickle.dumps(value)` for plain data |
-//! | [`truthy`] | `bool(value)`, also straight off a `serde_json` value, and `a or b or ...` |
+//! | [`truthy`] | `bool(value)`, also straight off a `serde_json` value, `a or b or ...` over optional text, and `first or second` |
+//! | [`dict`] | `dict` reads and `d[key] = value` writes, in insertion order |
+//! | [`safe_json`] | LiteLLM's `safe_json_structure(value)` and `safe_dumps(value)` |
+//! | [`scalar`] | `str(value)` and number comparison of request values whose wide numbers, `NaN` and `Infinity` arrive as raw-JSON marked strings |
+//! | [`pystr`] | `len(text)` and `text[start:end]` over code points |
 //! | [`number`] | `int(text)`, `float(text)`, `int(value)` and `float(value)` of loaded values, `sum(floats)`, `int(seconds)` as a `Duration`, and `str()` of an `int` or `float` |
 //! | [`format`] | `format(value, f".{precision}f")` and `format(value, f".{precision}%")` |
-//! | [`unicode`] | `str.isspace()` and `unicodedata.category()` for one character, and whether `str.encode("latin-1")` succeeds |
-//! | [`pydantic`] | `TypeAdapter(bool)` and `TypeAdapter(int)` lax validation |
+//! | [`unicode`] | `str.isspace()` and `unicodedata.category()` for one character, whether `str.encode("latin-1")` succeeds, and `bytes.decode("latin-1")` |
+//! | [`pydantic`] | `TypeAdapter(bool)`, `TypeAdapter(int)` and `TypeAdapter(float)` lax validation |
 //! | [`urllib`] | `urllib.parse.quote(text, safe=safe)` and `urllib.parse.urlsplit(url)` |
 //! | [`base64`] | `base64.b64decode(text, validate=True)` |
 //! | [`datetime`] | `datetime.fromtimestamp(seconds, timezone.utc)` fields and `datetime.fromisoformat(text)` |
@@ -34,6 +38,7 @@
 
 pub mod base64;
 pub mod datetime;
+pub mod dict;
 mod error;
 pub mod flags;
 pub mod format;
@@ -43,8 +48,11 @@ pub mod literal;
 pub mod number;
 pub mod pickle;
 pub mod pydantic;
+pub mod pystr;
 pub mod repr;
 pub mod reprlib;
+pub mod safe_json;
+pub mod scalar;
 pub mod truthy;
 pub mod unicode;
 pub mod urllib;

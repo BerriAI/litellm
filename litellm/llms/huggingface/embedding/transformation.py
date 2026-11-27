@@ -120,10 +120,10 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
     def get_config(cls) -> dict[str, object]:
         return super().get_config()
 
-    def get_special_options_params(self):
+    def get_special_options_params(self) -> list[str]:
         return ["use_cache", "wait_for_model"]
 
-    def get_supported_openai_params(self, model: str):
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "stream",
             "temperature",
@@ -137,11 +137,11 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
             if param == "temperature":
@@ -175,7 +175,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
     def get_hf_api_key(self) -> str | None:
         return get_secret_str("HUGGINGFACE_API_KEY")
 
-    def read_tgi_conv_models(self):
+    def read_tgi_conv_models(self) -> tuple[set[str], set[str]]:
         try:
             global tgi_models_cache, conv_models_cache
             # Check if the cache is already populated
@@ -183,7 +183,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             if (tgi_models_cache is not None) and (conv_models_cache is not None):
                 return tgi_models_cache, conv_models_cache
             # If not, read the file and populate the cache
-            tgi_models: Final = set()
+            tgi_models: Final[set[str]] = set()
             script_directory = os.path.dirname(os.path.abspath(__file__))
             script_directory = os.path.dirname(script_directory)
             # Construct the file path relative to the script's directory
@@ -206,7 +206,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 "huggingface_llms_metadata",
                 "hf_conversational_models.txt",
             )
-            conv_models: Final = set()
+            conv_models: Final[set[str]] = set()
             with open(file_path, "r") as file:
                 for line in file:
                     conv_models.add(line.strip())
@@ -237,10 +237,10 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         task: Final = litellm_params.get("task", None)
         ## VALIDATE API FORMAT
         if task is None or not isinstance(task, str) or task not in hf_task_list:
@@ -257,9 +257,9 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         ### MAP INPUT PARAMS
         #### HANDLE SPECIAL PARAMS
         special_params: Final = self.get_special_options_params()
-        special_params_dict: Final = {}
+        special_params_dict: Final[dict[str, object]] = {}
         # Create a list of keys to pop after iteration
-        keys_to_pop: Final = []
+        keys_to_pop: Final[list[str]] = []
 
         for k, v in optional_params.items():
             if k in special_params:
@@ -273,8 +273,8 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             inference_params = deepcopy(optional_params)
             inference_params.pop("details")
             inference_params.pop("return_full_text")
-            past_user_inputs: Final = []
-            generated_responses: Final = []
+            past_user_inputs: Final[list[str]] = []
+            generated_responses: Final[list[str]] = []
             text = ""
             for message in messages:
                 if message["role"] == "user":
@@ -283,7 +283,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                     text = convert_content_list_to_str(message)
                 elif message["role"] == "assistant" or message["role"] == "system":
                     generated_responses.append(convert_content_list_to_str(message))
-            data = {
+            data: dict[str, object] = {
                 "inputs": {
                     "text": text,
                     "past_user_inputs": past_user_inputs,
@@ -350,14 +350,14 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         default_headers: Final = {
             "content-type": "application/json",
         }
@@ -377,7 +377,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         response: httpx.Response,
         logging_obj: LoggingClass,
         model: str,
-        data: dict,
+        data: Mapping[str, object],
         api_key: str | None = None,
     ) -> list[dict[str, str]]:
         streamed_response: Final = CustomStreamWrapper(
@@ -445,7 +445,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 setattr(model_response.choices[0].message, "_logprob", sum_logprob)
             if "best_of" in optional_params and optional_params["best_of"] > 1:
                 if "details" in completion_response[0] and "best_of_sequences" in completion_response[0]["details"]:
-                    choices_list: Final = []
+                    choices_list: Final[list[Choices]] = []
                     for idx, item in enumerate(
                         iter_items(
                             _DECODED_JSON.validate_python(completion_response[0]["details"]["best_of_sequences"])
@@ -517,7 +517,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,

@@ -871,7 +871,7 @@ class InvokeStreamFrame:
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
-_Frame: Final = TypeVar("_Frame", ConverseStreamFrame, InvokeStreamFrame)
+_Frame = TypeVar("_Frame", ConverseStreamFrame, InvokeStreamFrame)
 
 
 def _event_message(raw: bytes) -> tuple[str, bytes] | None:
@@ -1191,7 +1191,7 @@ async def _post_call_rewritten_texts(
     """Run the post_call guardrails on a buffered stream's texts as one Converse response with a content block per
     group, and return each group's text as the guardrails left it, or None when the response came back in another
     shape."""
-    synthetic_response: Final[dict] = {
+    synthetic_response: Final[dict[str, object]] = {
         "output": {
             "message": {
                 "role": "assistant",
@@ -1514,7 +1514,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> object:
         endpoint: Final[object] = (request_data or {}).get("endpoint", "")
         if (
@@ -1663,6 +1663,17 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         return StreamingScanKey(
             texts=_group_stream_texts([frame.received_texts() for frame in frames]).texts(),
             stream_ended=self._check_streaming_has_ended(frames),
+        )
+
+    def starts_client_tool_call(self, item: object) -> bool:
+        """A Converse ``contentBlockStart`` that opens a ``toolUse``, or an invoke frame whose ``/v1/messages``
+        event opens a ``tool_use`` block."""
+        if isinstance(item, InvokeStreamFrame):
+            return AnthropicMessagesHandler().starts_client_tool_call(item.received_sse())
+        return any(
+            frame.event_type == "contentBlockStart"
+            and _json_object_member(_json_object_member(frame.payload, "start"), "toolUse") is not None
+            for frame in _converse_frames((item,))
         )
 
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:

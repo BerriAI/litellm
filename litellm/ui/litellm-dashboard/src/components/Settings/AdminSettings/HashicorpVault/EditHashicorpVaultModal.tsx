@@ -4,7 +4,7 @@ import { useHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOverrides
 import { useUpdateHashicorpVaultConfig } from "@/app/(dashboard)/hooks/configOverrides/useUpdateHashicorpVaultConfig";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { toast } from "@/lib/toast";
-import type { ParseKeys } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import React, { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
@@ -21,14 +21,14 @@ import { SENSITIVE_FIELDS, FIELD_LABELS } from "./constants";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface VaultFieldGroup {
-  title: ParseKeys;
+  title: (t: TFunction) => string;
   subtitle?: ParseKeys;
   fields: string[];
 }
 
 const FIELD_GROUPS: VaultFieldGroup[] = [
   {
-    title: "adminPanel.hashicorpVault.editModal.groups.connection.title",
+    title: (t) => t("adminPanel.hashicorpVault.editModal.groups.connection.title"),
     fields: [
       "vault_addr",
       "vault_namespace",
@@ -39,17 +39,17 @@ const FIELD_GROUPS: VaultFieldGroup[] = [
     ],
   },
   {
-    title: "adminPanel.hashicorpVault.editModal.groups.token.title",
+    title: (t) => t("adminPanel.hashicorpVault.editModal.groups.token.title"),
     subtitle: "adminPanel.hashicorpVault.editModal.groups.token.subtitle",
     fields: ["vault_token"],
   },
   {
-    title: "adminPanel.hashicorpVault.editModal.groups.appRole.title",
+    title: (t) => t("adminPanel.hashicorpVault.editModal.groups.appRole.title"),
     subtitle: "adminPanel.hashicorpVault.editModal.groups.appRole.subtitle",
     fields: ["approle_role_id", "approle_secret_id", "approle_mount_path"],
   },
   {
-    title: "adminPanel.hashicorpVault.editModal.groups.tls.title",
+    title: () => "TLS",
     subtitle: "adminPanel.hashicorpVault.editModal.groups.tls.subtitle",
     fields: ["client_cert", "client_key", "vault_cert_role"],
   },
@@ -167,9 +167,9 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({ isVis
         </DialogHeader>
         <form onSubmit={form.handleSubmit(handleSubmit)}>
           {FIELD_GROUPS.map((group, index) => (
-            <div key={group.title}>
+            <div key={group.fields[0]}>
               {index > 0 && <Separator className="my-6" />}
-              <h5 className="mb-1 text-base font-semibold text-foreground">{t(group.title)}</h5>
+              <h5 className="mb-1 text-base font-semibold text-foreground">{group.title(t)}</h5>
               {group.subtitle && <p className="mb-4 text-sm text-muted-foreground">{t(group.subtitle)}</p>}
               <FieldGroup>{group.fields.map(renderField)}</FieldGroup>
             </div>

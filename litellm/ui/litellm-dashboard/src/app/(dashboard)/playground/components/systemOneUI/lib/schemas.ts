@@ -2,7 +2,7 @@ import type { ParseKeys } from "i18next";
 import { z } from "zod";
 import i18n from "@/i18n/i18n";
 
-export type DecisionEndpoint = "/v1/systemone" | "/typesafe/v1/systemone";
+export type DecisionEndpoint = "/v1/systemone";
 
 const decisionsJson = z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())]);
 const decisionInstructions = decisionsJson.nullish();

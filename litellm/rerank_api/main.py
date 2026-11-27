@@ -6,8 +6,9 @@ from typing import Final, Literal
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.call_kwargs import http_client_of, logging_obj_of
+from litellm.litellm_core_utils.core_helpers import require_attributes, str_param, unpackable_mapping
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -45,10 +46,17 @@ async def arerank(
     rank_fields: list[str] | None = None,
     return_documents: bool | None = None,
     max_chunks_per_doc: int | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Async: Reranks a list of documents based on their relevance to the query
+
+    The returned response carries this call's cost in ``response._hidden_params.get("response_cost")``,
+    which may be None when the cost is unavailable. Success callbacks receive the same value in
+    ``kwargs["response_cost"]``. They run in the background and may still be pending when this coroutine
+    returns, so a ledger or exporter written from a callback may be incomplete at that point. A caller
+    that needs that write done must wait for an acknowledgment from its own callback.
+    ``CustomLogger.log_post_api_call`` is not a final-cost hook.
     """
     _custom_llm_provider: str | None = None
     try:
@@ -62,7 +70,7 @@ async def arerank(
             _, _custom_llm_provider, _, _ = litellm.get_llm_provider(  # rebind-ok: see pre-declaration above
                 model=model,
                 custom_llm_provider=custom_llm_provider,
-                api_base=kwargs.get("api_base", None),
+                api_base=str_param(kwargs, "api_base"),
             )
 
         func: Final = partial(
@@ -120,23 +128,31 @@ def rerank(
     return_documents: bool | None = True,
     max_chunks_per_doc: int | None = None,
     max_tokens_per_doc: int | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> RerankResponse | Awaitable[RerankResponse]:
     """
     Reranks a list of documents based on their relevance to the query
+
+    The returned response carries this call's cost in ``response._hidden_params.get("response_cost")``,
+    which may be None when the cost is unavailable. Success callbacks receive the same value in
+    ``kwargs["response_cost"]``. They run on a background logging thread and may still be pending when
+    this function returns, so a ledger or exporter written from a callback may be incomplete at that point.
+    A caller that needs that write done must wait for an acknowledgment from its own callback.
+    ``CustomLogger.log_post_api_call`` is not a final-cost hook.
     """
     # `instruction` is read from kwargs rather than declared as a named param.
     # The router forwards rerank calls via an untyped `**kwargs` unpack, and a
     # typed named param there would trip the basedpyright budget gate without
     # adding real safety; it stays typed downstream via get_optional_rerank_params.
-    instruction: Final[str | None] = kwargs.get("instruction", None)
-    headers: Final[dict | None] = kwargs.get("headers")
-    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-    litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+    instruction: Final = str_param(kwargs, "instruction")
+    raw_headers: Final = kwargs.get("headers")
+    headers: Final = require_attributes(raw_headers, dict[str, object], "keys") if raw_headers else None
+    raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
+    litellm_call_id: Final = kwargs.get("litellm_call_id", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
     model_info: Final = kwargs.get("model_info", None)
     user: Final = kwargs.get("user", None)
-    client: Final = kwargs.get("client", None)
+    client: Final = http_client_of(kwargs.get("client", None))
     _custom_llm_provider: str | None = None  # rebind-ok: set by the get_llm_provider unpack; read in the except
     try:
         _is_async: Final = kwargs.pop("arerank", False) is True
@@ -167,10 +183,10 @@ def rerank(
             present_version_params=present_version_params,
         )
 
-        optional_rerank_params: Final[dict] = get_optional_rerank_params(
+        optional_rerank_params: Final[dict[str, object]] = get_optional_rerank_params(
             rerank_provider_config=rerank_provider_config,
             model=model,
-            drop_params=kwargs.get("drop_params") or litellm.drop_params or False,
+            drop_params=bool(kwargs.get("drop_params") or litellm.drop_params),
             query=query,
             documents=documents,
             custom_llm_provider=_custom_llm_provider,
@@ -199,6 +215,7 @@ def rerank(
             }
         )
 
+        litellm_logging_obj: Final = logging_obj_of(raw_logging_obj)
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
@@ -375,7 +392,7 @@ def rerank(
             merged_headers = headers or litellm.headers or {}
             extra_headers_from_kwargs: Final = kwargs.get("extra_headers")
             if extra_headers_from_kwargs:
-                merged_headers = {**merged_headers, **extra_headers_from_kwargs}
+                merged_headers = {**merged_headers, **unpackable_mapping(extra_headers_from_kwargs)}
 
             response = bedrock_rerank.rerank(
                 model=model,

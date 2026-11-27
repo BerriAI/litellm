@@ -10,13 +10,14 @@ import re
 import typing
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping, MutableSequence, Sequence
 from collections.abc import Set as AbstractSet
-from typing import Any, Final, Literal, Protocol, overload
+from typing import Final, Literal, Protocol, overload
 from urllib.parse import quote
 
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, has_attributes
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if typing.TYPE_CHECKING:
@@ -370,7 +371,7 @@ def iter_known_server_prefixes(server: _McpServerLike) -> Iterator[str]:
     short-ID forms so the routing layer can resolve tool names regardless of
     which prefix mode was active when the client first observed them.
     """
-    seen: Final = set()
+    seen: Final[set[str]] = set()
 
     def _emit(value: str | None) -> Iterator[str]:
         if value and value not in seen:
@@ -574,20 +575,26 @@ def extract_mcp_tool_result_error_message(result: object) -> str | None:
     Accepts both ``mcp.types.CallToolResult`` objects and their dict
     equivalents, duck-typed so the ``mcp`` package is not required.
     """
+    mapping: Final = as_str_mapping(result)
     is_error: Final[object] = (
-        (result.get("isError") if result.get("isError") is not None else result.get("is_error"))
-        if isinstance(result, Mapping)
+        (mapping.get("isError") if mapping.get("isError") is not None else mapping.get("is_error"))
+        if mapping is not None
         else getattr(result, "is_error", None)
     )
     if is_error is not True:
         return None
-    content: Final[object] = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
-    if isinstance(content, (list, tuple)):
-        for item in content:
-            text: object = item.get("text") if isinstance(item, Mapping) else getattr(item, "text", None)
-            if isinstance(text, str) and text:
-                return text
+    content: Final[object] = mapping.get("content") if mapping is not None else getattr(result, "content", None)
+    for item in _list_or_tuple_items(content):
+        item_mapping = as_str_mapping(item)
+        text: object = item_mapping.get("text") if item_mapping is not None else getattr(item, "text", None)
+        if isinstance(text, str) and text:
+            return text
     return "MCP tool call returned isError=true"
+
+
+def _list_or_tuple_items(value: object) -> Sequence[object]:
+    """The items of a list or tuple, or nothing for any other value."""
+    return value if isinstance(value, (list, tuple)) else ()
 
 
 def mcp_tool_result_content_list(result: object) -> MutableSequence[object] | None:  # mutable-ok: see below
@@ -601,7 +608,8 @@ def mcp_tool_result_content_list(result: object) -> MutableSequence[object] | No
     Accepts both ``mcp.types.CallToolResult`` objects and their dict
     equivalents, duck-typed so the ``mcp`` package is not required.
     """
-    content: Final[object] = result.get("content") if isinstance(result, Mapping) else getattr(result, "content", None)
+    mapping: Final = as_str_mapping(result)
+    content: Final[object] = mapping.get("content") if mapping is not None else getattr(result, "content", None)
     if isinstance(content, MutableSequence):
         return content
     return None
@@ -617,8 +625,9 @@ def mcp_content_item_text(item: object) -> str | None:
     and is reported as ``None``.
     """
     text: object
-    if isinstance(item, Mapping):
-        text = item.get("text")
+    mapping: Final = as_str_mapping(item)
+    if mapping is not None:
+        text = mapping.get("text")
     elif callable(getattr(item, "model_copy", None)):
         text = getattr(item, "text", None)
     else:
@@ -632,8 +641,9 @@ def with_mcp_content_item_text(item: object, text: str) -> object:
     Only meaningful for items ``mcp_content_item_text`` returned a text for; any
     other item is returned unchanged.
     """
-    if isinstance(item, Mapping):
-        return {**item, "text": text}
+    mapping: Final = as_str_mapping(item)
+    if mapping is not None:
+        return {**mapping, "text": text}
     model_copy: Final = getattr(item, "model_copy", None)
     if callable(model_copy):
         return model_copy(update={"text": text})
@@ -718,9 +728,14 @@ class _ModelDumpable(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
+class AdminUserEnvVarSpec(TypedDict):
+    name: ReadOnly[str]
+    description: ReadOnly[object]
+
+
 def parse_admin_env_vars(
     env_vars: Iterable[object] | None,
-) -> tuple[dict[str, str], list[dict[str, Any]]]:
+) -> tuple[dict[str, str], Sequence[AdminUserEnvVarSpec]]:
     """Split admin-configured env var entries into globals and per-user specs.
 
     Accepts the raw value of ``MCPServer.env_vars`` (list of dicts or Pydantic
@@ -733,7 +748,7 @@ def parse_admin_env_vars(
     Unknown / malformed entries are skipped silently.
     """
     global_values: Final[dict[str, str]] = {}
-    user_specs: Final[list[dict[str, object]]] = []
+    user_specs: Final[list[AdminUserEnvVarSpec]] = []
     if not env_vars:
         return global_values, user_specs
     for raw in env_vars:
@@ -864,8 +879,9 @@ def json_string_leaves(value: object, path: JSONLeafPath = ()) -> tuple[tuple[JS
         return ((path, value),)
     if isinstance(value, dict):
         return _flatten_leaf_groups(json_string_leaves(item, (*path, key)) for key, item in value.items())
-    if isinstance(value, list):
-        return _flatten_leaf_groups(json_string_leaves(item, (*path, index)) for index, item in enumerate(value))
+    listed: Final = as_object_list(value)
+    if listed is not None:
+        return _flatten_leaf_groups(json_string_leaves(item, (*path, index)) for index, item in enumerate(listed))
     return ()
 
 
@@ -879,8 +895,9 @@ def with_json_string_leaves(
         return replacements.get(path, value)
     if isinstance(value, dict):
         return {key: with_json_string_leaves(item, replacements, (*path, key)) for key, item in value.items()}
-    if isinstance(value, list):
-        return [with_json_string_leaves(item, replacements, (*path, index)) for index, item in enumerate(value)]
+    listed: Final = as_object_list(value)
+    if listed is not None:
+        return [with_json_string_leaves(item, replacements, (*path, index)) for index, item in enumerate(listed)]
     return value
 
 
@@ -905,8 +922,9 @@ def json_unrewritable_labels(value: object, path_depth: int = 0) -> tuple[str, .
         if any(group is None for group in nested):
             return None
         return own + tuple(label for group in nested if group is not None for label in group)
-    if isinstance(value, list):
-        nested = tuple(json_unrewritable_labels(item, path_depth + 1) for item in value)
+    listed: Final = as_object_list(value)
+    if listed is not None:
+        nested = tuple(json_unrewritable_labels(item, path_depth + 1) for item in listed)
         if any(group is None for group in nested):
             return None
         return tuple(label for group in nested if group is not None for label in group)
@@ -915,9 +933,10 @@ def json_unrewritable_labels(value: object, path_depth: int = 0) -> tuple[str, .
 
 def mcp_tool_result_structured_content(result: object) -> object:
     """The ``structuredContent`` of an MCP tool result, or ``None`` when it has none."""
-    if isinstance(result, Mapping):
-        structured: Final = result.get("structuredContent")
-        return structured if structured is not None else result.get("structured_content")
+    mapping: Final = as_str_mapping(result)
+    if mapping is not None:
+        structured: Final = mapping.get("structuredContent")
+        return structured if structured is not None else mapping.get("structured_content")
     return getattr(result, "structured_content", None)
 
 
@@ -998,10 +1017,16 @@ def _identity_header_names() -> frozenset[str]:
         return frozenset()
     if not general_settings:
         return frozenset()
+    return _identity_header_names_in(general_settings)
+
+
+def _identity_header_names_in(general_settings: Mapping[str, object]) -> frozenset[str]:
+    """The identity header names a non-empty ``general_settings`` configures, lowercased."""
     user_header: Final = general_settings.get("user_header_name")
     configured: Final = general_settings.get("user_header_mappings")
-    mappings: Final = configured if isinstance(configured, list) else (configured,) if configured else ()
-    mapped: Final = (mapping.get("header_name") for mapping in mappings if isinstance(mapping, Mapping))
+    listed: Final = as_object_list(configured)
+    mappings: Final = listed if listed is not None else (configured,) if configured else ()
+    mapped: Final = (mapping.get("header_name") for mapping in map(as_str_mapping, mappings) if mapping is not None)
     return frozenset(name.lower() for name in (user_header, *mapped) if isinstance(name, str) and name)
 
 
@@ -1081,7 +1106,7 @@ def build_synthetic_mcp_request(
     excluded: Final = (
         _SYNTHETIC_REQUEST_EXCLUDED_HEADERS
         | upstream_credential_headers(raw_headers.keys() if raw_headers else ())
-        | (frozenset({custom_key_header.lower()}) if custom_key_header else frozenset())
+        | (frozenset({custom_key_header.lower()}) if custom_key_header else frozenset[str]())
     )
     forwarded: Final = tuple(
         (

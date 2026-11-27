@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from litellm.types.utils import ServiceTier, StandardLoggingPayload
@@ -15,6 +17,14 @@ KNOWN_REQUEST_SERVICE_TIERS: Final = frozenset(
     tuple(tier.value for tier in ServiceTier) + ("batch", "default", "reserved", "scale", "standard", "standard_only")
 )
 
+GEMINI_TRAFFIC_TYPE_SERVICE_TIERS: Final[Mapping[str, str]] = MappingProxyType(
+    {"ON_DEMAND_PRIORITY": "priority", "ON_DEMAND_FLEX": "flex", "FLEX": "flex", "BATCH": "flex"}
+)
+
+
+def _json_object(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, dict) else None
+
 
 def get_served_service_tier(standard_logging_payload: StandardLoggingPayload) -> str | None:
     """
@@ -23,12 +33,12 @@ def get_served_service_tier(standard_logging_payload: StandardLoggingPayload) ->
     Providers report it either at the top level of the response (OpenAI, Bedrock,
     Groq) or on the usage object (Anthropic).
     """
-    response: Final = standard_logging_payload.get("response")
-    usage_object: Final = standard_logging_payload.get("metadata", {}).get("usage_object")
+    response: Final = _json_object(standard_logging_payload.get("response"))
+    usage_object: Final = _json_object(standard_logging_payload.get("metadata", {}).get("usage_object"))
 
     served_candidates: Final[tuple[object, ...]] = (
-        response.get("service_tier") if isinstance(response, dict) else None,
-        usage_object.get("service_tier") if isinstance(usage_object, dict) else None,
+        response.get("service_tier") if response is not None else None,
+        usage_object.get("service_tier") if usage_object is not None else None,
     )
     return next((tier for tier in served_candidates if isinstance(tier, str) and tier), None)
 
@@ -42,8 +52,8 @@ def get_requested_service_tier(standard_logging_payload: StandardLoggingPayload)
     cannot serve under ``drop_params``), so it is only reported when it names a
     known tier, in lowercase since Bedrock takes any case.
     """
-    model_parameters: Final = standard_logging_payload.get("model_parameters")
-    requested_tier: Final = model_parameters.get("service_tier") if isinstance(model_parameters, dict) else None
+    model_parameters: Final = _json_object(standard_logging_payload.get("model_parameters"))
+    requested_tier: Final = model_parameters.get("service_tier") if model_parameters is not None else None
     if isinstance(requested_tier, str) and requested_tier.lower() in KNOWN_REQUEST_SERVICE_TIERS:
         return requested_tier.lower()
     return None

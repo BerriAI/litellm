@@ -33,6 +33,7 @@ from pydantic import Json, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, assert_never
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import json_contains, subscript
 from litellm.litellm_core_utils.url_utils import is_https_url_with_host
 from litellm.models.plugin_upload import (
     PluginDownloader,
@@ -104,6 +105,7 @@ class _MarketplaceEntry(TypedDict, total=False):
 
 
 _INSTALLATION_PREFERENCES: Final[tuple[InstallationPreference, ...]] = get_args(InstallationPreference)
+_DECODED_JSON: Final = TypeAdapter(object)
 MANIFEST_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
@@ -388,28 +390,30 @@ async def get_marketplace(request: Request, key: str | None = None):
             where=visibility.where()
         )
 
-        plugin_list: Final = []
+        plugin_list: Final[list[_MarketplaceEntry]] = []
         for plugin in plugins:
             if not visibility.allows(plugin):
                 continue
             try:
-                manifest: Mapping[str, object] = json.loads(plugin.manifest_json or "{}")
+                manifest = _DECODED_JSON.validate_python(json.loads(plugin.manifest_json or "{}"))
             except json.JSONDecodeError:
                 verbose_proxy_logger.warning("Plugin %s has invalid manifest JSON, skipping", plugin.name)
                 continue
 
             # Source must be specified for URL-based marketplaces
-            if "source" not in manifest:
+            if not json_contains(manifest, "source"):
                 verbose_proxy_logger.warning("Plugin %s has no source field, skipping", plugin.name)
                 continue
 
-            installation_preference = get_installation_preference(manifest)
+            installation_preference = get_installation_preference(
+                manifest,  # pyright: ignore[reportArgumentType]  # main passed the raw manifest
+            )
             entry: _MarketplaceEntry = (
-                {"name": plugin.name, "source": manifest["source"]}
+                {"name": plugin.name, "source": subscript(manifest, "source")}
                 if installation_preference is None
                 else {
                     "name": plugin.name,
-                    "source": manifest["source"],
+                    "source": subscript(manifest, "source"),
                     "installationPreference": installation_preference,
                 }
             )
@@ -418,14 +422,14 @@ async def get_marketplace(request: Request, key: str | None = None):
                 entry["version"] = plugin.version
             if plugin.description:
                 entry["description"] = plugin.description
-            if "author" in manifest:
-                entry["author"] = manifest["author"]
-            if "homepage" in manifest:
-                entry["homepage"] = manifest["homepage"]
-            if "keywords" in manifest:
-                entry["keywords"] = manifest["keywords"]
-            if "category" in manifest:
-                entry["category"] = manifest["category"]
+            if json_contains(manifest, "author"):
+                entry["author"] = subscript(manifest, "author")
+            if json_contains(manifest, "homepage"):
+                entry["homepage"] = subscript(manifest, "homepage")
+            if json_contains(manifest, "keywords"):
+                entry["keywords"] = subscript(manifest, "keywords")
+            if json_contains(manifest, "category"):
+                entry["category"] = subscript(manifest, "category")
 
             plugin_list.append(entry)
 
@@ -709,7 +713,7 @@ async def list_visible_plugins(enabled_only: bool, user_api_key_dict: UserAPIKey
             where={"enabled": True} if enabled_only else visibility.where()
         )
 
-        plugin_list: Final = []
+        plugin_list: Final[list[PluginListItem]] = []
         for p in plugins:
             if not visibility.allows(p):
                 continue

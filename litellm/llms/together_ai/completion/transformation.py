@@ -6,6 +6,7 @@ Calls done in OpenAI/openai.py as TogetherAI is openai-compatible.
 Docs: https://docs.together.ai/reference/completions-1
 """
 
+from collections.abc import Mapping
 from typing import Final, cast
 
 from litellm.llms.openai.completion.utils import is_tokens_or_list_of_tokens
@@ -44,9 +45,9 @@ class TogetherAITextCompletionConfig(OpenAITextCompletionConfig):
         self,
         model: str,
         messages: list[AllMessageValues] | list[OpenAITextCompletionUserMessage],
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         prompt: Final = self._transform_prompt(messages)
         return {
             "model": model,

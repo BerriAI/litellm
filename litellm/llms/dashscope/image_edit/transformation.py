@@ -74,12 +74,12 @@ class DashScopeImageEditConfig(BaseImageEditConfig):
     @override
     def validate_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: mirrors override contract
+        headers: dict[str, object],  # mutable-ok: mirrors override contract
         model: str,
         api_key: str | None = None,
         litellm_params: dict[str, object] | None = None,  # mutable-ok: mirrors override contract
         api_base: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: mirrors override contract
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
         return self._generation_config.validate_environment(
             headers=dict(headers),
             model=model,

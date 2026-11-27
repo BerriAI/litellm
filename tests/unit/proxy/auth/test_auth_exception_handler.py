@@ -47,6 +47,7 @@ from litellm.proxy.db.request_error_tracking import RequestErrorAccumulator
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.utils import PrismaClient, dequeue_spend_logs
 from litellm.responses.streaming_iterator import drain_logging_tasks
+from tests.unit.proxy.rust_auth_stores import native_database_failure
 
 
 class _EngineHttp500:
@@ -277,6 +278,8 @@ async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
         TimeoutError("timed out"),
         asyncio.TimeoutError(),
         OSError("network is unreachable"),
+        native_database_failure("unreachable"),
+        native_database_failure("capacity"),
         HTTPClientClosedError(),
         PrismaError("can't reach database server"),
         RawQueryError(
@@ -1101,6 +1104,60 @@ async def test_auth_failure_logs_user_agent(request_data: dict[str, object], met
     logged_metadata = mock_hook.call_args[1]["request_data"][metadata_key]
     assert logged_metadata["user_agent"] == "abusive-client/9.9"
     assert logged_metadata["requester_ip_address"] == "10.1.2.3"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_data, metadata_key, route, header",
+    [
+        pytest.param(
+            {"model": "gpt-4o"}, "metadata", "/v1/completions", "litellm-enable-message-redaction", id="metadata"
+        ),
+        pytest.param(
+            {"litellm_metadata": {}},
+            "litellm_metadata",
+            "/v1/responses",
+            "x-litellm-enable-message-redaction",
+            id="litellm_metadata",
+        ),
+    ],
+)
+async def test_auth_failure_logs_the_redaction_header(
+    request_data: dict[str, object], metadata_key: str, route: str, header: str
+) -> None:
+    """Auth gate rejections never reach `add_litellm_data_to_request`, which is what
+    records the request headers, so the failure log could not tell that the caller
+    asked for redaction."""
+    with (
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity"
+        ),
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_hook,
+        patch(  # test-quality-ok: handler reads proxy_server globals at call time
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException):
+            await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                ProxyException(
+                    message="Invalid API key",
+                    type=ProxyErrorTypes.auth_error,
+                    param=None,
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ),
+                _http_request(headers={header: "true", "authorization": "Bearer sk-bad-key"}),
+                request_data,
+                route,
+                None,
+                "sk-bad-key",
+            )
+
+    assert mock_hook.call_args[1]["request_data"][metadata_key]["headers"] == {header: "true"}
 
 
 @pytest.mark.asyncio

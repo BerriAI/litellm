@@ -82,7 +82,7 @@ export default function SSOSettings() {
 
   const providerConfigs = {
     google: {
-      providerText: t(ssoProviderDisplayNames.google),
+      providerText: ssoProviderDisplayNames.google(t),
       fields: [
         {
           label: t("adminPanel.ssoSettings.details.clientId"),
@@ -99,7 +99,7 @@ export default function SSOSettings() {
       ],
     },
     microsoft: {
-      providerText: t(ssoProviderDisplayNames.microsoft),
+      providerText: ssoProviderDisplayNames.microsoft(t),
       fields: [
         {
           label: t("adminPanel.ssoSettings.details.clientId"),
@@ -120,7 +120,7 @@ export default function SSOSettings() {
       ],
     },
     okta: {
-      providerText: t(ssoProviderDisplayNames.okta),
+      providerText: ssoProviderDisplayNames.okta(t),
       fields: [
         {
           label: t("adminPanel.ssoSettings.details.clientId"),
@@ -159,7 +159,7 @@ export default function SSOSettings() {
       ],
     },
     generic: {
-      providerText: t(ssoProviderDisplayNames.generic),
+      providerText: ssoProviderDisplayNames.generic(t),
       fields: [
         {
           label: t("adminPanel.ssoSettings.details.clientId"),
@@ -198,7 +198,7 @@ export default function SSOSettings() {
       ],
     },
     saml: {
-      providerText: t(ssoProviderDisplayNames.saml),
+      providerText: ssoProviderDisplayNames.saml(t),
       fields: [
         {
           label: t("adminPanel.ssoSettings.details.samlIdpMetadataUrl"),
@@ -249,7 +249,7 @@ export default function SSOSettings() {
                 src={ssoProviderLogoMap[selectedProvider]}
                 label={
                   Object.hasOwn(ssoProviderDisplayNames, selectedProvider)
-                    ? t(ssoProviderDisplayNames[selectedProvider])
+                    ? ssoProviderDisplayNames[selectedProvider](t)
                     : selectedProvider
                 }
                 className="size-6 object-contain"

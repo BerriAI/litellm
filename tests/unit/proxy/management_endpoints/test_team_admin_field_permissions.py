@@ -44,6 +44,15 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
 _SUPPORTED = frozenset({"tpm_limit", "rpm_limit", "team_alias"})
 
 
+def test_generic_metadata_delegation_does_not_allow_team_admins_to_change_lens_logging() -> None:
+    verdict: Final = team_admin_edit_verdict(
+        UpdateTeamRequest(team_id="team-1", metadata={"lens_enabled": False}),
+        LiteLLM_TeamTable(team_id="team-1"),
+        frozenset({"metadata"}),
+    )
+    assert verdict == TeamAdminMetadataKeyProxyControlled(key="lens_enabled")
+
+
 def _team(**overrides):
     return LiteLLM_TeamTable(team_id="team-1", **overrides)
 
@@ -346,6 +355,7 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "phoenix_project_name",
     "opik",
     "model_limit_max_borrow_multiple",
+    "required_customer_headers",
 )
 
 _STORED_METADATA: Final = {"cost_center": "eng", "region": "eu", "priority": "high", "guardrails": ["pii"]}

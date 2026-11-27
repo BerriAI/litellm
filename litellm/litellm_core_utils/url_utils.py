@@ -21,7 +21,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
 
 import asyncio
 import socket
-from ipaddress import ip_address, ip_network
+from ipaddress import IPv6Address, ip_address, ip_network
 from typing import Final, Protocol
 from urllib.parse import quote, urlparse, urlsplit, urlunparse
 
@@ -110,6 +110,26 @@ def is_https_url_with_host(url: str) -> bool:
         return parsed_url.scheme == "https" and bool(parsed_url.hostname)
     except ValueError:
         return False
+
+
+def _normalized_host(host: str) -> str:
+    return host.removeprefix("[").removesuffix("]").rstrip(".").lower()
+
+
+def is_local_host(host: str) -> bool:
+    return is_loopback_host(host) or _normalized_host(host).endswith(".localhost")
+
+
+def is_loopback_host(host: str) -> bool:
+    normalized: Final = _normalized_host(host)
+    if normalized == "localhost":
+        return True
+    try:
+        address: Final = ip_address(normalized)
+    except ValueError:
+        return False
+    effective: Final = address.ipv4_mapped if isinstance(address, IPv6Address) and address.ipv4_mapped else address
+    return effective.is_loopback or effective.is_unspecified
 
 
 def encode_url_path_segment(value: object, *, field_name: str = "path parameter") -> str:

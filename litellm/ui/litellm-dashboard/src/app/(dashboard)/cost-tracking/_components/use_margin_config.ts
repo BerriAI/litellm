@@ -12,6 +12,7 @@ export interface UseMarginConfigProps {
 
 export interface UseMarginConfigReturn {
   marginConfig: MarginConfig;
+  isConfigOwned: boolean;
   setMarginConfig: React.Dispatch<React.SetStateAction<MarginConfig>>;
   fetchMarginConfig: () => Promise<void>;
   saveMarginConfig: (config: MarginConfig) => Promise<void>;
@@ -33,6 +34,7 @@ export interface AddMarginParams {
 export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMarginConfigReturn {
   const { t } = useTranslation();
   const [marginConfig, setMarginConfig] = useState<MarginConfig>({});
+  const [isConfigOwned, setIsConfigOwned] = useState(false);
 
   const fetchMarginConfig = useCallback(async () => {
     try {
@@ -50,6 +52,7 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       if (response.ok) {
         const data = await response.json();
         setMarginConfig(data.values || {});
+        setIsConfigOwned(data.source === "config");
       } else {
         console.error("Failed to fetch margin config");
       }
@@ -179,6 +182,7 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
 
   return {
     marginConfig,
+    isConfigOwned,
     setMarginConfig,
     fetchMarginConfig,
     saveMarginConfig,

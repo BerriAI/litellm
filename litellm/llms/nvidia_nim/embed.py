@@ -64,7 +64,7 @@ class NvidiaNimEmbeddingConfig:
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         kwargs: Mapping[str, object] | None = None,
     ):

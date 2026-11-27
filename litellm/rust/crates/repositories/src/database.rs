@@ -40,8 +40,9 @@ impl Database {
         }
     }
 
-    /// Runs `operation` as one reported operation under the socket deadline. A stale prepared plan recycles
-    /// the pools and the operation runs once more, on fresh connections.
+    /// Runs `operation` as one reported operation under the socket deadline. An error that calls for fresh
+    /// connections, such as a writer that became read-only after a failover, recycles the pools; after a stale
+    /// prepared plan the operation runs once more, on the fresh connections.
     pub(crate) async fn run<T, F, Fut>(
         &self,
         call: Call,
@@ -56,11 +57,12 @@ impl Database {
             call,
             litellm_db::within(self.socket_timeout, async {
                 match operation().await {
-                    Err(error)
-                        if error.kind() == ErrorKind::StalePlan
-                            && self.pools.recycle_after(&error) =>
-                    {
-                        operation().await
+                    Err(error) if self.pools.recycle_after(&error) => {
+                        if error.kind() == ErrorKind::StalePlan {
+                            operation().await
+                        } else {
+                            Err(error)
+                        }
                     }
                     result => result,
                 }
@@ -85,10 +87,20 @@ impl Database {
             Side::Read => self.pools.read().await?,
             Side::Writer => self.pools.writer_only().await?,
         };
-        Ok(Session {
+        Ok(self.session_on(connection))
+    }
+
+    /// A connection from the writer, or from the read replica while the writer is marked down, for a read that must
+    /// see the latest commit yet keep working through a writer outage, as Python's `WriterPinnedClient` does.
+    pub(crate) async fn writer_preferred_session(&self) -> Result<Session, litellm_db::Error> {
+        Ok(self.session_on(self.pools.read_after_write().await?))
+    }
+
+    fn session_on(&self, connection: PoolConnection<Postgres>) -> Session {
+        Session {
             connection,
             named: self.names_statements,
-        })
+        }
     }
 }
 
@@ -102,6 +114,17 @@ impl Session {
     /// An executor for the next query on this connection.
     pub(crate) fn executor(&mut self) -> Statements<&mut PgConnection> {
         Statements::new(&mut *self.connection, self.named)
+    }
+
+    /// The connection itself, for a repository that opens a transaction on it. Its queries pass
+    /// [`Session::names_statements`] to `Statements::new`.
+    pub(crate) fn connection(&mut self) -> &mut PgConnection {
+        &mut self.connection
+    }
+
+    /// Whether statements on this connection are prepared under a name.
+    pub(crate) fn names_statements(&self) -> bool {
+        self.named
     }
 }
 

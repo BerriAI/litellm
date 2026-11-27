@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from litellm.proxy.auth.host.steps.team_member_add import add_team_member
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 TEAM: Final = {
@@ -39,14 +40,21 @@ async def test_a_user_is_added_through_the_repository_and_the_rows_the_add_chang
 ) -> None:
     rust_auth_stores.team.rows["team-a"] = TEAM
     cache: Final = UserApiKeyCache()
-    changed: Final = ("team_id:team-a", "team_alias:Team A", "new", "team_membership:new:team-a", "team-a_new")
-    for key in (*changed, "bystander"):
-        await cache.async_set_cache(key=key, value={"cached": key})
+    changed: Final = (
+        AuthObject.team("team-a"),
+        AuthObject.team_alias("Team A"),
+        AuthObject.user("new"),
+        AuthObject.team_membership_reservation(user_id="new", team_id="team-a"),
+        AuthObject.team_membership(team_id="team-a", user_id="new"),
+    )
+    bystander: Final = AuthObject.user("bystander")
+    for key in (*changed, bystander):
+        await cache.async_set_cache(key=key, value={"cached": key.key})
 
     await _add(cache)
 
     assert rust_auth_stores.team_membership.adds == [("new", "team-a", None)]
-    assert [await cache.async_get_cache(key=key) for key in (*changed, "bystander")] == [
+    assert [await cache.async_get_cache(key=key) for key in (*changed, bystander)] == [
         *(None for _ in changed),
         {"cached": "bystander"},
     ]
@@ -144,12 +152,12 @@ async def test_an_add_that_does_not_land_keeps_the_cached_user_and_adds_no_budge
     rust_auth_stores.team.rows["team-a"] = {**TEAM, "default_team_member_models": ["gpt-4o"]}
     rust_auth_stores.team_membership.add_outcome = "already_member"
     cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(key="new", value={"cached": "user"})
+    await cache.async_set_cache(key=AuthObject.user("new"), value={"cached": "user"})
 
     await _add(cache)
 
     assert rust_auth_stores.team_membership.own_budgets == {}
-    assert await cache.async_get_cache(key="new") == {"cached": "user"}
+    assert await cache.async_get_cache(key=AuthObject.user("new")) == {"cached": "user"}
 
 
 @pytest.mark.asyncio

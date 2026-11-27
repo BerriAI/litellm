@@ -16,6 +16,7 @@ from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.openai.common_utils import create_may_already_exist
 from litellm.types.integrations.custom_logger_v2 import Outcome
 from litellm.types.router import (
     FallbackSkipReason,
@@ -226,10 +227,11 @@ def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None
     chain of its own, so it resumes the original group's chain, and `attempted_targets` keeps
     the entries already tried from being repeated.
     """
-    metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
-    routed_group_value: Final = metadata.get("model_group") if isinstance(metadata, Mapping) else None
+    raw_metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
+    metadata: Final[Mapping[object, object] | None] = raw_metadata if isinstance(raw_metadata, Mapping) else None
+    routed_group_value: Final = metadata.get("model_group") if metadata is not None else None
     routed_group: Final = routed_group_value if isinstance(routed_group_value, str) else None
-    original_group_value: Final = metadata.get("original_model_group") if isinstance(metadata, Mapping) else None
+    original_group_value: Final = metadata.get("original_model_group") if metadata is not None else None
     original_group: Final = original_group_value if isinstance(original_group_value, str) else None
     ordered: Final = (get_pre_routing_selection(kwargs), routed_group, model_group, original_group)
     return tuple(dict.fromkeys(group for group in ordered if group))
@@ -346,6 +348,18 @@ PROVIDER_SCOPED_RESOURCE_FUNCTION_NAMES: Final = frozenset(
     }
 )
 PROVIDER_SCOPED_CREATION_FUNCTION_NAMES: Final = frozenset({"_acreate_file"})
+NON_IDEMPOTENT_CREATE_FUNCTION_NAMES: Final = frozenset({"_acreate_file", "_acreate_batch"})
+
+
+def is_create_that_may_already_exist(function_name: str, error: BaseException) -> bool:
+    return function_name in NON_IDEMPOTENT_CREATE_FUNCTION_NAMES and create_may_already_exist(error)
+
+
+def log_create_not_resent(model_group: str | None) -> None:
+    verbose_router_logger.info(
+        "Model group '%s' does not resend a failed create, because the provider may already have created it",
+        model_group,
+    )
 
 
 def references_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:

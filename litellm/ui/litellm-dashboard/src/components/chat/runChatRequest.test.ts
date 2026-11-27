@@ -72,6 +72,27 @@ describe("runChatRequest", () => {
     expect(args[14]).toBe("previous-response");
   });
 
+  it("offers the whole conversation in Responses API form for the helper to resend on demand", async () => {
+    const fullHistory = [
+      { role: "user" as const, content: "First" },
+      { role: "assistant" as const, content: "Answer" },
+      { role: "user" as const, content: "Hello" },
+    ];
+    vi.mocked(toResponsesMessages).mockImplementation((messages) =>
+      messages.map(({ role, content }) => ({ role, content: `converted ${content}` })),
+    );
+    vi.mocked(makeOpenAIResponsesRequest).mockResolvedValue(undefined);
+
+    await runChatRequest(requestOptions({ resendHistory: () => fullHistory }));
+
+    const replayHistory = vi.mocked(makeOpenAIResponsesRequest).mock.calls[0][29];
+    expect(replayHistory?.()).toEqual([
+      { role: "user", content: "converted First" },
+      { role: "assistant", content: "converted Answer" },
+      { role: "user", content: "converted Hello" },
+    ]);
+  });
+
   it("should preserve completed tool results and partial text on abort without retaining late response ids", async () => {
     const controller = new AbortController();
     const options = requestOptions({ signal: controller.signal });

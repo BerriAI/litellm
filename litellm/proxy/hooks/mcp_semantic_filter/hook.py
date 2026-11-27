@@ -251,7 +251,7 @@ class SemanticToolFilterHook(CustomLogger):
         name, _ = self.filter.extract_tool_info(tool)
         return bool(name) and name in self.filter._tool_map
 
-    def _get_metadata_variable_name(self, data: dict) -> str:
+    def _get_metadata_variable_name(self, data: Mapping[str, object]) -> str:
         if "litellm_metadata" in data:
             return "litellm_metadata"
         return "metadata"
@@ -293,7 +293,7 @@ class SemanticToolFilterHook(CustomLogger):
 
     def _emit_filter_metadata_safe(
         self,
-        data: dict,
+        data: dict[str, object],
         mcp_tools: Sequence[object],
         filtered_mcp_tools: Sequence[object],
         native_tools: Sequence[object],

@@ -139,6 +139,9 @@ from litellm._logging import ALL_LOGGERS  # noqa: E402  # same import-time depen
 from litellm.anthropic_beta_headers_manager import (
     reload_beta_headers_config,  # noqa: E402  # same import-time dependency
 )
+from litellm.litellm_core_utils.cached_imports import (  # noqa: E402  # same import-time dependency
+    clear_cached_imports,
+)
 from litellm.litellm_core_utils.get_model_cost_map import (  # noqa: E402  # same import-time dependency
     model_cost_inputs,
 )
@@ -405,6 +408,7 @@ def isolate_litellm_globals() -> Iterator[None]:
     }
     original_tool_policy_registry: Final = tool_registry_writer_module._tool_policy_registry
     _flush_client_caches()
+    clear_cached_imports()
     for name in CALLBACK_LISTS:
         setattr(litellm, name, [])
     routers_holding_global_callbacks.clear()
@@ -415,6 +419,7 @@ def isolate_litellm_globals() -> Iterator[None]:
     tool_registry_writer_module._tool_policy_registry = None
     yield
     _flush_client_caches()
+    clear_cached_imports()
     leaked_clients: Final = tuple(litellm.__dict__.pop(name, None) for name in MODULE_LEVEL_CLIENTS)
     for name, client in zip(MODULE_LEVEL_CLIENTS, leaked_clients):
         if client is not original_clients.get(name):
@@ -463,6 +468,9 @@ def isolate_model_catalog() -> Iterator[None]:
     models_by_provider: Final = litellm.models_by_provider
     models_by_provider_entries: Final = dict(models_by_provider)
     provider_model_sets: Final = tuple((models, frozenset(models)) for models in _provider_model_sets())
+    model_list_entries: Final = tuple(litellm.model_list)
+    model_list_set: Final = litellm.model_list_set
+    model_list_set_entries: Final = frozenset(model_list_set)
     yield
     model_cost.clear()
     model_cost.update(model_cost_entries)
@@ -471,6 +479,9 @@ def isolate_model_catalog() -> Iterator[None]:
     for models, entries in provider_model_sets:
         models.clear()
         models.update(entries)
+    litellm.model_list[:] = model_list_entries
+    model_list_set.clear()
+    model_list_set.update(model_list_set_entries)
     publish(litellm.model_cost)
     litellm.get_model_info.cache_clear()
 

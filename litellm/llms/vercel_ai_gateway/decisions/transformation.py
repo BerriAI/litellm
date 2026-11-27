@@ -14,7 +14,7 @@ from litellm.types.decisions import (
     OpenAIDecisionInputTokensDetails,
 )
 
-_Model: Final = TypeVar("_Model", bound=BaseModel)
+_Model = TypeVar("_Model", bound=BaseModel)
 
 
 class _ProviderAttempt(BaseModel):
@@ -120,6 +120,7 @@ class VercelAIGatewayDecisionsConfig(OpenAIDecisionsConfig):
     inlines_remote_images = True
     supports_prompt_cache = False
     supports_developer_and_system_messages = False
+    supports_json_input = False
 
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key

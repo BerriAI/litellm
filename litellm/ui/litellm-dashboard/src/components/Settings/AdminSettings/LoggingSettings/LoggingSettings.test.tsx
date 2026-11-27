@@ -1,4 +1,5 @@
 import {
+  ConfigType,
   DeleteProxyConfigFieldRequest,
   useDeleteProxyConfigField,
   useProxyConfig,
@@ -191,6 +192,30 @@ describe("LoggingSettings", () => {
       );
     });
     expect(clearedFieldNames()).not.toContain("maximum_spend_logs_retention_period");
+  });
+
+  it.each([true, false, "true", "false"])("saves the unchanged store-prompts value %j", async (storedValue) => {
+    mockUseProxyConfig.mockReturnValue({
+      ...mockUseProxyConfig(ConfigType.GENERAL_SETTINGS),
+      data: [
+        {
+          field_name: "store_prompts_in_spend_logs",
+          field_type: "Boolean",
+          field_description: "Store prompts in spend logs",
+          field_value: storedValue,
+          stored_in_db: true,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+
+    renderWithProviders(<LoggingSettings />);
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    expect(mockMutate).toHaveBeenCalledExactlyOnceWith(
+      { store_prompts_in_spend_logs: storedValue },
+      expect.any(Object),
+    );
   });
 
   it("should submit every spend logs cleanup setting that has a value", async () => {

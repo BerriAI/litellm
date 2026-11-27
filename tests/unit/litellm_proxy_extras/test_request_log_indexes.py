@@ -1,12 +1,15 @@
+import logging
 import re
 from pathlib import Path
-from typing import Final
+from typing import Final, NoReturn
 
+import psycopg
 import pytest
 from litellm_proxy_extras.migration_recovery import is_inert_migration
 from litellm_proxy_extras.request_log_indexes import (
     REQUEST_LOG_INDEXES,
     RequestLogIndex,
+    ensure_request_log_indexes,
     filter_request_log_index_diff,
 )
 
@@ -15,6 +18,9 @@ SCHEMA: Final = PACKAGE / "schema.prisma"
 INERT_MIGRATIONS: Final = (
     "20260823000000_add_spend_logs_api_key_starttime_index",
     "20260831120001_spend_logs_litellm_call_id_index",
+    "20250510142544_add_session_id_index_spend_logs",
+    "20260228100000_add_spend_logs_composite_index",
+    "20260724000000_add_spend_log_tool_index_start_time_idx",
 )
 CALL_ID_INDEX: Final = RequestLogIndex(
     "LiteLLM_SpendLogs", "LiteLLM_SpendLogs_litellm_call_id_idx", '("litellm_call_id")'
@@ -163,3 +169,28 @@ class TestFilterRequestLogIndexDiff:
 
     def test_an_empty_script_stays_empty(self):
         assert filter_request_log_index_diff("") == ""
+
+
+class TestEnsureRequestLogIndexesWithoutAUsableDriver:
+    DATABASE_URL: Final = "postgresql://user:secret@writer:5432/litellm"
+
+    def test_an_unloadable_psycopg_skips_the_build_as_done_without_connecting(
+        self, unloadable_psycopg: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        def connect(database_url: str) -> NoReturn:
+            raise AssertionError(f"connected to {database_url} although psycopg could not be imported")
+
+        with caplog.at_level(logging.WARNING, logger="litellm_proxy_extras"):
+            built: Final = ensure_request_log_indexes(self.DATABASE_URL, "public", connect=connect)
+
+        assert built is True
+        messages: Final = tuple(record.getMessage() for record in caplog.records)
+        skips: Final = tuple(message for message in messages if "skipping the request-log index build" in message)
+        assert len(skips) == 1
+        assert unloadable_psycopg in skips[0]
+
+    def test_a_database_error_still_reports_the_indexes_as_not_built(self) -> None:
+        def connect(database_url: str) -> NoReturn:
+            raise psycopg.OperationalError("connection to server at writer failed: Connection refused")
+
+        assert ensure_request_log_indexes(self.DATABASE_URL, "public", connect=connect) is False

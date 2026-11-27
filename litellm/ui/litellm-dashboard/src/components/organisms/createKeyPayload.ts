@@ -1,3 +1,4 @@
+import { lensCreationMetadata, type LensPolicy } from "@/components/lens/lensPolicy";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
 import { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
 import type { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
@@ -22,6 +23,7 @@ export interface ExistingKey {
 
 export interface KeyCreateInput {
   readonly formValues: Record<string, unknown>;
+  readonly lensPolicy?: LensPolicy;
   readonly existingKeys: readonly ExistingKey[] | null;
   readonly keyOwner: string;
   readonly userID: string | null;
@@ -120,7 +122,7 @@ const buildMetadataJson = (values: Record<string, unknown>, input: KeyCreateInpu
     string,
     unknown
   >;
-  return JSON.stringify({ ...withoutTypedAlertEmails, ...alertEmails });
+  return JSON.stringify(lensCreationMetadata({ ...withoutTypedAlertEmails, ...alertEmails }, input.lensPolicy));
 };
 
 interface PermissionSources {

@@ -1,6 +1,9 @@
 import asyncio
 import json
 import logging
+import queue
+import threading
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -584,3 +587,155 @@ async def test_cohere_rerank_success_callback_receives_search_unit_cost(
     assert expected_cost > 0
     assert recorder.response_cost == expected_cost
     assert response._hidden_params["response_cost"] == expected_cost
+
+
+_CALLBACK_DEADLOCK_GUARD_SECONDS: Final = 30
+_BILLED_SEARCH_UNITS: Final = 3
+_COHERE_RERANK_RESPONSE_BILLING_SEARCH_UNITS: Final = {
+    **COHERE_RERANK_RESPONSE,
+    "meta": {"api_version": {"version": "2"}, "billed_units": {"search_units": _BILLED_SEARCH_UNITS}},
+}
+
+
+def _expected_rerank_cost() -> float:
+    return litellm.model_cost["rerank-v4.0-pro"]["input_cost_per_query"] * _BILLED_SEARCH_UNITS
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_rerank_returns_cost_while_plain_success_callback_is_held_off_the_caller_thread(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://api.cohere.com/v2/rerank").return_value = httpx.Response(
+        200, json=_COHERE_RERANK_RESPONSE_BILLING_SEARCH_UNITS
+    )
+    entered: Final = threading.Event()
+    release: Final = threading.Event()
+    done: Final = threading.Event()
+    ledger: Final[queue.SimpleQueue[tuple[int, object]]] = queue.SimpleQueue()
+
+    def record_cost(
+        kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        entered.set()
+        try:
+            if release.wait(_CALLBACK_DEADLOCK_GUARD_SECONDS):
+                ledger.put((threading.get_ident(), kwargs["response_cost"]))
+        finally:
+            done.set()
+
+    try:
+        response: Final = litellm.rerank(
+            model="cohere/rerank-v4.0-pro",
+            query="hello",
+            documents=["hello", "world"],
+            api_key="test-api-key",
+            success_callback=[record_cost],
+        )
+        returned_cost: Final = response._hidden_params.get("response_cost")
+        assert entered.wait(_CALLBACK_DEADLOCK_GUARD_SECONDS)
+        assert ledger.empty()
+    finally:
+        release.set()
+        if entered.is_set():
+            assert done.wait(_CALLBACK_DEADLOCK_GUARD_SECONDS)
+
+    assert done.is_set()
+    callback_thread, callback_cost = ledger.get_nowait()
+    assert _expected_rerank_cost() > 0
+    assert returned_cost == _expected_rerank_cost()
+    assert callback_cost == returned_cost
+    assert callback_thread != threading.get_ident()
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_arerank_returns_cost_while_async_success_callback_is_held(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://api.cohere.com/v2/rerank").return_value = httpx.Response(
+        200, json=_COHERE_RERANK_RESPONSE_BILLING_SEARCH_UNITS
+    )
+    entered: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    done: Final = asyncio.Event()
+    ledger: Final[asyncio.Queue[object]] = asyncio.Queue()
+
+    async def record_cost(
+        kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        entered.set()
+        try:
+            await asyncio.wait_for(release.wait(), timeout=_CALLBACK_DEADLOCK_GUARD_SECONDS)
+            ledger.put_nowait(kwargs["response_cost"])
+        finally:
+            done.set()
+
+    client: Final = AsyncHTTPHandler(transport=RespxAsyncTransport(respx_mock))
+    try:
+        response: Final = await litellm.arerank(
+            model="cohere/rerank-v4.0-pro",
+            query="hello",
+            documents=["hello", "world"],
+            api_key="test-api-key",
+            client=client,
+            success_callback=[record_cost],
+        )
+        returned_cost: Final = response._hidden_params.get("response_cost")
+        await asyncio.wait_for(entered.wait(), timeout=_CALLBACK_DEADLOCK_GUARD_SECONDS)
+        assert ledger.empty()
+    finally:
+        release.set()
+        try:
+            if entered.is_set():
+                await asyncio.wait_for(done.wait(), timeout=_CALLBACK_DEADLOCK_GUARD_SECONDS)
+        finally:
+            await client.client.aclose()
+
+    assert done.is_set()
+    callback_cost: Final = ledger.get_nowait()
+    assert _expected_rerank_cost() > 0
+    assert returned_cost == _expected_rerank_cost()
+    assert callback_cost == returned_cost
+
+
+def test_rerank_omits_instruction_that_is_not_a_string_from_the_provider_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("http://vllm.test/rerank")
+    route.return_value = httpx.Response(200, json=COHERE_RERANK_RESPONSE)
+
+    litellm.rerank(
+        model="hosted_vllm/reranker",
+        query="hello",
+        documents=["hello", "world"],
+        api_base="http://vllm.test",
+        instruction=123,
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent == {
+        "model": "reranker",
+        "query": "hello",
+        "documents": ["hello", "world"],
+        "return_documents": True,
+    }, sent
+
+
+@pytest.mark.asyncio
+async def test_arerank_resolves_provider_without_api_base_that_is_not_a_string(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    resolved_api_bases: Final[list[object]] = []
+
+    def record_resolution(*args: object, **kwargs: object) -> tuple[str, str, None, None]:
+        resolved_api_bases.append(kwargs.get("api_base"))
+        return "rerank-v4.0-pro", "cohere", None, None
+
+    def rerank_raises_provider_error(*args: object, **kwargs: object) -> None:
+        raise BaseLLMException(status_code=401, message='{"error":"bad key"}')
+
+    monkeypatch.setattr(litellm, "get_llm_provider", record_resolution)
+    monkeypatch.setattr("litellm.rerank_api.main.rerank", rerank_raises_provider_error)
+
+    with pytest.raises(litellm.AuthenticationError):
+        await litellm.arerank(model="cohere/rerank-v4.0-pro", query="hello", documents=["hello"], api_base=123)
+
+    assert resolved_api_bases[0] is None, resolved_api_bases

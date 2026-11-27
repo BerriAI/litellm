@@ -29,6 +29,13 @@ pub enum RoutingStrategy {
     LatencyBased,
     #[strum(serialize = "cost-based-routing")]
     CostBased,
+    #[strum(serialize = "provider-budget-routing")]
+    ProviderBudget,
+    #[strum(serialize = "lar1")]
+    Lar1,
+    /// A routing group whose members are tried in `model_priorities` order.
+    #[strum(serialize = "priority")]
+    Priority,
     /// `routing_strategy=None` passed explicitly (sent as `"None"`): stored as None, so no
     /// strategy arm matches and every pick finds no deployment.
     #[strum(serialize = "None")]
@@ -55,7 +62,16 @@ mod tests {
     use super::*;
 
     #[rstest]
-    #[case::native("simple-shuffle", RoutingStrategy::SimpleShuffle)]
+    #[case::simple_shuffle("simple-shuffle", RoutingStrategy::SimpleShuffle)]
+    #[case::least_busy("least-busy", RoutingStrategy::LeastBusy)]
+    #[case::usage_based("usage-based-routing", RoutingStrategy::UsageBased)]
+    #[case::usage_based_v2("usage-based-routing-v2", RoutingStrategy::UsageBasedV2)]
+    #[case::latency_based("latency-based-routing", RoutingStrategy::LatencyBased)]
+    #[case::cost_based("cost-based-routing", RoutingStrategy::CostBased)]
+    #[case::provider_budget("provider-budget-routing", RoutingStrategy::ProviderBudget)]
+    #[case::lar1("lar1", RoutingStrategy::Lar1)]
+    #[case::priority("priority", RoutingStrategy::Priority)]
+    #[case::unset("None", RoutingStrategy::Unset)]
     #[case::unknown("my-strategy", RoutingStrategy::Other("my-strategy".to_owned()))]
     fn routing_strategy_parses_its_wire_name(
         #[case] wire: &str,

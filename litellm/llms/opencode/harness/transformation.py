@@ -396,7 +396,7 @@ def build_opencode_config(
     return {**user, **managed, **dict(present)}  # mutable-ok: opencode config JSON
 
 
-class OpenCodeHarnessConfig(BaseCLIHarnessConfig):
+class OpenCodeHarnessConfig(BaseCLIHarnessConfig[OpenCodeOptions, OpenCodeStreamState]):
     harness = Harness.OPENCODE
     options_type = OpenCodeOptions
     capabilities = Capabilities(

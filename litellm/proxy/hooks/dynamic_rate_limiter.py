@@ -51,7 +51,7 @@ class DynamicRateLimiterCache:
         return response
 
     @with_service_target(RATE_LIMITS_TARGET)
-    async def async_set_cache_sadd(self, model: str, value: list):
+    async def async_set_cache_sadd(self, model: str, value: list[str]):
         """
         Add value to set.
 
@@ -242,7 +242,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_success_hook(
-        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> LLMResponseTypes | None:
         try:
             if isinstance(response, ModelResponse):
@@ -273,7 +273,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 )
 
                 return response
-            return await super().async_post_call_success_hook(
+            await super().async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
                 response=response,
@@ -283,6 +283,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 "litellm.proxy.hooks.dynamic_rate_limiter.py::async_post_call_success_hook(): Exception occured - %s", e
             )
             return response
+        return None
 
 
 PROXY_DynamicRateLimitHandler: Final = _PROXY_DynamicRateLimitHandler

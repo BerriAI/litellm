@@ -1,13 +1,14 @@
 import math
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
-from functools import lru_cache
-from itertools import accumulate, chain, repeat, takewhile
+from functools import lru_cache, partial
+from itertools import accumulate, chain, starmap
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast, get_type_hints
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -17,6 +18,8 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils import model_cost_table
+from litellm.litellm_core_utils.fallback_generalizations import match_fill_missing_generalizations
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -56,6 +59,66 @@ GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
 
 
 GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+GEMINI_FILES_API_V1_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1/files/"
+GEMINI_FILES_API_URI_PREFIXES: Final = (
+    GEMINI_FILES_API_URI_PREFIX,
+    GEMINI_FILES_API_V1_URI_PREFIX,
+)
+
+
+def gemini_media_capability(
+    model: str,
+    key: Literal["supports_part_media_resolution", "supports_media_in_tool_response"],
+    *,
+    custom_llm_provider: str | None = None,
+) -> bool:
+    name: Final = model.rsplit("/", 1)[-1]
+    qualified_name: Final = f"gemini/{name}"
+    catalog: Final = cast(  # cast-ok: the published catalog contains model rows
+        Mapping[str, Mapping[str, object]], model_cost_table.published()
+    )
+    candidates: Final = (
+        (model, qualified_name, f"vertex_ai/{name}", name)
+        if custom_llm_provider is None
+        else (f"{custom_llm_provider}/{name}", name)
+    )
+    for candidate in candidates:
+        row = catalog.get(candidate)
+        if row is None:
+            continue
+        flag = row.get(key)
+        if isinstance(flag, bool):
+            return flag
+    defaults: Final = match_fill_missing_generalizations(qualified_name, custom_llm_provider or "gemini")
+    default_flag: Final = defaults.get(key) if defaults is not None else None
+    if isinstance(default_flag, bool):
+        return default_flag
+
+    from .gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    # Older cost maps lack these flags, including for models no longer listed in the catalog.
+    return VertexGeminiConfig.is_gemini_3_or_newer(model)
+
+
+_YOUTUBE_VIDEO_URL: Final = re.compile(
+    r"(?i:https?://(?:(?:www|m)\.)?youtube\.com(?::443)?/)(?:watch\?(?:[^#]*&)?v=|shorts/|embed/)[\w-]"
+    r"|(?i:https?://youtu\.be(?::443)?/)[\w-]"
+)
+
+
+def gemini_fetches_url_itself(url: str) -> bool:
+    return url.startswith(GEMINI_FILES_API_URI_PREFIXES) or _YOUTUBE_VIDEO_URL.match(url) is not None
+
+
+def youtube_video_mime_type(url: str) -> str | None:
+    return "video/mp4" if _YOUTUBE_VIDEO_URL.match(url) else None
+
+
+def normalize_youtube_url(url: str) -> str:
+    if _YOUTUBE_VIDEO_URL.match(url) is None:
+        return url
+    parts: Final = urlsplit(url)
+    return urlunsplit(parts._replace(scheme=parts.scheme.lower(), netloc=parts.hostname or parts.netloc))
 
 
 # https://cloud.google.com/vertex-ai/generative-ai/docs/image/configure-aspect-ratio
@@ -193,7 +256,7 @@ def redact_vertex_ai_metadata_from_logged_object(obj: object) -> None:
             hidden_params.pop(field, None)
 
 
-def redact_vertex_ai_metadata_from_litellm_params(model_call_details: dict) -> None:
+def redact_vertex_ai_metadata_from_litellm_params(model_call_details: Mapping[str, object]) -> None:
     """
     success_handler() merges response._hidden_params into
     litellm_params.metadata['hidden_params'] before redaction runs, so the Vertex
@@ -233,7 +296,7 @@ def vertex_request_labels_from_litellm_params(
 
 
 def pop_vertex_caller_labels(
-    optional_params: dict | None,
+    optional_params: dict[str, object] | None,
     litellm_params: Mapping[str, object] | None,
 ) -> dict[str, str] | None:
     """
@@ -247,8 +310,8 @@ def pop_vertex_caller_labels(
 
 
 def pop_vertex_request_labels(
-    optional_params: dict | None,
-    litellm_params: dict | None,
+    optional_params: dict[str, object] | None,
+    litellm_params: Mapping[str, object] | None,
 ) -> dict[str, str] | None:
     """
     The caller's labels from ``pop_vertex_caller_labels``, plus the proxy identity
@@ -712,7 +775,7 @@ def check_text_in_content(parts: list[PartType]) -> bool:
 _check_text_in_content = check_text_in_content
 
 
-def _fix_enum_empty_strings(schema, depth=0):
+def _fix_enum_empty_strings(schema, depth: int = 0):
     """Fix empty strings in enum values by replacing them with None. Gemini doesn't accept empty strings in enums."""
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
@@ -731,7 +794,7 @@ def _fix_enum_empty_strings(schema, depth=0):
         _fix_enum_empty_strings(items, depth=depth + 1)
 
 
-GEMINI_MAX_ENUM_CHARACTERS: Final = 2000
+GEMINI_MAX_ENUM_BYTES: Final = 2000
 _GEMINI_EXACT_INT_MAX: Final = 2**53 - 1
 
 
@@ -766,28 +829,50 @@ def _json_children(node: JsonValue) -> Iterable[JsonValue]:
             return ()
 
 
-def _next_json_level(level: tuple[JsonValue, ...], _: None) -> tuple[JsonValue, ...]:
-    return tuple(chain.from_iterable(_json_children(node) for node in level))
-
-
-def _enum_size(node: JsonValue) -> tuple[bool, int] | None:
+def _enum_bytes(node: JsonValue) -> int:
     match node:
         case {"enum": list() as values}:
-            return (str(node.get("type")).lower() == "integer", sum(len(str(value)) for value in values))
+            return sum(len(str(value).encode()) for value in values)
         case _:
-            return None
+            return 0
+
+
+def _is_integer_enum(node: JsonValue) -> bool:
+    match node:
+        case {"enum": list()}:
+            return str(node.get("type")).lower() == "integer"
+        case _:
+            return False
+
+
+def _json_nodes(schema: JsonValue) -> Iterator[JsonValue]:
+    on_path: Final = {id(schema)}
+    frames: Final = [(schema, iter(_json_children(schema)))]
+    yield schema
+    while frames:
+        node, children = frames[-1]
+        if (child := next((c for c in children if isinstance(c, (dict, list)) and id(c) not in on_path), None)) is None:
+            frames.pop()
+            on_path.discard(id(node))
+            continue
+        yield child
+        on_path.add(id(child))
+        frames.append((child, iter(_json_children(child))))
+
+
+def has_const(schema: JsonValue) -> bool:
+    return any(isinstance(node, dict) and "const" in node for node in _json_nodes(schema))
+
+
+def enums_fit(request_parts: JsonValue) -> bool:
+    return all(total <= GEMINI_MAX_ENUM_BYTES for total in accumulate(map(_enum_bytes, _json_nodes(request_parts))))
 
 
 def _integer_enums_fit(schema: JsonValue) -> bool:
-    levels: Final = takewhile(bool, accumulate(repeat(None), _next_json_level, initial=(schema,)))
-    enum_sizes: Final = tuple(size for node in chain.from_iterable(levels) if (size := _enum_size(node)) is not None)
-    return (
-        not any(is_integer for is_integer, _ in enum_sizes)
-        or sum(characters for _, characters in enum_sizes) <= GEMINI_MAX_ENUM_CHARACTERS
-    )
+    return enums_fit(schema) or not any(map(_is_integer_enum, _json_nodes(schema)))
 
 
-_GeminiRequestPart: Final = TypeVar("_GeminiRequestPart")
+_GeminiRequestPart = TypeVar("_GeminiRequestPart")
 
 
 def with_integer_enums_that_fit(
@@ -801,12 +886,32 @@ def with_integer_enums_that_fit(
     ):
         return with_integer_enums
     verbose_logger.debug(
-        "Gemini integer enums dropped: the request's enum values exceed %s characters", GEMINI_MAX_ENUM_CHARACTERS
+        "Gemini integer enums dropped: the request's enum values exceed %s bytes", GEMINI_MAX_ENUM_BYTES
     )
     return build(False)
 
 
-def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
+def with_pins_that_fit(build: Callable[[bool], _GeminiRequestPart], pin_consts: bool) -> _GeminiRequestPart:
+    if not pin_consts:
+        return build(False)
+    pinned: Final = build(True)
+    if enums_fit(cast(JsonValue, pinned)):  # cast-ok: built tools and schemas are JSON
+        return pinned
+    verbose_logger.debug(
+        "Gemini consts sent unpinned: the request's enum values exceed %s bytes", GEMINI_MAX_ENUM_BYTES
+    )
+    return build(False)
+
+
+def with_enums_that_fit(
+    build: Callable[[bool, bool], _GeminiRequestPart], send_integer_enums: bool, pin_consts: bool
+) -> _GeminiRequestPart:
+    return with_integer_enums_that_fit(
+        lambda integer_enums: with_pins_that_fit(partial(build, integer_enums), pin_consts), send_integer_enums
+    )
+
+
+def _fix_enum_types(schema: object, depth: int = 0, send_integer_enums: bool = False):
     """Make `enum` fields acceptable to Gemini / Vertex.
 
     Gemini / Vertex APIs only accept string enum values. With `send_integer_enums`,
@@ -866,8 +971,124 @@ def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
                 _fix_enum_types(item, depth=depth + 1, send_integer_enums=send_integer_enums)
 
 
+_MAP_SCHEMA_KEYWORDS: Final = frozenset({"properties", "$defs", "definitions", "patternProperties"})
+_SINGLE_SCHEMA_KEYWORDS: Final = frozenset({"items", "additionalProperties", "not", "contains"})
+_LIST_SCHEMA_KEYWORDS: Final = frozenset({"items", "anyOf", "oneOf", "allOf", "prefixItems"})
+
+
+def _pinnable_type_of(value: JsonValue) -> Literal["boolean", "integer", "number", "string"] | None:
+    match value:
+        case bool():
+            return "boolean"
+        case int() if -_GEMINI_EXACT_INT_MAX <= value <= _GEMINI_EXACT_INT_MAX:
+            return "integer"
+        case float():
+            return "number"
+        case str():
+            return "string"
+        case _:
+            return None
+
+
+_TYPES_HOLDING: Final = MappingProxyType(
+    {
+        "boolean": frozenset({"boolean"}),
+        "integer": frozenset({"integer", "number"}),
+        "number": frozenset({"number"}),
+        "string": frozenset({"string"}),
+    }
+)
+
+
+def _declared_type_holds(
+    declared_type: JsonValue, json_type: Literal["boolean", "integer", "number", "string"]
+) -> bool:
+    match declared_type:
+        case None:
+            return True
+        case str():
+            return declared_type.lower() in _TYPES_HOLDING[json_type]
+        case list():
+            return any(isinstance(item, str) and item.lower() in _TYPES_HOLDING[json_type] for item in declared_type)
+        case _:
+            return False
+
+
+def _subschemas(keyword: str, value: JsonValue) -> Iterable[JsonValue]:
+    match value:
+        case dict() if keyword in _MAP_SCHEMA_KEYWORDS:
+            return value.values()
+        case dict() if keyword in _SINGLE_SCHEMA_KEYWORDS:
+            return (value,)
+        case list() if keyword in _LIST_SCHEMA_KEYWORDS:
+            return value
+        case _:
+            return ()
+
+
+def _const_as_declared(value: JsonValue, declared_type: JsonValue) -> JsonValue:
+    match value:
+        case float() if value.is_integer() and not _declared_type_holds(declared_type, "number"):
+            return int(value)
+        case _:
+            return value
+
+
+def _branch_holds(branch: JsonValue, const: JsonValue) -> bool:
+    if not isinstance(branch, dict):
+        return True
+    if "$ref" in branch or ("const" in branch and branch["const"] != const):
+        return False
+    declared_type: Final = branch.get("type")
+    json_type: Final = _pinnable_type_of(_const_as_declared(const, declared_type))
+    return json_type is not None and _declared_type_holds(declared_type, json_type)
+
+
+def _union_keyword(schema: Mapping[str, JsonValue]) -> Literal["anyOf", "oneOf"]:
+    return "anyOf" if "anyOf" in schema else "oneOf"
+
+
+def _push_const_into_branches(schema: JsonValue) -> None:
+    if not isinstance(schema, dict) or _pinnable_type_of(schema.get("const")) is None:
+        return
+    keyword: Final = _union_keyword(schema)
+    branches: Final = schema.get(keyword)
+    if not isinstance(branches, list):
+        return
+    const: Final = schema["const"]
+    holding: Final = tuple(branch for branch in branches if _branch_holds(branch, const))
+    if not holding:
+        return
+    del schema["const"]  # rebind-ok: the schema builders edit their own copy in place
+    schema[keyword] = [  # rebind-ok: the schema builders edit their own copy in place
+        {**branch, "const": const} if isinstance(branch, dict) else branch for branch in holding
+    ]
+
+
+def _pin_scalar_consts(schema: JsonValue, *, pins_empty_string: bool, depth: int = 0) -> None:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH or not isinstance(schema, dict):
+        return
+    _push_const_into_branches(schema)
+    declared_type: Final = schema.get("type")
+    const: Final = _const_as_declared(schema.get("const"), declared_type)
+    unresolved: Final = _is_union(schema) or "$ref" in schema
+    unpinned_empty_string: Final = const == "" and not pins_empty_string
+    json_type: Final = None if unresolved or unpinned_empty_string else _pinnable_type_of(const)
+    if json_type is not None and _declared_type_holds(declared_type, json_type):
+        del schema["const"]  # rebind-ok: the schema builders edit their own copy in place
+        schema["enum"] = [const]  # rebind-ok: the schema builders edit their own copy in place
+        schema["type"] = declared_type if isinstance(declared_type, str) else json_type  # rebind-ok: same copy
+    if unpinned_empty_string and declared_type is None and not unresolved:
+        schema["type"] = "string"  # rebind-ok: the schema builders edit their own copy in place
+    for subschema in chain.from_iterable(starmap(_subschemas, schema.items())):
+        _pin_scalar_consts(subschema, pins_empty_string=pins_empty_string, depth=depth + 1)
+
+
 def build_vertex_schema(
-    parameters: dict, add_property_ordering: bool = False, send_integer_enums: bool = False
+    parameters: dict,
+    add_property_ordering: bool = False,
+    send_integer_enums: bool = False,
+    pin_consts: bool = True,
 ) -> dict[str, object]:
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
@@ -879,6 +1100,7 @@ def build_vertex_schema(
         add_property_ordering: bool - whether to add propertyOrdering to the schema. This is only applicable to schemas for structured outputs. See
           set_schema_property_ordering for more details.
         send_integer_enums: bool - whether to send integer enums with string values instead of removing them
+        pin_consts: bool - whether to send each scalar `const` as a one-value enum, since Gemini ignores `const`
     Returns:
         parameters: dict - the input parameters, modified in place
     """
@@ -891,6 +1113,11 @@ def build_vertex_schema(
     # with circular references (see issue #19098). unpack_defs handles nested
     # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
+    if pin_consts:
+        _pin_scalar_consts(
+            cast(JsonValue, parameters),  # cast-ok: tool and response schemas are JSON request data
+            pins_empty_string=False,
+        )
 
     _convert_schema_types(parameters)
 
@@ -1001,7 +1228,9 @@ def _forces(function_calling_config: JsonValue, name: JsonValue) -> bool:
 
 def _vertex_parameters(json_schema: Mapping[str, JsonValue], send_integer_enums: bool) -> Mapping[str, JsonValue]:
     stripped: Final = remove_strict_from_schema(remove_additional_properties(deepcopy(dict(json_schema))))
-    return _JSON_SCHEMA.validate_python(build_vertex_schema(stripped, send_integer_enums=send_integer_enums))
+    return _JSON_SCHEMA.validate_python(
+        build_vertex_schema(stripped, send_integer_enums=send_integer_enums, pin_consts=False)
+    )
 
 
 def _declaration_for(declaration: JsonValue, function_calling_config: JsonValue, send_integer_enums: bool) -> JsonValue:
@@ -1042,14 +1271,21 @@ def with_forced_bare_root_unions_on_parameters(
             return tools
 
 
-def parameters_json_schema_for(parameters: Mapping[str, object]) -> Mapping[str, JsonValue] | None:
+def parameters_json_schema_for(
+    parameters: Mapping[str, object], pin_consts: bool = True
+) -> Mapping[str, JsonValue] | None:
     if "$ref" not in parameters and not _root_cannot_be_vertex_parameters(parameters):
         return None
     json_schema: Final = _JSON_SCHEMA.validate_python(to_jsonable_python(parameters))
-    return json_schema if needs_parameters_json_schema(json_schema) else None
+    if not needs_parameters_json_schema(json_schema):
+        return None
+    pinned: Final = dict(json_schema)
+    if pin_consts:
+        _pin_scalar_consts(pinned, pins_empty_string=True)
+    return pinned
 
 
-def build_json_schema(parameters: dict) -> dict:
+def build_json_schema(parameters: Mapping[str, object], pin_consts: bool = True) -> dict[str, object]:
     """
     Build a JSON Schema for use with Gemini's responseJsonSchema parameter.
 
@@ -1060,19 +1296,22 @@ def build_json_schema(parameters: dict) -> dict:
     - Preserves $defs/$ref (Gemini 2.0+ supports JSON Schema references natively)
 
     Parameters:
-        parameters: dict - the JSON schema to process
+        parameters: Mapping - the JSON schema to process, left unchanged
 
     Returns:
         dict - the processed schema in standard JSON Schema format
     """
-    # Gemini 2.0+ with responseJsonSchema accepts standard JSON Schema as-is,
-    # including $ref, $defs, anyOf, etc. No transformations needed — the
-    # OpenAPI-specific fixes (unpack_defs, add_object_type, convert_anyof, etc.)
+    # The OpenAPI-specific fixes (unpack_defs, add_object_type, convert_anyof, etc.)
     # are only required for responseSchema (Gemini 1.5) and can break valid
     # JSON Schema by adding conflicting fields to $ref nodes.
     # See: https://blog.google/technology/developers/gemini-api-structured-outputs/
-
-    return parameters
+    schema: Final = deepcopy(dict(parameters))
+    if pin_consts:
+        _pin_scalar_consts(
+            cast(JsonValue, schema),  # cast-ok: response schemas are JSON request data
+            pins_empty_string=True,
+        )
+    return schema
 
 
 _build_json_schema = build_json_schema
@@ -1103,7 +1342,7 @@ def _filter_anyof_fields(schema_dict: dict[str, object]) -> dict[str, object]:
     return schema_dict
 
 
-def process_items(schema, depth=0):
+def process_items(schema: object, depth: int = 0):
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
@@ -1160,7 +1399,9 @@ def set_schema_property_ordering(schema: dict[str, object], depth: int = 0) -> d
     return schema
 
 
-def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str], processed=None) -> dict[str, object]:
+def filter_schema_fields(
+    schema_dict: dict[str, object], valid_fields: set[str], processed: set[int] | None = None
+) -> dict[str, object]:
     """
     Recursively filter a schema dictionary to keep only valid fields.
     """
@@ -1176,7 +1417,7 @@ def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str],
     if not isinstance(schema_dict, dict):
         return schema_dict
 
-    result: Final = {}
+    result: Final[dict[str, object]] = {}
     schema_dict = _filter_anyof_fields(schema_dict)
     for key, value in schema_dict.items():
         if key not in valid_fields:
@@ -1199,7 +1440,7 @@ def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str],
     return result
 
 
-def convert_anyof_null_to_nullable(schema, depth=0):
+def convert_anyof_null_to_nullable(schema, depth: int = 0):
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
@@ -1299,7 +1540,7 @@ def convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
 _convert_vertex_datetime_to_openai_datetime = convert_vertex_datetime_to_openai_datetime
 
 
-def _convert_schema_types(schema, depth=0):
+def _convert_schema_types(schema: object, depth: int = 0):
     """
     Convert type arrays and lowercase types for Vertex AI compatibility.
 
@@ -1506,14 +1747,14 @@ class VertexAIModelInfo(BaseLLMModelInfo):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         raise NotImplementedError("Vertex AI models are not supported yet")
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
@@ -1754,12 +1995,14 @@ class VertexAITokenCounter(BaseTokenCounter):
                 )
 
             if result is not None:
-                return TokenCountResponse(
-                    total_tokens=result.get("input_tokens", 0),
-                    request_model=request_model,
-                    model_used=model_to_use,
-                    tokenizer_type=result.get("tokenizer_used", ""),
-                    original_response=result,
+                return TokenCountResponse.model_validate(
+                    {
+                        "total_tokens": result.get("input_tokens", 0),
+                        "request_model": request_model,
+                        "model_used": model_to_use,
+                        "tokenizer_type": result.get("tokenizer_used", ""),
+                        "original_response": result,
+                    }
                 )
         else:
             from litellm.llms.anthropic.messages.context_management.inference_view import (
@@ -1771,7 +2014,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 VertexGeminiCountContextError,
                 count_context_error_response,
                 gemini_count_contents,
-                malformed_tool_result_text_count_error,
+                malformed_messages_error,
                 provider_error_response,
                 unconvertible_messages_error,
                 vertex_gemini_count_context,
@@ -1794,7 +2037,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 return count_context_error_response(count_context, request_model, model_to_use)
             blocks_error: Final = unconvertible_messages_error(
                 request_view.messages, messages_format
-            ) or malformed_tool_result_text_count_error(messages, messages_format, resolved_deployment)
+            ) or malformed_messages_error(messages, messages_format, resolved_deployment)
             if blocks_error is not None:
                 return count_context_error_response(blocks_error, request_model, model_to_use)
 
@@ -1822,12 +2065,14 @@ class VertexAITokenCounter(BaseTokenCounter):
                 return provider_error_response(error, request_model, model_to_use)
 
             if "totalTokens" in result:
-                return TokenCountResponse(
-                    total_tokens=result["totalTokens"],
-                    request_model=request_model,
-                    model_used=model_to_use,
-                    tokenizer_type=result.get("tokenizer_used", "gemini"),
-                    original_response=result,
+                return TokenCountResponse.model_validate(
+                    {
+                        "total_tokens": result["totalTokens"],
+                        "request_model": request_model,
+                        "model_used": model_to_use,
+                        "tokenizer_type": result.get("tokenizer_used", "gemini"),
+                        "original_response": result,
+                    }
                 )
 
         return None

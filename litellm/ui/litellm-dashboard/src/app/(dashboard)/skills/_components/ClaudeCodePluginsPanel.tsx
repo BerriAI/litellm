@@ -1,4 +1,7 @@
 import type { SkillListQuery } from "@/components/claude_code_plugins/types";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { Blocks } from "lucide-react";
 import { SkillFilters } from "@/components/claude_code_plugins/SkillFilters";
 import { useSkillFilters, skillSortQuery } from "@/components/claude_code_plugins/skillCatalog";
 import React, { useState } from "react";
@@ -185,7 +188,7 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
+    <PageContent>
       {selectedSkill ? (
         <CatalogSkillDetail
           userRole={userRole}
@@ -200,17 +203,24 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
         />
       ) : (
         <>
-          <div className="flex flex-col gap-2 mb-4">
-            <h1 className="text-2xl font-bold">{t("skills.panel.title")}</h1>
-            <p className="text-sm text-muted-foreground">{t("skills.panel.intro")}</p>
-            <div className="mt-2 flex gap-2">
+          <PageHeader>
+            <PageHeaderTitle>
+              <Blocks />
+              {t("skills.panel.title")}
+            </PageHeaderTitle>
+            <PageHeaderDescription>{t("skills.panel.intro")}</PageHeaderDescription>
+            <PageHeaderControls>
               <Button onClick={() => setIsAddModalVisible(true)} disabled={!canWrite}>
                 {t("skills.panel.addButton")}
               </Button>
-            </div>
-          </div>
+            </PageHeaderControls>
+          </PageHeader>
 
-          <Tabs value={tab} onValueChange={(value) => setTab(value === "submissions" ? "submissions" : "skills")}>
+          <Tabs
+            value={tab}
+            onValueChange={(value) => setTab(value === "submissions" ? "submissions" : "skills")}
+            className="gap-6"
+          >
             <TabsList variant="line">
               <TabsTrigger value="skills">{t("skills.panel.tabs.skills")}</TabsTrigger>
               <TabsTrigger value="submissions">
@@ -318,7 +328,7 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
           </AlertDialogContent>
         </AlertDialog>
       )}
-    </div>
+    </PageContent>
   );
 };
 

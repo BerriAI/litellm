@@ -8,7 +8,9 @@ from typing import Final
 
 from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    ImageTokenCostReporter,
     calculate_image_response_cost_from_usage,
+    calculate_image_token_cost,
     flat_image_cost,
     generic_cost_per_token,
     resolve_image_model_info,
@@ -21,9 +23,11 @@ def cost_calculator(
     image_response: ImageResponse,
     custom_llm_provider: str | None = None,
     model_info: ModelInfo | None = None,
+    *,
+    report_token_cost: ImageTokenCostReporter | None = None,
 ) -> float:
     """Calculate cost for OpenAI gpt-image models (token-based pricing)."""
-    rendering_cost: Final = _rendering_cost(model, image_response, custom_llm_provider, model_info)
+    rendering_cost: Final = _rendering_cost(model, image_response, custom_llm_provider, model_info, report_token_cost)
     svg_usage: Final = image_response.svg_usage
     if svg_usage is None:
         return rendering_cost
@@ -40,6 +44,8 @@ def cost_calculator(
     except Exception as exc:  # noqa: BLE001  # get_model_info can raise a bare Exception for missing pricing
         verbose_logger.debug("Unable to price SVG authoring usage for model=%s: %s", svg_usage.model, exc)
         return rendering_cost
+    if report_token_cost is not None:
+        report_token_cost(prompt_cost, completion_cost, None)
     return rendering_cost + prompt_cost + completion_cost
 
 
@@ -48,6 +54,7 @@ def _rendering_cost(
     image_response: ImageResponse,
     custom_llm_provider: str | None,
     model_info: ModelInfo | None,
+    report_token_cost: ImageTokenCostReporter | None,
 ) -> float:
     provider: Final = custom_llm_provider or "openai"
     price_table: Final = (
@@ -63,10 +70,13 @@ def _rendering_cost(
 
     # A chat Usage with an explicit output breakdown: cost via generic_cost_per_token.
     if isinstance(usage, Usage) and usage.completion_tokens_details is not None:
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model=model, usage=usage, custom_llm_provider=provider, model_info=price_table
+        return calculate_image_token_cost(
+            model=model,
+            usage=usage,
+            custom_llm_provider=provider,
+            model_info=price_table,
+            report_token_cost=report_token_cost,
         )
-        return prompt_cost + completion_cost
 
     # ImageUsage / ResponseAPIUsage: reuse the shared helper (same path as
     # azure_ai/gemini/vertex_ai). It prices generated output tokens at
@@ -74,7 +84,11 @@ def _rendering_cost(
     # does not itemize output and splitting text/image when it does.
     if getattr(usage, "input_tokens", None) is not None:
         token_based_cost: Final = calculate_image_response_cost_from_usage(
-            model=model, image_response=image_response, custom_llm_provider=provider, model_info=price_table
+            model=model,
+            image_response=image_response,
+            custom_llm_provider=provider,
+            model_info=price_table,
+            report_token_cost=report_token_cost,
         )
         if token_based_cost is not None:
             return token_based_cost
@@ -82,9 +96,12 @@ def _rendering_cost(
     # Fallback: a Usage with no output breakdown that the image helper can't read —
     # cost via generic_cost_per_token (text rate) instead of returning 0.0.
     if isinstance(usage, Usage):
-        prompt_cost, completion_cost = generic_cost_per_token(
-            model=model, usage=usage, custom_llm_provider=provider, model_info=price_table
+        return calculate_image_token_cost(
+            model=model,
+            usage=usage,
+            custom_llm_provider=provider,
+            model_info=price_table,
+            report_token_cost=report_token_cost,
         )
-        return prompt_cost + completion_cost
 
     return flat_image_cost(price_table, image_response)

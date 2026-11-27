@@ -37,6 +37,7 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsUsage,
     NoulAnswer,
+    OpenAIChoiceAnswer,
     OpenAIDecisionInputMessage,
     OpenAIDecisionInputText,
     OpenAIDecisionPromptCacheBreakpoint,
@@ -654,6 +655,209 @@ async def test_litellm_proxy_decisions_refuse_what_the_deployment_turns_off(
         )
 
     assert not route.called
+
+
+_PROXY_COST_REQUEST: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "input": "The package arrived broken.",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cost_header", "billed"), [("0.00042", 0.00042), ("0", 0.0)])
+async def test_litellm_proxy_decisions_bill_the_cost_the_proxy_reports(
+    respx_mock: respx.MockRouter,
+    cost_header: str,
+    billed: float,
+) -> None:
+    respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json=_OPENAI_PREDICATE_RESPONSE, headers={"x-litellm-response-cost": cost_header}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="litellm_proxy/openai/gpt-6-luna",
+        **_PROXY_COST_REQUEST,
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    assert response._hidden_params["response_cost"] == billed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cost_header", [None, "not-a-cost", "-1", "nan", "inf"])
+async def test_litellm_proxy_decisions_bill_the_model_price_without_a_usable_cost_header(
+    respx_mock: respx.MockRouter,
+    cost_header: str | None,
+) -> None:
+    respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json=_OPENAI_PREDICATE_RESPONSE,
+        headers={} if cost_header is None else {"x-litellm-response-cost": cost_header},
+    )
+    respx_mock.post("https://openai.example/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    proxied: Final = await litellm.adecisions(
+        model="litellm_proxy/openai/gpt-6-luna",
+        **_PROXY_COST_REQUEST,
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+    direct: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        **_PROXY_COST_REQUEST,
+        api_base="https://openai.example/v1",
+        api_key="caller-key",
+    )
+
+    assert direct._hidden_params["response_cost"] > 0
+    assert proxied._hidden_params["response_cost"] == direct._hidden_params["response_cost"]
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_systemone_goes_to_the_proxy_systemone_endpoint_unchanged(
+    respx_mock: respx.MockRouter,
+) -> None:
+    decisions_route: Final = respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json=_OPENAI_PREDICATE_RESPONSE
+    )
+    systemone_route: Final = respx_mock.post("https://proxy.example/v1/systemone").respond(json=_RESPONSE)
+
+    response: Final = await litellm.asystemone(
+        model="litellm_proxy/gemini/gemini-decision-1",
+        state="review photo-1",
+        questions=_QUESTIONS,
+        assets={"photo-1": {"format": "png", "data_base64": "AA=="}},
+        images=[_PNG_DATA_URL],
+        safety_identifier="end-user-1",
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    assert not decisions_route.called
+    sent: Final = json.loads(systemone_route.calls.last.request.content)
+    assert sent["model"] == "gemini/gemini-decision-1"
+    assert sent["questions"] == _QUESTIONS
+    assert sent["assets"] == {"photo-1": {"format": "png", "data_base64": "AA=="}}
+    assert sent["images"] == [_PNG_DATA_URL]
+    assert sent["safety_identifier"] == "end-user-1"
+    assert systemone_route.calls.last.request.headers["authorization"] == "Bearer proxy-key"
+    assert response.answers["sentiment"].confidence == 0.8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api", "request_kwargs", "proxy_response"),
+    [
+        (
+            "decisions",
+            {"input": "review", "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}]},
+            _OPENAI_PREDICATE_RESPONSE,
+        ),
+        ("systemone", {"state": "review", "questions": _QUESTIONS}, _RESPONSE),
+    ],
+    ids=("decisions", "systemone"),
+)
+@pytest.mark.parametrize("scope", ("call", "global", "off"))
+async def test_litellm_proxy_calls_pass_on_only_the_callers_own_drop_params(
+    api: str,
+    request_kwargs: dict[str, object],
+    proxy_response: dict[str, object],
+    scope: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", scope == "global")
+    route: Final = respx_mock.post(f"https://proxy.example/v1/{api}").respond(json=proxy_response)
+
+    await getattr(litellm, f"a{api}")(
+        model="litellm_proxy/gemini/gemini-decision-1",
+        safety_identifier="end-user-1",
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+        **request_kwargs,
+        **({"drop_params": True} if scope == "call" else {}),
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["safety_identifier"] == "end-user-1"
+    assert sent.get("drop_params") is (True if scope == "call" else None)
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_calls_pass_on_answers_the_proxy_returns_without_confidence(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json={
+            **_OPENAI_RESPONSE,
+            "answers": [
+                {
+                    "type": "choice",
+                    "name": "sentiment",
+                    "choice": "positive",
+                    "probabilities": [{"value": "positive", "probability": 0.8}, {"value": "negative", "probability": 0.2}],
+                }
+            ],
+        }
+    )
+    respx_mock.post("https://proxy.example/v1/systemone").respond(
+        json={
+            **_RESPONSE,
+            "answers": {
+                "sentiment": {"type": "choice", "choice": "positive", "probabilities": {"positive": 0.8, "negative": 0.2}}
+            },
+        }
+    )
+
+    decision: Final = await litellm.adecisions(
+        model="litellm_proxy/parallel_ai/decider",
+        input="The package arrived broken.",
+        questions=[
+            {
+                "type": "choice",
+                "name": "sentiment",
+                "instructions": "What is the tone?",
+                "choices": [{"value": "positive"}, {"value": "negative"}],
+            }
+        ],
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+    systemone: Final = await litellm.asystemone(
+        model="litellm_proxy/parallel_ai/decider",
+        state="The package arrived broken.",
+        questions={"sentiment": {"type": "choice", "criteria": {"positive": None, "negative": None}}},
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    answer: Final = decision.answers[0]
+    assert isinstance(answer, OpenAIChoiceAnswer)
+    assert answer.choice == "positive"
+    assert answer.confidence is None
+    assert systemone.answers["sentiment"].confidence is None
+
+
+@pytest.mark.asyncio
+async def test_litellm_proxy_decisions_keep_the_evidence_fields_the_proxy_returns(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://proxy.example/v1/decisions").respond(
+        json={**_OPENAI_PREDICATE_RESPONSE, "decision_id": "dec_123", "mode": "fast"}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="litellm_proxy/parallel_ai/decider",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_base="https://proxy.example/v1",
+        api_key="proxy-key",
+    )
+
+    assert response.model_dump()["decision_id"] == "dec_123"
+    assert response.model_dump()["mode"] == "fast"
 
 
 @pytest.mark.asyncio
@@ -2986,6 +3190,183 @@ def test_drop_params_refuses_input_with_only_developer_and_system_messages_for_a
             api_key="caller-key",
             input=[_CACHED_POLICY_MESSAGE, {"role": "system", "content": _SUPPORT_TEAM_NOTE}],
             questions=_PREDICATE_QUESTIONS,
+        )
+
+    assert not route.called
+
+
+_ORDER_EVIDENCE: Final[Mapping[str, object]] = MappingProxyType(
+    {"ticket": {"body": "Please refund the duplicate charge.", "attachment": None}, "order": {"charges": [49, 49]}}
+)
+_EVIDENCE_INSTRUCTION: Final[Mapping[str, object]] = MappingProxyType(
+    {"type": "input_text", "text": "Evaluate the ticket using the order evidence."}
+)
+
+
+def _evidence_message(data: object) -> Mapping[str, object]:
+    return {
+        "type": "message",
+        "role": "user",
+        "content": [dict(_EVIDENCE_INSTRUCTION), {"type": "input_json", "data": data}],
+    }
+
+
+@pytest.fixture
+def default_openai_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("default_openai_base")
+@pytest.mark.parametrize(
+    "data",
+    (dict(_ORDER_EVIDENCE), [dict(_ORDER_EVIDENCE), {"refund": None}]),
+    ids=("object", "array_of_objects"),
+)
+async def test_openai_receives_input_json_parts_as_sent(data: object, respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        api_key="caller-key",
+        input=[_evidence_message(data)],
+        questions=_PREDICATE_QUESTIONS,
+    )
+
+    assert json.loads(route.calls[0].request.content)["input"] == [_evidence_message(data)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("default_openai_base")
+async def test_input_json_with_a_prompt_cache_breakpoint_is_refused_before_openai(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+    marked: Final = {
+        "type": "input_json",
+        "data": dict(_ORDER_EVIDENCE),
+        "prompt_cache_breakpoint": {"mode": "explicit"},
+    }
+
+    with pytest.raises(litellm.BadRequestError, match=r"(?s)Invalid Decisions request.*prompt_cache_breakpoint"):
+        await litellm.adecisions(
+            model="openai/gpt-6-luna",
+            api_key="caller-key",
+            input=[{"role": "user", "content": [marked]}],
+            questions=_PREDICATE_QUESTIONS,
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("default_openai_base")
+async def test_drop_params_drops_a_prompt_cache_breakpoint_on_input_json_before_openai(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+    marked: Final = {
+        "type": "input_json",
+        "data": dict(_ORDER_EVIDENCE),
+        "prompt_cache_breakpoint": {"mode": "explicit"},
+    }
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        api_key="caller-key",
+        input=[{"role": "user", "content": [dict(_EVIDENCE_INSTRUCTION), marked]}],
+        questions=_PREDICATE_QUESTIONS,
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls[0].request.content)["input"] == [_evidence_message(dict(_ORDER_EVIDENCE))]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    (
+        _evidence_message("ticket 7"),
+        _evidence_message([1, 2]),
+        {"role": "developer", "content": [{"type": "input_json", "data": dict(_ORDER_EVIDENCE)}]},
+    ),
+    ids=("string_data", "scalar_array_data", "developer_message"),
+)
+async def test_input_json_shapes_openai_refuses_are_refused_before_http(
+    message: Mapping[str, object], respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_PREDICATE_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request"):
+        await litellm.adecisions(
+            model="openai/gpt-6-luna",
+            api_key="caller-key",
+            input=[message],
+            questions=_PREDICATE_QUESTIONS,
+            drop_params=True,
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_input_json_is_refused_by_a_provider_without_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="input_json"):
+        await litellm.adecisions(
+            model="perplexity/pplx-decider-v1-27b",
+            api_key="caller-key",
+            input=[_evidence_message(dict(_ORDER_EVIDENCE))],
+            questions=_PREDICATE_QUESTIONS,
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "url"),
+    [
+        ("perplexity/pplx-decider-v1-27b", _PERPLEXITY_DECISIONS_URL),
+        ("typesafe/jev-1.13", "https://api.typesafe.ai/v1/systemone"),
+    ],
+)
+async def test_drop_params_drops_input_json_for_a_provider_without_it(
+    respx_mock: respx.MockRouter, model: str, url: str
+) -> None:
+    route: Final = respx_mock.post(url).respond(json=_RESPONSE)
+
+    await litellm.adecisions(
+        model=model,
+        api_key="caller-key",
+        input=[_evidence_message(dict(_ORDER_EVIDENCE)), _REVIEW_MESSAGE],
+        questions=_PREDICATE_QUESTIONS,
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls[0].request.content)["state"] == f"{_EVIDENCE_INSTRUCTION['text']}\n\n{_SCREEN_TEXT}"
+
+
+@pytest.mark.asyncio
+async def test_drop_params_refuses_input_with_only_input_json_for_a_provider_without_it(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(_PERPLEXITY_DECISIONS_URL).respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.BadRequestError, match="leaves no input to decide on"):
+        await litellm.adecisions(
+            model="perplexity/pplx-decider-v1-27b",
+            api_key="caller-key",
+            input=[{"role": "user", "content": [{"type": "input_json", "data": dict(_ORDER_EVIDENCE)}]}],
+            questions=_PREDICATE_QUESTIONS,
+            drop_params=True,
         )
 
     assert not route.called
@@ -5525,6 +5906,49 @@ async def test_ollama_decisions_resolves_environment_key_and_explicit_connection
 
 
 @pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
+@pytest.mark.parametrize(
+    ("api_base", "api_key", "authorization"),
+    (
+        (None, None, "Bearer environment-key"),
+        ("http://ollama.local:11434/v1", "call-key", "Bearer call-key"),
+        ("http://ollama.local:11434/v1", "fake-api-key", None),
+    ),
+    ids=("environment", "explicit", "placeholder"),
+)
+async def test_ollama_decisions_model_info_lookups_go_to_the_call_server_with_the_call_key(
+    provider: str,
+    api_base: str | None,
+    api_key: str | None,
+    authorization: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.utils import cached_get_model_info_helper
+
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ignored.local:11434" if api_base else "http://ollama.local:11434")
+    monkeypatch.setenv("OLLAMA_API_KEY", "environment-key")
+    route: Final = respx_mock.post("http://ollama.local:11434/v1/systemone").respond(json=_RESPONSE)
+    lookup: Final = respx_mock.post("http://ollama.local:11434/api/show").respond(json={"model_info": {}})
+    stray: Final = respx_mock.route().respond(404)
+    litellm.get_model_info.cache_clear()
+    cached_get_model_info_helper.cache_clear()
+    try:
+        await litellm.asystemone(
+            model=f"{provider}/d3:4b", state="review", questions=_QUESTIONS, api_base=api_base, api_key=api_key
+        )
+    finally:
+        litellm.get_model_info.cache_clear()
+        cached_get_model_info_helper.cache_clear()
+
+    assert route.calls.last.request.headers.get("authorization") == authorization
+    assert lookup.call_count > 0
+    assert {call.request.headers.get("authorization") for call in lookup.calls} == {authorization}
+    assert [str(call.request.url) for call in stray.calls] == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ("ollama", "ollama_chat"))
 async def test_ollama_decisions_maps_upstream_bad_requests(
     provider: str, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
@@ -6054,6 +6478,26 @@ async def test_vercel_ai_gateway_decisions_refuse_developer_messages_without_dro
         await litellm.adecisions(
             model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
             input=[_CACHED_POLICY_MESSAGE, _REVIEW_MESSAGE],
+            questions=_PREDICATE_QUESTIONS,
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("vercel_gateway_key")
+async def test_vercel_ai_gateway_decisions_refuse_input_json_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(_VERCEL_DECISIONS_URL).respond(
+        json=_vercel_response("openai/gpt-6-luna-decisions", {})
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="input_json"):
+        await litellm.adecisions(
+            model="vercel_ai_gateway/openai/gpt-6-luna-decisions",
+            input=[_evidence_message(dict(_ORDER_EVIDENCE))],
             questions=_PREDICATE_QUESTIONS,
         )
 

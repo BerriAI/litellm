@@ -9,7 +9,6 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
     get_provider_request_id,
     provider_request_id_headers,
-    provider_request_ids,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -113,35 +112,6 @@ def test_provider_request_id_headers_keeps_only_request_id_headers(
     headers: dict[str, object] | None, expected: dict[str, str] | None
 ) -> None:
     result = provider_request_id_headers(headers)
-    assert (None if result is None else dict(result)) == expected
-
-
-@pytest.mark.parametrize(
-    ("response_headers", "additional_headers", "expected"),
-    (
-        (
-            {"APIM-Request-Id": "az-1", "x-request-id": "oai-1", "retry-after": "7"},
-            None,
-            {"apim-request-id": "az-1", "x-request-id": "oai-1"},
-        ),
-        (
-            None,
-            {"llm_provider-apim-request-id": "az-2", "llm_provider-content-type": "text/event-stream"},
-            {"apim-request-id": "az-2"},
-        ),
-        ({"x-request-id": "raw"}, {"llm_provider-x-request-id": "processed"}, {"x-request-id": "processed"}),
-        ({"x-request-id": 7, "apim-request-id": "", "x-amzn-requestid": "amzn-\u00fc"}, None, None),
-        ({"x-request-id": "x" * 10_000}, None, None),
-        ({"retry-after": "7"}, {"llm_provider-retry-after": "7"}, None),
-        (None, None, None),
-    ),
-)
-def test_provider_request_ids_keeps_every_valid_request_id_by_header_name(
-    response_headers: dict[str, object] | None,
-    additional_headers: dict[str, object] | None,
-    expected: dict[str, str] | None,
-) -> None:
-    result = provider_request_ids(response_headers, additional_headers)
     assert (None if result is None else dict(result)) == expected
 
 

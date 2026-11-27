@@ -6,6 +6,7 @@ const uiSettingsKeys = createQueryKeys("uiSettings");
 
 export type AriaInternalUserAccess = "none" | "own_usage" | "own_and_team_usage";
 type UISettings = {
+  supports_similarity_threshold?: boolean;
   values?: Record<string, unknown> & {
     aria_internal_user_access?: AriaInternalUserAccess;
     disable_aria?: boolean;
@@ -31,12 +32,13 @@ type UISettings = {
  */
 export const useUISettings = (options?: { staleTime?: number; refetchInterval?: number; enabled?: boolean }) => {
   const proxyBaseUrl = getProxyBaseUrl();
-  return useQuery<UISettings>({
+  const queryOptions = {
     queryKey: [...uiSettingsKeys.list({}), proxyBaseUrl],
     queryFn: async () => await getUiSettings(proxyBaseUrl),
     staleTime: options?.staleTime ?? 60 * 60 * 1000, // 1 hour - data rarely changes
     gcTime: 60 * 60 * 1000, // 1 hour - keep in cache for 1 hour
     refetchInterval: options?.refetchInterval,
     enabled: options?.enabled,
-  });
+  };
+  return useQuery<UISettings>(queryOptions);
 };

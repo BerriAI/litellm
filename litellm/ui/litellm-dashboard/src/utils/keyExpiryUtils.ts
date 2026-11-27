@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { add } from "date-fns";
 
 const HAS_TIMEZONE_SUFFIX = /[zZ]$|[+-]\d{2}:?\d{2}$/;
@@ -19,7 +20,7 @@ export function formatExpiresUtc(expires: string): string {
     return expires;
   }
 
-  return new Date(expiryMs).toLocaleString();
+  return displayTimestamp(new Date(expiryMs));
 }
 
 /**
@@ -68,7 +69,7 @@ export function calculateExpiryPreviewFromDuration(duration: string | undefined)
       throw new Error("Invalid duration format");
     }
 
-    return newExpiry.toLocaleString();
+    return displayTimestamp(newExpiry);
   } catch {
     return null;
   }

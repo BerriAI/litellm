@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Final
 from unittest.mock import MagicMock
@@ -8,6 +9,7 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from pydantic import BaseModel
 
+import litellm
 import litellm.proxy.proxy_server as proxy_server
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
@@ -17,13 +19,9 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    end_user_cache_key,
-    project_cache_key,
-    team_membership_reservation_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.router import Router
 
 _ProxyObject = (
@@ -35,18 +33,18 @@ _ProxyObject = (
 )
 
 
-def _cache_key(row: _ProxyObject) -> str:
+def _cache_key(row: _ProxyObject) -> AuthObject:
     match row:
         case LiteLLM_TeamTableCachedObj():
-            return f"team_id:{row.team_id}"
+            return AuthObject.team(row.team_id)
         case LiteLLM_UserTable():
-            return row.user_id
+            return AuthObject.user(row.user_id)
         case LiteLLM_EndUserTable():
-            return end_user_cache_key(row.user_id)
+            return AuthObject.end_user(row.user_id)
         case LiteLLM_ProjectTableCachedObj():
-            return project_cache_key(row.project_id)
+            return AuthObject.project(row.project_id)
         case LiteLLM_TeamMembership():
-            return team_membership_reservation_cache_key(user_id=row.user_id, team_id=row.team_id)
+            return AuthObject.team_membership_reservation(user_id=row.user_id, team_id=row.team_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,3 +82,48 @@ def proxy_auth_state(monkeypatch: pytest.MonkeyPatch) -> ProxyAuthState:
     for name, value in proxy_globals.items():
         monkeypatch.setattr(proxy_server, name, value)
     return ProxyAuthState(cache=cache, monkeypatch=monkeypatch)
+
+
+WITHOUT_LOW_TIERS_MODEL: Final = "reasoner-without-low-tiers"
+WITHOUT_MINIMAL_MODEL: Final = "reasoner-without-minimal"
+
+
+def _reasoner_refusing(
+    model: str, model_cost_key: str, provider: str, refused_efforts: frozenset[str]
+) -> Iterator[str]:
+    litellm.model_cost[model_cost_key] = {
+        "litellm_provider": provider,
+        "mode": "responses",
+        "supports_reasoning": True,
+        **{
+            f"supports_{effort}_reasoning_effort": effort not in refused_efforts
+            for effort in ("none", "minimal", "low")
+        },
+    }
+    litellm.get_model_info.cache_clear()
+    try:
+        yield f"{provider}/{model}"
+    finally:
+        litellm.model_cost.pop(model_cost_key, None)
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def openai_model_without_low_tiers(local_model_cost_map: None) -> Iterator[str]:
+    yield from _reasoner_refusing(
+        WITHOUT_LOW_TIERS_MODEL, WITHOUT_LOW_TIERS_MODEL, "openai", frozenset({"none", "minimal", "low"})
+    )
+
+
+@pytest.fixture
+def azure_model_without_low_tiers(local_model_cost_map: None) -> Iterator[str]:
+    yield from _reasoner_refusing(
+        WITHOUT_LOW_TIERS_MODEL, f"azure/{WITHOUT_LOW_TIERS_MODEL}", "azure", frozenset({"none", "minimal", "low"})
+    )
+
+
+@pytest.fixture
+def azure_model_without_minimal(local_model_cost_map: None) -> Iterator[str]:
+    yield from _reasoner_refusing(
+        WITHOUT_MINIMAL_MODEL, f"azure/{WITHOUT_MINIMAL_MODEL}", "azure", frozenset({"none", "minimal"})
+    )

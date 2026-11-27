@@ -31,6 +31,8 @@ _CACHE_PARAMETER_HELPERS: Final = frozenset(
     {
         "litellm/llms/anthropic/prompt_cache_prediction.py",
         "litellm/proxy/common_utils/cache_coordinator.py",
+        "litellm/proxy/common_utils/hook_cache.py",
+        "litellm/proxy/common_utils/state_cache.py",
         "litellm/proxy/common_utils/user_api_key_cache.py",
         "litellm/router_rust/routing_stores.py",
         "litellm/router_utils/routing_prefetch.py",
@@ -54,7 +56,9 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/litellm_core_utils/specialty_caches/dynamic_logging_cache.py",
         "litellm/litellm_core_utils/specialty_caches/service_trace_id_cache.py",
         "litellm/llms/azure/common_utils.py",
+        "litellm/llms/base_llm/auth/provider_oauth.py",
         "litellm/llms/bedrock/base_aws_llm.py",
+        "litellm/llms/bedrock/model_listing.py",
         "litellm/llms/custom_httpx/http_handler.py",
         "litellm/llms/databricks/common_utils.py",
         "litellm/llms/gigachat/authenticator.py",

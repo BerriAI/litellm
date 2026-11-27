@@ -1,4 +1,4 @@
-import type { ParseKeys } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import googleLogo from "../../../../../public/assets/logos/google.svg";
 import microsoftAzureLogo from "../../../../../public/assets/logos/microsoft_azure.svg";
 
@@ -12,12 +12,12 @@ export const ssoProviderLogoMap: Record<string, string> = {
 };
 
 // SSO Provider display names (consistent between select dropdown and table)
-export const ssoProviderDisplayNames: Record<string, ParseKeys> = {
-  google: "adminPanel.ssoSettings.providers.google",
-  microsoft: "adminPanel.ssoSettings.providers.microsoft",
-  okta: "adminPanel.ssoSettings.providers.okta",
-  generic: "adminPanel.ssoSettings.providers.generic",
-  saml: "adminPanel.ssoSettings.providers.saml",
+export const ssoProviderDisplayNames: Record<string, (t: TFunction) => string> = {
+  google: () => "Google SSO",
+  microsoft: () => "Microsoft SSO",
+  okta: () => "Okta / Auth0 SSO",
+  generic: (t) => t("adminPanel.ssoSettings.providers.generic"),
+  saml: () => "SAML SSO",
 };
 
 export const defaultRoleDisplayNames: Record<string, ParseKeys> = {

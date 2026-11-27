@@ -1,5 +1,6 @@
 "use client";
 
+import { productNames } from "@/i18n/untranslated/productNames";
 import { useState, useEffect } from "react";
 import { PlayCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -12,7 +13,7 @@ import BetaBadge from "@/components/BetaBadge";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
 import { useUrlTab } from "@/hooks/useUrlTab";
-import { Page, PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 
 const PLAYGROUND_TABS = ["chat", "compare", "compliance", "system-one", "agent-builder"] as const;
@@ -51,11 +52,11 @@ export default function PlaygroundPage() {
   }
 
   return (
-    <Page className="h-full overflow-hidden pb-0 sm:pb-0">
+    <>
       <PageHeader>
         <PageHeaderTitle>
           <PlayCircle />
-          {t("playground.page.title")}
+          {productNames.playground}
         </PageHeaderTitle>
         <PageHeaderDescription>{t("playground.page.description")}</PageHeaderDescription>
       </PageHeader>
@@ -105,6 +106,6 @@ export default function PlaygroundPage() {
           />
         </PageTabsContent>
       </PageTabs>
-    </Page>
+    </>
   );
 }

@@ -1,7 +1,7 @@
 import itertools
 import reprlib
 import time
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -348,22 +348,22 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
     def __init__(
         self,
         preamble: str | None = None,
-        chat_history: list | None = None,
+        chat_history: Sequence[object] | None = None,
         generation_id: str | None = None,
         response_id: str | None = None,
         conversation_id: str | None = None,
         prompt_truncation: str | None = None,
-        connectors: list | None = None,
+        connectors: Sequence[object] | None = None,
         search_queries_only: bool | None = None,
-        documents: list | None = None,
+        documents: Sequence[object] | None = None,
         temperature: int | None = None,
         max_tokens: int | None = None,
         k: int | None = None,
         p: int | None = None,
         frequency_penalty: int | None = None,
         presence_penalty: int | None = None,
-        tools: list | None = None,
-        tool_results: list | None = None,
+        tools: Sequence[object] | None = None,
+        tool_results: Sequence[object] | None = None,
         seed: int | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = MappingProxyType(locals())
@@ -373,11 +373,11 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -416,10 +416,10 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "stream":
                 optional_params["stream"] = value
@@ -451,7 +451,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict[str, object],
         litellm_params: dict[str, object],
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         """
         Cohere v2 chat api is in openai format, so we can use the openai transform request function to transform the request.
@@ -472,16 +472,16 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final[CohereV2ChatResponse] = raw_response.json()
         except Exception:
             raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -563,8 +563,8 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -575,7 +575,9 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             raise ValueError("api_base is required")
         return api_base
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return CohereError(status_code=status_code, message=error_message)
 
     def _translate_citations_to_openai_annotations(self, citations: list[dict]) -> list[ChatCompletionAnnotation]:

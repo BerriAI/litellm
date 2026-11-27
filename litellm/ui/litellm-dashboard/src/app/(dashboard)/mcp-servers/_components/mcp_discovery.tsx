@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { Search } from "lucide-react";
+import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -12,6 +13,19 @@ import { mcpLogoImg } from "./CreateMCPServer";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 
 const ALL_CATEGORIES = "All";
+const CATEGORY_LABELS = new Map<string, ParseKeys>([
+  ["Developer Tools", "mcpServers.discovery.categories.developerTools"],
+  ["Communication", "mcpServers.discovery.categories.communication"],
+  ["Databases", "mcpServers.discovery.categories.databases"],
+  ["Productivity", "mcpServers.discovery.categories.productivity"],
+  ["Search", "mcpServers.discovery.categories.search"],
+  ["Web & Browser", "mcpServers.discovery.categories.webAndBrowser"],
+  ["Cloud", "mcpServers.discovery.categories.cloud"],
+  ["System", "mcpServers.discovery.categories.system"],
+  ["Finance", "mcpServers.discovery.categories.finance"],
+  ["E-Commerce", "mcpServers.discovery.categories.eCommerce"],
+  ["Other", "mcpServers.discovery.otherCategory"],
+]);
 
 interface MCPDiscoveryProps {
   isVisible: boolean;
@@ -46,6 +60,10 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
   accessToken,
 }) => {
   const { t } = useTranslation();
+  const categoryLabel = (category: string) => {
+    const key = CATEGORY_LABELS.get(category);
+    return key ? t(key) : category;
+  };
   const [servers, setServers] = useState<DiscoverableMCPServer[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -136,7 +154,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
                   variant={isSelected ? "default" : "outline"}
                   onClick={() => setSelectedCategory(cat)}
                 >
-                  {cat === ALL_CATEGORIES ? t("mcpServers.discovery.allCategories") : cat}
+                  {cat === ALL_CATEGORIES ? t("mcpServers.discovery.allCategories") : categoryLabel(cat)}
                 </Button>
               );
             })}
@@ -186,7 +204,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
             Object.entries(groupedServers).map(([category, categoryServers]) => (
               <div key={category} className="mb-4">
                 <div className="mb-1 border-b border-border py-1.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
-                  {category === "Other" ? t("mcpServers.discovery.otherCategory") : category}
+                  {categoryLabel(category)}
                 </div>
                 <div className="grid grid-cols-2 gap-x-4">
                   {categoryServers.map((server) => {

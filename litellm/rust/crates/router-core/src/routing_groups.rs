@@ -38,7 +38,7 @@ pub fn members(
 
 /// Whether `group` is a priority group.
 pub fn is_priority(group: &RoutingGroupSpec) -> bool {
-    matches!(&group.routing_strategy, RoutingStrategy::Other(name) if name == "priority")
+    group.routing_strategy == RoutingStrategy::Priority
 }
 
 fn with_order(deployment: &Arc<Deployment>, order: i64) -> Arc<Deployment> {

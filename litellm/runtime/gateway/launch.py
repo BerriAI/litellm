@@ -37,10 +37,17 @@ KEEPALIVE_FLAG: Final = "--timeout-keep-alive"
 
 def uvicorn_argv(argv: Sequence[str], environ: Mapping[str, str]) -> tuple[str, ...]:
     """Honor ``KEEPALIVE_TIMEOUT`` like ``proxy_cli.py`` does, unless the flag was passed explicitly."""
-    keepalive: Final = environ.get("KEEPALIVE_TIMEOUT")
-    if keepalive is None or any(arg == KEEPALIVE_FLAG or arg.startswith(f"{KEEPALIVE_FLAG}=") for arg in argv):
+    if any(arg == KEEPALIVE_FLAG or arg.startswith(f"{KEEPALIVE_FLAG}=") for arg in argv):
         return (GATEWAY_APP, "--factory", *argv)
-    return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, keepalive)
+    keepalive: Final = environ.get("KEEPALIVE_TIMEOUT")
+    if keepalive is not None:
+        return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, keepalive)
+    if environ.get("UVICORN_TIMEOUT_KEEP_ALIVE"):
+        return (GATEWAY_APP, "--factory", *argv)
+
+    from litellm.constants import DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS
+
+    return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, str(DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS))
 
 
 def pool_database_url(

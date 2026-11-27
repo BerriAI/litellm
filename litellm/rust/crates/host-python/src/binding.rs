@@ -11,15 +11,16 @@ pub trait PythonBinding: PythonOwned {
     /// raises it.
     type Failure: Into<PyErr>;
 
+    /// What decoding hands the call's start: the request, and any per-call setup the binding
+    /// chose with it.
+    type Decoded: Send + 'static;
+
     /// Decodes the keyword view returned by `prepare_arguments`, including preflight rewrites.
     fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<
-        <Self::Protocol as Protocol>::Request,
-        InvokeError<<Self::Protocol as Protocol>::Error>,
-    >;
+    ) -> Result<Self::Decoded, InvokeError<<Self::Protocol as Protocol>::Error>>;
 
     fn encode_response(
         &mut self,

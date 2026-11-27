@@ -15,7 +15,7 @@ class SendbirdDetector(RegexBasedDetector):
         return "Sendbird Credential"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Sendbird Access ID
             re.compile(

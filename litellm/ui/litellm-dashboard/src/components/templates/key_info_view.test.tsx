@@ -1,12 +1,15 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { renderWithProviders } from "../../../tests/test-utils";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { apiClient, keyDeleteCall, keyUpdateCall, regenerateKeyCall, teamInfoCall } from "../networking";
 import { QueryClient } from "@tanstack/react-query";
+import { I18nextProvider } from "react-i18next";
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 import KeyInfoView, { needsLifetimeSpendBackfill } from "./key_info_view";
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
@@ -216,6 +219,7 @@ describe("KeyInfoView", () => {
     premiumUser: true,
     token: "test-token",
     userEmail: null,
+    userAlias: null,
     disabledPersonalKeyCreation: null,
     isLoading: false,
     isAuthorized: true,
@@ -272,41 +276,69 @@ describe("KeyInfoView", () => {
   });
 
   describe("last updated", () => {
-    const renderWithTimestamps = (overrides: Partial<KeyResponse>) => {
+    const renderWithTimestamps = (overrides: Partial<KeyResponse>, locale = i18n) => {
       vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
 
       return renderWithProviders(
-        <KeyInfoView
-          keyData={{
-            ...MOCK_KEY_DATA,
-            created_at: "2021-06-15T12:00:00Z",
-            updated_at: "2023-06-15T12:00:00Z",
-            ...overrides,
-          }}
-          onClose={() => {}}
-          keyId={"test-key-id"}
-          onKeyDataUpdate={() => {}}
-          teams={[]}
-        />,
+        <I18nextProvider i18n={locale}>
+          <KeyInfoView
+            keyData={{
+              ...MOCK_KEY_DATA,
+              created_at: "2021-06-15T12:00:00Z",
+              updated_at: "2023-06-15T12:00:00Z",
+              ...overrides,
+            }}
+            onClose={() => {}}
+            keyId={"test-key-id"}
+            onKeyDataUpdate={() => {}}
+            teams={[]}
+          />
+        </I18nextProvider>,
       );
     };
 
-    const findLastUpdatedText = async () => {
-      const label = await screen.findByText("Last Updated");
-      return label.closest("div")?.parentElement?.parentElement?.textContent ?? "";
+    const lifecycleStep = async (label: string) => {
+      const lifecycle = await screen.findByTestId("key-lifecycle-card");
+      return within(lifecycle).queryByText(label)?.closest("li") ?? null;
     };
+
+    it("updates key overview labels and dates when switching languages", async () => {
+      const locale = i18n.cloneInstance({ forkResourceStore: true });
+      locale.addResourceBundle("zh-CN", "translation", zh);
+      await locale.changeLanguage("en");
+      const dates = { expires: "2053-11-29T12:00:00Z", budget_reset_at: "2026-12-12T13:45:00Z", max_budget: 10 };
+      renderWithTimestamps(dates, locale);
+
+      expect(await screen.findByRole("button", { name: "Open activity" })).toBeInTheDocument();
+      expect(await lifecycleStep("Created")).toHaveTextContent(/Jun \d+, 2021/);
+      expect(screen.getByTestId("key-can-still-spend")).toHaveTextContent("Resets Dec 12, 2026 at 1:45 PM UTC");
+      expect(screen.getByTestId("applied-budgets")).toHaveTextContent("Resets Dec 12, 2026 at 1:45 PM UTC");
+
+      await act(() => locale.changeLanguage("zh-CN"));
+      expect(screen.getByRole("button", { name: "查看活动" })).toBeInTheDocument();
+      expect(screen.getByText("剩余可用费用")).toBeInTheDocument();
+      expect(await lifecycleStep("创建时间")).toHaveTextContent(/2021年6月\d+日/);
+      expect(await lifecycleStep("到期时间")).toHaveTextContent(/2053年11月\d+日/);
+      expect(screen.getByTestId("key-can-still-spend")).toHaveTextContent("于 2026年12月12日 13:45 UTC 重置");
+      expect(screen.getByTestId("applied-budgets")).toHaveTextContent("于 2026年12月12日 13:45 UTC 重置");
+
+      await act(() => locale.changeLanguage("en"));
+      expect(screen.getByRole("button", { name: "Open activity" })).toBeInTheDocument();
+      expect(await lifecycleStep("Expires")).toHaveTextContent(/Nov \d+, 2053/);
+    });
 
     it("should show when the key was last configured, not when it last recorded spend", async () => {
       renderWithTimestamps({ settings_updated_at: "2022-06-15T12:00:00Z" });
 
-      expect(await findLastUpdatedText()).toMatch(/Jun \d+, 2022/);
+      expect(await lifecycleStep("Last updated")).toHaveTextContent(/Jun \d+, 2022/);
       expect(screen.queryByText(/Jun \d+, 2023/)).not.toBeInTheDocument();
     });
 
-    it("should fall back to creation time for a key that was never reconfigured", async () => {
+    it("should leave the last update out of the timeline for a key that was never reconfigured", async () => {
       renderWithTimestamps({ settings_updated_at: null });
 
-      expect(await findLastUpdatedText()).toMatch(/Jun \d+, 2021/);
+      expect(await lifecycleStep("Created")).toHaveTextContent(/Jun \d+, 2021/);
+      expect(await lifecycleStep("Last updated")).toBeNull();
       expect(screen.queryByText(/Jun \d+, 2023/)).not.toBeInTheDocument();
     });
   });
@@ -324,8 +356,26 @@ describe("KeyInfoView", () => {
       />,
     );
 
-    expect(await screen.findByText("$0.2500")).toBeInTheDocument();
-    expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime spend: $340.5000");
+    expect(await screen.findByTestId("key-period-spend")).toHaveTextContent("$0.25");
+    expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime$340.50");
+  });
+
+  it("shows lifetime spend for a key that never resets, since it can be edited to reset later", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+    const neverResets = { ...MOCK_KEY_DATA, spend: 12, total_spend: 12, budget_duration: null, budget_reset_at: null };
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={neverResets}
+        onClose={() => {}}
+        keyId="test-key-id"
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByTestId("key-period-spend")).toHaveTextContent("$12.00");
+    expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime$12.00");
   });
 
   it("shows a team-member budget for a key without its own budget", async () => {
@@ -359,8 +409,12 @@ describe("KeyInfoView", () => {
       />,
     );
 
-    expect(await screen.findByText("Team member spend $45.0000 of $50.00 (team member budget)")).toBeInTheDocument();
-    expect(screen.queryByText("of Unlimited")).not.toBeInTheDocument();
+    const memberRow = (await within(await screen.findByTestId("applied-budgets")).findByText(/in Test Team$/)).closest(
+      "li",
+    );
+    expect(memberRow).toHaveTextContent("Team member budget");
+    expect(memberRow).toHaveTextContent("$45.00 of $50.00");
+    expect(screen.getByTestId("key-can-still-spend")).toHaveTextContent("$5.00");
     expect(teamInfoCall).toHaveBeenCalledWith("test-token", "member-budget-info-team", {
       includeMembers: false,
       keyLimit: 1,
@@ -374,7 +428,7 @@ describe("KeyInfoView", () => {
     expect(await screen.findByText("$50.00 (team member budget)")).toBeInTheDocument();
   });
 
-  it("keeps an own key budget in the Overview when a team-member budget exists", async () => {
+  it("keeps an own key budget in the Overview and still lists the team-member budget that applies", async () => {
     vi.mocked(useAuthorized).mockReturnValue(authorizedForTeamBudget);
     vi.mocked(teamInfoCall).mockResolvedValue({
       team_info: {
@@ -395,7 +449,7 @@ describe("KeyInfoView", () => {
     );
 
     expect(await screen.findByText("of $20.00")).toBeInTheDocument();
-    expect(teamInfoCall).not.toHaveBeenCalled();
+    expect(await within(screen.getByTestId("applied-budgets")).findByText(/in Test Team$/)).toBeInTheDocument();
   });
 
   it("shows the backfill hint when lifetime spend trails the period spend", async () => {
@@ -413,7 +467,7 @@ describe("KeyInfoView", () => {
 
     expect(await screen.findByTestId("key-lifetime-spend-backfill-hint")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /lifetime spend is below/i })).toBeInTheDocument();
-    expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime spend: $4.0000");
+    expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime$4.00");
   });
 
   it("hides the backfill hint when lifetime spend covers the period spend", async () => {
@@ -481,9 +535,7 @@ describe("KeyInfoView", () => {
         teams={[]}
       />,
     );
-    await waitFor(() => {
-      expect(screen.getByText("test-tag")).toBeInTheDocument();
-    });
+    expect(await within(await screen.findByTestId("key-other-settings")).findByText("test-tag")).toBeInTheDocument();
   });
 
   it("should not render tags in metadata textarea", async () => {
@@ -560,7 +612,7 @@ describe("KeyInfoView", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Regenerate Key")).toBeInTheDocument();
+      expect(screen.getByText("Regenerate key")).toBeInTheDocument();
     });
     await openMoreKeyActions();
     expect(await screen.findByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
@@ -606,7 +658,7 @@ describe("KeyInfoView", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Regenerate Key")).toBeInTheDocument();
+      expect(screen.getByText("Regenerate key")).toBeInTheDocument();
     });
     await openMoreKeyActions();
     expect(await screen.findByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
@@ -631,7 +683,7 @@ describe("KeyInfoView", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Regenerate Key")).toBeInTheDocument();
+      expect(screen.getByText("Regenerate key")).toBeInTheDocument();
     });
     await openMoreKeyActions();
     expect(await screen.findByRole("menuitem", { name: /delete key/i })).toBeInTheDocument();
@@ -655,7 +707,7 @@ describe("KeyInfoView", () => {
     );
 
     await waitFor(() => {
-      expect(screen.queryByText("Regenerate Key")).not.toBeInTheDocument();
+      expect(screen.queryByText("Regenerate key")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /more key actions/i })).not.toBeInTheDocument();
     });
   });
@@ -679,7 +731,7 @@ describe("KeyInfoView", () => {
     );
 
     await waitFor(() => {
-      expect(screen.queryByText("Regenerate Key")).not.toBeInTheDocument();
+      expect(screen.queryByText("Regenerate key")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /more key actions/i })).not.toBeInTheDocument();
     });
   });
@@ -723,7 +775,7 @@ describe("KeyInfoView", () => {
     );
 
     await waitFor(() => {
-      expect(screen.queryByText("Regenerate Key")).not.toBeInTheDocument();
+      expect(screen.queryByText("Regenerate key")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /more key actions/i })).not.toBeInTheDocument();
     });
   });
@@ -756,9 +808,10 @@ describe("KeyInfoView", () => {
         <KeyInfoView keyData={keyData} onClose={() => {}} keyId="test-key-id" onKeyDataUpdate={() => {}} teams={[]} />,
       );
 
-      expect(await screen.findByRole("link", { name: "Linked Team" })).toHaveAttribute(
-        "href",
-        expect.stringContaining("/teams?team=linked-team-id"),
+      const teamLinks = await screen.findAllByRole("link", { name: "Linked Team" });
+      expect(teamLinks.length).toBeGreaterThan(0);
+      teamLinks.forEach((link) =>
+        expect(link).toHaveAttribute("href", expect.stringContaining("/teams?team=linked-team-id")),
       );
     });
 
@@ -864,7 +917,7 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await screen.findByText("Team");
+      await screen.findByTestId("key-spend-card");
       expect(screen.queryByRole("link", { name: /team/i })).not.toBeInTheDocument();
     });
   });
@@ -1011,9 +1064,9 @@ describe("KeyInfoView", () => {
       />,
     );
 
-    await waitFor(() => {
-      expect(screen.getByText("Guardrails")).toBeInTheDocument();
-    });
+    const guardrails = await screen.findByTestId("key-guardrails-card");
+    expect(within(guardrails).getByText("guardrail-1")).toBeInTheDocument();
+    expect(within(guardrails).getByText("guardrail-2")).toBeInTheDocument();
   });
 
   it("should display policies when present", async () => {
@@ -1037,9 +1090,9 @@ describe("KeyInfoView", () => {
       />,
     );
 
-    await waitFor(() => {
-      expect(screen.getByText("Policies")).toBeInTheDocument();
-    });
+    const guardrails = await screen.findByTestId("key-guardrails-card");
+    expect(within(guardrails).getByText("From policies")).toBeInTheDocument();
+    expect(within(guardrails).getByText("policy-1")).toBeInTheDocument();
   });
 
   it("should display no key found message when keyData is undefined", async () => {
@@ -1551,15 +1604,16 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await userEvent.click(await screen.findByRole("button", { name: "Regenerate Key" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Regenerate key" }));
       await userEvent.click(await screen.findByRole("button", { name: "Regenerate" }));
       await waitFor(() => expect(regenerateKeyCall).toHaveBeenCalled());
       await userEvent.keyboard("{Escape}");
       await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
 
-      const lastRegenerated = within(screen.getByText("Last Regenerated").parentElement!).getByText(/ at /);
+      const settings = within(screen.getByRole("tabpanel"));
+      const lastRegenerated = within(settings.getByText("Last Regenerated").parentElement!).getByText(/ at /);
       expect(lastRegenerated).toHaveTextContent("2026");
-      expect(screen.getByText("Created").nextElementSibling).toHaveTextContent(lastRegenerated.textContent!);
+      expect(settings.getByText("Created").nextElementSibling).toHaveTextContent(lastRegenerated.textContent!);
     });
 
     it("hands the parent the regeneration time as an ISO timestamp", async () => {
@@ -1579,7 +1633,7 @@ describe("KeyInfoView", () => {
         />,
       );
 
-      await userEvent.click(await screen.findByRole("button", { name: "Regenerate Key" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Regenerate key" }));
       await userEvent.click(await screen.findByRole("button", { name: "Regenerate" }));
       await waitFor(() => expect(regenerateKeyCall).toHaveBeenCalled());
       await userEvent.keyboard("{Escape}");

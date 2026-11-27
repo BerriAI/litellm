@@ -2876,7 +2876,7 @@ IMAGEN_NEXT_IMAGES_ONE: Final = CostTrackingTestCase(
         content_type="application/json", body={"predictions": [{"bytesBase64Encoded": "AA==", "mimeType": "image/png"}]}
     ),
     expected=ExactExpected(
-        spend=0.05, input_cost=0.05, output_cost=0, prompt_tokens=0, completion_tokens=0, breakdown_persisted=False
+        spend=0.05, input_cost=0, output_cost=0.05, prompt_tokens=0, completion_tokens=0
     ),
 )
 

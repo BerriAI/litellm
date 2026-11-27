@@ -464,13 +464,14 @@ def check_vector_store_permission(
         if metadata is None:
             continue
 
-        allowed_indexes = metadata.get("allowed_vector_store_indexes")
-        if not allowed_indexes or not isinstance(allowed_indexes, list):
+        allowed_indexes = as_object_list(metadata.get("allowed_vector_store_indexes"))
+        if not allowed_indexes:
             continue
 
         # Look for matching index
-        for index_config in allowed_indexes:
-            if not isinstance(index_config, dict):
+        for entry in allowed_indexes:
+            index_config = as_str_mapping(entry)
+            if index_config is None or not isinstance(entry, dict):
                 continue
 
             if index_config.get("index_name") == index_name:

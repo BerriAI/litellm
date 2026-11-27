@@ -5,7 +5,6 @@ import { useTranslation } from "react-i18next";
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { deprecationProvider } from "./DeprecationModel";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { Page } from "@/components/shared/Page";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { useDeprecationAlerts } from "@/components/ModelDeprecationAlerts/useDeprecationAlerts";
 import { hasCapability } from "@/utils/capabilities";
@@ -13,6 +12,8 @@ import { migrationUrlParsers, migrationHref } from "./migrationRoute";
 import DeprecationEmailSetup from "./DeprecationEmailSetup";
 import AlertsInbox from "./AlertsInbox";
 import MigrationDetail from "./MigrationDetail";
+
+const PANEL_CLASS_NAME = "flex h-full min-h-0 min-w-0 w-full flex-col gap-3 overflow-y-auto";
 
 export default function ModelDeprecationsPanel() {
   const { t } = useTranslation();
@@ -26,13 +27,13 @@ export default function ModelDeprecationsPanel() {
   const missingDetail = detailReady && !selected;
   if (!allowed)
     return (
-      <Page className="h-full gap-3 overflow-y-auto p-0 sm:p-0">
+      <div className={PANEL_CLASS_NAME}>
         <h1 className="text-xl font-semibold">{t("alerts.panel.title")}</h1>
         <p>{t("alerts.panel.adminRequired")}</p>
-      </Page>
+      </div>
     );
   return (
-    <Page className="h-full gap-3 overflow-y-auto p-0 sm:p-0">
+    <div className={PANEL_CLASS_NAME}>
       {params.model && (
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -75,6 +76,6 @@ export default function ModelDeprecationsPanel() {
           isViewOnly={Boolean(isViewOnly)}
         />
       )}
-    </Page>
+    </div>
   );
 }

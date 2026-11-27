@@ -13,7 +13,7 @@ import httpx
 
 import litellm
 from litellm.constants import request_timeout
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.call_kwargs import http_client_of, logging_obj_of, shared_session_of
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.openai_evals import (
@@ -52,7 +52,7 @@ async def acreate_eval(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Eval:
     """
     Async: Create a new evaluation
@@ -121,7 +121,7 @@ def create_eval(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Eval | Coroutine[object, object, Eval]:
     """
     Create a new evaluation
@@ -143,8 +143,8 @@ def create_eval(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acreate_eval", False) is True
 
         # Get LiteLLM parameters
@@ -190,7 +190,7 @@ def create_eval(
         url: Final = evals_api_provider_config.get_complete_url(api_base=api_base, endpoint="evals")
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params=request_body,
@@ -207,12 +207,12 @@ def create_eval(
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -237,7 +237,7 @@ async def alist_evals(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ListEvalsResponse:
     """
     Async: List all evaluations
@@ -306,7 +306,7 @@ def list_evals(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ListEvalsResponse | Coroutine[object, object, ListEvalsResponse]:
     """
     List all evaluations
@@ -328,8 +328,8 @@ def list_evals(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("alist_evals", False) is True
 
         # Get LiteLLM parameters
@@ -376,7 +376,7 @@ def list_evals(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params=query_params,
@@ -393,12 +393,12 @@ def list_evals(
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -419,7 +419,7 @@ async def aget_eval(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Eval:
     """
     Async: Get an evaluation by ID
@@ -476,7 +476,7 @@ def get_eval(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Eval | Coroutine[object, object, Eval]:
     """
     Get an evaluation by ID
@@ -494,8 +494,8 @@ def get_eval(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aget_eval", False) is True
 
         # Get LiteLLM parameters
@@ -527,7 +527,7 @@ def get_eval(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={"eval_id": eval_id},
@@ -543,12 +543,12 @@ def get_eval(
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -572,7 +572,7 @@ async def aupdate_eval(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Eval:
     """
     Async: Update an evaluation
@@ -638,7 +638,7 @@ def update_eval(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Eval | Coroutine[object, object, Eval]:
     """
     Update an evaluation
@@ -659,8 +659,8 @@ def update_eval(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aupdate_eval", False) is True
 
         # Get LiteLLM parameters
@@ -746,7 +746,7 @@ def update_eval(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params=request_body,
@@ -763,12 +763,12 @@ def update_eval(
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -789,7 +789,7 @@ async def adelete_eval(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteEvalResponse:
     """
     Async: Delete an evaluation
@@ -846,7 +846,7 @@ def delete_eval(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteEvalResponse | Coroutine[object, object, DeleteEvalResponse]:
     """
     Delete an evaluation
@@ -864,8 +864,8 @@ def delete_eval(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("adelete_eval", False) is True
 
         # Get LiteLLM parameters
@@ -897,7 +897,7 @@ def delete_eval(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={"eval_id": eval_id},
@@ -913,12 +913,12 @@ def delete_eval(
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -939,7 +939,7 @@ async def acancel_eval(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> CancelEvalResponse:
     """
     Async: Cancel a running evaluation
@@ -996,7 +996,7 @@ def cancel_eval(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> CancelEvalResponse | Coroutine[object, object, CancelEvalResponse]:
     """
     Cancel a running evaluation
@@ -1014,8 +1014,8 @@ def cancel_eval(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acancel_eval", False) is True
 
         # Get LiteLLM parameters
@@ -1051,7 +1051,7 @@ def cancel_eval(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={"eval_id": eval_id},
@@ -1067,12 +1067,12 @@ def cancel_eval(
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -1102,7 +1102,7 @@ async def acreate_run(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Run:
     """
     Async: Create a new run for an evaluation
@@ -1171,7 +1171,7 @@ def create_run(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Run | Coroutine[object, object, Run]:
     """
     Create a new run for an evaluation
@@ -1193,8 +1193,8 @@ def create_run(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acreate_run", False) is True
 
         # Get LiteLLM parameters
@@ -1239,7 +1239,7 @@ def create_run(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params=request_body,
@@ -1256,12 +1256,12 @@ def create_run(
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or httpx.Timeout(timeout=600.0, connect=5.0),
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -1286,7 +1286,7 @@ async def alist_runs(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ListRunsResponse:
     """
     Async: List all runs for an evaluation
@@ -1355,7 +1355,7 @@ def list_runs(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ListRunsResponse | Coroutine[object, object, ListRunsResponse]:
     """
     List all runs for an evaluation
@@ -1377,8 +1377,8 @@ def list_runs(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("alist_runs", False) is True
 
         # Get LiteLLM parameters
@@ -1424,7 +1424,7 @@ def list_runs(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={"eval_id": eval_id, **query_params},
@@ -1441,12 +1441,12 @@ def list_runs(
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -1468,7 +1468,7 @@ async def aget_run(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Run:
     """
     Async: Get a specific run
@@ -1528,7 +1528,7 @@ def get_run(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Run | Coroutine[object, object, Run]:
     """
     Get a specific run
@@ -1547,8 +1547,8 @@ def get_run(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aget_run", False) is True
 
         # Get LiteLLM parameters
@@ -1581,7 +1581,7 @@ def get_run(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={"eval_id": eval_id, "run_id": run_id},
@@ -1597,12 +1597,12 @@ def get_run(
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -1624,7 +1624,7 @@ async def acancel_run(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> CancelRunResponse:
     """
     Async: Cancel a running run
@@ -1684,7 +1684,7 @@ def cancel_run(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> CancelRunResponse | Coroutine[object, object, CancelRunResponse]:
     """
     Cancel a running run
@@ -1703,8 +1703,8 @@ def cancel_run(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acancel_run", False) is True
 
         # Get LiteLLM parameters
@@ -1741,7 +1741,7 @@ def cancel_run(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={"eval_id": eval_id, "run_id": run_id},
@@ -1757,12 +1757,12 @@ def cancel_run(
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -1789,7 +1789,7 @@ async def adelete_run(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> RunDeleteResponse:
     """
     Async: Delete a run
@@ -1849,7 +1849,7 @@ def delete_run(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> RunDeleteResponse | Coroutine[object, object, RunDeleteResponse]:
     """
     Delete a run
@@ -1868,8 +1868,8 @@ def delete_run(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("adelete_run", False) is True
 
         # Get LiteLLM parameters
@@ -1906,7 +1906,7 @@ def delete_run(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={"eval_id": eval_id, "run_id": run_id},
@@ -1922,12 +1922,12 @@ def delete_run(
             evals_api_provider_config=evals_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response

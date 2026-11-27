@@ -8,10 +8,11 @@
 import json
 import os
 from collections.abc import Mapping
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
+from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -36,6 +37,10 @@ DEFAULT_QUALIFIRE_API_BASE: Final = "https://proxy.qualifire.ai"
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+
 class QualifireGuardrail(CustomGuardrail):
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -58,7 +63,7 @@ class QualifireGuardrail(CustomGuardrail):
         tool_selection_quality_check: bool | None = None,
         assertions: list[str] | None = None,
         on_flagged: str | None = "block",
-        **kwargs,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ):
         """
         Initialize the QualifireGuardrail class.
@@ -101,8 +106,11 @@ class QualifireGuardrail(CustomGuardrail):
         # Initialize async HTTP client for direct API calls
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        super().__init__(**kwargs)
+        default_event_hooks: Final = list(self.get_supported_event_hooks())
+        if "supported_event_hooks" in kwargs:
+            super().__init__(**kwargs)
+        else:
+            super().__init__(supported_event_hooks=default_event_hooks, **kwargs)
 
     def _validate_on_flagged(self, on_flagged: str) -> None:
         if on_flagged not in ("block", "monitor"):
@@ -157,7 +165,7 @@ class QualifireGuardrail(CustomGuardrail):
             "tool_calls": [{"id": "...", "name": "...", "arguments": {...}}]  # optional
         }
         """
-        api_messages: Final = []
+        api_messages: Final[list[dict[str, object]]] = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -185,7 +193,7 @@ class QualifireGuardrail(CustomGuardrail):
             # Handle tool calls if present
             tool_calls = [*anthropic_server_tool_call_params(msg), *(msg.get("tool_calls") or [])]
             if tool_calls:
-                api_tool_calls = []
+                api_tool_calls: list[dict[str, object]] = []
                 for tc in tool_calls:
                     if isinstance(tc, dict):
                         function_info = tc.get("function", {})
@@ -224,7 +232,7 @@ class QualifireGuardrail(CustomGuardrail):
         if not tools:
             return None
 
-        api_tools: Final = []
+        api_tools: Final[list[dict[str, object]]] = []
         for tool in tools:
             if isinstance(tool, dict):
                 # Handle OpenAI function tool format
@@ -271,7 +279,7 @@ class QualifireGuardrail(CustomGuardrail):
         self,
         api_messages: list[dict[str, object]],
         output: str | None,
-        assertions: list[str] | None,
+        assertions: object,
         available_tools: list[dict[str, object]] | None,
     ) -> dict[str, object]:
         """Build payload dictionary for the /api/evaluation/evaluate endpoint."""
@@ -309,7 +317,7 @@ class QualifireGuardrail(CustomGuardrail):
         self,
         messages: list[AllMessageValues],
         output: str | None,
-        dynamic_params: dict[str, Any],
+        dynamic_params: Mapping[str, object],
         available_tools: list[object] | None = None,
     ) -> None:
         """
@@ -504,7 +512,7 @@ class QualifireGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[BaseModel]"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
             QualifireGuardrailConfigModel,
         )

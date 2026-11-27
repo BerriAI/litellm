@@ -1,4 +1,5 @@
 import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
 import { isAdminRole } from "@/utils/roles";
 import { ChevronDownIcon, ChevronRightIcon, ExternalLinkIcon, PlusCircleIcon } from "@heroicons/react/outline";
@@ -8,27 +9,27 @@ import Link from "next/link";
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getProxyBaseUrl, getPublicModelHubInfo, getUiPageUrl, updateUsefulLinksCall } from "../networking";
+import { toUsefulLinksRequest } from "./usefulLinksMapper";
+import { createUsefulLinksSchemas, type UsefulLink } from "./usefulLinksSchema";
 
 interface UsefulLinksManagementProps {
   accessToken: string | null;
   userRole: string | null;
 }
 
-interface Link {
-  id: string;
-  displayName: string;
-  url: string;
-  index?: number;
-}
+const emptyLink = { url: "", displayName: "" };
 
 const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessToken, userRole }) => {
   const { t } = useTranslation();
-  const [links, setLinks] = useState<Link[]>([]);
-  const [newLink, setNewLink] = useState({ url: "", displayName: "" });
-  const [editingLink, setEditingLink] = useState<Link | null>(null);
+  const [links, setLinks] = useState<UsefulLink[]>([]);
+  const { addSchema, editSchema } = createUsefulLinksSchemas(links);
+  const addForm = useZodForm(addSchema, { defaultValues: emptyLink });
+  const editForm = useZodForm(editSchema, { defaultValues: { link: null } });
+  const newLink = addForm.watch();
+  const editingLink = editForm.watch("link");
   const [isExpanded, setIsExpanded] = useState(true);
   const [isRearranging, setIsRearranging] = useState(false);
-  const [originalLinksOrder, setOriginalLinksOrder] = useState<Link[]>([]);
+  const [originalLinksOrder, setOriginalLinksOrder] = useState<UsefulLink[]>([]);
 
   const fetchUsefulLinks = async () => {
     if (!accessToken) return;
@@ -48,7 +49,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
               return {
                 id: `${(value as any).index ?? 0}-${displayName}`,
                 displayName,
-                url: (value as any).url as string,
+                url: value.url,
                 index: (value as any).index ?? 0,
               };
             } else {
@@ -86,21 +87,12 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     return null;
   }
 
-  const saveLinksToBackend = async (updatedLinks: Link[]) => {
+  const saveLinksToBackend = async (updatedLinks: UsefulLink[]) => {
     if (!accessToken) return false;
 
     try {
-      // Convert array back to object format with index for ordering
-      // New format: { "displayName": { "url": "...", "index": 0 } }
-      const linksObject: Record<string, { url: string; index: number }> = {};
-      updatedLinks.forEach((link, index) => {
-        linksObject[link.displayName] = {
-          url: link.url,
-          index: index,
-        };
-      });
-
-      await updateUsefulLinksCall(accessToken, linksObject);
+      const { useful_links } = toUsefulLinksRequest(updatedLinks);
+      await updateUsefulLinksCall(accessToken, useful_links);
 
       return true;
     } catch (error) {
@@ -110,70 +102,60 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     }
   };
 
+  const showDraftError = (message: string | undefined) => {
+    if (message === "invalidUrl" || message === "duplicateName") {
+      toast.fromError(t(`aiHub.usefulLinks.${message}`));
+    }
+  };
+
   const handleAddLink = async () => {
-    if (!newLink.url || !newLink.displayName) return;
-
-    // Validate URL
-    try {
-      new URL(newLink.url);
-    } catch {
-      toast.fromError(t("aiHub.usefulLinks.invalidUrl"));
+    const result = addSchema.safeParse(addForm.getValues());
+    if (!result.success) {
+      showDraftError(result.error.issues[0]?.message);
       return;
     }
-
-    // Check for duplicate display names
-    if (links.some((link) => link.displayName === newLink.displayName)) {
-      toast.fromError(t("aiHub.usefulLinks.duplicateName"));
-      return;
-    }
-
-    const newLinkObj: Link = {
-      id: `${Date.now()}-${newLink.displayName}`,
-      displayName: newLink.displayName,
-      url: newLink.url,
+    const { displayName, url } = result.data;
+    const newLinkObj: UsefulLink = {
+      id: `${Date.now()}-${displayName}`,
+      displayName,
+      url,
     };
 
     const updatedLinks = [...links, newLinkObj];
 
     if (await saveLinksToBackend(updatedLinks)) {
       setLinks(updatedLinks);
-      setNewLink({ url: "", displayName: "" });
+      addForm.reset(emptyLink);
       toast.success(t("aiHub.usefulLinks.added"));
     }
   };
 
-  const handleEditLink = (link: Link) => {
-    setEditingLink({ ...link });
+  const handleEditLink = (link: UsefulLink) => {
+    editForm.setValue("link", link);
   };
 
   const handleUpdateLink = async () => {
     if (!editingLink) return;
 
-    // Validate URL
-    try {
-      new URL(editingLink.url);
-    } catch {
-      toast.fromError(t("aiHub.usefulLinks.invalidUrl"));
+    const result = editSchema.safeParse(editForm.getValues());
+    if (!result.success) {
+      showDraftError(result.error.issues[0]?.message);
       return;
     }
 
-    // Check for duplicate display names (excluding current link)
-    if (links.some((link) => link.id !== editingLink.id && link.displayName === editingLink.displayName)) {
-      toast.fromError(t("aiHub.usefulLinks.duplicateName"));
-      return;
-    }
-
-    const updatedLinks = links.map((link) => (link.id === editingLink.id ? editingLink : link));
+    const editedLink = result.data.link;
+    if (!editedLink) return;
+    const updatedLinks = links.map((link) => (link.id === editedLink.id ? editedLink : link));
 
     if (await saveLinksToBackend(updatedLinks)) {
       setLinks(updatedLinks);
-      setEditingLink(null);
+      handleCancelEdit();
       toast.success(t("aiHub.usefulLinks.updated"));
     }
   };
 
   const handleCancelEdit = () => {
-    setEditingLink(null);
+    editForm.setValue("link", null);
   };
 
   const deleteLink = async (linkId: string) => {
@@ -191,7 +173,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
 
   const handleStartRearranging = () => {
     if (editingLink) {
-      setEditingLink(null);
+      handleCancelEdit();
     }
     setOriginalLinksOrder([...links]);
     setIsRearranging(true);
@@ -253,12 +235,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                 <input
                   type="text"
                   value={newLink.displayName}
-                  onChange={(e) =>
-                    setNewLink({
-                      ...newLink,
-                      displayName: e.target.value,
-                    })
-                  }
+                  onChange={(e) => addForm.setValue("displayName", e.target.value)}
                   placeholder={t("aiHub.usefulLinks.addForm.displayNamePlaceholder")}
                   className="w-full px-3 py-2 border border-border rounded-md text-sm"
                 />
@@ -268,12 +245,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                 <input
                   type="text"
                   value={newLink.url}
-                  onChange={(e) =>
-                    setNewLink({
-                      ...newLink,
-                      url: e.target.value,
-                    })
-                  }
+                  onChange={(e) => addForm.setValue("url", e.target.value)}
                   placeholder="https://example.com"
                   className="w-full px-3 py-2 border border-border rounded-md text-sm"
                 />
@@ -348,10 +320,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                               type="text"
                               value={editingLink.displayName}
                               onChange={(e) =>
-                                setEditingLink({
-                                  ...editingLink,
-                                  displayName: e.target.value,
-                                })
+                                editForm.setValue("link", { ...editingLink, displayName: e.target.value })
                               }
                               className="w-full px-2 py-1 border border-border rounded-md text-sm"
                             />
@@ -359,13 +328,8 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                           <TableCell className="py-0.5">
                             <input
                               type="text"
-                              value={editingLink.url}
-                              onChange={(e) =>
-                                setEditingLink({
-                                  ...editingLink,
-                                  url: e.target.value,
-                                })
-                              }
+                              value={editingLink.url as string}
+                              onChange={(e) => editForm.setValue("link", { ...editingLink, url: e.target.value })}
                               className="w-full px-2 py-1 border border-border rounded-md text-sm"
                             />
                           </TableCell>
@@ -389,7 +353,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                       ) : (
                         <>
                           <TableCell className="py-0.5 text-sm text-foreground">{link.displayName}</TableCell>
-                          <TableCell className="py-0.5 text-sm text-muted-foreground">{link.url}</TableCell>
+                          <TableCell className="py-0.5 text-sm text-muted-foreground">{link.url as string}</TableCell>
                           <TableCell className="py-0.5 whitespace-nowrap">
                             {isRearranging ? (
                               <div className="flex space-x-2">
@@ -414,7 +378,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                               <div className="flex space-x-2">
                                 <TableIconActionButton
                                   variant="Open"
-                                  onClick={() => setCurrentLink(link.url)}
+                                  onClick={() => setCurrentLink(link.url as string)}
                                   tooltipText={t("aiHub.usefulLinks.openLink")}
                                   dataTestId={`open-link-${link.id}`}
                                 />

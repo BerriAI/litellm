@@ -82,7 +82,7 @@ class HTTPClient:
         url: Final = f"{self._base_url}/{uri.lstrip('/')}"
 
         # Prepare headers
-        request_headers: Final = {}
+        request_headers: Final[dict[str, str]] = {}
         if headers:
             request_headers.update(headers)
         if self._api_key:

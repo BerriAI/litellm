@@ -1,5 +1,10 @@
+//! Drives a hosted coroutine from Python: every host call the body yields is answered by the method
+//! of that name on the host object, awaited in the caller's task, and the body's output is turned
+//! into the Python value the execution returns.
+
 use std::{
     any::Any,
+    future::Future,
     mem,
     panic::AssertUnwindSafe,
     sync::{Arc, Mutex, PoisonError},
@@ -10,13 +15,13 @@ use futures_util::{
     future::{AbortHandle, Abortable},
 };
 use litellm_callbacks::{
-    CallbackError, ErasedCallback, HookInput, HookOutput, HostCallError, HostException, HostFault,
-    HostReply, HostRequest, Hosted, RequestState, hosted,
+    CallbackError, ErasedCallback, HookInput, HookOutput, Host, HostCallError, HostException,
+    HostFault, HostReply, HostRequest, Hosted, RequestState, hosted,
 };
 use litellm_coroutine::{CoroutineState, Reply, ResumeError};
 use litellm_host_python::{
-    ExecutionBody, ExecutionStep, Suspension, json_from_py, json_to_py, poll_async_value,
-    run_async_value,
+    Execution, ExecutionBody, ExecutionStep, Suspension, json_from_py, json_to_py,
+    poll_async_value, run_async_value,
 };
 use pyo3::{
     exceptions::{PyException, PyRuntimeError},
@@ -24,15 +29,15 @@ use pyo3::{
     prelude::*,
 };
 
-use crate::{panic_error, payload, verdict_object};
+use crate::{execution_steps, panic_error, payload, verdict_object};
 
 type Handled = Result<HookOutput, Box<dyn Any + Send>>;
-type Outcome = Result<CoroutineState<HostRequest, Handled>, ResumeError>;
+type Outcome<C> = Result<CoroutineState<HostRequest, C>, ResumeError>;
+type Finish<C> = Box<dyn FnOnce(Python<'_>, C) -> PyResult<Py<PyAny>> + Send + Sync>;
 
-#[derive(Default)]
-struct Slot {
-    body: Option<Hosted<Handled>>,
-    outcome: Option<Outcome>,
+struct Slot<C> {
+    body: Option<Hosted<C>>,
+    outcome: Option<Outcome<C>>,
 }
 
 enum Waiting {
@@ -46,23 +51,35 @@ enum Next {
     Again,
 }
 
-pub(crate) struct HostedExecution {
-    slot: Arc<Mutex<Slot>>,
+/// One hosted coroutine run as a Python execution: the body's host calls go to `host`, and
+/// `finish` turns the body's output into the execution's return value.
+pub(crate) struct HostedExecution<C: Send + 'static> {
+    slot: Arc<Mutex<Slot<C>>>,
     host: Py<PyAny>,
     waiting: Waiting,
+    finish: Option<Finish<C>>,
 }
 
 fn out_of_order() -> PyErr {
     PyRuntimeError::new_err("the rust callback execution was resumed out of order")
 }
 
-pub(crate) fn callback_error(error: CallbackError) -> PyErr {
-    if let CallbackError::Host(HostCallError::Raised { exception, .. }) = &error
+/// The Python error a failed host call surfaces as: the exception the host raised, when it raised
+/// one, else a `RuntimeError` naming the call.
+pub fn host_call_error(error: &HostCallError) -> PyErr {
+    if let HostCallError::Raised { exception, .. } = error
         && let Some(original) = exception.original::<PyErr>()
     {
         return Python::attach(|py| original.clone_ref(py));
     }
     PyRuntimeError::new_err(error.to_string())
+}
+
+pub(crate) fn callback_error(error: CallbackError) -> PyErr {
+    match &error {
+        CallbackError::Host(host) => host_call_error(host),
+        _ => PyRuntimeError::new_err(error.to_string()),
+    }
 }
 
 fn host_reply(py: Python<'_>, answer: PyResult<Py<PyAny>>) -> HostReply {
@@ -85,24 +102,74 @@ fn is_awaitable(value: &Bound<'_, PyAny>) -> PyResult<bool> {
         .is_truthy()
 }
 
-impl HostedExecution {
-    pub(crate) fn new(
-        callback: Arc<dyn ErasedCallback>,
-        input: HookInput,
-        state: Option<RequestState>,
-        render_loop: Option<Arc<Py<PyAny>>>,
-        host: Py<PyAny>,
-    ) -> Self {
-        let body = hosted(move |host| async move {
-            payload::on_render_loop(
-                render_loop,
-                AssertUnwindSafe(async {
-                    callback.handle_hosted(&input, state.as_ref(), host).await
-                })
+/// Runs `run` as a Python execution whose host calls `host` answers. A panic in the body raises a
+/// `RuntimeError`; otherwise `finish` turns the body's output into the value the execution returns.
+pub fn run_hosted<C, F>(
+    run: impl FnOnce(Host) -> F,
+    host: Py<PyAny>,
+    finish: impl FnOnce(Python<'_>, C) -> PyResult<Py<PyAny>> + Send + Sync + 'static,
+) -> Execution
+where
+    C: Send + 'static,
+    F: Future<Output = C> + Send + 'static,
+{
+    let body = hosted(move |host| AssertUnwindSafe(run(host)).catch_unwind());
+    Execution::new(
+        HostedExecution::new(
+            body,
+            host,
+            Box::new(
+                move |py, output: Result<C, Box<dyn Any + Send>>| match output {
+                    Ok(output) => finish(py, output),
+                    Err(panic) => Err(panic_error(panic)),
+                },
+            ),
+        ),
+        execution_steps,
+    )
+}
+
+/// `run_hosted` for one hook run a host starts itself: the verdict is the execution's return
+/// value, as it is for `RustCallback.start`.
+pub fn run_hosted_hook<F>(run: impl FnOnce(Host) -> F, host: Py<PyAny>) -> Execution
+where
+    F: Future<Output = HookOutput> + Send + 'static,
+{
+    run_hosted(run, host, |py, handled: HookOutput| match handled {
+        Ok(verdict) => verdict_object(py, verdict),
+        Err(error) => Err(callback_error(error)),
+    })
+}
+
+/// The execution behind `RustCallback.start`: the callback's hosted handler, its verdict returned.
+pub(crate) fn callback_execution(
+    callback: Arc<dyn ErasedCallback>,
+    input: HookInput,
+    state: Option<RequestState>,
+    render_loop: Option<Arc<Py<PyAny>>>,
+    host: Py<PyAny>,
+) -> HostedExecution<Handled> {
+    let body = hosted(move |host| async move {
+        payload::on_render_loop(
+            render_loop,
+            AssertUnwindSafe(async { callback.handle_hosted(&input, state.as_ref(), host).await })
                 .catch_unwind(),
-            )
-            .await
-        });
+        )
+        .await
+    });
+    HostedExecution::new(
+        body,
+        host,
+        Box::new(|py, handled: Handled| match handled {
+            Ok(Ok(verdict)) => verdict_object(py, verdict),
+            Ok(Err(error)) => Err(callback_error(error)),
+            Err(panic) => Err(panic_error(panic)),
+        }),
+    )
+}
+
+impl<C: Send + 'static> HostedExecution<C> {
+    fn new(body: Hosted<C>, host: Py<PyAny>, finish: Finish<C>) -> Self {
         Self {
             slot: Arc::new(Mutex::new(Slot {
                 body: Some(body),
@@ -110,14 +177,15 @@ impl HostedExecution {
             })),
             host,
             waiting: Waiting::Nothing,
+            finish: Some(finish),
         }
     }
 
-    fn slot(&self) -> std::sync::MutexGuard<'_, Slot> {
+    fn slot(&self) -> std::sync::MutexGuard<'_, Slot<C>> {
         self.slot.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn landed(&self) -> PyResult<Outcome> {
+    fn landed(&self) -> PyResult<Outcome<C>> {
         self.slot().outcome.take().ok_or_else(out_of_order)
     }
 
@@ -154,7 +222,7 @@ impl HostedExecution {
         ))))
     }
 
-    fn run(&mut self, py: Python<'_>, landed: Option<Outcome>) -> PyResult<ExecutionStep> {
+    fn run(&mut self, py: Python<'_>, landed: Option<Outcome<C>>) -> PyResult<ExecutionStep> {
         let mut landed = landed;
         loop {
             let outcome = match landed.take() {
@@ -170,7 +238,7 @@ impl HostedExecution {
         }
     }
 
-    fn settle(&mut self, py: Python<'_>, outcome: Outcome) -> PyResult<Next> {
+    fn settle(&mut self, py: Python<'_>, outcome: Outcome<C>) -> PyResult<Next> {
         match outcome {
             Ok(CoroutineState::Yielded(HostRequest {
                 call,
@@ -192,11 +260,10 @@ impl HostedExecution {
                     }
                 }
             }
-            Ok(CoroutineState::Complete(Ok(Ok(verdict)))) => Ok(Next::Step(ExecutionStep::Return(
-                verdict_object(py, verdict)?,
-            ))),
-            Ok(CoroutineState::Complete(Ok(Err(error)))) => Err(callback_error(error)),
-            Ok(CoroutineState::Complete(Err(panic))) => Err(panic_error(panic)),
+            Ok(CoroutineState::Complete(output)) => {
+                let finish = self.finish.take().ok_or_else(out_of_order)?;
+                Ok(Next::Step(ExecutionStep::Return(finish(py, output)?)))
+            }
             Err(error) => Err(PyRuntimeError::new_err(error.to_string())),
         }
     }
@@ -221,7 +288,7 @@ impl HostedExecution {
     }
 }
 
-impl ExecutionBody for HostedExecution {
+impl<C: Send + 'static> ExecutionBody for HostedExecution<C> {
     fn resume(&mut self, result: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep> {
         Python::attach(
             |py| match (mem::replace(&mut self.waiting, Waiting::Nothing), result) {
@@ -253,7 +320,7 @@ impl ExecutionBody for HostedExecution {
     }
 }
 
-impl Drop for HostedExecution {
+impl<C: Send + 'static> Drop for HostedExecution<C> {
     fn drop(&mut self) {
         self.cancel();
     }

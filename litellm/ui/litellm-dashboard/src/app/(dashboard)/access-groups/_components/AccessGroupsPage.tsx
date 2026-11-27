@@ -1,4 +1,4 @@
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { AccessGroupResponse, useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { useDeleteAccessGroup } from "@/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup";
 import { Boxes, Plus, SearchIcon, X } from "lucide-react";
@@ -64,7 +64,7 @@ export function AccessGroupsPage() {
   }
 
   return (
-    <Page>
+    <>
       <PageHeader>
         <PageHeaderTitle>
           <Boxes />
@@ -139,6 +139,6 @@ export function AccessGroupsPage() {
         }}
         confirmLoading={deleteMutation.isPending}
       />
-    </Page>
+    </>
   );
 }

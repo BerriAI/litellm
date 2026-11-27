@@ -476,6 +476,35 @@ async def test_only_proxy_admin_sets_batch_limits_on_a_created_key():
 
 
 @pytest.mark.asyncio
+async def test_only_proxy_admin_sets_semantic_cache_policy_on_bulk_user_creation() -> None:
+    policy: Final = {"cache_params": {"enabled": False}}
+    rows: Final = (
+        {"user_id": "user-without-key", "metadata": policy},
+        {"user_id": "user-with-key", "metadata": policy, "auto_create_key": True},
+        {"user_id": "user-with-unrelated-metadata", "metadata": {"region": "us"}},
+    )
+
+    async def generate_key(**kwargs: object) -> dict[str, object]:
+        return {"token": f"sk-{kwargs['user_id']}"}
+
+    prisma: Final = _FakePrisma()
+    org_admin: Final = UserAPIKeyAuth(user_id="org-admin", user_role=LitellmUserRoles.ORG_ADMIN)
+    denied: Final = await _run(prisma, rows, caller=org_admin, generate_key=generate_key)
+    assert [row.success for row in denied.data] == [False, False, True]
+    assert [row.error for row in denied.data[:2]] == [
+        "Only proxy admins can change metadata.cache_params on a user.",
+        "Only proxy admins can change metadata.cache_params on a user.",
+    ]
+    assert set(prisma.db.litellm_usertable.rows) == {"user-with-unrelated-metadata"}
+
+    admin_prisma: Final = _FakePrisma()
+    created: Final = await _run(admin_prisma, rows, generate_key=generate_key)
+    assert [row.success for row in created.data] == [True, True, True]
+    assert created.data[1].key == "sk-user-with-key"
+    assert json.loads(admin_prisma.db.litellm_usertable.rows["user-with-key"].metadata) == policy
+
+
+@pytest.mark.asyncio
 async def test_only_proxy_admin_creates_a_key_whose_logging_references_a_credential(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

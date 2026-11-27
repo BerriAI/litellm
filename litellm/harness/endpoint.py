@@ -17,7 +17,7 @@ import logging
 import math
 import secrets
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
@@ -34,7 +34,7 @@ from litellm.constants import (
     HARNESS_PROCESS_KILL_GRACE_SECONDS,
     HARNESS_SESSION_TOKEN_BYTES,
 )
-from litellm.harness.context import GatewayTarget
+from litellm.harness.context import CostTracker, GatewayTarget
 from litellm.harness.errors import HarnessError, HarnessInstallFailed
 from litellm.harness.types import Harness, Usage
 from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_attributes
@@ -155,14 +155,18 @@ class UsageTracker:
 
     input_tokens: int = 0
     output_tokens: int = 0
-    cost: float = 0.0
+    costs: CostTracker = field(default_factory=CostTracker)
     calls: int = 0
 
-    def add(self, input_tokens: int = 0, output_tokens: int = 0, cost: float = 0.0) -> None:
+    def add(self, input_tokens: int = 0, output_tokens: int = 0, cost: float | None = None) -> None:
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
-        self.cost += cost
+        self.costs.add(cost)
         self.calls += 1
+
+    @property
+    def cost(self) -> float | None:
+        return self.costs.total
 
     def snapshot(self) -> Usage:
         return Usage(
@@ -271,7 +275,7 @@ class SSEUsageParser:
             return
         try:
             event: Final[object] = _JSON_VALUE_ADAPTER.validate_python(json.loads(payload))
-        except ValueError:
+        except (ValueError, RecursionError):
             return
         if isinstance(event, Mapping):
             self.absorb(_JSON_OBJECT_ADAPTER.validate_python(event))
@@ -312,10 +316,12 @@ class SSEUsageParser:
 
 def compute_cost(
     model: str | None, input_tokens: int, output_tokens: int, prompt_cache: PromptCache = NO_PROMPT_CACHE
-) -> float:
-    """Cost from LiteLLM's price map, cached prompt tokens at their cache prices. Never raises; unknown models cost 0.0."""
-    if not model or not (input_tokens or output_tokens):
+) -> float | None:
+    """Cost from LiteLLM's price map, or None when the token price is unknown."""
+    if not (input_tokens or output_tokens):
         return 0.0
+    if not model:
+        return None
     try:
         prompt_cost, completion_cost = litellm.cost_per_token(
             model=model,
@@ -327,7 +333,7 @@ def compute_cost(
         return float(prompt_cost) + float(completion_cost)
     except Exception:  # accounting must never break a call; the price-map lookup raises bare Exception
         verbose_logger.debug("harness endpoint: cost lookup failed for %s", model, exc_info=True)
-        return 0.0
+        return None
 
 
 def header_cost(headers: Mapping[str, str]) -> float | None:
@@ -430,8 +436,16 @@ def error_body(exc: BaseException, message: str) -> dict[str, dict[str, str]]:  
     return {"error": {"type": type(exc).__name__, "message": message}}  # mutable-ok: JSONResponse body
 
 
+class _DumpsModel(Protocol):
+    def model_dump(self, *, mode: str, exclude_none: bool) -> object: ...
+
+
+class _DumpsModelJson(Protocol):
+    def model_dump_json(self) -> object: ...
+
+
 def to_jsonable(obj: object) -> object:
-    if hasattr(obj, "model_dump"):
+    if has_attributes(obj, _DumpsModel, "model_dump"):
         return obj.model_dump(mode="json", exclude_none=True)
     if isinstance(obj, Mapping):
         return dict(obj)  # mutable-ok: plain-dict copy so json.dumps can serialize any Mapping
@@ -449,7 +463,7 @@ def encode_anthropic_chunk(chunk: object) -> bytes:
 
 
 def encode_chat_chunk(chunk: object) -> bytes:
-    if hasattr(chunk, "model_dump_json"):
+    if has_attributes(chunk, _DumpsModelJson, "model_dump_json"):
         return f"data: {chunk.model_dump_json()}\n\n".encode()
     return f"data: {json.dumps(to_jsonable(chunk))}\n\n".encode()
 

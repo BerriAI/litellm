@@ -20,13 +20,14 @@ use std::{
     time::Duration,
 };
 
+use litellm_model_catalog::bedrock_base_model;
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, Blocked, BuildAsk, BuildPath, Built, CallbackFiltered,
-    Deployment, Error, HealthState, Outcomes, PreRoute, PreRouted, Provided, Randomness,
-    RegistryHost, RouterCache, RouterEvent, RouterHost, RouterResponse, RoutingContext, SecretRef,
-    SelectStage, Served, ThreadRandomness, UsageCounts, UsageWindow, build::BuiltDeployment,
-    health::CooldownValue, host::ModelInfoLookup, model_info::MergedModelInfo,
-    precall::PreCallFacts, shape::AttemptShape,
+    Deployment, Error, HealthState, LimitCounter, Outcomes, PreRoute, PreRouted, Provided,
+    Randomness, RegistryHost, RouterCache, RouterEvent, RouterHost, RouterResponse, RoutingContext,
+    SecretRef, SelectStage, Served, ThreadRandomness, UsageCounts, UsageWindow,
+    build::BuiltDeployment, health::CooldownValue, host::ModelInfoLookup,
+    model_info::MergedModelInfo, precall::PreCallFacts, shape::AttemptShape,
 };
 use pyo3::{PyResult, Python, types::PyAnyMethods};
 use serde_json::{Map, Value};
@@ -259,6 +260,8 @@ pub(crate) enum HostCall {
         max_retries: u32,
         model_group_size: usize,
         shape: AttemptShape,
+        refused_ids: Vec<String>,
+        provider_refused_window: bool,
     },
     Sleep {
         seconds: f64,
@@ -763,6 +766,31 @@ impl RouterCache for PythonRouterCache {
     async fn count_failure(&self, id: &str) -> Result<(), litellm_cache::Error> {
         stored(CacheCall::CountFailure { id: id.to_owned() }).await
     }
+
+    /// Python's `ModelRateLimitingCheck` counts the model rate limits on this host.
+    async fn limit_usage(
+        &self,
+        _counter: &LimitCounter,
+        _limit: f64,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        Ok(None)
+    }
+
+    async fn add_limit_usage(
+        &self,
+        _counter: &LimitCounter,
+        _amount: i64,
+        _ttl: Duration,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        Ok(None)
+    }
+
+    async fn add_limit_usages(
+        &self,
+        _increments: &[(LimitCounter, i64, Duration)],
+    ) -> Result<Option<Vec<f64>>, litellm_cache::Error> {
+        Ok(None)
+    }
 }
 
 /// A deployment as Python spells a `model_list` entry, with its id in `model_info`.
@@ -837,6 +865,14 @@ impl RouterHost for PythonRouterHost {
     type Failure = ();
     type Cache = PythonRouterCache;
 
+    fn provider_model_id<'a>(&self, model_id: &'a str, provider: &str) -> &'a str {
+        if provider.starts_with("bedrock") {
+            bedrock_base_model(model_id)
+        } else {
+            model_id
+        }
+    }
+
     async fn attempt(&self, attempt: &Attempt) -> Result<Served<()>, AttemptFailure<()>> {
         let call = HostCall::Attempt {
             deployment_id: attempt.deployment.id.clone(),
@@ -858,6 +894,8 @@ impl RouterHost for PythonRouterHost {
             max_retries: attempt.max_retries,
             model_group_size: attempt.model_group_size,
             shape: AttemptShape::of(attempt),
+            refused_ids: attempt.refused_ids.clone(),
+            provider_refused_window: attempt.provider_refused_window,
         };
         let (result, blocked, deferred, tracks_usage) = match call_host(call).await {
             HostCallResponse::Attempt(result) => (result, None, false, None),
@@ -1077,6 +1115,7 @@ impl RouterHost for PythonRouterHost {
                 | RouterEvent::RetryLogged { .. }
                 | RouterEvent::RetryPolicyRaised { .. }
                 | RouterEvent::RetryCountRaised { .. }
+                | RouterEvent::ContextWindowRaised { .. }
                 | RouterEvent::FallbackDone { .. }
                 | RouterEvent::Blocked { .. }
                 | RouterEvent::CooldownSet { .. }
@@ -1242,7 +1281,7 @@ mod tests {
 
     use futures_util::FutureExt;
     use litellm_router_core::{
-        FailureKind, HostFacts, InMemoryRouterCache, Op, Router, RouterConfig, RouterDynamicConfig,
+        FailureKind, InMemoryRouterCache, Op, Router, RouterConfig, RouterDynamicConfig,
         RouterRequest, SeededRandomness,
     };
     use rstest::{fixture, rstest};
@@ -1253,7 +1292,7 @@ mod tests {
     fn router(config: Value, dynamic: Value) -> Router {
         let config: RouterConfig = serde_json::from_value(config).unwrap();
         let dynamic: RouterDynamicConfig = serde_json::from_value(dynamic).unwrap();
-        Router::builder(config, dynamic, HostFacts::everything())
+        Router::builder(config, dynamic)
             .randomness(Arc::new(SeededRandomness::new(7)))
             .build()
             .unwrap()

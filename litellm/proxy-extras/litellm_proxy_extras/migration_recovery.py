@@ -1,18 +1,32 @@
 import hashlib
 import re
 import subprocess
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 from uuid import uuid4
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
+from litellm_proxy_extras._redaction import _redact_credentials
 from litellm_proxy_extras.migration_lock import MigrationCoordinator
 
 if TYPE_CHECKING:
     import psycopg
+
+
+# SHA-256 of earlier shipped files whose successful run applied everything the current file does,
+# and whose failed run the current file can replay.
+SUPERSEDED_CHECKSUMS: Final = MappingProxyType(
+    {
+        "20260226120000_add_spend_log_tool_index": frozenset(
+            {"019ae3e4e71f35763d6d515e1d463d97e75b8c50e7637c842e4e16ce59009a4b"}
+        )
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,12 +37,8 @@ class MigrationProgress:
     id: str = ""
     finished: bool = False
 
-    def confirms_completion(self, script: bytes) -> bool:
-        return (
-            self.applied_steps_count == 1
-            and not self.logs.strip()
-            and self.checksum == hashlib.sha256(script).hexdigest()
-        )
+    def confirms_completion(self, checksums: frozenset[str]) -> bool:
+        return self.applied_steps_count == 1 and not self.logs.strip() and self.checksum in checksums
 
 
 def _migration_records(
@@ -60,9 +70,12 @@ def recover_completed_migration(coordinator: MigrationCoordinator, schema: str, 
     records: Final = _migration_records(coordinator.connection, schema, migration)
     unfinished: Final = tuple(record for record in records if not record.finished)
     script: Final = migration.read_bytes()
+    checksums: Final = frozenset({hashlib.sha256(script).hexdigest()}) | SUPERSEDED_CHECKSUMS.get(
+        migration.parent.name, frozenset()
+    )
     if not unfinished:
-        return any(record.checksum == hashlib.sha256(script).hexdigest() for record in records)
-    if len(unfinished) != 1 or not unfinished[0].confirms_completion(script):
+        return any(record.checksum in checksums for record in records)
+    if len(unfinished) != 1 or not unfinished[0].confirms_completion(checksums):
         return False
     progress: Final = unfinished[0]
     result: Final = coordinator.connection.execute(
@@ -178,21 +191,23 @@ def is_inert_migration(script: str) -> bool:
     return all(not part.strip() or _NO_OP_STATEMENT_RE.match(part) for part in stripped.split(";"))
 
 
-def roll_back_failed_inert_migration(coordinator: MigrationCoordinator, schema: str, migration: Path) -> bool:
-    """Roll back the failed ledger row of a migration whose file in this build is inert,
-    so `migrate deploy` applies the inert file on its next pass. The row records an
-    earlier build's attempt at SQL this build no longer ships (an index now built by the
-    migration job), so no database change can be repeated or skipped by replaying
-    the empty file. The caller commits this checkpoint before the next Prisma command.
+def roll_back_replayable_failed_migration(coordinator: MigrationCoordinator, schema: str, migration: Path) -> bool:
+    """Roll back the failed ledger row of a migration this build can safely replay, so
+    `migrate deploy` applies the current file on its next pass. Either the file is now
+    inert, or the row recorded an earlier shipped file listed in SUPERSEDED_CHECKSUMS
+    whose index the migration job now builds. A failed run of the current file is left
+    for the operator. The caller commits this checkpoint before the next Prisma command.
     """
     from psycopg import sql
 
-    if not is_inert_migration(migration.read_text(encoding="utf-8")):
+    inert: Final = is_inert_migration(migration.read_text(encoding="utf-8"))
+    superseded: Final = SUPERSEDED_CHECKSUMS.get(migration.parent.name, frozenset())
+    if not inert and not superseded:
         return False
     coordinator.acquire_prisma_lock()
     records: Final = _migration_records(coordinator.connection, schema, migration)
     unfinished: Final = tuple(record for record in records if not record.finished)
-    if len(unfinished) != 1:
+    if len(unfinished) != 1 or not (inert or unfinished[0].checksum in superseded):
         return False
     result: Final = coordinator.connection.execute(
         sql.SQL(
@@ -202,10 +217,82 @@ def roll_back_failed_inert_migration(coordinator: MigrationCoordinator, schema: 
         (unfinished[0].id,),
     )
     if result.rowcount != 1:
-        raise RuntimeError("Could not roll back the failed inert migration history row; rerun the database setup.")
+        raise RuntimeError("Could not roll back the failed migration history row; rerun the database setup.")
     logger.info(
-        "Rolled back the failed history row of %s: this build ships it as an inert migration, "
+        "Rolled back the failed history row of %s: this build replays it safely, "
         "its index is built by the migration job",
         migration.parent.name,
     )
     return True
+
+
+KILLED_SESSION_WAIT_SECONDS: Final = 30.0
+
+
+def roll_back_killed_migration(
+    database_url: str, schema: str, application_name: str, attempt_started: float
+) -> tuple[str, ...]:
+    """Roll back the history row of a migration that was still running when its `prisma migrate deploy`
+    was killed at the deploy time limit, and return its name.
+
+    Postgres keeps running a killed client's statement, so the session Prisma left behind can still
+    commit the migration once the lock it waits on is released. Every session named `application_name`
+    is terminated and confirmed gone before the row is touched, otherwise nothing is changed. The
+    caller holds Prisma's migration lock and `attempt_started` is its `time.monotonic()` from before
+    the deploy, so the unfinished row is the killed command's own.
+    """
+    try:
+        import psycopg
+    except ImportError:
+        return ()
+    from psycopg import sql
+
+    unchanged: Final = "Its migration history row was left unchanged."
+    try:
+        with psycopg.connect(database_url, connect_timeout=10, autocommit=True, client_encoding="utf8") as connection:
+            deadline: Final = time.monotonic() + KILLED_SESSION_WAIT_SECONDS
+            while _terminate_sessions(connection, application_name):
+                if time.monotonic() >= deadline:
+                    logger.warning(
+                        "The database session of the prisma migrate deploy that was stopped at its time limit "
+                        "is still running after %ss. %s",
+                        KILLED_SESSION_WAIT_SECONDS,
+                        unchanged,
+                    )
+                    return ()
+                time.sleep(0.2)
+            rolled_back: Final = connection.execute(
+                sql.SQL(
+                    "UPDATE {} SET rolled_back_at = current_timestamp "
+                    "WHERE finished_at IS NULL AND rolled_back_at IS NULL AND logs IS NULL "
+                    "AND applied_steps_count = 0 AND started_at >= current_timestamp - make_interval(secs => %s) "
+                    "RETURNING migration_name"
+                ).format(sql.Identifier(schema, "_prisma_migrations")),
+                (time.monotonic() - attempt_started,),
+            ).fetchall()
+    except psycopg.Error as exc:
+        logger.warning(
+            "Could not confirm that the database session of the prisma migrate deploy that was stopped at its "
+            "time limit is gone (%s). %s",
+            _redact_credentials(str(exc)).strip(),
+            unchanged,
+        )
+        return ()
+    names: Final = tuple(str(row[0]) for row in rolled_back)
+    for name in names:
+        logger.warning(
+            "Migration %s was still running when prisma migrate deploy was stopped at its time limit. "
+            "Its database session was ended and its migration history row was marked rolled back so it can be "
+            "applied again.",
+            name,
+        )
+    return names
+
+
+def _terminate_sessions(connection: "psycopg.Connection[tuple[object, ...]]", application_name: str) -> bool:
+    """Signal every other session named `application_name` to end, and say whether any was still there."""
+    return connection.execute(
+        "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity "
+        "WHERE datname = current_database() AND application_name = %s AND pid <> pg_backend_pid()",
+        (application_name,),
+    ).fetchone() != (0,)

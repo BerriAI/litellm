@@ -1,6 +1,6 @@
 import json
 import traceback
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from datetime import datetime
 from typing import Final, Literal
 
@@ -59,7 +59,7 @@ class VertexFineTuningAPI(VertexLLM):
         self,
         create_fine_tuning_job_data: FineTuningJobCreate,
         original_hyperparameters: dict = {},
-        kwargs: dict | None = None,
+        kwargs: Mapping[str, object] | None = None,
     ) -> FineTuneJobCreate:
         """
         convert request from OpenAI format to Vertex format
@@ -95,7 +95,7 @@ class VertexFineTuningAPI(VertexLLM):
         self,
         create_fine_tuning_job_data: FineTuningJobCreate,
         original_hyperparameters: dict = {},
-        kwargs: dict | None = None,
+        kwargs: Mapping[str, object] | None = None,
     ) -> FineTuneHyperparameters:
         _oai_hyperparameters: Final = create_fine_tuning_job_data.hyperparameters
         _vertex_hyperparameters: Final = FineTuneHyperparameters()
@@ -166,7 +166,7 @@ class VertexFineTuningAPI(VertexLLM):
     async def acreate_fine_tuning_job(
         self,
         fine_tuning_url: str,
-        headers: dict,
+        headers: Mapping[str, object],
         request_data: FineTuneJobCreate,
     ):
         try:
@@ -213,7 +213,7 @@ class VertexFineTuningAPI(VertexLLM):
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
-        kwargs: dict | None = None,
+        kwargs: Mapping[str, object] | None = None,
         original_hyperparameters: dict | None = {},
     ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
         verbose_logger.debug("creating fine tuning job, args= %s", create_fine_tuning_job_data)

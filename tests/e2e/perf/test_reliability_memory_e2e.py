@@ -50,10 +50,10 @@ v1.100.x worker with a database idled at 886 MB RSS where v1.101.0rc1 idled at
 544 MB on the same database (1.3 GB against 560 MB at the pod level, under a
 2 GiB limit): the generated Prisma client at prisma-client-py's default recursive
 type depth, 91k TypedDict classes that v1.101.0 cut to 19k with
-recursive_type_depth = -1. The budget starts at the rc1 reading plus headroom and
-E2E_MEMORY_IDLE_RSS_BUDGET_MB overrides it; a later session on the same stack (the
-changed-files workflow's repeat passes, a developer's local loop) measures a proxy
-already warmed by traffic, which that headroom also has to cover.
+recursive_type_depth = -1. The default budget includes headroom above recent
+scheduled main readings and E2E_MEMORY_IDLE_RSS_BUDGET_MB overrides it. A later
+session on the same stack (the changed-files workflow's repeat passes, a
+developer's local loop) measures a proxy already warmed by traffic.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ from e2e_config import (
 )
 from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
-from memory_readings import RssCapture, RssReading, WorkerKey, settled_rss_per_worker
+from memory_readings import RssCapture, RssReading, WorkerKey, assert_same_rss_workers, settled_rss_per_worker
 from models import ChatMessage, LiteLLMParamsBody, ReliabilityChatBody, RouterSettingsOverride
 from proxy_client import ProxyClient
 
@@ -203,14 +203,7 @@ def _settled_rss_after_batches(
 def _heaviest_worker_growth(
     warm: Mapping[WorkerKey, RssReading], after: Mapping[WorkerKey, RssReading]
 ) -> WorkerGrowth:
-    assert warm.keys() == after.keys(), (
-        f"the workers answering /debug/memory/summary changed around measured batches {FIRST_MEASURED_BATCH}-"
-        f"{LAST_BATCH}, so not every "
-        f"worker can be compared with itself: gone after it {sorted(warm.keys() - after.keys())} (a worker "
-        f"that died or was restarted under failing traffic, which is what an OOM kill looks like), first seen "
-        f"after it {sorted(after.keys() - warm.keys())} (the warm window never reached them, so they have no "
-        f"baseline; raise E2E_MEMORY_RSS_SETTLE_SAMPLES if the stack has more workers than the window covers)"
-    )
+    assert_same_rss_workers(warm, after)
     return max((WorkerGrowth(warm[worker], after[worker]) for worker in warm), key=lambda growth: growth.growth_mb)
 
 

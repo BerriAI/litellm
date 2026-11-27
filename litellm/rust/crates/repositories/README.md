@@ -29,13 +29,20 @@ crates/repositories/
       memory.rs               # a repository's own memory tier gets its own file
       queries.rs
       queries/...
+    spend_log/
+      mod.rs
+      record.rs               # the typed log, delivery and write the spend log writer hands in
+      repository.rs           # the window sums, and one transaction for the rows and their ledger deliveries
+      queries.rs
+      queries/...
 ```
 
 ## Rules
 
 - Queries are private to their folder. Query functions and row types in `queries.rs` are `pub(super)`, so only that folder's `repository.rs` can call them, and not other repositories or other crates. Only a row type that a public repository method returns as is gets `pub` and a re-export from `mod.rs`, like `MappedClaim`
 - Every query runs inside `Database::run` with a `Call`. `run` reports the operation, applies the socket deadline, and recycles the pools and retries once on a stale prepared plan. A query called outside it skips all three. The `Call`'s `call_type` and `table` are the names the Prisma version of the same read reported, so DB dashboards keep one series across both
-- Take a connection with `Database::session(side)` and pass `session.executor()` to the query, so statements stay unnamed under PgBouncer. `Side::Read` prefers the replica. `Side::Writer` is for every write and for reads that must see the latest commit
+- Take a connection with `Database::session(side)` and pass `session.executor()` to the query, so statements stay unnamed under PgBouncer. `Side::Read` prefers the replica. `Side::Writer` is for every write and for reads that must see the latest commit. A read that should see the latest commit but must keep working through a writer outage, like the model and credential reads a boot depends on, takes `Database::writer_preferred_session()` instead, which falls back to the replica only while the writer is marked down
+- A write that must commit several queries together takes the session's connection with `Session::connection()`, opens the transaction on it, and passes `Session::names_statements()` to `Statements::new` for each query inside, as `spend_log` does. The whole transaction still runs inside one `Database::run`
 - `repository.rs` holds the policy around the queries: the side, the `Call`, short-circuits that skip the round trip (an empty input list), fallbacks between queries, memory tiers, and shaping rows into the types the caller takes. Shaping that SQL can do, such as `COALESCE` defaults and joins, goes in the SQL so the row comes out ready
 - Each query is one `.sql` file in its folder's `queries/`, read with `sqlx::query_file!`, `query_file_as!` or `query_file_scalar!`. The path is relative to the crate root, not the source file: `"src/key/queries/find_key_view.sql"`. The workspace `clippy.toml` bans the unchecked `sqlx::query` family outside test fixtures
 - One exception to the `.sql` file rule: a query that differs only in which column it filters on, chosen from a short closed list, may be one runtime `sqlx::query`, `query_as` or `query_scalar` under `#[expect(clippy::disallowed_methods, reason = ...)]` instead of one file per column. The column must come from a `match` on an enum in the same function whose arms are `&'static str` SQL built with `concat!` from literals, never `format!` (sqlx only takes static SQL without `AssertSqlSafe`, which stays off limits), every value still goes through `.bind()`, and the `reason` names the enum. It gives up the compile-time check and the `.sqlx` entry, so the database tests must run the query once per arm. `spend_log::queries::window_spend` is the example
@@ -51,7 +58,7 @@ crates/repositories/
 
 ## Tests
 
-- Database tests sit inline in `queries.rs`, use the `database_pool` fixture from `test_support`, are `#[ignore]`d with the reason `requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database`, and run inside a transaction they never commit, so their fixture rows roll back
+- Database tests sit inline in `queries.rs` (or in `repository.rs` for policy that spans several queries, such as a transaction), use the `database_pool` fixture from `test_support`, are `#[ignore]`d with the reason `requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database`, and run inside a transaction they never commit, so their fixture rows roll back
 - Policy that needs no database (memory tiers, row shaping) is tested inline in the file that holds it, without the database
 - Run the database tests against a database Prisma has migrated:
 
