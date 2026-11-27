@@ -372,6 +372,11 @@
     },
     "supported_endpoints": ["/v1/chat/completions"]
   },
+  "blazeinfer": {
+    "base_url": "https://blaze.e2enetworks.net/v1",
+    "api_key_env": "BLAZE_API_KEY",
+    "api_base_env": "BLAZE_API_BASE"
+  },
   "huawei_maas": {
     "base_url": "https://api-ap-southeast-1.modelarts-maas.com/openai/v1",
     "api_key_env": "HUAWEI_MAAS_API_KEY",
