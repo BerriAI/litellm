@@ -8,9 +8,9 @@ mod support;
 
 use std::sync::Arc;
 
-use litellm_auth_store::{Error, UserDatabase};
+use litellm_auth_store::{Error, SignedIn, UserDatabase};
 use litellm_db_testing::MigratedPostgres;
-use litellm_repositories::{Side, SignIn, UserRepository};
+use litellm_repositories::{Side, SignIn, SsoLink, UserRepository};
 use rstest::{fixture, rstest};
 use sqlx::PgPool;
 
@@ -281,4 +281,170 @@ async fn a_user_row_the_model_refuses_fails_the_read(
         "{:?}",
         refused.err()
     );
+}
+
+fn sign_in(
+    user_id: &str,
+    sso_user_id: Option<&str>,
+    user_email: Option<&str>,
+    links_any_user: bool,
+) -> SignIn {
+    SignIn {
+        user_id: user_id.to_owned(),
+        sso_user_id: sso_user_id.map(str::to_owned),
+        user_email: user_email.map(str::to_owned),
+        email_verified: None,
+        links_any_user,
+    }
+}
+
+async fn stored_sso_user_id(pool: &PgPool, user_id: &str) -> Option<String> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assertion reads are outside the compile-checked query set"
+    )]
+    let read =
+        sqlx::query_scalar(r#"SELECT sso_user_id FROM "LiteLLM_UserTable" WHERE user_id = $1"#);
+    read.bind(user_id).fetch_one(pool).await.unwrap()
+}
+
+/// Python caches the row it read before linking its own id as its SSO id, so the entry still has
+/// none while the row now holds it.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sign_in_that_links_its_own_id_is_the_entry_python_caches_for_the_row_as_read(
+    #[future(awt)] users: Users,
+) {
+    let signed_in = users
+        .database
+        .sign_in(
+            &sign_in("created", Some("created"), None, false),
+            Side::Read,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let stored = stored_sso_user_id(users.postgres.pool(), "created").await;
+
+    assert_eq!(
+        (
+            dumped(signed_in.user).as_str(),
+            signed_in.sso_link,
+            signed_in.owes_email,
+            stored.as_deref()
+        ),
+        (CREATED_ENTRY, SsoLink::Linked, false, Some("created"))
+    );
+}
+
+/// `full` holds `sso` and `full@example.com`, `created` holds neither, and `emailed` holds only
+/// `emailed@example.com`.
+#[rstest]
+#[case::by_id_alone(
+    sign_in("full", None, None, false),
+    "full",
+    Some("sso"),
+    SsoLink::Unchanged,
+    false
+)]
+#[case::by_id_with_an_email_the_row_lacks(
+    sign_in("created", None, Some("created@example.com"), false),
+    "created",
+    None,
+    SsoLink::Unchanged,
+    true
+)]
+#[case::by_id_with_the_email_the_row_holds(
+    sign_in("full", None, Some("full@example.com"), false),
+    "full",
+    Some("sso"),
+    SsoLink::Unchanged,
+    false
+)]
+#[case::by_id_under_links_any_user_leaves_its_own_id_unlinked(
+    sign_in("created", Some("created"), None, true),
+    "created",
+    None,
+    SsoLink::Unchanged,
+    false
+)]
+#[case::by_sso_id(
+    sign_in("new", Some("sso"), None, false),
+    "full",
+    Some("sso"),
+    SsoLink::Unchanged,
+    false
+)]
+#[case::by_email_links_the_sso_id_in_line(
+    sign_in("new", Some("sso-new"), Some("Emailed@Example.com"), false),
+    "emailed",
+    Some("sso-new"),
+    SsoLink::Linked,
+    false
+)]
+#[case::by_email_under_links_any_user_links_in_the_background(
+    sign_in("new", Some("sso-new"), Some("full@example.com"), true),
+    "full",
+    Some("sso"),
+    SsoLink::Pending,
+    false
+)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sign_in_reads_the_user_it_resolves_to_with_what_it_linked_and_owes(
+    #[future(awt)] users: Users,
+    #[case] signing_in: SignIn,
+    #[case] user_id: &str,
+    #[case] sso_user_id: Option<&str>,
+    #[case] sso_link: SsoLink,
+    #[case] owes_email: bool,
+) {
+    execute(
+        users.postgres.pool(),
+        r#"INSERT INTO "LiteLLM_UserTable" (user_id, user_email, created_at, updated_at)
+           VALUES ('emailed', 'emailed@example.com', '2026-11-01 00:00:00', '2026-11-01 00:00:00')"#,
+    )
+    .await;
+
+    let SignedIn {
+        user,
+        sso_link: linked,
+        owes_email: owed,
+    } = users
+        .database
+        .sign_in(&signing_in, Side::Read)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        (
+            user.user_id.as_str(),
+            user.sso_user_id.as_deref(),
+            linked,
+            owed
+        ),
+        (user_id, sso_user_id, sso_link, owes_email)
+    );
+}
+
+#[rstest]
+#[case::by_id_alone(sign_in("gone", None, None, false))]
+#[case::by_an_sso_id_and_an_email_no_row_holds(sign_in(
+    "gone",
+    Some("sso-gone"),
+    Some("gone@example.com"),
+    false
+))]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_sign_in_no_row_answers_is_not_found(
+    #[future(awt)] users: Users,
+    #[case] signing_in: SignIn,
+) {
+    let read = users
+        .database
+        .sign_in(&signing_in, Side::Read)
+        .await
+        .unwrap();
+
+    assert!(read.is_none());
 }
