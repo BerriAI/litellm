@@ -377,6 +377,11 @@
     "api_key_env": "HUAWEI_MAAS_API_KEY",
     "api_base_env": "HUAWEI_MAAS_API_BASE"
   },
+  "inference_net": {
+    "base_url": "https://api.inference.net/v1",
+    "api_key_env": "INFERENCE_NET_API_KEY",
+    "api_base_env": "INFERENCE_NET_API_BASE"
+  },
   "wally": {
     "base_url": "https://inference.runanywhere.ai/v1",
     "api_key_env": "WALLY_API_KEY",
