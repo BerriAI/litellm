@@ -982,6 +982,59 @@ async def test_model_armor_handler_raised_http_error_sanitized(sanitize: bool):
         assert marker in str(exc_info.value.detail)
 
 
+_ARMOR_FOUND_NOTHING = {"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND", "filterResults": {}}}
+_ARMOR_DEIDENTIFIED = {
+    "sanitizationResult": {
+        "filterMatchState": "MATCH_FOUND",
+        "filterResults": {
+            "sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND", "data": {"text": "[X]"}}}}
+        },
+    }
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("skip_passed", "armor_response", "logged_action"),
+    [(True, _ARMOR_FOUND_NOTHING, "none"), (True, _ARMOR_DEIDENTIFIED, None), (False, _ARMOR_FOUND_NOTHING, None)],
+    ids=["clean", "masked", "setting_off"],
+)
+async def test_model_armor_post_call_logging_says_a_clean_run_did_not_act_with_skip_passed_on(
+    monkeypatch, skip_passed, armor_response, logged_action
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", skip_passed)
+    guardrail = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        guardrail_name="model-armor-test",
+        mask_response_content=True,
+    )
+    guardrail.make_model_armor_request = AsyncMock(return_value=armor_response)
+    guardrail.should_run_guardrail = Mock(return_value=True)
+    mock_llm_response = litellm.ModelResponse()
+    mock_llm_response.choices = [litellm.Choices(message=litellm.Message(content="model output"))]
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "synthetic input"}],
+        "metadata": {},
+        "litellm_logging_obj": MagicMock(),
+    }
+
+    logged_runs = []
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.callback_utils.add_guardrail_response_to_standard_logging_object",
+        lambda litellm_logging_obj, guardrail_response: logged_runs.append(guardrail_response),
+    )
+
+    await guardrail.async_post_call_success_hook(
+        data=request_data, user_api_key_dict=UserAPIKeyAuth(), response=mock_llm_response
+    )
+
+    assert [run.get("guardrail_action") for run in logged_runs] == [logged_action]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sanitize", [True, False])
 async def test_model_armor_post_call_logging_redacts_scanned_content(sanitize: bool):
