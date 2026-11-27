@@ -17,6 +17,7 @@ import json
 
 import pytest
 
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -39,6 +40,10 @@ def _inspect_input(input_items):
     return LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
         input=input_items, responses_api_request={}
     )
+
+
+def _block_order(content):
+    return [(block["type"], block.get("signature") or block.get("text")) for block in content]
 
 
 class TestReasoningInputItemHandler:
@@ -272,6 +277,92 @@ class TestEncryptedReasoningRoundTrip:
         assert "reasoning_content" not in messages[0]
         assert messages[0]["thinking_blocks"][0]["signature"] == "sig-one"
         assert messages[1]["role"] == "user"
+
+
+class TestInterleavedThinkingReplay:
+    """A joined answer is split back around the thinking blocks that preceded it."""
+
+    def test_multi_thinking_block_replay_restores_the_original_block_order(self):
+        blocks = [
+            {"type": "thinking", "thinking": "Erster Teil.", "signature": "sig1"},
+            {"type": "thinking", "thinking": "Zweiter Teil.", "signature": "sig2"},
+        ]
+        messages = _transform_input(
+            [
+                {"role": "user", "content": "first question"},
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [],
+                    "encrypted_content": json.dumps(blocks),
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Erster Teil.Zweiter Teil."}],
+                },
+                {"role": "user", "content": "second question"},
+            ]
+        )
+
+        expected_order = [
+            ("thinking", "sig1"),
+            ("text", "Erster Teil."),
+            ("thinking", "sig2"),
+            ("text", "Zweiter Teil."),
+        ]
+        assert _block_order(messages[1]["content"]) == expected_order
+
+        anthropic_turns = anthropic_messages_pt(
+            messages=list(messages), model="claude-sonnet-5-5", llm_provider="anthropic"
+        )
+        assistant_turn = next(turn for turn in anthropic_turns if turn["role"] == "assistant")
+        assert _block_order(assistant_turn["content"]) == expected_order
+
+    def test_single_thinking_block_replay_keeps_the_joined_answer(self):
+        block = {"type": "thinking", "thinking": "hidden analysis", "signature": "sig-one"}
+        messages = _transform_input(
+            [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [],
+                    "encrypted_content": json.dumps([block]),
+                },
+                {"type": "message", "role": "assistant", "content": "The answer."},
+            ]
+        )
+
+        assert messages[0]["content"] == "The answer."
+        assert messages[0]["thinking_blocks"] == [block]
+
+        anthropic_turns = anthropic_messages_pt(
+            messages=list(messages), model="claude-sonnet-5-5", llm_provider="anthropic"
+        )
+        assert _block_order(anthropic_turns[0]["content"]) == [
+            ("thinking", "sig-one"),
+            ("text", "The answer."),
+        ]
+
+    def test_unmatched_thinking_text_never_invents_text_boundaries(self):
+        blocks = [
+            {"type": "thinking", "thinking": "analysis one", "signature": "sig1"},
+            {"type": "thinking", "thinking": "analysis two", "signature": "sig2"},
+        ]
+        messages = _transform_input(
+            [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [],
+                    "encrypted_content": json.dumps(blocks),
+                },
+                {"type": "message", "role": "assistant", "content": "The answer."},
+            ]
+        )
+
+        assert messages[0]["content"] == "The answer."
+        assert [block["signature"] for block in messages[0]["thinking_blocks"]] == ["sig1", "sig2"]
 
 
 class TestInspectionCallersStillSeeReasoningText:

@@ -729,6 +729,58 @@ def _without_paused_turn_thinking(input_items: Sequence[Mapping[str, object]]) -
     )
 
 
+def _plain_text_content(content: object) -> tuple[str, Mapping[str, object] | None] | None:
+    if isinstance(content, str):
+        return content, None
+    if not isinstance(content, list):
+        return None
+    entries: Final = cast(list[object], content)  # cast-ok: the isinstance check above fixes the shape
+    if len(entries) != 1:
+        return None
+    block: Final = entries[0]
+    if not isinstance(block, Mapping):
+        return None
+    typed_block: Final = cast(Mapping[str, object], block)  # cast-ok: the isinstance check above fixes the shape
+    text: Final = typed_block.get("text")
+    return (text, typed_block) if typed_block.get("type") == "text" and isinstance(text, str) else None
+
+
+def _interleaved_thinking_and_text_content(
+    content: object,
+    thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
+) -> list[dict[str, object]] | None:  # mutable-ok: the assistant message content is a block list
+    """Split joined assistant text back into the segments its signed thinking blocks preceded.
+
+    The response side joins text blocks without a separator, so the blocks' own
+    ``thinking`` text is the only remaining record of where each segment ended.
+    Return ``None`` unless that text partitions the joined answer exactly.
+    """
+    if len(thinking_blocks) < 2:
+        return None
+    plain: Final = _plain_text_content(content)
+    if plain is None:
+        return None
+    text, text_block = plain
+    plain_blocks: Final = tuple(
+        cast(Mapping[str, object], block)  # cast-ok: every replayed block is a thinking payload mapping
+        for block in thinking_blocks
+    )
+    segments: Final = tuple(block.get("thinking") for block in plain_blocks)
+    if not all(isinstance(segment, str) and segment for segment in segments):
+        return None
+    typed_segments: Final = cast(tuple[str, ...], segments)  # cast-ok: the check above keeps only non-empty str
+    starts: Final = tuple(accumulate((len(segment) for segment in typed_segments), initial=0))
+    if starts[-1] != len(text) or not all(
+        text.startswith(segment, start) for segment, start in zip(typed_segments, starts[:-1], strict=True)
+    ):
+        return None
+    pairs: Final = (
+        (dict(block), {**(text_block or {"type": "text"}), "text": segment})
+        for block, segment in zip(plain_blocks, typed_segments, strict=True)
+    )
+    return list(chain.from_iterable(pairs))
+
+
 SessionMessage: TypeAlias = (
     AllMessageValues
     | GenericChatCompletionMessage
@@ -2146,6 +2198,11 @@ class LiteLLMCompletionResponsesConfig:
         already carries, because Anthropic and Bedrock verify signatures against
         the original block order.
 
+        When the replayed blocks carry the text that sat between them, the joined
+        answer is split back into its segments and interleaved with the blocks
+        instead, because Anthropic also verifies the content that preceded each
+        block. Without a recoverable split the blocks stay ahead of the text.
+
         If the reasoning item is not followed by an assistant message (e.g. a
         stateless chain replays ``reasoning`` + ``user``), the standalone
         reasoning message is preserved so the reasoning is still passed back.
@@ -2191,17 +2248,28 @@ class LiteLLMCompletionResponsesConfig:
                 ]
             ],
         ) -> None:
+            current: Final = msg
             pending_texts: Final = tuple(text for text, _ in pending_items if text)
             pending_blocks: Final = tuple(block for _, blocks in pending_items for block in blocks or ())
             if pending_texts:
-                existing_text: Final = _reasoning_text(msg)
+                existing_text: Final = _reasoning_text(current)
                 combined: Final = "\n".join(pending_texts + ((existing_text,) if existing_text else ()))
                 if isinstance(msg, dict):
                     cast(dict[str, object], msg)["reasoning_content"] = combined  # cast-ok: mutable reasoning carrier
                 else:
                     setattr(msg, "reasoning_content", combined)  # noqa: B010  # attribute name is fixed, not dynamic
             if pending_blocks:
-                replayed: Final = list(pending_blocks + (_thinking_blocks(msg) or ()))
+                interleaved: Final = (
+                    _interleaved_thinking_and_text_content(_content(current), pending_blocks)
+                    if not _thinking_blocks(current) and _tool_calls(current) is None
+                    else None
+                )
+                if interleaved is not None:
+                    if isinstance(msg, dict):
+                        cast(dict[str, object], msg)["content"] = interleaved  # cast-ok: mutable message carrier
+                    else:
+                        setattr(msg, "content", interleaved)  # noqa: B010  # attribute name is fixed, not dynamic
+                replayed: Final = list(pending_blocks + (_thinking_blocks(current) or ()))
                 if isinstance(msg, dict):
                     cast(dict[str, object], msg)["thinking_blocks"] = replayed  # cast-ok: mutable reasoning carrier
                 else:
