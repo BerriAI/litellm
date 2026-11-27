@@ -1,5 +1,11 @@
+import functools
 import traceback
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
+from datetime import datetime
+from email import policy
+from email.message import EmailMessage
+from email.parser import BytesParser
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -9,6 +15,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.elevenlabs.audio_transcription.transformation import ElevenLabsAudioTranscriptionConfig
 from litellm.llms.elevenlabs.text_to_speech.transformation import ElevenLabsTextToSpeechConfig
 from litellm.types.utils import TranscriptionResponse
@@ -34,6 +41,402 @@ def _elevenlabs_httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     monkeypatch.setattr(litellm, "sync_transport", None, raising=False)
     yield
     client_cache.flush_cache()
+
+
+def _form_fields(request: httpx.Request) -> list[tuple[str, str]]:
+    head: Final = f"Content-Type: {request.headers['Content-Type']}\r\n\r\n".encode()
+    message: Final = BytesParser(_class=EmailMessage, policy=policy.HTTP).parsebytes(head + request.content)
+    assert isinstance(message, EmailMessage)
+    return [
+        (str(part.get_param("name", header="content-disposition")), str(part.get_content()))
+        for part in message.iter_parts()
+        if part.get_filename() is None
+    ]
+
+
+def _mock_transcription_endpoint(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(ELEVENLABS_TRANSCRIPTION_URL).mock(
+        return_value=httpx.Response(200, json={"text": "ok", "language_code": "en", "words": []})
+    )
+
+
+def _sent_fields(route: respx.Route) -> dict[str, list[str]]:
+    fields: Final = _form_fields(route.calls.last.request)
+    return {name: [value for field_name, value in fields if field_name == name] for name, _ in fields}
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+@pytest.mark.parametrize(
+    ("params", "expected"),
+    [
+        ({"keyterms": ["BOI report", "EIN"]}, {"keyterms": ["BOI report", "EIN"]}),
+        ({"keyterms": ["EIN"]}, {"keyterms": ["EIN"]}),
+        ({"diarize": True, "tag_audio_events": False}, {"diarize": ["true"], "tag_audio_events": ["false"]}),
+        ({"num_speakers": 2, "language": "en"}, {"language_code": ["en"], "num_speakers": ["2"]}),
+        ({"keyterms": ("EIN", "BOI report")}, {"keyterms": ["EIN", "BOI report"]}),
+        ({"keyterms": ["EIN", None]}, {"keyterms": ["EIN"]}),
+        ({"keyterms": []}, {}),
+        ({"additional_formats": [{"format": "srt"}]}, {"additional_formats": ['[{"format": "srt"}]']}),
+        ({"webhook_metadata": {"job": "a1", "retry": False}}, {"webhook_metadata": ['{"job": "a1", "retry": false}']}),
+        ({"extra_body": {"keyterms": ["EIN"], "diarize": True}}, {"keyterms": ["EIN"], "diarize": ["true"]}),
+        (
+            {"keyterms": ["TOP"], "diarize": False, "extra_body": {"keyterms": ["EXTRA"], "diarize": True}},
+            {"keyterms": ["TOP"], "diarize": ["false"]},
+        ),
+        ({"temperature": 0.2, "extra_body": {"temperature": 0.9}}, {"temperature": ["0.2"]}),
+        ({"extra_body": {"diarize": None, "keyterms": ["EIN"]}}, {"keyterms": ["EIN"]}),
+        (
+            {"webhook_metadata": {"job": "a1"}, "extra_body": {"webhook_metadata": {b"job": "a1"}}},
+            {"webhook_metadata": ['{"job": "a1"}']},
+        ),
+        ({"extra_body": {"extra_body": {"diarize": True}}}, {}),
+        ({"model_id": "scribe_v2", "extra_body": {"model_id": "scribe_v2"}}, {}),
+        ({"model_id": "scribe_v2", "extra_body": {"model_id": "scribe_v1"}}, {}),
+        ({"additional_formats": [{"format": "srt"}, None]}, {"additional_formats": ['[{"format": "srt"}]']}),
+        ({"custom_rows": [["a", "b"], "c"]}, {"custom_rows": ['[["a", "b"], "c"]']}),
+        (
+            {"webhook_metadata": {"sent_at": datetime(2026, 1, 1), "job": MappingProxyType({"id": 1})}},
+            {"webhook_metadata": ['{"sent_at": "2026-01-01 00:00:00", "job": {"id": 1}}']},
+        ),
+        (
+            {
+                "webhook_metadata": MappingProxyType({2: "a", None: "b", True: "c", 1.5: "d", float("inf"): "f"}),
+                "custom_rows": [{"job": MappingProxyType({3: "e"})}],
+            },
+            {
+                "webhook_metadata": ['{"2": "a", "null": "b", "true": "c", "1.5": "d", "Infinity": "f"}'],
+                "custom_rows": ['[{"job": {"3": "e"}}]'],
+            },
+        ),
+    ],
+    ids=[
+        "keyterms-multi",
+        "keyterms-single",
+        "bools",
+        "scalars",
+        "keyterms-tuple",
+        "keyterms-none-item",
+        "keyterms-empty",
+        "list-of-objects-as-json",
+        "object-as-json",
+        "extra-body-flattened",
+        "top-level-wins-over-extra-body",
+        "top-level-openai-param-wins-over-extra-body",
+        "extra-body-none-dropped",
+        "top-level-wins-over-extra-body-value-that-cannot-be-encoded",
+        "extra-body-cannot-nest",
+        "model-id-matching-the-model-is-sent-once",
+        "top-level-model-id-wins-over-extra-body-model-id",
+        "json-list-none-item-dropped",
+        "nested-list-as-json",
+        "datetime-as-text-mapping-as-json",
+        "non-string-mapping-keys-as-json",
+    ],
+)
+def test_transcription_sends_each_param_as_its_own_multipart_text_part(
+    respx_mock: respx.MockRouter, params: dict[str, object], expected: dict[str, list[str]]
+):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+
+    litellm.transcription(model="elevenlabs/scribe_v2", file=b"fake audio", **params)
+
+    assert _sent_fields(route) == {"model_id": ["scribe_v2"], **expected}
+
+
+class _DoublingOnLookupDict(dict[str, int]):
+    def __getitem__(self, key: str) -> int:
+        return 2 * super().__getitem__(key)
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+def test_read_only_view_of_a_mapping_is_sent_like_the_mapping_itself(respx_mock: respx.MockRouter):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+    mapping: Final = _DoublingOnLookupDict(job=1)
+
+    litellm.transcription(
+        model="elevenlabs/scribe_v2",
+        file=b"fake audio",
+        webhook_metadata=mapping,
+        custom_metadata=MappingProxyType(mapping),
+    )
+
+    sent: Final = _sent_fields(route)
+    assert sent["custom_metadata"] == sent["webhook_metadata"]
+
+
+def _as_top_level_param(mapping: Mapping[object, str]) -> dict[str, object]:
+    return {"webhook_metadata": mapping}
+
+
+def _inside_a_list_param(mapping: Mapping[object, str]) -> dict[str, object]:
+    return {"custom_rows": [{"job": mapping}]}
+
+
+def _under_a_parent_key(mapping: object) -> dict[str, object]:
+    return {"webhook_metadata": {"parent-378282246310005": mapping}}
+
+
+def _exception_chain(error: BaseException | None) -> Iterator[BaseException]:
+    if error is None:
+        return
+    yield error
+    yield from _exception_chain(error.__cause__)
+    yield from _exception_chain(error.__context__)
+
+
+def _text_the_error_chain_exposes(error: BaseException) -> str:
+    return "".join("".join(traceback.format_exception_only(link)) for link in _exception_chain(error))
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+@pytest.mark.parametrize(
+    "placement",
+    [_as_top_level_param, _inside_a_list_param, _under_a_parent_key],
+    ids=["top-level", "inside-list", "under-parent-key"],
+)
+@pytest.mark.parametrize("mapping_type", [dict, MappingProxyType], ids=["dict", "mapping-proxy"])
+@pytest.mark.parametrize(
+    "key",
+    [b"acct-4111111111111111", ("acct-4111111111111111", 7)],
+    ids=["bytes-key", "tuple-key"],
+)
+async def test_mapping_key_without_json_form_is_a_400_that_sends_nothing_and_echoes_nothing(
+    respx_mock: respx.MockRouter,
+    placement: Callable[[Mapping[object, str]], dict[str, object]],
+    mapping_type: Callable[[dict[object, str]], Mapping[object, str]],
+    key: object,
+):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.atranscription(
+            model="elevenlabs/scribe_v2", file=b"fake audio", **placement(mapping_type({key: "value-5500000000000004"}))
+        )
+
+    assert exc_info.value.status_code == 400
+    exposed: Final = _text_the_error_chain_exposes(exc_info.value)
+    assert "4111111111111111" not in exposed
+    assert "5500000000000004" not in exposed
+    assert "378282246310005" not in exposed
+    assert not route.called
+
+
+class _SelfReferencingMapping(Mapping[str, object]):
+    def __getitem__(self, key: str) -> object:
+        return self
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(("self",))
+
+    def __len__(self) -> int:
+        return 1
+
+
+class _MappingHoldingAFreshViewOfItself(_SelfReferencingMapping):
+    def __getitem__(self, key: str) -> object:
+        return MappingProxyType(self)
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+@pytest.mark.parametrize(
+    "mapping_type",
+    [_SelfReferencingMapping, _MappingHoldingAFreshViewOfItself],
+    ids=["holds-itself", "holds-a-fresh-view-of-itself"],
+)
+async def test_self_referencing_mapping_is_a_400_that_sends_nothing_and_echoes_nothing(
+    respx_mock: respx.MockRouter, mapping_type: Callable[[], Mapping[str, object]]
+):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.atranscription(
+            model="elevenlabs/scribe_v2", file=b"fake audio", **_under_a_parent_key(mapping_type())
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "378282246310005" not in _text_the_error_chain_exposes(exc_info.value)
+    assert not route.called
+
+
+def _int_too_long_for_text() -> int:
+    return 10**5000
+
+
+def _frozenset_nested_past_the_stack() -> frozenset[object]:
+    innermost: Final[frozenset[object]] = frozenset()
+    return functools.reduce(lambda inner, _: frozenset({inner}), range(200_000), innermost)
+
+
+class _TextThatRaises:
+    def __str__(self) -> str:
+        raise ValueError("acct-4111111111111111")
+
+
+def _as_provider_param(value: object) -> dict[str, object]:
+    return {"custom_param": value}
+
+
+def _inside_a_provider_list_param(value: object) -> dict[str, object]:
+    return {"keyterms": [value]}
+
+
+def _as_extra_body_value(value: object) -> dict[str, object]:
+    return {"extra_body": {"custom_param": value}}
+
+
+def _as_openai_param(value: object) -> dict[str, object]:
+    return {"temperature": value}
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+@pytest.mark.parametrize(
+    "placement",
+    [_as_provider_param, _inside_a_provider_list_param, _as_extra_body_value, _as_openai_param],
+    ids=["provider-param", "inside-provider-list", "extra-body-value", "openai-param"],
+)
+@pytest.mark.parametrize(
+    "make_value",
+    [_int_too_long_for_text, _frozenset_nested_past_the_stack, _TextThatRaises],
+    ids=["int-too-long", "frozenset-nested-past-the-stack", "text-that-raises"],
+)
+async def test_value_without_a_text_form_is_a_400_that_sends_nothing_and_echoes_nothing(
+    respx_mock: respx.MockRouter,
+    placement: Callable[[object], dict[str, object]],
+    make_value: Callable[[], object],
+):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+    value: Final = make_value()
+    with pytest.raises((ValueError, RecursionError)) as own_error:
+        str(value)
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.atranscription(model="elevenlabs/scribe_v2", file=b"fake audio", **placement(value))
+
+    assert exc_info.value.status_code == 400
+    assert str(own_error.value) not in _text_the_error_chain_exposes(exc_info.value)
+    assert not route.called
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+@pytest.mark.parametrize("key", [("acct-4111111111111111", 7), b"acct-4111111111111111"], ids=["tuple", "bytes"])
+async def test_extra_body_key_that_is_not_a_string_is_a_400_that_sends_nothing_and_echoes_nothing(
+    respx_mock: respx.MockRouter, key: object
+):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.atranscription(
+            model="elevenlabs/scribe_v2",
+            file=b"fake audio",
+            extra_body={key: "value"},
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "4111111111111111" not in _text_the_error_chain_exposes(exc_info.value)
+    assert not route.called
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+@pytest.mark.parametrize(
+    "params",
+    [{"model_id": "scribe_v1"}, {"extra_body": {"model_id": "scribe_v1"}}],
+    ids=["top-level", "extra-body"],
+)
+async def test_model_id_other_than_the_model_is_a_400_that_sends_nothing(
+    respx_mock: respx.MockRouter, params: Mapping[str, object]
+):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.atranscription(model="elevenlabs/scribe_v2", file=b"fake audio", **params)
+
+    assert exc_info.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"model_id": "scribe_v1", "keyterms": ["EIN"]},
+        {"extra_body": {"model_id": "scribe_v1", "keyterms": ["EIN"]}},
+        {"extra_body": {7: "x", "keyterms": ["EIN"]}},
+        {"extra_body": {b"diarize": True, "keyterms": ["EIN"]}},
+        {"webhook_metadata": {b"job": "a1"}, "keyterms": ["EIN"]},
+        {"extra_body": {"webhook_metadata": {b"job": "a1"}}, "keyterms": ["EIN"]},
+        {"webhook_metadata": {b"job": "a1"}, "extra_body": {"webhook_metadata": {"job": "a1"}}, "keyterms": ["EIN"]},
+    ],
+    ids=[
+        "model-id",
+        "extra-body-model-id",
+        "extra-body-int-key",
+        "extra-body-bytes-key",
+        "value-without-json-form",
+        "extra-body-value",
+        "dropped-top-level-value-does-not-fall-back-to-extra-body",
+    ],
+)
+@pytest.mark.parametrize("drop_params_source", ["call", "global"])
+async def test_drop_params_drops_what_would_be_a_400_and_sends_the_rest(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    params: Mapping[str, object],
+    drop_params_source: str,
+):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+    monkeypatch.setattr(litellm, "drop_params", drop_params_source == "global")
+    call_params: Final = {**params, "drop_params": True} if drop_params_source == "call" else params
+
+    await litellm.atranscription(model="elevenlabs/scribe_v2", file=b"fake audio", **call_params)
+
+    assert _sent_fields(route) == {"model_id": ["scribe_v2"], "keyterms": ["EIN"]}
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+async def test_router_deployment_drop_params_drops_a_client_model_id(respx_mock: respx.MockRouter):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "scribe",
+                "litellm_params": {"model": "elevenlabs/scribe_v2", "api_key": "k", "drop_params": True},
+            }
+        ]
+    )
+
+    await router.atranscription(model="scribe", file=b"fake audio", model_id="scribe_v1", keyterms=["EIN"])
+
+    assert _sent_fields(route) == {"model_id": ["scribe_v2"], "keyterms": ["EIN"]}
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+def test_sync_transcription_of_a_mapping_key_without_json_form_is_a_400_that_sends_nothing(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+
+    with pytest.raises(BaseLLMException) as exc_info:
+        litellm.transcription(model="elevenlabs/scribe_v2", file=b"fake audio", webhook_metadata={b"job": "a1"})
+
+    assert exc_info.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.usefixtures("elevenlabs_api_key_env", "_elevenlabs_httpx_transport")
+async def test_router_deployment_keyterms_default_is_sent_as_repeated_parts(respx_mock: respx.MockRouter):
+    route: Final = _mock_transcription_endpoint(respx_mock)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "scribe",
+                "litellm_params": {"model": "elevenlabs/scribe_v2", "api_key": "k", "keyterms": ["BOI report", "EIN"]},
+            }
+        ]
+    )
+
+    await router.atranscription(model="scribe", file=b"fake audio")
+
+    assert _sent_fields(route) == {"model_id": ["scribe_v2"], "keyterms": ["BOI report", "EIN"]}
 
 
 def _transform(payload: object) -> TranscriptionResponse:
@@ -216,8 +619,8 @@ class TestElevenLabsAudioTranscription:
                     "diarize" in form_data
                 ), f"diarize should be in form data. Got: {list(form_data.keys())}"
                 assert (
-                    form_data["diarize"] == "True"
-                ), f"Expected diarize='True', got {form_data['diarize']}"
+                    form_data["diarize"] == "true"
+                ), f"Expected diarize='true', got {form_data['diarize']}"
 
                 # Check that OpenAI language parameter is mapped correctly
                 assert (
