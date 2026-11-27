@@ -2017,13 +2017,14 @@ def _log_rejected_caller_input(logging_obj: Logging, request_fields: Mapping[str
         or should_redact_message_logging(logging_obj.model_call_details)
     ):
         return None
-    caller_request_fields: Final = _CALLER_REQUEST_FIELDS_BY_CALL_TYPE.get(logging_obj.call_type, ())
-    if caller_request_fields:
+    caller_request: Final = dict(
+        (field, request_fields[field])
+        for field in _CALLER_REQUEST_FIELDS_BY_CALL_TYPE.get(logging_obj.call_type, ())
+        if field in request_fields
+    )
+    if caller_request:
         try:
-            log_caller_request(
-                request_fields,
-                dict((field, request_fields[field]) for field in caller_request_fields if field in request_fields),
-            )
+            log_caller_request(request_fields, caller_request)
         except ValueError:
             verbose_proxy_logger.debug("the rejected request cannot be logged as messages")
     responses_text: Final = request_fields.get("input")

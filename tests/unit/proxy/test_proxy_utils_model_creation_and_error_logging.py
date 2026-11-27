@@ -567,6 +567,17 @@ async def test_proxy_only_error_log_keeps_the_responses_text_out_of_the_callback
     assert details["input"] == ""
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+@pytest.mark.parametrize(("route", "call_type"), [("/v1/decisions", "adecisions"), ("/v1/systemone", "asystemone")])
+async def test_proxy_only_error_log_keeps_the_placeholder_when_no_decision_field_reached_the_rejection(
+    route: str, call_type: str, with_logging_object: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    details: Final = await _rejected_request_log(route, call_type, {}, with_logging_object, monkeypatch)
+
+    assert details["messages"] == [{"role": "user", "content": "default-message-value"}]
+
+
 def _nested(depth: int) -> Mapping[str, object]:
     return {"message": "PROMPT-CANARY"} if depth == 0 else {"deeper": _nested(depth - 1)}
 
