@@ -168,9 +168,10 @@ impl AppState {
         host::auth::auth(config, self.auth_store.clone())
     }
 
-    /// Drains the spend logs still queued, writes the gateway request counts still in memory,
-    /// then closes the database pools.
+    /// Flushes what the callbacks still batch, drains the spend logs still queued, writes the
+    /// gateway request counts still in memory, then closes the database pools.
     pub async fn close(&self) {
+        self.inference.host().flush_callbacks().await;
         if let Some(spend_logs) = &self.spend_logs {
             spend_logs.drain().await;
         }

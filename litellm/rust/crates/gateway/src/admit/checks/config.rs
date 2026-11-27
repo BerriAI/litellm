@@ -4,6 +4,7 @@
 
 use axum::http::request::Parts;
 use litellm_callbacks_model_capacity::NAME as MODEL_CAPACITY;
+use litellm_callbacks_s3_log::NAME as S3_LOG;
 use litellm_config::{
     Config, Environment, GeneralSettings, LiteLlmSettings, PriorityReservationSettings,
     RouterSettings, Value,
@@ -14,7 +15,7 @@ use super::{
     Admit, Reason, Refused,
     fields::{IsSet, other, unknown},
 };
-use crate::{StoredConfig, stored::holds};
+use crate::{StoredConfig, callbacks::s3_log, stored::holds};
 
 const STORE_MODEL_IN_DB: &str = "store_model_in_db";
 /// The `LiteLLM_UISettings` row, named when it could not be read.
@@ -100,6 +101,7 @@ fn unhonored<'a>(
         .chain(general(config))
         .chain(router(&config.router_settings))
         .chain(litellm(config))
+        .chain(s3_log::python_hosted(config, environment))
         .chain(sections(config))
 }
 
@@ -156,6 +158,14 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         model_cost_map_min_model_count: _,
         model_cost_map_max_shrink_ratio: _,
         aws_region_name: _,
+        default_batch_size: _,
+        default_flush_interval_seconds: _,
+        default_s3_batch_size: _,
+        default_s3_flush_interval_seconds: _,
+        default_s3_max_concurrent_uploads: _,
+        default_s3_max_adaptive_concurrency: _,
+        s3_upload_attempt_timeout_seconds: _,
+        aws_web_identity_token: _,
     } = environment;
     set!(
         "",
@@ -361,12 +371,12 @@ fn unkept(config: &Config) -> bool {
             || config.router_settings.request_timeout.is_some())
 }
 
-/// A callback other than `dynamic_rate_limiter_v3`, the one the native app runs.
+/// A callback other than `dynamic_rate_limiter_v3` and `s3_v2`, the ones the native app runs.
 fn other_callbacks(callbacks: &Option<Vec<Value>>) -> bool {
     callbacks
         .iter()
         .flatten()
-        .any(|callback| callback.as_str() != Some(MODEL_CAPACITY))
+        .any(|callback| !matches!(callback.as_str(), Some(MODEL_CAPACITY | S3_LOG)))
 }
 
 /// A per-model limit that borrows a model's idle capacity, which the dynamic rate limiter holds
@@ -384,7 +394,9 @@ fn borrows(settings: &Option<PriorityReservationSettings>) -> bool {
 /// variable set them, `request_timeout` unless it is [`unkept`], and
 /// `use_chat_completions_url_for_anthropic_messages` is [`messages_only`]. `callbacks` is honored
 /// when it names only the dynamic rate limiter, which reads `priority_reservation` and its
-/// settings. The others the native app does not read only shape another route or the UI.
+/// settings, and `s3_v2`, whose `s3_callback_params` are honored unless
+/// [`s3_log::python_hosted`] names them. The others the native app does not read only shape
+/// another route or the UI.
 fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let LiteLlmSettings {
         ssl_verify: _,
@@ -440,7 +452,11 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             model_cost_map_url => |url: &Option<_>| url.is_some() && !set_by_its_variable(config)
         ]
     )
-    .chain(unknown("litellm_settings.", additional_fields))
+    .chain(other(
+        "litellm_settings.",
+        additional_fields.keys(),
+        &[s3_log::PARAMS],
+    ))
     .map(|key| spelled(config, key))
 }
 
@@ -548,6 +564,26 @@ mod tests {
         "litellm_settings:\n  callbacks: [dynamic_rate_limiter_v3, prometheus]\n",
         "litellm_settings.callbacks"
     )]
+    #[case::a_callback_beside_s3_v2(
+        "litellm_settings:\n  callbacks: [s3_v2, langfuse]\n",
+        "litellm_settings.callbacks"
+    )]
+    #[case::s3_v2_stripping_base64_files(
+        "litellm_settings:\n  callbacks: [s3_v2]\n  s3_callback_params:\n    s3_bucket_name: logs\n    s3_strip_base64_files: true\n",
+        "litellm_settings.s3_callback_params.s3_strip_base64_files"
+    )]
+    #[case::s3_v2_with_a_web_identity_token(
+        "litellm_settings:\n  callbacks: [s3_v2]\n  s3_callback_params:\n    s3_aws_web_identity_token: oidc/google/aud\n",
+        "litellm_settings.s3_callback_params.s3_aws_web_identity_token"
+    )]
+    #[case::s3_v2_verifying_tls_its_own_way(
+        "litellm_settings:\n  callbacks: [s3_v2]\n  s3_callback_params:\n    s3_verify: /etc/ca.pem\n",
+        "litellm_settings.s3_callback_params.s3_verify"
+    )]
+    #[case::s3_v2_with_params_that_are_no_mapping(
+        "litellm_settings:\n  callbacks: [s3_v2]\n  s3_callback_params: logs\n",
+        "litellm_settings.s3_callback_params"
+    )]
     #[case::a_request_timeout_float_refuses(
         "litellm_settings:\n  request_timeout: soon\n",
         "litellm_settings.request_timeout"
@@ -573,6 +609,13 @@ mod tests {
     #[case::the_routers_timeout_alone("router_settings:\n  timeout: 10\n")]
     #[case::a_request_timeout_beside_the_routers_timeout(
         "litellm_settings:\n  request_timeout: 30\nrouter_settings:\n  timeout: 10\n"
+    )]
+    #[case::s3_v2_alone("litellm_settings:\n  callbacks: [s3_v2]\n")]
+    #[case::s3_v2_beside_the_dynamic_rate_limiter(
+        "litellm_settings:\n  callbacks: [dynamic_rate_limiter_v3, s3_v2]\n"
+    )]
+    #[case::s3_v2_with_the_params_its_sink_reads(
+        "litellm_settings:\n  callbacks: [s3_v2]\n  s3_callback_params:\n    s3_bucket_name: logs\n    s3_region_name: us-east-1\n    s3_path: team\n    s3_use_key_prefix: true\n    s3_log_prompts_only: true\n    s3_partition_granularity: hour\n"
     )]
     fn a_messages_setting_the_native_call_reads_as_python_does_is_not_named(#[case] yaml: &str) {
         assert_eq!(written(yaml), Vec::<String>::new());
@@ -680,6 +723,26 @@ mod tests {
         assert_eq!(
             found(&set_by("LITELLM_DROP_PARAMS", "maybe")),
             ["LITELLM_DROP_PARAMS"]
+        );
+    }
+
+    #[rstest]
+    #[case::for_s3_v2("litellm_settings:\n  callbacks: [s3_v2]\n", vec!["AWS_WEB_IDENTITY_TOKEN"])]
+    #[case::without_s3_v2("model_list: []\n", vec![])]
+    fn a_web_identity_token_in_the_environment_sends_only_s3_v2_to_python(
+        #[case] yaml: &str,
+        #[case] named: Vec<&str>,
+    ) {
+        let environment = Environment {
+            aws_web_identity_token: Some("oidc/google/aud".into()),
+            ..Environment::default()
+        };
+
+        assert_eq!(
+            unhonored(&Config::from_yaml(yaml).unwrap(), &environment)
+                .map(String::from)
+                .collect::<Vec<_>>(),
+            named
         );
     }
 

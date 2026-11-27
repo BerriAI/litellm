@@ -95,7 +95,7 @@ const LICENSE: &str = "LITELLM_LICENSE";
 
 /// The inference routes of `config` with the callbacks the gateway runs around their calls, in
 /// the order the proxy registers them: the config's `callbacks`, of which only the dynamic rate
-/// limiter is built, then the proxy's own key limiter. The keys' limits and the model groups'
+/// limiter and `s3_v2` are built, then the proxy's own key limiter. The keys' limits and the model groups'
 /// capacity are counted in `redis`'s coordination client when there is one, and in this process's
 /// memory otherwise. `variables` holds the config's `environment_variables` in front of the
 /// process's, as the limiter reads its window from them on every call. With a `spend_log`, the
@@ -141,14 +141,28 @@ pub(crate) async fn inference_over(
         }));
         ModelCapacity::new(read, counters, active, router.clone())
     });
-    let callbacks = Callbacks::new(
+    let s3_log = callbacks::s3_log::build(config, resources, variables).await?;
+    let configured = in_config_order(
+        config,
         model_capacity
             .iter()
-            .map(|capacity| capacity.registered())
+            .map(|capacity| {
+                (
+                    litellm_callbacks_model_capacity::NAME,
+                    capacity.registered(),
+                )
+            })
+            .chain(s3_log.map(|s3_log| (litellm_callbacks_s3_log::NAME, s3_log)))
+            .collect(),
+    );
+    let callbacks = Callbacks::new(
+        configured
+            .into_iter()
             .chain([key_limiter.registered()])
             .chain(spend_log.map(SpendLog::registered))
             .collect(),
-    )?;
+    )?
+    .logging_over(router.clone());
     let gateway = Gateway::new(
         resources.core.clone(),
         resources.http.clone(),
@@ -166,6 +180,23 @@ pub(crate) async fn inference_over(
         gateway: Arc::new(gateway),
         key_limiter,
     })
+}
+
+/// The config's callbacks the gateway built, each by its name, in the order `callbacks` names
+/// them, as `litellm.callbacks` holds them.
+fn in_config_order(config: &Config, mut built: Vec<(&str, Registered)>) -> Vec<Registered> {
+    let named: Vec<&str> = config
+        .litellm_settings
+        .callbacks
+        .iter()
+        .flatten()
+        .filter_map(litellm_config::Value::as_str)
+        .collect();
+    built.sort_by_key(|(name, _)| named.iter().position(|named| named == name));
+    built
+        .into_iter()
+        .map(|(_, registered)| registered)
+        .collect()
 }
 
 pub fn install_crypto_provider() {

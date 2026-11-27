@@ -32,10 +32,12 @@ const SAMPLING_PARAMS: [&str; 3] = ["temperature", "top_p", "top_k"];
 /// The request as the standard logging payload logs it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LoggedRequest {
-    /// The payload's `messages`: the attempt's messages with its `system` prompt in front and
-    /// long base64 payloads cut, `null` before any attempt.
+    /// The payload's `messages`, long base64 payloads cut: the attempt's messages with its
+    /// `system` prompt in front, or the client's messages as sent for a call refused before its
+    /// first attempt.
     pub messages: Value,
-    /// The payload's `model_parameters`: the attempt's optional params less the prompt ones.
+    /// The payload's `model_parameters`: the attempt's optional params less the prompt ones, or
+    /// the client's `stream` alone for a call refused before its first attempt.
     pub model_parameters: Map<String, Value>,
     /// The metadata's `requester_metadata`: the body's `metadata` object as the client sent it.
     pub requester_metadata: Option<Map<String, Value>>,
@@ -49,7 +51,23 @@ impl LoggedRequest {
     /// `requester_metadata` is the snapshot `add_litellm_data_to_request` keeps of a `metadata`
     /// object, and the end user is `get_end_user_id_from_request_body`'s `metadata.user_id`,
     /// stripped and kept when text is left (`_coerce_user_id_to_str`).
+    ///
+    /// The messages and model params are what `ProxyLogging._handle_logging_proxy_only_error`
+    /// logs for a call refused before it reaches the provider: of the body's fields it hands the
+    /// logging object only `_PROXY_ONLY_ERROR_LOGGED_FIELDS`, so the messages are the body's
+    /// without its `system` prompt, which never reaches the logged kwargs, and the optional params
+    /// are the body's `stream` when it sends one. An attempt overwrites both.
     pub fn sent(&mut self, body: &Map<String, Value>) {
+        self.messages = truncate_base64(
+            body.get("messages").cloned().unwrap_or(Value::Null),
+            MAX_BASE64_LENGTH_FOR_LOGGING,
+        );
+        self.model_parameters = messages_model_parameters(
+            body.get("stream")
+                .map(|stream| ("stream".to_owned(), stream.clone()))
+                .into_iter()
+                .collect(),
+        );
         let metadata = body.get("metadata").and_then(Value::as_object);
         self.requester_metadata = metadata.cloned();
         self.end_user = metadata
@@ -164,6 +182,66 @@ mod tests {
         assert_eq!(
             (logged.requester_metadata, logged.end_user.as_deref()),
             (requester_metadata.map(object), end_user)
+        );
+    }
+
+    #[rstest]
+    #[case::stream_sent(
+        json!({"model": "m", "messages": [{"role": "user", "content": "hi"}], "system": "s", "max_tokens": 8, "stream": true}),
+        json!([{"role": "user", "content": "hi"}]),
+        json!({"stream": true})
+    )]
+    #[case::stream_left_out(
+        json!({"model": "m", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 8, "top_k": 3}),
+        json!([{"role": "user", "content": "hi"}]),
+        json!({})
+    )]
+    #[case::stream_null(json!({"messages": "hi", "stream": null}), json!("hi"), json!({"stream": null}))]
+    #[case::no_messages(json!({"model": "m"}), Value::Null, json!({}))]
+    fn a_call_refused_before_an_attempt_logs_the_bodys_messages_and_stream(
+        #[case] body: Value,
+        #[case] messages: Value,
+        #[case] model_parameters: Value,
+    ) {
+        let mut logged = LoggedRequest::default();
+        logged.sent(&object(body));
+        assert_eq!(
+            (logged.messages, Value::Object(logged.model_parameters)),
+            (messages, model_parameters)
+        );
+    }
+
+    #[rstest]
+    fn long_base64_in_the_sent_messages_is_cut() {
+        let image = json!({"type": "image", "source": {"type": "base64", "data": "A".repeat(100)}});
+        let mut logged = LoggedRequest::default();
+        logged.sent(&object(
+            json!({"messages": [{"role": "user", "content": [image]}]}),
+        ));
+        assert_eq!(
+            logged.messages,
+            json!([{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "data": "[base64_data truncated: 75B]"}}
+            ]}])
+        );
+    }
+
+    #[rstest]
+    fn an_attempt_overwrites_what_the_sent_body_logged() {
+        let body = object(json!({
+            "messages": [{"role": "user", "content": "hi"}],
+            "system": "s",
+            "max_tokens": 8,
+        }));
+        let mut logged = LoggedRequest::default();
+        logged.sent(&body);
+        logged.attempted(&body, &[], false);
+        assert_eq!(
+            (logged.messages, Value::Object(logged.model_parameters)),
+            (
+                json!([{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}]),
+                json!({"max_tokens": 8, "stream": false})
+            )
         );
     }
 

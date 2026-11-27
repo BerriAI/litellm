@@ -397,7 +397,7 @@ mod tests {
 
     use litellm_gateway_inference::{
         CallType, ServedCall,
-        record::{self, CallRecord, LoggedRequest, RequestFacts},
+        record::{self, CallRecord, RequestFacts},
     };
     use litellm_router_core::DeploymentSpec;
     use litellm_standard_logging::{
@@ -443,8 +443,22 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    /// The body of the `/v1/messages` request `record.py` makes.
+    fn request_body(stream: bool) -> Map<String, Value> {
+        let mut body = object(json!({
+            "model": MODEL_GROUP,
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "Hey"}],
+        }));
+        if stream {
+            body.insert("stream".to_owned(), json!(true));
+        }
+        body
+    }
+
     /// The `/v1/messages` request `record.py` makes with its bare virtual key, as the record
-    /// holds it once read.
+    /// holds it once read and before any attempt. `record.py` logs an empty
+    /// `requester_metadata` for its body, which sends no `metadata`.
     fn requested(entries: &mut CallState, stream: bool) {
         entries.call_type = Some(CallType::AnthropicMessages);
         entries.call_id = Some("call-1".to_owned());
@@ -456,16 +470,9 @@ mod tests {
             metadata: Some(Map::new()),
             ..Charged::default()
         };
-        let mut body = object(json!({
-            "model": MODEL_GROUP,
-            "max_tokens": 64,
-            "messages": [{"role": "user", "content": "Hey"}],
-        }));
-        let mut model_parameters = object(json!({"max_tokens": 64}));
-        if stream {
-            body.insert("stream".to_owned(), json!(true));
-            model_parameters.insert("stream".to_owned(), json!(true));
-        }
+        let body = request_body(stream);
+        entries.logged_request.sent(&body);
+        entries.logged_request.requester_metadata = Some(Map::new());
         entries.hold(body);
         entries.release();
         entries.request_facts = RequestFacts {
@@ -478,12 +485,17 @@ mod tests {
             requester_custom_headers: Some(BTreeMap::new()),
             client_sent_oauth_token: false,
         };
-        entries.logged_request = LoggedRequest {
-            messages: json!([{"role": "user", "content": "Hey"}]),
-            model_parameters,
-            requester_metadata: Some(Map::new()),
-            end_user: None,
-        };
+    }
+
+    /// What an attempt logs of `record.py`'s request: its messages, and the optional params
+    /// `record.py` hands the logging object.
+    fn attempted(entries: &mut CallState, stream: bool) {
+        let mut model_parameters = object(json!({"max_tokens": 64}));
+        if stream {
+            model_parameters.insert("stream".to_owned(), json!(true));
+        }
+        entries.logged_request.messages = json!([{"role": "user", "content": "Hey"}]);
+        entries.logged_request.model_parameters = model_parameters;
     }
 
     fn sent_to_the_provider() -> AttemptRecord {
@@ -497,6 +509,8 @@ mod tests {
         let first_event = entries
             .stream()
             .then(|| entries.start() + Duration::from_millis(750));
+        let stream = entries.stream();
+        attempted(entries, stream);
         entries.served_message = Some(message);
         entries.attempt = Some(sent_to_the_provider());
         entries.serve(ServedCall {
@@ -553,6 +567,7 @@ mod tests {
 
     fn provider_4xx(entries: &mut CallState, _: &Arc<Deployment>) {
         requested(entries, false);
+        attempted(entries, false);
         entries.failed_attempts = vec![sent_to_the_provider()];
         failed(
             entries,
@@ -655,11 +670,21 @@ mod tests {
 
     /// The golden as the proxy logs the same call: `add_litellm_data_to_request` always stamps
     /// whether the client sent an OAuth token, which `record.py` leaves out of its metadata, and
-    /// the failure handler redacts `error_str`, which `record.py` passes as raised.
-    fn as_the_proxy_logs(mut golden: Value, error_str: Option<&str>) -> Value {
+    /// the failure handler redacts `error_str`, which `record.py` passes as raised. A call refused
+    /// before its first attempt logs `model_parameters` `refused_with`, since
+    /// `_handle_logging_proxy_only_error` hands the logging object only the body's `stream`
+    /// where `record.py` hands it a routed call's optional params.
+    fn as_the_proxy_logs(
+        mut golden: Value,
+        error_str: Option<&str>,
+        refused_with: Option<Value>,
+    ) -> Value {
         golden["metadata"]["used_client_oauth_token"] = json!(false);
         if let Some(error_str) = error_str {
             golden["error_str"] = json!(error_str);
+        }
+        if let Some(model_parameters) = refused_with {
+            golden["model_parameters"] = model_parameters;
         }
         golden
     }
@@ -669,11 +694,13 @@ mod tests {
         unary_success,
         false,
         None,
+        None,
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../standard-logging/tests/goldens/unary_success.json"))
     )]
     #[case::stream_success(
         stream_success,
         false,
+        None,
         None,
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../standard-logging/tests/goldens/stream_success.json"))
     )]
@@ -681,25 +708,29 @@ mod tests {
         provider_4xx,
         true,
         None,
+        None,
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../standard-logging/tests/goldens/provider_4xx.json"))
     )]
     #[case::key_limit_429(
         key_limit_429,
         false,
         Some(concat!("429: Rate limit exceeded for REDACTED ", "Limit type: requests. Current limit: 1, Remaining: 0. Limit resets at: 2026-01-01 12:01:00 UTC")),
+        Some(json!({})),
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../standard-logging/tests/goldens/key_limit_429.json"))
     )]
     fn a_messages_call_logs_the_payload_python_logs_for_it(
         #[case] scenario: Scenario,
         #[case] failed_on: bool,
         #[case] redacted_error_str: Option<&str>,
+        #[case] refused_with: Option<Value>,
         #[case] golden: &str,
     ) {
         let golden: Value = serde_json::from_str(golden).unwrap();
         let built = masked(built(scenario, failed_on).unwrap(), &golden);
         assert_eq!(
             serde_json::to_string(&built).unwrap(),
-            serde_json::to_string(&as_the_proxy_logs(golden, redacted_error_str)).unwrap()
+            serde_json::to_string(&as_the_proxy_logs(golden, redacted_error_str, refused_with))
+                .unwrap()
         );
     }
 

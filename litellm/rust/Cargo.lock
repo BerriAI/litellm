@@ -4230,6 +4230,7 @@ dependencies = [
  "litellm-callbacks-budgets",
  "litellm-callbacks-model-capacity",
  "litellm-callbacks-parallel-request-limiter",
+ "litellm-callbacks-s3-log",
  "litellm-callbacks-spend-log",
  "litellm-callbacks-spend-logger",
  "litellm-circuit-breaker",
