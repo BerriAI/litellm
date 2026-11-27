@@ -6,7 +6,7 @@ import MCPToolsViewer from "./mcp_tools";
 import { callMCPTool, listMCPTools, getMCPOAuthUserCredentialStatus } from "@/components/networking";
 import type { MCPTool } from "@/components/mcp_tools/types";
 import { isTokenValid, getToken } from "@/utils/mcpTokenStore";
-import { fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "@/../tests/test-utils";
+import { act, fireEvent, renderWithProviders, screen, testQueryClient, waitFor } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   listMCPTools: vi.fn(),
@@ -321,8 +321,9 @@ describe("MCPToolsViewer URL state", () => {
     expect(screen.queryByText("Tool executed successfully")).not.toBeInTheDocument();
   });
 
-  it("clears the previous result when the selected tool is picked again", async () => {
-    renderViewer(M2M, "?tool=search_docs");
+  it("clears the previous result without a new history entry when the selected tool is picked again", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderViewer(M2M, "?tool=search_docs", onUrlUpdate);
 
     await userEvent.click(await screen.findByRole("button", { name: "Call Tool" }));
     expect(await screen.findByText("Tool executed successfully")).toBeInTheDocument();
@@ -330,6 +331,11 @@ describe("MCPToolsViewer URL state", () => {
     await userEvent.click(toolListItem("search_docs"));
 
     expect(await screen.findByText("Ready to Call Tool")).toBeInTheDocument();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+
+    await userEvent.click(toolListItem("fetch_page"));
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+    expect(onUrlUpdate.mock.calls.map(([update]) => update.searchParams.get("tool"))).toEqual(["fetch_page"]);
   });
 
   it("filters the tool list by the search in the URL and writes what the user types", async () => {
@@ -344,6 +350,7 @@ describe("MCPToolsViewer URL state", () => {
     fireEvent.change(searchBox, { target: { value: "docs" } });
 
     await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("tool_search")).toBe("docs"));
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].options.history).toBe("replace");
     expect(toolListItem("search_docs")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { level: 4, name: "fetch_page" })).not.toBeInTheDocument();
 

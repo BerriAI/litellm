@@ -266,6 +266,11 @@ const MCPToolsViewer = ({
 
   const toolsData = mcpToolsResponse?.tools || [];
   const selectedTool = toolsData.find((tool: MCPTool) => tool.name === selectedToolName) ?? null;
+  const pickTool = (toolName: string) => {
+    setToolOutcome(null);
+    if (toolName === selectedToolName) return;
+    void setToolUrlState({ tool: toolName });
+  };
   const selectedOutcome = toolOutcome?.toolName === selectedToolName ? toolOutcome : null;
 
   const toolsError = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
@@ -504,10 +509,7 @@ const MCPToolsViewer = ({
                                     ? "border-primary bg-accent ring-1 ring-ring"
                                     : "border-border bg-card",
                                 )}
-                                onClick={() => {
-                                  void setToolUrlState({ tool: tool.name });
-                                  setToolOutcome(null);
-                                }}
+                                onClick={() => pickTool(tool.name)}
                               >
                                 <div className="flex items-start space-x-2">
                                   {tool.mcp_info.logo_url && (
