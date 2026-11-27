@@ -61,11 +61,11 @@ class ModalSandboxConfig(BaseSandboxConfig):
         return key
 
     async def _client(self, api_key: str | None) -> tuple[ModuleType, object]:
+        token_id, token_secret = self.validate_environment(api_key=api_key).split(":", 1)
         try:
             modal: Final = importlib.import_module("modal")
         except ImportError as e:
             raise ImportError("The Modal sandbox provider needs the modal SDK. Run `pip install modal`.") from e
-        token_id, token_secret = self.validate_environment(api_key=api_key).split(":", 1)
         return modal, await modal.Client.from_credentials.aio(token_id, token_secret)
 
     async def _sandbox(self, container: ContainerHandle | str, api_key: str | None) -> _ModalSandbox:
