@@ -257,24 +257,21 @@ describe("UsageTab", () => {
   it("opens on the per-day bars when ?savings=per-interval", () => {
     renderWith(twoDays(), { searchParams: "?savings=per-interval" });
 
-    expect(screen.getByRole("tab", { name: "Per day" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Per day", selected: true })).toBeInTheDocument();
     expect(screen.getByTestId("bar-chart")).toBeInTheDocument();
     expect(screen.queryByTestId("area-chart")).not.toBeInTheDocument();
   });
 
-  it("opens on the running total for an unknown ?savings= value", () => {
-    renderWith(twoDays(), { searchParams: "?savings=weekly" });
-
-    expect(screen.getByRole("tab", { name: "Cumulative" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByTestId("area-chart")).toBeInTheDocument();
-  });
-
-  it("writes ?savings=per-interval for the per-day view and drops it for the running total", async () => {
+  it("ignores an unknown ?savings=, then replaces it with the per-day view and drops it for the running total", async () => {
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-    renderWith(twoDays(), { onUrlUpdate });
+    renderWith(twoDays(), { searchParams: "?savings=weekly", onUrlUpdate });
+
+    expect(screen.getByRole("tab", { name: "Cumulative", selected: true })).toBeInTheDocument();
+    expect(screen.getByTestId("area-chart")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("tab", { name: "Per day" }));
     await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("savings")).toBe("per-interval"));
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].options.history).toBe("replace");
 
     await userEvent.click(screen.getByRole("tab", { name: "Cumulative" }));
     await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("savings")).toBe(false));

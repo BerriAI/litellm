@@ -1,10 +1,9 @@
 import { renderWithProviders as render } from "../../../../../tests/test-utils";
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
-import { renderWithProviders } from "../../../../../tests/test-utils";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 
 const { useAuthorizedMock } = vi.hoisted(() => ({ useAuthorizedMock: vi.fn() }));
 
@@ -27,36 +26,27 @@ vi.mock("./AutoRouterBenchmarksTab", () => ({
 
 import CostOptimizationView from "./CostOptimizationView";
 
-const renderView = (userRole = "Admin", url: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction } = {}) => {
-  useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole });
+interface UrlOptions {
+  searchParams?: string;
+  onUrlUpdate?: OnUrlUpdateFunction;
+  resetUrlUpdateQueueOnMount?: boolean;
+}
+
+const renderView = (userRole = "Admin", url: UrlOptions = {}) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return renderWithProviders(
-    <QueryClientProvider client={queryClient}>
-      <CostOptimizationView accessToken="test-token" userId="u1" userRole={userRole} />
-    </QueryClientProvider>,
-    url,
-  );
+  const viewAs = (role: string) => {
+    useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole: role });
+    return (
+      <QueryClientProvider client={queryClient}>
+        <CostOptimizationView accessToken="test-token" userId="u1" userRole={role} />
+      </QueryClientProvider>
+    );
+  };
+  const view = render(viewAs(userRole), url);
+  return { ...view, changeRole: (role: string) => view.rerender(viewAs(role)) };
 };
 
-const renderViewKeepingMountUpdates = (userRole: string, searchParams: string, onUrlUpdate: OnUrlUpdateFunction) => {
-  useAuthorizedMock.mockReturnValue({ accessToken: "test-token", userId: "u1", userRole });
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<CostOptimizationView accessToken="test-token" userId="u1" userRole={userRole} />, {
-    wrapper: ({ children }) => (
-      <NuqsTestingAdapter
-        searchParams={searchParams}
-        onUrlUpdate={onUrlUpdate}
-        hasMemory
-        resetUrlUpdateQueueOnMount={false}
-      >
-        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-      </NuqsTestingAdapter>
-    ),
-  });
-};
-
-const lastSearchParams = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
-  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+const lastUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => onUrlUpdate.mock.calls.at(-1)?.[0];
 
 describe("CostOptimizationView", () => {
   beforeEach(() => {
@@ -118,46 +108,95 @@ describe("CostOptimizationView", () => {
   });
 
   describe("URL state", () => {
-    it("opens the tab named in ?tab=", () => {
-      renderView("Admin", { searchParams: "?tab=caching" });
+    it.each([
+      ["compression", "Prompt Compression", "compression-tab"],
+      ["caching", "Prompt Caching", "caching-tab"],
+      ["autorouter-usage", "Auto-Router", "autorouter-benchmarks-tab"],
+    ])("opens ?tab=%s for a proxy admin", (slug, name, panel) => {
+      renderView("Admin", { searchParams: `?tab=${slug}` });
 
-      expect(screen.getByRole("tab", { name: "Prompt Caching" })).toHaveAttribute("aria-selected", "true");
-      expect(screen.getByRole("tab", { name: "Overall" })).toHaveAttribute("aria-selected", "false");
+      expect(screen.getByRole("tab", { name, selected: true })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Overall", selected: false })).toBeInTheDocument();
+      expect(screen.getByTestId(panel)).toBeInTheDocument();
+    });
+
+    it("opens a proxy-admin-only tab for an admin viewer", () => {
+      renderView("Admin Viewer", { searchParams: "?tab=caching" });
+
+      expect(screen.getByRole("tab", { name: "Prompt Caching", selected: true })).toBeInTheDocument();
       expect(screen.getByTestId("caching-tab")).toBeInTheDocument();
     });
 
-    it("writes ?tab= when a tab is chosen and drops it for Overall", async () => {
+    it("replaces ?tab= when a tab is chosen and drops it for Overall", async () => {
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
       renderView("Admin", { onUrlUpdate });
 
       fireEvent.click(screen.getByRole("tab", { name: "Auto-Router" }));
-      await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.get("tab")).toBe("autorouter-usage"));
+      await waitFor(() => expect(lastUpdate(onUrlUpdate)?.searchParams.get("tab")).toBe("autorouter-usage"));
+      expect(lastUpdate(onUrlUpdate)?.options.history).toBe("replace");
 
       fireEvent.click(screen.getByRole("tab", { name: "Overall" }));
-      await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.has("tab")).toBe(false));
+      await waitFor(() => expect(lastUpdate(onUrlUpdate)?.searchParams.has("tab")).toBe(false));
     });
 
-    it("keeps the tab opened from the URL mounted after switching away", () => {
-      renderView("Admin", { searchParams: "?tab=caching" });
+    it("writes nothing to the URL on a bare visit", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderView("Admin", { onUrlUpdate, resetUrlUpdateQueueOnMount: false });
+
+      fireEvent.click(screen.getByRole("tab", { name: "Prompt Compression" }));
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+      expect(lastUpdate(onUrlUpdate)?.queryString).toBe("?tab=compression");
+    });
+
+    it("keeps the tab opened from the URL mounted after switching away", async () => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderView("Admin", { searchParams: "?tab=caching", onUrlUpdate });
 
       fireEvent.click(screen.getByRole("tab", { name: "Overall" }));
+      await waitFor(() => expect(lastUpdate(onUrlUpdate)?.searchParams.has("tab")).toBe(false));
 
-      expect(screen.getByRole("tab", { name: "Overall" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("tab", { name: "Overall", selected: true })).toBeInTheDocument();
       expect(screen.getByTestId("caching-tab")).toBeInTheDocument();
       expect(screen.queryByTestId("compression-tab")).not.toBeInTheDocument();
     });
 
-    it.each([
-      ["an admin-only tab for an internal user", "Internal User", "?tab=caching"],
-      ["an unknown tab for an admin", "Admin", "?tab=bogus"],
-    ])("falls back to Overall and clears %s", async (_label, userRole, searchParams) => {
-      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-      renderViewKeepingMountUpdates(userRole, searchParams, onUrlUpdate);
+    it.each(["Internal User", "Internal Viewer", "Org Admin"])(
+      "shows %s Overall for a proxy-admin-only link without mounting it, and keeps the link for a later admin role",
+      async (userRole) => {
+        const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+        const { changeRole } = renderView(userRole, {
+          searchParams: "?tab=caching",
+          onUrlUpdate,
+          resetUrlUpdateQueueOnMount: false,
+        });
 
-      expect(screen.getByRole("tab", { name: "Overall" })).toHaveAttribute("aria-selected", "true");
+        expect(screen.getByRole("tab", { name: "Overall", selected: true })).toBeInTheDocument();
+        expect(screen.getByTestId("usage-tab")).toBeInTheDocument();
+        expect(screen.queryByTestId("caching-tab")).not.toBeInTheDocument();
+
+        changeRole("Admin");
+
+        expect(await screen.findByRole("tab", { name: "Prompt Caching", selected: true })).toBeInTheDocument();
+        expect(screen.getByTestId("caching-tab")).toBeInTheDocument();
+        expect(onUrlUpdate).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["?tab=bogus", "?tab=CACHING"])("falls back to Overall and clears %s", async (searchParams) => {
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderView("Admin", { searchParams, onUrlUpdate, resetUrlUpdateQueueOnMount: false });
+
+      expect(screen.getByRole("tab", { name: "Overall", selected: true })).toBeInTheDocument();
       expect(screen.queryByTestId("caching-tab")).not.toBeInTheDocument();
       await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
-      expect(lastSearchParams(onUrlUpdate)?.has("tab")).toBe(false);
+      expect(lastUpdate(onUrlUpdate)?.searchParams.has("tab")).toBe(false);
+    });
+
+    it("uses the first ?tab= when the param repeats", () => {
+      renderView("Admin", { searchParams: "?tab=caching&tab=compression" });
+
+      expect(screen.getByRole("tab", { name: "Prompt Caching", selected: true })).toBeInTheDocument();
     });
   });
 });

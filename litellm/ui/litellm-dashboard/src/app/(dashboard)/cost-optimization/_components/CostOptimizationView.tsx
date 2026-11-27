@@ -16,10 +16,11 @@ import PromptCachingTab from "./PromptCachingTab";
 import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
 import { useDailyActivityRange } from "./useDailyActivityRange";
 import { useVisitedUrlTabs } from "./useVisitedUrlTabs";
-
-const ALL_TABS = ["usage", "compression", "caching", "autorouter-usage"] as const;
-type CostOptimizationTab = (typeof ALL_TABS)[number];
-const UNPRIVILEGED_TABS: readonly CostOptimizationTab[] = ["usage"];
+import {
+  COST_OPTIMIZATION_TABS,
+  DEFAULT_COST_OPTIMIZATION_TAB,
+  visibleCostOptimizationTab,
+} from "./costOptimizationTabs";
 
 interface CostOptimizationViewProps {
   accessToken: string | null;
@@ -31,11 +32,17 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
   const { t } = useTranslation();
   const activity = useDailyActivityRange(accessToken, userId, userRole);
   const canViewProxyWideCostData = useCan("viewProxyWideCostData");
-  const [tab, setTab] = useUrlTab(canViewProxyWideCostData ? ALL_TABS : UNPRIVILEGED_TABS, "usage");
-  const visitedTabs = useVisitedUrlTabs(tab);
+  const [requestedTab, setRequestedTab] = useUrlTab(COST_OPTIMIZATION_TABS, DEFAULT_COST_OPTIMIZATION_TAB);
+  const activeTab = visibleCostOptimizationTab(requestedTab, canViewProxyWideCostData);
+  const visitedTabs = useVisitedUrlTabs(activeTab);
+
+  const handleTabChange = (value: unknown) => {
+    const next = COST_OPTIMIZATION_TABS.find((tab) => tab === value);
+    if (next) setRequestedTab(next);
+  };
 
   return (
-    <PageTabs value={tab} onValueChange={setTab}>
+    <PageTabs value={activeTab} onValueChange={handleTabChange}>
       <PageHeader>
         <PageHeaderTitle>
           <PiggyBank />

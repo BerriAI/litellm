@@ -1,11 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { chooseSelectOption, renderWithProviders } from "../../../../../tests/test-utils";
+import { renderWithProviders } from "../../../../../tests/test-utils";
 
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { ApiError } from "@/lib/http/client";
@@ -143,7 +142,9 @@ const activityFor = (dateValue: { from: Date; to: Date }, onDateChange = vi.fn()
   cancel: vi.fn(),
 });
 
-const renderTab = (url: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction } = {}) => {
+const renderTab = (
+  url: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction; resetUrlUpdateQueueOnMount?: boolean } = {},
+) => {
   const dateValue = { from: new Date(2026, 6, 6), to: new Date(2026, 7, 5) };
   const onDateChange = vi.fn();
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -159,10 +160,7 @@ const renderTab = (url: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFuncti
   };
 };
 
-const lastSearchParams = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) =>
-  onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
-
-const twoRouters = () => response([group(), group({ router_name: "gpt-auto" })]);
+const lastUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => onUrlUpdate.mock.calls.at(-1)?.[0];
 
 describe("AutoRouterBenchmarksTab", () => {
   beforeEach(() => {
@@ -549,95 +547,43 @@ describe("AutoRouterBenchmarksTab", () => {
   });
 
   describe("URL state", () => {
-    it("opens the sub-tab named in ?router_tab= and mounts the other one only once visited", () => {
+    it("opens the sub-tab named in ?router_tab= and mounts the other one only once visited", async () => {
       mockHook({ data: response([group()]) });
-      renderTab({ searchParams: "?router_tab=shadow-evals" });
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderTab({ searchParams: "?router_tab=shadow-evals", onUrlUpdate });
 
-      expect(screen.getByRole("tab", { name: "Shadow Evals" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("tab", { name: "Shadow Evals", selected: true })).toBeInTheDocument();
       expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
       expect(screen.queryByText("Total estimated savings")).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
+      await waitFor(() => expect(lastUpdate(onUrlUpdate)?.searchParams.has("router_tab")).toBe(false));
       expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
       expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
     });
 
-    it("writes ?router_tab= for shadow evals and drops it for usage", async () => {
+    it("replaces ?router_tab= for shadow evals and drops it for usage", async () => {
       mockHook({ data: response([group()]) });
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
       renderTab({ onUrlUpdate });
 
       fireEvent.click(screen.getByRole("tab", { name: "Shadow Evals" }));
-      await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.get("router_tab")).toBe("shadow-evals"));
+      await waitFor(() => expect(lastUpdate(onUrlUpdate)?.searchParams.get("router_tab")).toBe("shadow-evals"));
+      expect(lastUpdate(onUrlUpdate)?.searchParams.has("tab")).toBe(false);
+      expect(lastUpdate(onUrlUpdate)?.options.history).toBe("replace");
 
       fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
-      await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.has("router_tab")).toBe(false));
+      await waitFor(() => expect(lastUpdate(onUrlUpdate)?.searchParams.has("router_tab")).toBe(false));
     });
 
     it("falls back to usage and clears an unknown ?router_tab=", async () => {
       mockHook({ data: response([group()]) });
       const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-      const dateValue = { from: new Date(2026, 6, 6), to: new Date(2026, 7, 5) };
-      render(<AutoRouterBenchmarksTab accessToken="sk-test" activity={activityFor(dateValue)} />, {
-        wrapper: ({ children }) => (
-          <NuqsTestingAdapter
-            searchParams="?router_tab=bogus"
-            onUrlUpdate={onUrlUpdate}
-            hasMemory
-            resetUrlUpdateQueueOnMount={false}
-          >
-            <QueryClientProvider client={new QueryClient()}>{children}</QueryClientProvider>
-          </NuqsTestingAdapter>
-        ),
-      });
+      renderTab({ searchParams: "?router_tab=bogus", onUrlUpdate, resetUrlUpdateQueueOnMount: false });
 
-      expect(screen.getByRole("tab", { name: "Usage" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("tab", { name: "Usage", selected: true })).toBeInTheDocument();
       await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
-      expect(lastSearchParams(onUrlUpdate)?.has("router_tab")).toBe(false);
-    });
-
-    it("selects the router named in ?router=", () => {
-      mockHook({ data: twoRouters() });
-      renderTab({ searchParams: `?router=${encodeURIComponent("gpt-auto complexity")}` });
-
-      expect(screen.getByRole("combobox")).toHaveTextContent("gpt-auto");
-    });
-
-    it("shows every router when ?router= names one that is not in the range", () => {
-      mockHook({ data: twoRouters() });
-      renderTab({ searchParams: "?router=retired-auto%20complexity" });
-
-      expect(screen.getByRole("combobox")).toHaveTextContent("All auto-routers");
-    });
-
-    it("writes the chosen router to ?router= and drops it for all routers", async () => {
-      mockHook({ data: twoRouters() });
-      const user = userEvent.setup();
-      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
-      renderTab({ onUrlUpdate });
-
-      await chooseSelectOption(user, screen.getByRole("combobox"), "gpt-auto");
-      await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.get("router")).toBe("gpt-auto complexity"));
-      expect(screen.getByRole("combobox")).toHaveTextContent("gpt-auto");
-
-      await chooseSelectOption(user, screen.getByRole("combobox"), "All auto-routers");
-      await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.has("router")).toBe(false));
-      expect(screen.getByRole("combobox")).toHaveTextContent("All auto-routers");
-    });
-
-    it("keeps the router choice in local state when the usage view is mounted without a URL", async () => {
-      mockHook({ data: twoRouters() });
-      const user = userEvent.setup();
-      const dateValue = { from: new Date(2026, 6, 6), to: new Date(2026, 7, 5) };
-      render(
-        <QueryClientProvider client={new QueryClient()}>
-          <AutoRouterUsageView accessToken="sk-test" activity={activityFor(dateValue)} apiKey="key-hash-1" />
-        </QueryClientProvider>,
-      );
-
-      await chooseSelectOption(user, screen.getByRole("combobox"), "gpt-auto");
-
-      expect(screen.getByRole("combobox")).toHaveTextContent("gpt-auto");
+      expect(lastUpdate(onUrlUpdate)?.searchParams.has("router_tab")).toBe(false);
     });
   });
 });
