@@ -1234,8 +1234,8 @@ async def test_audit_events_flush_at_the_same_batch_size(
 async def test_both_loggers_keep_uploads_that_fail_in_transport(
     golden: Golden, bucket: FakeBucket, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
-    monkeypatch.setattr(s3_v2, "S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", 0.3)
     if failure == "timeout":
+        monkeypatch.setattr(s3_v2, "S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", 0.3)
         bucket.delays.append(("_a\\.json", 1.0))
     else:
         bucket.failures.append(("_a\\.json", 0, ""))
@@ -1255,7 +1255,15 @@ async def test_both_loggers_keep_uploads_that_fail_in_transport(
     python_paths: Final = golden.expected("put-paths")
     assert isinstance(python_paths, list)
     assert [str(path).rsplit("_", 1)[-1] for path in python_paths].count("a.json") == attempts
-    assert [path.rsplit("_", 1)[-1] for path in _put_paths(bucket)].count("a.json") == attempts
+    assert (await _put_names_once_received(bucket, "a.json", attempts)).count("a.json") == attempts
+
+
+async def _put_names_once_received(bucket: FakeBucket, name: str, count: int) -> list[str]:
+    for _ in range(500):
+        if [path.rsplit("_", 1)[-1] for path in _put_paths(bucket)].count(name) >= count:
+            break
+        await asyncio.sleep(0.02)
+    return [path.rsplit("_", 1)[-1] for path in _put_paths(bucket)]
 
 
 _NO_METADATA: Final = object()

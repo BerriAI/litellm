@@ -330,7 +330,7 @@ mod tests {
     #[tokio::test]
     async fn a_keys_counter_starts_from_the_spend_its_row_holds() {
         let held = Held::holding(TOKEN, json!({"spend": 1.5})).await;
-        let host = RustSpendLogHost::new(Some(Arc::new(KeyRepository::new(held.repositories()))));
+        let host = RustSpendLogHost::new(Some(Arc::new(KeyRepository::new(held.database()))));
         let counter = SpendCounter::Key {
             token: Token::new(TOKEN).hash().as_str().to_owned(),
             window: None,

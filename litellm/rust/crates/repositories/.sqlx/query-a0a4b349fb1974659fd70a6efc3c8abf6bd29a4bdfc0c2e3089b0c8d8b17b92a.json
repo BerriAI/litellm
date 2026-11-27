@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT access_group_id\nFROM \"LiteLLM_AccessGroupTable\"\nWHERE access_group_id = ANY ($1::text[])\nORDER BY access_group_id COLLATE \"C\"\nFOR UPDATE\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "access_group_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_AccessGroupTable\"",
+            "name": "access_group_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a0a4b349fb1974659fd70a6efc3c8abf6bd29a4bdfc0c2e3089b0c8d8b17b92a"
+}

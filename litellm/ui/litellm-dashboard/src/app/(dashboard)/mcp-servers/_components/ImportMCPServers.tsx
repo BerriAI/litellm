@@ -1,12 +1,15 @@
 import React, { useState } from "react";
+import { useController } from "react-hook-form";
 import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { importMCPServers } from "@/components/networking";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
-import { MCPConnectorImportResponse, parseConnectorConfig } from "./importConnectorConfig";
+import { type MCPConnectorImportResponse, parseConnectorConfig } from "./ImportMCPServers/mapper";
+import { connectorImportSchema } from "./ImportMCPServers/schema";
 
 interface ImportMCPServersProps {
   accessToken: string;
@@ -26,20 +29,23 @@ const PLACEHOLDER = `{
 
 const ImportMCPServers: React.FC<ImportMCPServersProps> = ({ accessToken, open, onClose, onImported }) => {
   const { t } = useTranslation();
-  const [configText, setConfigText] = useState("");
+  const { control, getValues, reset } = useZodForm(connectorImportSchema, { defaultValues: { configText: "" } });
+  const { field: configText } = useController({ control, name: "configText" });
   const [parseError, setParseError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [result, setResult] = useState<MCPConnectorImportResponse | null>(null);
 
   const handleClose = () => {
-    setConfigText("");
+    reset();
     setParseError(null);
     setResult(null);
     onClose();
   };
 
   const handleImport = async () => {
-    const parsed = parseConnectorConfig(configText, t);
+    const draft = connectorImportSchema.safeParse(getValues());
+    if (!draft.success) return;
+    const parsed = parseConnectorConfig(draft.data.configText, t);
     if (!parsed.ok) {
       setParseError(parsed.error);
       return;
@@ -73,8 +79,8 @@ const ImportMCPServers: React.FC<ImportMCPServersProps> = ({ accessToken, open, 
           </p>
           <Textarea
             aria-label={t("mcpServers.importMcpServers.connectorJsonLabel")}
-            value={configText}
-            onChange={(e) => setConfigText(e.target.value)}
+            value={configText.value}
+            onChange={(e) => configText.onChange(e.target.value)}
             placeholder={PLACEHOLDER}
             rows={10}
             className="font-mono text-xs"

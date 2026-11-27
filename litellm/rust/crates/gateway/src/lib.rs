@@ -12,6 +12,7 @@ mod license;
 mod live;
 pub mod middleware;
 mod periodic;
+mod prompt_estimate;
 mod redis;
 mod reload;
 mod resources;

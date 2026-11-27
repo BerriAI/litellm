@@ -9,9 +9,9 @@ mod support;
 
 use std::sync::Arc;
 
-use litellm_auth_store::{AliasMatch, Error, TeamDatabase};
+use litellm_auth_store::{AliasMatch, CreatedTeam, Error, TeamDatabase};
 use litellm_db_testing::MigratedPostgres;
-use litellm_repositories::{ObjectPermissionRepository, Side, TeamRepository};
+use litellm_repositories::{Inserted, NewTeam, ObjectPermissionRepository, Side, TeamRepository};
 use rstest::{fixture, rstest};
 use sqlx::PgPool;
 
@@ -118,6 +118,32 @@ const TEXT_ENTRY: &str = concat!(
     r#" "updated_at": "2026-11-19T10:00:00Z", "created_at": "2026-11-19T10:00:00Z","#,
     r#" "last_refreshed_at": null}"#,
 );
+/// The row `_get_team_db_check` stores under `team_id_upsert` for a team id with
+/// `default_team_params` set, and the entry Python caches for it. The repository's tests pin the
+/// row its insert stores against the row Python's own path stored for the same defaults.
+const DEFAULTS_ROW: &str = concat!(
+    r#"{"team_id":"defaults","team_alias":null,"organization_id":"org","admins":[],"members":[]"#,
+    r#","members_with_roles":[],"metadata":{},"max_budget":10.0,"soft_budget":null,"spend":0.0,"#,
+    r#""models":[],"max_parallel_requests":null,"tpm_limit":100,"rpm_limit":10,"tpd_limit":null"#,
+    r#","budget_duration":"30d","budget_reset_at":"2026-12-01T00:00:00+00:00","blocked":false,""#,
+    r#"created_at":"2026-11-27T08:00:00+00:00","updated_at":"2026-11-27T08:00:00+00:00","model_"#,
+    r#"spend":{},"model_max_budget":{},"router_settings":{},"team_member_permissions":["/key/ge"#,
+    r#"nerate"],"access_group_ids":["wanted"],"policies":[],"default_team_member_models":[],"bu"#,
+    r#"dget_limits":null,"model_id":null,"allow_team_guardrail_config":false,"object_permission"#,
+    r#"_id":null,"litellm_model_table":null}"#,
+);
+const DEFAULTS_ENTRY: &str = concat!(
+    r#"{"team_alias": null, "team_id": "defaults", "organization_id": "org", "admins": [], "mem"#,
+    r#"bers": [], "members_with_roles": [], "team_member_permissions": ["/key/generate"], "meta"#,
+    r#"data": {}, "tpm_limit": 100, "rpm_limit": 10, "tpd_limit": null, "max_budget": 10.0, "so"#,
+    r#"ft_budget": null, "budget_duration": "30d", "budget_limits": null, "models": [], "blocke"#,
+    r#"d": false, "router_settings": {}, "access_group_ids": ["wanted"], "default_team_member_m"#,
+    r#"odels": [], "spend": 0.0, "max_parallel_requests": null, "budget_reset_at": "2026-12-01T"#,
+    r#"00:00:00Z", "model_id": null, "model_spend": {}, "model_max_budget": {}, "policies": [],"#,
+    r#" "allow_team_guardrail_config": false, "litellm_model_table": null, "object_permission":"#,
+    r#" null, "object_permission_id": null, "updated_at": "2026-11-27T08:00:00Z", "created_at":"#,
+    r#" "2026-11-27T08:00:00Z", "last_refreshed_at": null}"#,
+);
 const FULL_ENTRY: &str = concat!(
     r#"{"team_alias": "Full", "team_id": "full", "organization_id": "org","#,
     r#" "admins": ["admin"], "members": ["member"],"#,
@@ -153,7 +179,8 @@ struct Teams {
     database: TeamDatabase,
 }
 
-/// A migrated Postgres holding a team as `/team/new` stores it when asked for nothing, one with
+/// A migrated Postgres holding a team with only its id and the table's defaults, one as
+/// `team_id_upsert` stores it with `default_team_params` set, one with
 /// every column set, one with a JSON `null` in each column the model lets be unset, and one with
 /// the `json.dumps` text an older writer stored in each column the model parses such text from.
 #[fixture]
@@ -244,6 +271,20 @@ async fn insert_teams(pool: &PgPool) {
            )"#,
     )
     .await;
+    execute(
+        pool,
+        r#"INSERT INTO "LiteLLM_TeamTable" (
+               team_id, organization_id, admins, members, members_with_roles, models, blocked,
+               allow_team_guardrail_config, model_spend, router_settings, max_budget, budget_duration,
+               budget_reset_at, tpm_limit, rpm_limit, team_member_permissions, access_group_ids,
+               created_at, updated_at
+           ) VALUES (
+               'defaults', 'org', '{}', '{}', '[]', '{}', false, false, '{}', '{}', 10.0, '30d',
+               '2026-12-01 00:00:00', 100, 10, ARRAY['/key/generate'], ARRAY['wanted'],
+               '2026-11-27 08:00:00', '2026-11-27 08:00:00'
+           )"#,
+    )
+    .await;
 }
 
 #[rstest]
@@ -251,6 +292,7 @@ async fn insert_teams(pool: &PgPool) {
 #[case::every_column_set("full", FULL_ROW, FULL_ENTRY)]
 #[case::json_nulls("nulls", NULLS_ROW, NULLS_ENTRY)]
 #[case::json_text("text", TEXT_ROW, TEXT_ENTRY)]
+#[case::upserted_with_defaults("defaults", DEFAULTS_ROW, DEFAULTS_ENTRY)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_team_read_from_the_database_is_the_entry_python_caches(
     #[future(awt)] teams: Teams,
@@ -393,5 +435,126 @@ async fn a_team_row_the_model_refuses_fails_the_read(
         matches!(&read, Err(Error::Row { column, within }) if (*column, *within) == refused),
         "{:?}",
         read.err()
+    );
+}
+
+async fn stored_entry(teams: &Teams, team_id: &str) -> Option<String> {
+    teams
+        .database
+        .team(team_id, Side::Writer)
+        .await
+        .unwrap()
+        .map(dumped)
+}
+
+/// An insert returns the entry a read of the row it stored returns, which is what a host caches
+/// after it. The row itself is pinned in the repository's tests against the row Python stores.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_team_upserted_by_id_alone_is_the_entry_for_the_row_as_stored(
+    #[future(awt)] teams: Teams,
+) {
+    let created = teams
+        .database
+        .insert(&NewTeam {
+            team_id: "upserted".to_owned(),
+            ..NewTeam::default()
+        })
+        .await
+        .unwrap();
+
+    let CreatedTeam {
+        team: Inserted::Created(entry),
+        access_groups,
+    } = created
+    else {
+        panic!("the team was created: {created:?}");
+    };
+    assert_eq!(
+        (Some(dumped(entry)), access_groups),
+        (stored_entry(&teams, "upserted").await, Vec::<String>::new())
+    );
+}
+
+/// `wanted` lists no team, `stale` lists `upserted` already, as a deleted team of the same id
+/// leaves it, and `unrelated` lists another team. The host drops the cached entries of the groups
+/// on either side of the reconcile.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_team_upserted_with_defaults_is_its_entry_and_the_access_groups_to_drop(
+    #[future(awt)] teams: Teams,
+) {
+    execute(
+        teams.postgres.pool(),
+        r#"INSERT INTO "LiteLLM_AccessGroupTable" (access_group_id, access_group_name, assigned_team_ids)
+           VALUES ('wanted', 'Wanted', ARRAY[]::text[]),
+                  ('stale', 'Stale', ARRAY['upserted']),
+                  ('unrelated', 'Unrelated', ARRAY['full'])"#,
+    )
+    .await;
+
+    let created = teams
+        .database
+        .insert(&NewTeam {
+            team_id: "upserted".to_owned(),
+            organization_id: Some("org".to_owned()),
+            max_budget: Some(10.0),
+            budget_duration: Some("30d".to_owned()),
+            budget_reset_at: Some("2026-12-01T00:00:00Z".parse().unwrap()),
+            tpm_limit: Some(100),
+            rpm_limit: Some(10),
+            team_member_permissions: Some(vec!["/key/generate".to_owned()]),
+            access_group_ids: Some(vec!["wanted".to_owned()]),
+        })
+        .await
+        .unwrap();
+
+    let CreatedTeam {
+        team: Inserted::Created(entry),
+        access_groups,
+    } = created
+    else {
+        panic!("the team was created: {created:?}");
+    };
+    assert_eq!(
+        (
+            entry.organization_id.as_deref(),
+            entry.access_group_ids.clone(),
+            access_groups,
+        ),
+        (
+            Some("org"),
+            Some(vec!["wanted".to_owned()]),
+            vec!["stale".to_owned(), "wanted".to_owned()],
+        )
+    );
+    assert_eq!(Some(dumped(entry)), stored_entry(&teams, "upserted").await);
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_team_upsert_that_loses_to_a_stored_team_is_the_entry_for_the_team_that_won(
+    #[future(awt)] teams: Teams,
+) {
+    let created = teams
+        .database
+        .insert(&NewTeam {
+            team_id: "full".to_owned(),
+            max_budget: Some(99.0),
+            ..NewTeam::default()
+        })
+        .await
+        .unwrap();
+
+    let CreatedTeam {
+        team: Inserted::Conflict(Some(entry)),
+        access_groups,
+    } = created
+    else {
+        panic!("the insert lost to the stored team: {created:?}");
+    };
+    assert_eq!(
+        (Some(dumped(entry)), access_groups),
+        (stored_entry(&teams, "full").await, Vec::<String>::new())
     );
 }

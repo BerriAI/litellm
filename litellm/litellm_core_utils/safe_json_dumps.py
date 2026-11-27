@@ -8,6 +8,7 @@ from pydantic_core import to_jsonable_python
 from typing_extensions import Never
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.attribute_shapes import require_attributes
 
 UNSERIALIZABLE_OBJECT: Final = "Unserializable Object"
 
@@ -17,8 +18,6 @@ class _Orderable(Protocol):
 
 
 def _orderable(value: object) -> _Orderable:
-    from litellm.litellm_core_utils.core_helpers import require_attributes
-
     return require_attributes(value, _Orderable, "__lt__")
 
 

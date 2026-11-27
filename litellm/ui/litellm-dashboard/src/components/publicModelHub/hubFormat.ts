@@ -128,13 +128,14 @@ export const firstPlus = (items: string[]): string | undefined =>
 
 const MCP_AUTH: Record<string, ParseKeys> = {
   none: "publicModelHub.format.mcpAuth.none",
-  oauth2: "publicModelHub.format.mcpAuth.oauth2",
   bearer_token: "publicModelHub.format.mcpAuth.bearerToken",
   api_key: "publicModelHub.format.mcpAuth.apiKey",
 };
 
-export const mcpAuthLabel = (authType: string | null | undefined): string =>
-  authType ? (Object.hasOwn(MCP_AUTH, authType) && i18n.t(MCP_AUTH[authType])) || authType : "-";
+export const mcpAuthLabel = (authType: string | null | undefined): string => {
+  if (authType === "oauth2") return "OAuth";
+  return authType ? (Object.hasOwn(MCP_AUTH, authType) && i18n.t(MCP_AUTH[authType])) || authType : "-";
+};
 
 export const usefulLinkList = (
   links: Record<string, string | { url: string; index?: number }> | undefined,
