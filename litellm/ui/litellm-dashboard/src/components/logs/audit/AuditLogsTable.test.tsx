@@ -65,11 +65,16 @@ describe("AuditLogsTable", () => {
     await locale.changeLanguage("zh-CN");
     const updated = { ...ROWS[1], action: "updated" };
     const unknown = { ...ROWS[1], id: "log-3", action: "custom_action", object_id: "custom-object" };
-    const props = renderTable({ data: [ROWS[0], updated, unknown], rowCount: 3 }, locale);
+    const blocked = { ...ROWS[0], id: "log-4", action: "blocked" };
+    const unblocked = { ...ROWS[0], id: "log-5", action: "unblocked" };
+    const data = [ROWS[0], updated, unknown, blocked, unblocked];
+    const props = renderTable({ data, rowCount: data.length }, locale);
 
     expect(screen.getByText("已创建")).toBeInTheDocument();
     expect(screen.getByText("已更新")).toBeInTheDocument();
     expect(screen.getByText("custom_action")).toBeInTheDocument();
+    expect(screen.getByText("已封禁")).toBeInTheDocument();
+    expect(screen.getByText("已解除封禁")).toBeInTheDocument();
     await userEvent.click(screen.getByText(updated.object_id));
     expect(props.onViewLog).toHaveBeenCalledWith(updated);
   });

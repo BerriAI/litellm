@@ -15626,6 +15626,8 @@
         "created": "已创建",
         "updated": "已更新",
         "deleted": "已删除",
+        "blocked": "已封禁",
+        "unblocked": "已解除封禁",
         "rotated": "已轮换",
         "killSwitchFired": "已触发紧急开关"
       },

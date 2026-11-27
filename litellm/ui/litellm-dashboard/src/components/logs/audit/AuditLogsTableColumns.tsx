@@ -41,6 +41,8 @@ export const AUDIT_ACTION_OPTIONS = [
   { labelKey: "logs.audit.actionOptions.created", value: "created" },
   { labelKey: "logs.audit.actionOptions.updated", value: "updated" },
   { labelKey: "logs.audit.actionOptions.deleted", value: "deleted" },
+  { labelKey: "logs.audit.actionOptions.blocked", value: "blocked" },
+  { labelKey: "logs.audit.actionOptions.unblocked", value: "unblocked" },
   { labelKey: "logs.audit.actionOptions.rotated", value: "rotated" },
   { labelKey: "logs.audit.actionOptions.killSwitchFired", value: "kill_switch_fired" },
 ] as const;

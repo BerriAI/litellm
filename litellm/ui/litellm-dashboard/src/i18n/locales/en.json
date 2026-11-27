@@ -15626,6 +15626,8 @@
         "created": "Created",
         "updated": "Updated",
         "deleted": "Deleted",
+        "blocked": "Blocked",
+        "unblocked": "Unblocked",
         "rotated": "Rotated",
         "killSwitchFired": "Kill switch fired"
       },
