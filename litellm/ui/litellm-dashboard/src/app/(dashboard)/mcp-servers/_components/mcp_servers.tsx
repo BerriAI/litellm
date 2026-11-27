@@ -159,6 +159,11 @@ function DeleteServerDialog({
   );
 }
 
+const roleAccess = (role: string | null) => ({
+  isAdmin: role !== null && isAdminRole(role),
+  canViewLiveConnections: role !== null && isProxyAdminTierRole(role),
+});
+
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, isViewOnly = false }) => {
   const { t } = useTranslation();
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
@@ -187,8 +192,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
     });
   }, [mcpServers, healthStatuses]);
 
-  const isAdmin = userRole !== null && isAdminRole(userRole);
-  const canViewLiveConnections = userRole !== null && isProxyAdminTierRole(userRole);
+  const { isAdmin, canViewLiveConnections } = roleAccess(userRole);
   const {
     tab,
     setTab,
