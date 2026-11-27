@@ -236,7 +236,7 @@ def create(
     custom_llm_provider: str | None = None,
     *,
     agent_config: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> (
     InteractionsAPIResponse
     | Iterator[InteractionsAPIStreamingResponse]
@@ -279,7 +279,7 @@ def create(
 
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acreate_interaction", False) is True
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -300,6 +300,26 @@ def create(
             )
         else:
             custom_llm_provider = custom_llm_provider or "gemini"
+        if agent and model and model != agent:
+            raise litellm.BadRequestError(
+                message=(
+                    f"agent '{agent}' can only run on a deployment of that agent, but the model is '{model}'. "
+                    "Configure a deployment whose model is the agent and send its model group."
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
+        if extra_body and (
+            ("agent" in extra_body and extra_body["agent"] != agent) or (agent and "model" in extra_body)
+        ):
+            raise litellm.BadRequestError(
+                message=(
+                    "extra_body cannot set a different agent or add a model to an agent interaction. "
+                    "Send the agent and model as top-level fields."
+                ),
+                model=model,
+                llm_provider=custom_llm_provider,
+            )
 
         interactions_api_config: Final = get_provider_interactions_api_config(
             provider=custom_llm_provider,
@@ -340,7 +360,7 @@ def create(
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
-            model=model,
+            model=agent or model,
             optional_params=dict(optional_params),
             litellm_params={"litellm_call_id": litellm_call_id},
             custom_llm_provider=custom_llm_provider,
@@ -384,7 +404,7 @@ async def aget(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> InteractionsAPIResponse:
     """Async: Get an interaction by its ID."""
     local_vars: Final = locals()
@@ -427,7 +447,7 @@ def get(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> InteractionsAPIResponse | Coroutine[object, object, InteractionsAPIResponse]:
     """Sync: Get an interaction by its ID."""
     local_vars: Final = locals()
@@ -435,7 +455,7 @@ def get(
 
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aget_interaction", False) is True
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -531,7 +551,7 @@ def delete(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteInteractionResult | Coroutine[object, object, DeleteInteractionResult]:
     """Sync: Delete an interaction by its ID."""
     local_vars: Final = locals()
@@ -539,7 +559,7 @@ def delete(
 
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("adelete_interaction", False) is True
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -590,7 +610,7 @@ async def acancel(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> CancelInteractionResult:
     """Async: Cancel an interaction by its ID."""
     local_vars: Final = locals()
@@ -633,7 +653,7 @@ def cancel(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> CancelInteractionResult | Coroutine[object, object, CancelInteractionResult]:
     """Sync: Cancel an interaction by its ID."""
     local_vars: Final = locals()
@@ -641,7 +661,7 @@ def cancel(
 
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acancel_interaction", False) is True
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)

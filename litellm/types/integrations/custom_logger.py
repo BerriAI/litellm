@@ -1,7 +1,7 @@
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Annotated, Any, Final
 
-from pydantic import Field
+from pydantic import AfterValidator, Field
 
 from litellm.types.litellm_params import AgenticSurface
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -50,6 +50,10 @@ def converted_stream_requested(params: Mapping[str, object]) -> bool:
     return any(bool(params.get(key)) for key in CONVERTED_STREAM_KEYS)
 
 
+def bridged_from_chat_completion(params: Mapping[str, object]) -> bool:
+    return params.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE
+
+
 def as_converted_stream(
     params: Mapping[str, object], prefix: str
 ) -> dict[str, object]:  # mutable-ok: deployment hooks hand back the kwargs dict their caller keeps editing
@@ -81,6 +85,11 @@ class AgenticLoopLimitError(AgenticLoopSafetyError):
     pass
 
 
+class AgenticLoopToolChoiceError(AgenticLoopSafetyError):
+    def __init__(self, model: str) -> None:
+        super().__init__(f"The allowed_tools tool_choice excludes a tool call the model made, model={model}")
+
+
 class StandardCustomLoggerInitParams(LiteLLMBaseModel):
     """
     Params for initializing a CustomLogger.
@@ -95,11 +104,11 @@ class AgenticLoopRequestPatch(LiteLLMBaseModel):
     """
 
     model: str | None = None
-    messages: list[dict[str, Any]] | None = None
+    messages: Annotated[Sequence[Mapping[str, object]], AfterValidator(list)] | None = None
     tools: list[dict[str, object]] | None = None
     max_tokens: int | None = None
     optional_params: dict[str, object] = Field(default_factory=dict)
-    kwargs: dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, object] = Field(default_factory=dict)
 
 
 class AgenticLoopPlan(LiteLLMBaseModel):

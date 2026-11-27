@@ -8,6 +8,7 @@ from litellm.proxy._types import (
     ROLES_WITHIN_ORG,
     BudgetNewRequest,
     ChangePasswordRequest,
+    ConfigGeneralSettings,
     GenerateKeyRequest,
     GenerateKeyResponse,
     KeyRequest,
@@ -26,6 +27,7 @@ from litellm.proxy._types import (
     OrganizationMemberUpdateRequest,
     RegenerateKeyRequest,
     ResetSpendRequest,
+    UpdateCustomerRequest,
     UpdateKeyRequest,
     UpdateMCPServerRequest,
     UpdateTeamRequest,
@@ -374,6 +376,22 @@ def test_an_audit_log_stores_a_list_of_changes_as_json_text_with_keys_masked(fie
 
 
 @pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_stores_a_double_encoded_value_as_an_object_with_keys_masked(field: str) -> None:
+    sent: Final = {"team_id": "team-1", "key": SECRET, "key_alias": None}
+
+    log: Final = _audit_log(**{field: json.dumps(json.dumps(sent))})
+
+    assert json.loads(getattr(log, field)) == {**sent, "key": SECRET_MASKED}
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_keeps_a_plain_string_value(field: str) -> None:
+    log: Final = _audit_log(**{field: json.dumps("rotated by admin")})
+
+    assert json.loads(getattr(log, field)) == "rotated by admin"
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
 def test_an_audit_log_leaves_a_change_it_has_no_record_of_alone(field):
     assert getattr(_audit_log(**{field: None}), field) is None
 
@@ -460,6 +478,33 @@ def test_virtual_key_mapping_counts_as_configured_when_any_issuer_sets_the_claim
     )
 
     assert jwt_auth.is_virtual_key_mapping_configured() is is_configured
+
+
+@pytest.mark.parametrize("value", ["", None], ids=["empty", "null"])
+@pytest.mark.parametrize("field", ["audience", "public_key_url"])
+def test_litellm_jwtauth_refuses_an_empty_or_null_global_audience_or_jwks_url(field: str, value: str | None) -> None:
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    with pytest.raises(ValidationError, match=field):
+        _ = LiteLLM_JWTAuth(**{field: value})
+
+
+@pytest.mark.parametrize("public_key_url", [" ", ",", " , ", ",,", "\t,\n"])
+def test_litellm_jwtauth_refuses_a_jwks_url_list_that_names_no_url(public_key_url: str) -> None:
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    with pytest.raises(ValidationError, match="public_key_url"):
+        _ = LiteLLM_JWTAuth(public_key_url=public_key_url)
+
+
+@pytest.mark.parametrize(
+    "public_key_url",
+    ["https://a.example/keys", "https://a.example/keys, https://b.example/keys", "https://a.example/keys, ,"],
+)
+def test_litellm_jwtauth_keeps_a_jwks_url_list_that_names_a_url(public_key_url: str) -> None:
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    assert LiteLLM_JWTAuth(public_key_url=public_key_url).public_key_url == public_key_url
 
 
 def test_new_user_request_loudly_rejects_a_password():
@@ -553,6 +598,39 @@ def test_mcp_metadata_accepts_a_boolean_skip_tool_output_validation(
     assert parsed.mcp_info == {"skip_tool_output_validation": value}
 
 
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", [-1, 1.5, "60", True, None, 31536001, 10**400])
+def test_mcp_metadata_rejects_a_tools_list_cache_ttl_that_is_not_whole_seconds_within_a_year(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: object
+) -> None:
+    payload: Final = {
+        "server_id": "test",
+        "transport": "http",
+        "url": "https://example.com/mcp",
+        "mcp_info": {"tools_list_cache_ttl_seconds": value},
+    }
+
+    with pytest.raises(ValidationError):
+        request_model.model_validate(payload)
+
+
+@pytest.mark.parametrize("request_model", (NewMCPServerRequest, UpdateMCPServerRequest))
+@pytest.mark.parametrize("value", [0, 60, 31536000])
+def test_mcp_metadata_accepts_a_tools_list_cache_ttl_in_whole_seconds(
+    request_model: type[NewMCPServerRequest] | type[UpdateMCPServerRequest], value: int
+) -> None:
+    parsed: Final = request_model.model_validate(
+        {
+            "server_id": "test",
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "mcp_info": {"tools_list_cache_ttl_seconds": value},
+        }
+    )
+
+    assert parsed.mcp_info == {"tools_list_cache_ttl_seconds": value}
+
+
 MCP_SERVER_REQUESTS = (NewMCPServerRequest, UpdateMCPServerRequest)
 STDIO_SERVER_FIELDS = {"server_id": "stdio-1", "transport": "stdio", "command": "python", "args": ["server.py"]}
 
@@ -634,3 +712,60 @@ def test_batch_file_caps_accept_only_positive_limits(setting):
         with pytest.raises(ValidationError):
             ConfigGeneralSettings.model_validate({setting: invalid})
     assert getattr(ConfigGeneralSettings.model_validate({setting: 3}), setting) == 3
+
+
+@pytest.mark.parametrize(
+    ("request_type", "body", "message"),
+    [
+        pytest.param(
+            UpdateCustomerRequest,
+            {"user_id": "acme", "tpm_limit": 5, "quota": {"opus": 1}},
+            "Unknown fields: quota, tpm_limit. tpm_limit: these live on the customer's budget object, "
+            "update it with /budget/update.",
+            id="update_with_a_budget_field_and_a_made_up_one",
+        ),
+        pytest.param(
+            UpdateCustomerRequest,
+            {"user_id": "acme", "alias": "Acme", "quota": 1},
+            "Unknown fields: quota.",
+            id="update_with_a_made_up_field_has_no_budget_hint",
+        ),
+        pytest.param(
+            NewCustomerRequest,
+            {"user_id": "acme", "tpm_limti": 5},
+            "Unknown fields: tpm_limti.",
+            id="create_with_a_misspelled_budget_field",
+        ),
+    ],
+)
+def test_a_customer_request_with_unknown_fields_is_refused_naming_them(
+    request_type: type[BaseModel], body: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError) as exc:
+        request_type.model_validate(body)
+    assert [error["msg"] for error in exc.value.errors()] == [f"Value error, {message}"]
+
+
+@pytest.mark.parametrize(
+    ("request_type", "body"),
+    [
+        pytest.param(UpdateCustomerRequest, {"user_id": "acme", "alias": "Acme", "blocked": True}, id="update"),
+        pytest.param(
+            NewCustomerRequest,
+            {"user_id": "acme", "tpm_limit": 5, "model_tpm_limit": {"opus": 60}},
+            id="create_with_inline_budget_fields",
+        ),
+    ],
+)
+def test_a_customer_request_with_only_known_fields_is_accepted(
+    request_type: type[BaseModel], body: dict[str, object]
+) -> None:
+    assert request_type.model_validate(body).model_dump(exclude_unset=True) == body
+
+
+def test_require_key_mcp_access_defined_is_a_validated_bool_setting() -> None:
+    assert ConfigGeneralSettings().require_key_mcp_access_defined is None
+    parsed: Final = ConfigGeneralSettings.model_validate({"require_key_mcp_access_defined": True})
+    assert parsed.require_key_mcp_access_defined is True
+    with pytest.raises(ValidationError):
+        ConfigGeneralSettings.model_validate({"require_key_mcp_access_defined": "not-a-bool"})

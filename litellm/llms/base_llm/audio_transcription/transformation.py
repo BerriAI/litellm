@@ -182,8 +182,8 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -200,8 +200,8 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
     ) -> AudioTranscriptionRequestData:
         raise NotImplementedError(
             "AudioTranscriptionConfig needs a request transformation for audio transcription models"
@@ -219,10 +219,10 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         raise NotImplementedError(
             "AudioTranscriptionConfig does not need a request transformation for audio transcription models"
         )
@@ -233,10 +233,10 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -248,16 +248,16 @@ class BaseAudioTranscriptionConfig(BaseConfig, ABC):
     def get_provider_specific_params(
         self,
         model: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         openai_params: list[OpenAIAudioTranscriptionOptionalParams],
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Get provider specific parameters that are not OpenAI compatible
 
         eg. if user passes `diarize=True`, we need to pass `diarize` to the provider
         but `diarize` is not an OpenAI parameter, so we need to handle it here
         """
-        provider_specific_params: Final = {}
+        provider_specific_params: Final[dict[str, object]] = {}
         for key, value in optional_params.items():
             # Skip None values
             if value is None:

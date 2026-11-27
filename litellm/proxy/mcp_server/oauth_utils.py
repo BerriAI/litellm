@@ -131,6 +131,13 @@ def build_upstream_authorize_url(authorization_url: str, params: Mapping[str, st
     return urlunparse(parsed._replace(query=urlencode(merged)))
 
 
+MCP_WILDCARD_SCOPE: Final = "mcp_all"
+
+
+def asks_for_wildcard(scope: str | None) -> bool:
+    return MCP_WILDCARD_SCOPE in (scope or "").split()
+
+
 def proxy_base_url_from_env() -> str | None:
     """The gateway's fixed public URL from ``PROXY_BASE_URL``, ``None`` when unset or malformed."""
     return _resolve_proxy_base_url_env()
@@ -441,7 +448,7 @@ def _matches_trusted_origin_entry(netloc: str, entry: str) -> bool:
 
 
 def _normalize_native_redirect_uri(
-    parsed,
+    parsed: ParseResult,
 ) -> str:
     """Lowercase scheme, netloc, and path for allowlist comparison."""
     return urlunparse(
@@ -486,7 +493,7 @@ def _native_wildcard_prefix_matches(normalized: str, prefix: str) -> bool:
     return suffix[0] == "/"
 
 
-def _matches_trusted_native_redirect_uri(parsed) -> bool:
+def _matches_trusted_native_redirect_uri(parsed: ParseResult) -> bool:
     """Allowlisted private-use / custom-scheme OAuth callbacks for native MCP clients."""
     if parsed.fragment:
         return False

@@ -12,11 +12,11 @@ import pytest
 from tests._process_helpers import process_is_gone
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "scripts" / "pre_commit_lint.sh"
-WHOLE_TREE_RUFF = "run --no-sync ruff check --config ruff-tests.toml tests"
-TEST_TREE_RAN = "ran:     test-tree lint (ruff-tests.toml + test-quality gate)"
+SCRIPT = ROOT / "litellm/scripts" / "pre_commit_lint.sh"
+WHOLE_TREE_RUFF = "run --no-sync ruff check --config .github/linters/ruff-tests.toml tests"
+TEST_TREE_RAN = "ran:     test-tree lint (.github/linters/ruff-tests.toml + test-quality gate)"
 TEST_TREE_SKIPPED = (
-    "skipped: test-tree lint (ruff-tests.toml + test-quality gate) "
+    "skipped: test-tree lint (.github/linters/ruff-tests.toml + test-quality gate) "
     "(no tests/ Python files or test-tree lint inputs in scope)"
 )
 
@@ -81,9 +81,13 @@ case "$*" in
     *orjson*)
         [ -n "${STUB_BARRIER_DIR:-}" ] && barrier_sync genapi "python dashboard"
         ;;
-    "run --no-sync ruff check --config ruff-tests.toml"*)
+    "run --no-sync ruff check --config .github/linters/ruff-tests.toml"*)
         [ -n "${STUB_ARGS_DIR:-}" ] && echo "$*" >> "$STUB_ARGS_DIR/ruff_tests.args"
         [ "${STUB_FAIL:-}" = "tests-ruff" ] && exit 1
+        ;;
+    "run --no-sync python tests/code_coverage_tests/check_router_constructor_stub.py")
+        [ -n "${STUB_ARGS_DIR:-}" ] && echo "$*" >> "$STUB_ARGS_DIR/router_stub.args"
+        [ "${STUB_FAIL:-}" = "router-stub" ] && exit 1
         ;;
 esac
 exit 0
@@ -113,7 +117,7 @@ def _sandbox(tmp_path: Path) -> tuple[Path, Path]:
     (repo / "litellm" / "proxy").mkdir(parents=True)
     (repo / "litellm" / "foo.py").write_text("x = 1\n")
     (repo / "litellm" / "proxy" / "spec.py").write_text("y = 2\n")
-    dashboard = repo / "ui" / "litellm-dashboard"
+    dashboard = repo / "litellm" / "ui" / "litellm-dashboard"
     (dashboard / "src").mkdir(parents=True)
     (dashboard / "node_modules").mkdir()
     (dashboard / "src" / "app.ts").write_text("export {}\n")
@@ -241,7 +245,7 @@ def test_deleted_dashboard_file_still_triggers_dashboard_lint(tmp_path: Path) ->
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")
     _set_base_ref(repo)
-    (repo / "ui" / "litellm-dashboard" / "src" / "app.ts").unlink()
+    (repo / "litellm" / "ui" / "litellm-dashboard" / "src" / "app.ts").unlink()
     _commit_all(repo, "delete dashboard file")
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -421,18 +425,62 @@ def test_run_ends_with_a_summary_of_ran_and_skipped_blocks(tmp_path: Path) -> No
     assert "ran:     Python lint (make lint)" in proc.stdout
     assert "ran:     dashboard lint (prettier + eslint + lint budgets)" in proc.stdout
     assert "ran:     dashboard API-type sync (npm run gen:api)" in proc.stdout
-    assert "skipped: tests/e2e checks (basedpyright + raw HTTP client ban) (no tests/e2e Python files in scope)" in proc.stdout
+    assert "ran:     tests/e2e basedpyright" in proc.stdout
+    assert "skipped: tests/e2e raw HTTP client ban (no tests/e2e Python files in scope)" in proc.stdout
     assert TEST_TREE_SKIPPED in proc.stdout
     assert "check: PASS" in proc.stdout
     assert "check: FAIL" not in proc.stdout
 
 
 @pytest.mark.parametrize(
+    "type_input",
+    (
+        "tests/e2e_harness/collector.py",
+        "litellm/proxy-extras/litellm_proxy_extras/utils.py",
+        "pyproject.toml",
+        "uv.lock",
+    ),
+)
+def test_an_e2e_type_check_input_alone_runs_the_e2e_basedpyright_step(tmp_path: Path, type_input: str) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    args_dir = tmp_path / "args"
+    args_dir.mkdir()
+    _stage_file(repo, type_input, "x = 1\n")
+    proc = _run(repo, bin_dir, {"STUB_ARGS_DIR": str(args_dir)})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "lint-e2e-basedpyright" in _recorded(args_dir, "make.args")
+    assert "ran:     tests/e2e basedpyright" in proc.stdout
+
+
+@pytest.mark.parametrize(
+    ("changed", "runs"), (("litellm/router.py", True), ("litellm/__init__.py", True), ("litellm/foo.py", False))
+)
+def test_the_router_stub_guard_runs_only_when_the_router_changes(tmp_path: Path, changed: str, runs: bool) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    args_dir = tmp_path / "args"
+    args_dir.mkdir()
+    _stage_file(repo, changed, "x = 3\n")
+    proc = _run(repo, bin_dir, {"STUB_ARGS_DIR": str(args_dir)})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (args_dir / "router_stub.args").exists() is runs
+
+
+def test_a_failing_router_stub_guard_fails_the_run(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _stage_file(repo, "litellm/router.py", "x = 3\n")
+    proc = _run(repo, bin_dir, {"STUB_FAIL": "router-stub"})
+    assert proc.returncode == 1
+
+
+@pytest.mark.parametrize(
     "spec_input",
     (
-        "litellm/tracing/generated/models.py",
+        "litellm/integrations/lens/generated/models.py",
         "litellm/models/credentials.py",
-        "enterprise/litellm_enterprise/types/proxy/audit_logging_endpoints.py",
+        "litellm/enterprise/litellm_enterprise/types/proxy/audit_logging_endpoints.py",
         "pyproject.toml",
         "uv.lock",
     ),
@@ -449,20 +497,30 @@ def test_a_staged_spec_input_outside_proxy_and_types_runs_the_api_type_sync(tmp_
 def test_a_staged_rust_crate_change_skips_the_api_type_sync(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")
-    _stage_file(repo, "litellm-rust/crates/traces/src/lib.rs", "fn main() {}\n")
+    _stage_file(repo, "litellm/rust/crates/traces/src/lib.rs", "fn main() {}\n")
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "skipped: dashboard API-type sync (npm run gen:api)" in proc.stdout
+
+
+def test_frontend_python_helpers_do_not_trigger_sdk_checks(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _stage_file(repo, "litellm/ui/litellm-dashboard/scripts/generate.py", "value = []\n")
+    proc = _run(repo, bin_dir, {})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "linting Python" not in proc.stdout
     assert "skipped: dashboard API-type sync (npm run gen:api)" in proc.stdout
 
 
 def test_staged_files_matching_no_check_print_an_explicit_noop_note_and_nonempty_log(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")
-    _stage_file(repo, "scripts/tool.py", "def main() -> None: ...\n")
+    _stage_file(repo, "litellm/scripts/tool.py", "def main() -> None: ...\n")
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "no gating lint check matches the files in scope, so nothing ran" in proc.stdout
-    assert "scripts/tool.py" in proc.stdout
+    assert "litellm/scripts/tool.py" in proc.stdout
     assert "a no-op, not a lint verdict" in proc.stdout
     assert "check: PASS" in proc.stdout
     assert "linting Python" not in proc.stdout
@@ -497,9 +555,9 @@ def test_tests_only_change_runs_the_whole_test_tree_ruff_and_the_quality_gate(tm
 @pytest.mark.parametrize(
     "changed",
     [
-        "ruff-tests.toml",
-        "scripts/check_test_quality.py",
-        "scripts/test_quality_gate.py",
+        ".github/linters/ruff-tests.toml",
+        "litellm/scripts/check_test_quality.py",
+        "litellm/scripts/test_quality_gate.py",
         "tests/e2e/test_x.py",
     ],
 )
@@ -593,7 +651,7 @@ def test_partial_staging_warns_when_test_files_are_left_unstaged(tmp_path: Path)
     (repo / "tests" / "test_a.py").write_text("def test_a() -> None:\n    assert True\n")
     proc = _run(repo, bin_dir, {"STUB_ARGS_DIR": str(args_dir)})
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "SKIPPED test-tree lint (ruff-tests.toml + test-quality gate)" in proc.stdout
+    assert "SKIPPED test-tree lint (.github/linters/ruff-tests.toml + test-quality gate)" in proc.stdout
     assert "tests/test_a.py" in proc.stdout
     assert _recorded(args_dir, "ruff_tests.args") == []
     assert _recorded(args_dir, "make.args") == []
@@ -621,11 +679,11 @@ def test_run_under_a_held_slot_skips_reacquiring_the_gate_lock(tmp_path: Path) -
 
 def test_hook_symlink_install_still_resolves_the_slot_lock_helper(tmp_path: Path) -> None:
     repo, bin_dir = _sandbox(tmp_path)
-    scripts_dir = repo / "scripts"
+    scripts_dir = repo / "litellm/scripts"
     scripts_dir.mkdir()
     shutil.copy(SCRIPT, scripts_dir / "pre_commit_lint.sh")
     shutil.copy(SCRIPT.parent / "gate_slot_lock.py", scripts_dir / "gate_slot_lock.py")
-    (repo / ".git" / "hooks" / "pre-commit").symlink_to(Path("../../scripts/pre_commit_lint.sh"))
+    (repo / ".git" / "hooks" / "pre-commit").symlink_to(Path("../../litellm/scripts/pre_commit_lint.sh"))
     lock_dir = tmp_path / "gate-locks"
     proc = subprocess.run(
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "hooked"],

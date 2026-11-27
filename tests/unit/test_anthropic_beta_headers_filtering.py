@@ -99,7 +99,9 @@ class TestAnthropicBetaHeadersFiltering:
         filtered = filter_and_transform_beta_headers(
             beta_headers=all_headers, provider=provider
         )
-        assert ("compact-2026-09-04" in filtered) is (provider in ("anthropic", "azure_ai", "vertex_ai"))
+        # Bedrock InvokeModel serves the compact-2026-09-04 `compaction` parameter; Converse does not.
+        # https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
+        assert ("compact-2026-09-04" in filtered) is (provider in ("anthropic", "azure_ai", "vertex_ai", "bedrock"))
         assert ("mid-conversation-tool-changes-2026-07-01" in filtered) is (provider != "bedrock_converse")
 
         for header in unsupported_headers:
@@ -554,6 +556,17 @@ class TestAnthropicBetaHeadersFiltering:
         headers: Final = update_headers_with_filtered_beta({"anthropic-beta": ",".join(claude_code_betas)}, provider)
 
         assert frozenset(headers["anthropic-beta"].split(",")) == claude_code_betas
+
+    @pytest.mark.parametrize("provider", ["bedrock", "bedrock_mantle", "databricks"])
+    def test_platforms_forward_the_server_side_fallback_beta_they_take(self, provider: str) -> None:
+        """A `fallback` content block in the history needs server-side-fallback-2026-06-01, or the platform answers
+        400 "Input tag 'fallback' found using 'type' does not match any of the expected tags". Live probes on
+        2026-11-19 in us-east-1 found Bedrock Invoke and Bedrock Mantle answer 200 to a fallback-block history with
+        server-side-fallback-2026-06-01 and reject server-side-fallback-2026-07-01 with "Unexpected value(s)", and
+        Databricks answered the same way on databricks-claude-haiku-4-5 on 2026-11-23."""
+        assert update_headers_with_filtered_beta(
+            {"anthropic-beta": "server-side-fallback-2026-06-01,server-side-fallback-2026-07-01"}, provider
+        ) == {"anthropic-beta": "server-side-fallback-2026-06-01"}
 
     @pytest.mark.parametrize("provider", ["anthropic", "azure_ai", "vertex_ai"])
     def test_every_anthropic_sdk_beta_has_a_decision_for_the_probed_platforms(self, provider: str) -> None:

@@ -1,7 +1,7 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
 import random
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from functools import partial
 from math import ceil, isfinite
@@ -15,12 +15,17 @@ from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
-from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, safe_divide_seconds
+from litellm.litellm_core_utils.core_helpers import (
+    get_parent_otel_span_from_kwargs,
+    require_get,
+    safe_divide_seconds,
+    subscript,
+)
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.token_counter import embedding_aware_token_count
 from litellm.redis.stores.router_usage import ROUTER_USAGE_TARGET
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
@@ -66,6 +71,14 @@ def _ttft_seconds(elapsed: timedelta | float) -> float:
     return float(elapsed)
 
 
+def _caller_hung_up_on_speech(response_obj: object, metadata: object) -> bool:
+    """A streamed clip the caller hung up on lasted as long as they listened, not as long as the deployment took."""
+    return (
+        isinstance(response_obj, HttpxBinaryResponseContent)
+        and require_get(metadata).get("client_disconnected") is True
+    )
+
+
 class LowestLatencyLoggingHandler(CustomLogger):
     test_flag: bool = False
     logged_success: int = 0
@@ -76,7 +89,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         self.routing_args = RoutingArgs(**routing_args)
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs: Mapping[str, object], response_obj: object, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -84,12 +97,15 @@ class LowestLatencyLoggingHandler(CustomLogger):
             Update latency usage on success
             """
             metadata_field: Final = self._select_metadata_field(kwargs)
-            if kwargs["litellm_params"].get(metadata_field) is None:
+            if metadata_field is None:
+                return
+            litellm_params: Final = kwargs["litellm_params"]
+            if require_get(litellm_params).get(metadata_field) is None:
                 pass
             else:
-                model_group: Final = kwargs["litellm_params"][metadata_field].get("model_group", None)
+                model_group: Final = require_get(subscript(litellm_params, metadata_field)).get("model_group", None)
 
-                id = (kwargs["litellm_params"].get("model_info") or {}).get("id", None)
+                id = require_get(require_get(litellm_params).get("model_info") or {}).get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
@@ -164,12 +180,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id] = {}
 
                 ## Latency
-                if len(request_count_dict[id].get("latency_normalized", [])) < self.routing_args.max_latency_list_size:
-                    request_count_dict[id].setdefault("latency_normalized", []).append(final_value)
-                else:
-                    request_count_dict[id]["latency_normalized"] = request_count_dict[id]["latency_normalized"][1:] + [
-                        final_value
-                    ]
+                if not _caller_hung_up_on_speech(response_obj, subscript(litellm_params, metadata_field)):
+                    if (
+                        len(request_count_dict[id].get("latency_normalized", []))
+                        < self.routing_args.max_latency_list_size
+                    ):
+                        request_count_dict[id].setdefault("latency_normalized", []).append(final_value)
+                    else:
+                        request_count_dict[id]["latency_normalized"] = request_count_dict[id]["latency_normalized"][
+                            1:
+                        ] + [final_value]
 
                 ## Time to first token
                 if time_to_first_token is not None:
@@ -207,7 +227,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ):
         """
         Check if Timeout Error, if timeout set deployment latency -> 100
         """
@@ -215,14 +237,17 @@ class LowestLatencyLoggingHandler(CustomLogger):
             return
         try:
             metadata_field: Final = self._select_metadata_field(kwargs)
+            if metadata_field is None:
+                return
             _exception: Final = kwargs.get("exception", None)
             if isinstance(_exception, litellm.Timeout):
-                if kwargs["litellm_params"].get(metadata_field) is None:
+                litellm_params: Final = kwargs["litellm_params"]
+                if require_get(litellm_params).get(metadata_field) is None:
                     pass
                 else:
-                    model_group: Final = kwargs["litellm_params"][metadata_field].get("model_group", None)
+                    model_group: Final = require_get(subscript(litellm_params, metadata_field)).get("model_group", None)
 
-                    id = (kwargs["litellm_params"].get("model_info") or {}).get("id", None)
+                    id = require_get(require_get(litellm_params).get("model_info") or {}).get("id", None)
                     if model_group is None or id is None:
                         return
                     elif isinstance(id, int):
@@ -272,7 +297,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs: Mapping[str, object], response_obj: object, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -280,12 +305,15 @@ class LowestLatencyLoggingHandler(CustomLogger):
             Update latency usage on success
             """
             metadata_field: Final = self._select_metadata_field(kwargs)
-            if kwargs["litellm_params"].get(metadata_field) is None:
+            if metadata_field is None:
+                return
+            litellm_params: Final = kwargs["litellm_params"]
+            if require_get(litellm_params).get(metadata_field) is None:
                 pass
             else:
-                model_group: Final = kwargs["litellm_params"][metadata_field].get("model_group", None)
+                model_group: Final = require_get(subscript(litellm_params, metadata_field)).get("model_group", None)
 
-                id = (kwargs["litellm_params"].get("model_info") or {}).get("id", None)
+                id = require_get(require_get(litellm_params).get("model_info") or {}).get("id", None)
                 if model_group is None or id is None:
                     return
                 elif isinstance(id, int):
@@ -364,12 +392,16 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     request_count_dict[id] = {}
 
                 ## Latency
-                if len(request_count_dict[id].get("latency_normalized", [])) < self.routing_args.max_latency_list_size:
-                    request_count_dict[id].setdefault("latency_normalized", []).append(final_value)
-                else:
-                    request_count_dict[id]["latency_normalized"] = request_count_dict[id]["latency_normalized"][1:] + [
-                        final_value
-                    ]
+                if not _caller_hung_up_on_speech(response_obj, subscript(litellm_params, metadata_field)):
+                    if (
+                        len(request_count_dict[id].get("latency_normalized", []))
+                        < self.routing_args.max_latency_list_size
+                    ):
+                        request_count_dict[id].setdefault("latency_normalized", []).append(final_value)
+                    else:
+                        request_count_dict[id]["latency_normalized"] = request_count_dict[id]["latency_normalized"][
+                            1:
+                        ] + [final_value]
 
                 ## Time to first token
                 if time_to_first_token is not None:
@@ -545,7 +577,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ):
         # get list of potential deployments
         latency_key: Final = f"{model_group}_map"
@@ -571,7 +603,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ):
         """
         Returns a deployment with the lowest latency

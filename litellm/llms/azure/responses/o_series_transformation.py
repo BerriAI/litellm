@@ -32,7 +32,7 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
     in the responses API, so we need to drop it when drop_params is enabled.
     """
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get supported parameters for Azure OpenAI O-series Responses API.
 
@@ -56,7 +56,7 @@ class AzureOpenAIOSeriesResponsesAPIConfig(AzureOpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters for Azure OpenAI O-series Responses API.
 

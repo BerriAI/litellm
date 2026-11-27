@@ -14,6 +14,10 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    REASONING_EFFORT_ADVERTISEMENT_ORDER,
+    declared_reasoning_efforts_for_map_key,
+)
 from litellm.router_core import RouterCore
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost
 from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, timeout
@@ -205,6 +209,17 @@ async def test_sync_text_completion_merges_default_metadata_into_request_metadat
     assert (metadata["x"], metadata["y"], metadata["model_group"], sent["user"]) == (1, 2, "g", "u")
 
 
+async def test_sync_text_completion_keeps_the_request_metadata_over_the_default_metadata(
+    make_core: MakeCore, host: EndpointHost
+):
+    core: Final = make_core(
+        model_list=[deployment("g", "d1")],
+        default_litellm_params={"metadata": {"requester_metadata": {"env": "prod", "region": "us"}}},
+    )
+    core.text_completion(model="g", prompt="p", metadata={"requester_metadata": {"env": "dev", "team": "t1"}})
+    assert _bucket(_sent(host))["requester_metadata"] == {"env": "dev", "region": "us", "team": "t1"}
+
+
 async def test_sync_text_completion_sends_the_model_group_name_not_the_deployment_model(
     make_core: MakeCore, host: EndpointHost
 ):
@@ -329,12 +344,12 @@ async def test_default_litellm_params_metadata_merges_into_request_metadata(make
     assert (metadata["team"], metadata["trace"], metadata["model_group"]) == ("t", "x", "g")
 
 
-async def test_default_litellm_params_metadata_overwrites_the_same_request_metadata_key(
+async def test_the_request_metadata_key_wins_over_the_same_default_litellm_params_metadata_key(
     make_core: MakeCore, host: EndpointHost
 ):
     core: Final = make_core(model_list=[deployment("g", "d1")], default_litellm_params={"metadata": {"team": "t"}})
     await core.acompletion(model="g", messages=MESSAGES, metadata={"team": "request"})
-    assert _bucket(_sent(host))["team"] == "t"
+    assert _bucket(_sent(host))["team"] == "request"
 
 
 async def test_default_litellm_params_metadata_goes_to_litellm_metadata_for_generic_endpoints(
@@ -474,6 +489,110 @@ async def test_classifier_call_keeps_reasoning_effort_on_a_deployment_with_suppo
         model="g", messages=MESSAGES, reasoning_effort="low", litellm_metadata=dict(CLASSIFIER_METADATA)
     )
     assert _sent(host)["reasoning_effort"] == "low"
+
+
+CHAT_LATEST_DEPLOYMENTS: Final = (
+    ("openai/chat-latest", "chat-latest", {}),
+    ("azure_ai/gpt-chat-latest", "azure_ai/gpt-chat-latest", {"api_base": "https://qa.services.ai.azure.com"}),
+    (
+        "azure_ai/qa-prod-chat",
+        "azure_ai/gpt-chat-latest",
+        {"api_base": "https://qa.services.ai.azure.com", "base_model": "azure_ai/gpt-chat-latest"},
+    ),
+    ("azure/gpt-chat-latest", "azure/gpt-chat-latest", {"api_base": "https://qa.openai.azure.com"}),
+)
+
+
+@pytest.mark.parametrize("level", REASONING_EFFORT_ADVERTISEMENT_ORDER)
+@pytest.mark.parametrize(("model", "row", "params"), CHAT_LATEST_DEPLOYMENTS, ids=[d[0] for d in CHAT_LATEST_DEPLOYMENTS])
+async def test_classifier_call_keeps_only_the_efforts_the_chat_latest_row_lists(
+    make_core: MakeCore, host: EndpointHost, model: str, row: str, params: dict[str, object], level: str
+):
+    declared: Final = declared_reasoning_efforts_for_map_key(row)
+    assert declared
+    core: Final = make_core(model_list=[deployment("g", "d1", model=model, **params)])
+    await core.acompletion(model="g", messages=MESSAGES, reasoning_effort=level, metadata=dict(CLASSIFIER_METADATA))
+    assert _sent(host).get("reasoning_effort") == (level if level in declared else None)
+
+
+async def test_classifier_call_keeps_an_effort_the_deployment_itself_lists(make_core: MakeCore, host: EndpointHost):
+    core: Final = make_core(
+        model_list=[
+            deployment(
+                "g", "d1", model="openai/chat-latest", model_info={"reasoning_effort_levels": list(REASONING_EFFORT_ADVERTISEMENT_ORDER)}
+            )
+        ]
+    )
+    await core.acompletion(model="g", messages=MESSAGES, reasoning_effort={"effort": "low"}, metadata=dict(CLASSIFIER_METADATA))
+    assert _sent(host)["reasoning_effort"] == {"effort": "low"}
+
+
+LEVELED_FOUNDRY_MODEL: Final = "azure_ai/DeepSeek-V4-Flash-0731"
+
+
+def _catalog_levels(model: str) -> tuple[str, ...]:
+    levels: Final = litellm.model_cost[model]["reasoning_effort_levels"]
+    assert isinstance(levels, list) and levels
+    return tuple(str(level) for level in levels)
+
+
+def _unlisted_level(model: str) -> str:
+    return next(level for level in REASONING_EFFORT_ADVERTISEMENT_ORDER if level not in _catalog_levels(model))
+
+
+@pytest.mark.parametrize(
+    ("model", "model_info"),
+    [(LEVELED_FOUNDRY_MODEL, {}), ("azure_ai/litellm-qa-own-name", {"base_model": LEVELED_FOUNDRY_MODEL})],
+    ids=["catalog-model", "base-model"],
+)
+async def test_classifier_call_drops_a_reasoning_effort_level_the_deployment_refuses(
+    make_core: MakeCore, host: EndpointHost, model: str, model_info: dict[str, object]
+):
+    core: Final = make_core(model_list=[deployment("g", "d1", model=model, model_info=model_info)])
+    unlisted: Final = _unlisted_level(LEVELED_FOUNDRY_MODEL)
+    await core.acompletion(
+        model="g",
+        messages=MESSAGES,
+        reasoning_effort=unlisted,
+        litellm_metadata=dict(CLASSIFIER_METADATA),
+        proxy_server_request={"body": {"reasoning_effort": unlisted, "keep": 1}},
+    )
+    sent: Final = _sent(host)
+    assert "reasoning_effort" not in sent
+    assert sent["proxy_server_request"] == {"body": {"keep": 1}}
+
+
+@pytest.mark.parametrize(
+    ("listed", "deployment_params"),
+    [(True, {}), (False, {"allowed_openai_params": ["reasoning_effort"]})],
+    ids=["catalog-level", "allowlisted"],
+)
+async def test_classifier_call_keeps_a_reasoning_effort_level_the_deployment_sends(
+    make_core: MakeCore, host: EndpointHost, listed: bool, deployment_params: dict[str, object]
+):
+    level: Final = (
+        _catalog_levels(LEVELED_FOUNDRY_MODEL)[-1] if listed else _unlisted_level(LEVELED_FOUNDRY_MODEL)
+    )
+    core: Final = make_core(model_list=[deployment("g", "d1", model=LEVELED_FOUNDRY_MODEL, **deployment_params)])
+    await core.acompletion(
+        model="g", messages=MESSAGES, reasoning_effort=level, litellm_metadata=dict(CLASSIFIER_METADATA)
+    )
+    assert _sent(host)["reasoning_effort"] == level
+
+
+async def test_classifier_call_keeps_a_level_the_deployment_declares_itself(make_core: MakeCore, host: EndpointHost):
+    unlisted: Final = _unlisted_level(LEVELED_FOUNDRY_MODEL)
+    core: Final = make_core(
+        model_list=[
+            deployment(
+                "g", "d1", model=LEVELED_FOUNDRY_MODEL, model_info={"reasoning_effort_levels": [unlisted, "high"]}
+            )
+        ]
+    )
+    await core.acompletion(
+        model="g", messages=MESSAGES, reasoning_effort=unlisted, litellm_metadata=dict(CLASSIFIER_METADATA)
+    )
+    assert _sent(host)["reasoning_effort"] == unlisted
 
 
 # --- silent experiments ---------------------------------------------------------------------

@@ -9,6 +9,7 @@ import httpx
 from openai import AsyncOpenAI, OpenAI
 
 from litellm.llms.azure.azure import AsyncAzureOpenAI, AzureOpenAI
+from litellm.llms.openai.common_utils import asend_create_without_duplicates, send_create_without_duplicates
 from litellm.types.llms.openai import (
     CancelBatchRequest,
     CreateBatchRequest,
@@ -36,7 +37,9 @@ class AzureBatchesAPI(BaseAzureLLM):
         create_batch_data: CreateBatchRequest,
         azure_client: AsyncAzureOpenAI | AsyncOpenAI,
     ) -> LiteLLMBatch:
-        response: Final = await azure_client.batches.create(**create_batch_data)
+        response: Final = await asend_create_without_duplicates(
+            azure_client, create_batch_data, lambda client, request: client.batches.create(**request)
+        )
         return LiteLLMBatch.model_validate(response.model_dump())
 
     def create_batch(
@@ -49,7 +52,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
         azure_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
             api_key=api_key,
@@ -70,7 +73,11 @@ class AzureBatchesAPI(BaseAzureLLM):
                     "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
                 )
             return self.acreate_batch(create_batch_data=create_batch_data, azure_client=azure_client)
-        response = cast(AzureOpenAI | OpenAI, azure_client).batches.create(**create_batch_data)
+        response: Final = send_create_without_duplicates(
+            cast(AzureOpenAI | OpenAI, azure_client),
+            create_batch_data,
+            lambda client, request: client.batches.create(**request),
+        )
         return LiteLLMBatch.model_validate(response.model_dump())
 
     async def aretrieve_batch(
@@ -91,7 +98,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ):
         azure_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
             api_key=api_key,
@@ -133,7 +140,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ):
         azure_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
             api_key=api_key,
@@ -183,7 +190,7 @@ class AzureBatchesAPI(BaseAzureLLM):
         after: str | None = None,
         limit: int | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ):
         azure_client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = self.get_azure_openai_client(
             api_key=api_key,

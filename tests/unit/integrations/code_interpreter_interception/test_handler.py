@@ -12,6 +12,7 @@ from typing import Final
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 import respx
 
 import litellm
@@ -27,6 +28,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
     LITELLM_CODE_EXECUTION_TOOL_NAME,
     CodeInterpreterInterceptionLogger,
 )
+from litellm.litellm_core_utils.allowed_tools_tool_choice import tool_calls_the_choice_excludes
 from litellm.llms.base_llm.sandbox.transformation import CodeExecutionResult
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
@@ -727,6 +729,45 @@ async def test_chat_completion_build_plan_runs_code_and_appends_tool_message():
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_build_plan_keeps_an_allowed_tools_choice_without_forcing_another_call():
+    allowed: Final = [
+        {"type": "function", "function": {"name": LITELLM_CODE_EXECUTION_TOOL_NAME}},
+        {"type": "function", "function": {"name": "get_time"}},
+    ]
+    logger: Final = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox(stdout="42"))
+
+    plan: Final = await logger.async_build_agentic_loop_plan(
+        tools={
+            "tool_calls": [
+                {"id": "call_1", "name": LITELLM_CODE_EXECUTION_TOOL_NAME, "arguments": '{"code":"print(1)"}'}
+            ]
+        },
+        model="gpt-5",
+        messages=[{"role": "user", "content": "x"}],
+        response={"choices": [{"message": {"tool_calls": [_chat_function_call_item()]}}]},
+        anthropic_messages_provider_config=None,
+        anthropic_messages_optional_request_params={
+            "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+            "tool_choice": {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": allowed}},
+        },
+        logging_obj=FakeLogging(litellm_call_id="k1"),
+        stream=False,
+        kwargs={
+            "acompletion": True,
+            "litellm_call_id": "k1",
+            _ACTIVE_KEY: True,
+            _SANDBOX_KEY: "sbxkey1",
+            "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
+        },
+    )
+
+    assert plan.request_patch is not None
+    assert plan.request_patch.optional_params == {
+        "tool_choice": {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": allowed}}
+    }
+
+
+@pytest.mark.asyncio
 async def test_pre_call_strips_client_forged_marker_on_initial_request():
     """A client cannot pre-set the active marker on the original request: with no
     native code_interpreter tool, any client-supplied interception markers in
@@ -1201,6 +1242,38 @@ async def test_extract_tool_calls_reads_object_attributes():
 # ---------------------------------------------------------------------------
 # Sticky session tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "tool_choice"),
+    [
+        (CallTypes.aresponses, {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "code_interpreter"}]}),
+        (
+            CallTypes.acompletion,
+            {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "code_interpreter"}]}},
+        ),
+    ],
+)
+async def test_pre_call_lets_an_allowed_tools_choice_listing_code_interpreter_allow_the_run(
+    call_type: CallTypes, tool_choice: dict[str, object]
+):
+    logger: Final = CodeInterpreterInterceptionLogger()
+
+    result: Final = TypeAdapter(dict[str, object]).validate_python(
+        await logger.async_pre_call_deployment_hook(
+            {
+                "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}],
+                "tool_choice": tool_choice,
+                "custom_llm_provider": "openai",
+            },
+            call_type,
+        )
+    )
+
+    assert tool_calls_the_choice_excludes(result["tool_choice"], (LITELLM_CODE_EXECUTION_TOOL_NAME, "get_weather")) == (
+        "get_weather",
+    )
 
 
 @pytest.mark.asyncio

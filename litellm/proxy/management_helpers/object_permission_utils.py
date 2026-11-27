@@ -17,10 +17,15 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerName, SpecialMCPServerNames
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+from litellm.proxy._types import (
+    ObjectPermissionDict,
+    SpecialMCPServerName,
+    SpecialMCPServerNames,
+)
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import MCPServerRepository
 
@@ -84,6 +89,7 @@ async def prepare_object_permission_upsert(
     new_object_permission: Mapping[str, object],
     existing_object_permission_id: str | None,
     prisma_client: PrismaClient,
+    can_grant_apps: bool = False,
 ) -> ObjectPermissionUpsert:
     """
     Read-and-merge half of an object permission upsert; performs no writes.
@@ -109,15 +115,20 @@ async def prepare_object_permission_upsert(
         if existing_object_permission is not None
         else {}
     )
+    reject_app_grant_change(new_object_permission.get("apps"), existing_fields.get("apps"), can_grant_apps)
     await reject_ambiguous_mcp_tool_permission_keys(
         new_mcp_tool_permissions=new_object_permission.get("mcp_tool_permissions"),
         existing_mcp_tool_permissions=existing_fields.get("mcp_tool_permissions"),
         prisma_client=prisma_client,
     )
     merged: Final[dict[str, object]] = {
-        **existing_fields,
-        **new_object_permission,
-        "object_permission_id": object_permission_id,
+        key: value
+        for key, value in (
+            *existing_fields.items(),
+            *new_object_permission.items(),
+            ("object_permission_id", object_permission_id),
+        )
+        if can_grant_apps or key != "apps"
     }
     record: Final[dict[str, object]] = {
         **merged,
@@ -148,9 +159,10 @@ def _decoded_tool_permissions(raw: str) -> Mapping[str, object]:
 
 
 async def handle_update_object_permission_common(
-    data_json: dict,
+    data_json: dict[str, object],
     existing_object_permission_id: str | None,
     prisma_client: PrismaClient | None,
+    can_grant_apps: bool = False,
 ) -> str | None:
     """
     Common logic for handling object permission updates across organizations, teams, and keys.
@@ -166,6 +178,7 @@ async def handle_update_object_permission_common(
         data_json: The data dictionary containing the object_permission to update
         existing_object_permission_id: The current object_permission_id from the entity (can be None)
         prisma_client: The database client
+        can_grant_apps: Whether the caller may change the customer management apps granted
 
     Returns:
         Optional[str]: The object_permission_id after the update/creation, or None if no object_permission to process
@@ -184,6 +197,7 @@ async def handle_update_object_permission_common(
         new_object_permission=_object_permission_mapping(raw_object_permission),
         existing_object_permission_id=existing_object_permission_id,
         prisma_client=prisma_client,
+        can_grant_apps=can_grant_apps,
     )
     created_object_permission_row: Final = await ObjectPermissionRepository(prisma_client).table.upsert(
         where={"object_permission_id": upsert.object_permission_id},
@@ -208,7 +222,7 @@ async def invalidate_cached_object_permissions(
     upsert keeps that id, so pass both the outgoing and incoming ids since a change can also mint a new row.
     """
     cache_keys: Final = tuple(
-        object_permission_cache_key(object_permission_id)
+        AuthObject.object_permission(object_permission_id).key
         for object_permission_id in dict.fromkeys(pid for pid in object_permission_ids if isinstance(pid, str))
     )
     await evict_and_broadcast(cache_keys, user_api_key_cache)
@@ -217,6 +231,7 @@ async def invalidate_cached_object_permissions(
 async def set_object_permission(
     data_json: dict[str, object],
     prisma_client: PrismaClient | None,
+    can_grant_apps: bool = False,
 ) -> dict[str, object]:
     """
     Creates the LiteLLM_ObjectPermissionTable record for the key/team.
@@ -235,6 +250,7 @@ async def set_object_permission(
         k: v for k, v in permission_data.items() if v is not None and k != "object_permission_id"
     }
 
+    reject_app_grant_change(clean_data.get("apps"), None, can_grant_apps)
     await reject_ambiguous_mcp_tool_permission_keys(
         new_mcp_tool_permissions=clean_data.get("mcp_tool_permissions"),
         existing_mcp_tool_permissions=None,
@@ -515,6 +531,39 @@ async def _existing_object_permission_mcp_servers(
     if existing is None:
         return []
     return existing.mcp_servers or []
+
+
+_APP_IDS: Final = TypeAdapter(frozenset[str])
+
+
+def _app_grant_denied() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"error": "Only a proxy admin can change access to customer management apps."},
+    )
+
+
+def reject_app_grant_change(requested_apps: object, stored_apps: object, can_grant_apps: bool) -> None:
+    """Only a proxy admin may change which customer management apps an object permission grants."""
+    if can_grant_apps or requested_apps is None:
+        return
+    if _APP_IDS.validate_python(requested_apps) != _APP_IDS.validate_python(stored_apps or ()):
+        raise _app_grant_denied()
+
+
+async def reject_clearing_app_grants(
+    existing_object_permission_id: str | None,
+    can_grant_apps: bool,
+    prisma_client: PrismaClient | None,
+) -> None:
+    """Unlinking an object permission that grants customer management apps is a grant change too."""
+    if can_grant_apps or not existing_object_permission_id or prisma_client is None:
+        return
+    existing: Final = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        where={"object_permission_id": existing_object_permission_id},
+    )
+    if existing is not None and existing.apps:
+        raise _app_grant_denied()
 
 
 async def enforce_all_proxy_mcp_servers_grant_is_admin_only(

@@ -142,7 +142,7 @@ def _restore_content_shapes(
     for orig, ret in zip(originals, returned):
         orig_content = orig.get("content")
         ret_content = ret.get("content")
-        if isinstance(orig_content, list) and isinstance(ret_content, str):
+        if _is_object_list(orig_content) and isinstance(ret_content, str):
             if ret_content == content_to_text(orig_content):
                 # Untouched row: keep the exact original parts, including
                 # per-part fields like cache_control on later text parts.
@@ -203,6 +203,14 @@ def _anthropic_retrieve_ids_in_message(message: Mapping[str, object]) -> frozens
     return frozenset(call_id for block in content if (call_id := _anthropic_tool_use_retrieve_id(block)) is not None)
 
 
+def _responses_retrieve_call_ids(item: Mapping[str, object]) -> frozenset[str]:
+    name: Final = item.get("name")
+    call_id: Final = item.get("call_id")
+    if item.get("type") != "function_call" or not isinstance(name, str) or call_id is None:
+        return frozenset()
+    return frozenset({str(call_id)}) if _is_retrieve_tool_name(name) else frozenset()
+
+
 def _raw_retrieve_call_ids(messages: object) -> frozenset[str]:
     """Retrieve-tool call ids read from the request's own, untranslated messages.
 
@@ -210,8 +218,9 @@ def _raw_retrieve_call_ids(messages: object) -> frozenset[str]:
     over 64 chars is truncated to ``{prefix}_{hash}``, which drops the
     ``__headroom_retrieve`` suffix a long ``mcp__<server>__`` prefix pushes past
     the limit. Tool-call ids are never truncated, so pairing the tool result to
-    an id read from the original request keeps the match intact. Both wire
-    shapes are handled: OpenAI ``tool_calls`` and Anthropic ``tool_use`` blocks.
+    an id read from the original request keeps the match intact. OpenAI
+    ``tool_calls``, Anthropic ``tool_use`` blocks and Responses ``function_call``
+    items are handled.
     """
     if not _is_object_list(messages):
         return frozenset()
@@ -219,7 +228,9 @@ def _raw_retrieve_call_ids(messages: object) -> frozenset[str]:
         call_id
         for message in messages
         if _is_str_object_dict(message)
-        for call_id in _retrieve_call_ids_in_message(message) | _anthropic_retrieve_ids_in_message(message)
+        for call_id in _retrieve_call_ids_in_message(message)
+        | _anthropic_retrieve_ids_in_message(message)
+        | _responses_retrieve_call_ids(message)
     )
 
 
@@ -326,7 +337,7 @@ def _build_compress_failure_detail(status_code: int, body: str) -> dict[str, obj
 
 def _read_ccr_hashes(body: Mapping[str, object]) -> frozenset[str]:
     ccr_hashes: Final = body.get("ccr_hashes")
-    if not isinstance(ccr_hashes, list):
+    if not _is_object_list(ccr_hashes):
         return frozenset()
     return frozenset(
         hash_value.lower()
@@ -545,7 +556,7 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         self.timeout = self._resolve_timeout(timeout)
 
-    def _should_bypass(self, request_data: dict) -> bool:
+    def _should_bypass(self, request_data: Mapping[str, object]) -> bool:
         psr: Final = request_data.get("proxy_server_request")
         if not _is_str_object_dict(psr):
             return False
@@ -822,8 +833,9 @@ class HeadroomGuardrail(CustomGuardrail):
         # /v1/compress grows a field for sending the live turn as the retrieval
         # query without compressing it: query-aware compression reads the newest
         # user message, so it is withheld here at some cost to history ranking.
-        raw_messages: Final = request_data.get("messages")
-        raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(raw_messages)
+        raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(request_data.get("messages")) | _raw_retrieve_call_ids(
+            request_data.get("input")
+        )
         protected_indices: Final = _protected_indices(messages, raw_retrieve_call_ids)
         compressible: Final = [m for i, m in enumerate(messages) if i not in protected_indices]
         if not compressible:
@@ -877,7 +889,7 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
-        hashes: Final = result.ccr_hashes if self.ccr_retrieval else frozenset()
+        hashes: Final[frozenset[str]] = result.ccr_hashes if self.ccr_retrieval else frozenset()
         if not hashes:
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
@@ -915,12 +927,12 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         response: object,
         model: str,
-        messages: list[dict],
-        tools: list[dict] | None,
+        messages: object,
+        tools: object,
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
-    ) -> tuple[bool, dict]:
+        kwargs: object,
+    ) -> tuple[bool, dict[str, object]]:
         if not has_headroom_retrieve_tool(tools):
             return False, {}
 
@@ -934,7 +946,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         tools: dict,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         response: object,
         anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None,
         anthropic_messages_optional_request_params: dict,
@@ -948,14 +960,14 @@ class HeadroomGuardrail(CustomGuardrail):
         valid_context: Final = (
             context if isinstance(context, HeadroomRequestContext) and context.expires_at > time.monotonic() else None
         )
-        valid_hashes: Final = valid_context.issued_hashes if valid_context is not None else frozenset()
+        valid_hashes: Final[frozenset[str]] = valid_context.issued_hashes if valid_context is not None else frozenset()
 
         retrieved: Final[list[tuple[dict[str, object], str]]] = []
         for tc in tool_calls:
             arguments = tc.get("arguments", {})
-            raw_hash = arguments.get("hash", "") if isinstance(arguments, dict) else ""
+            raw_hash = arguments.get("hash", "") if _is_str_object_dict(arguments) else ""
             hash_value = str(raw_hash).lower()
-            query = arguments.get("query") if isinstance(arguments, dict) else None
+            query = arguments.get("query") if _is_str_object_dict(arguments) else None
             if hash_value not in valid_hashes:
                 verbose_proxy_logger.warning(
                     "Headroom CCR: rejecting hash=%s not produced by current request compression",

@@ -328,7 +328,9 @@ def test_chat_stream_upstream_drop_after_finish_ends_the_stream(gateway: Gateway
         key: Final = scenario.key(models=[model])
         response: Final = _stream_chat(gateway, model, key)
         assert response.status_code == 200, response.text
-        assert _chat_text(_sse_payloads(response)) == _REPLY_TEXT, response.text
+        payloads: Final = _sse_payloads(response)
+        assert _chat_text(payloads) == _REPLY_TEXT, response.text
+        assert not any("error" in payload for payload in payloads), response.text
         assert len(wire.drain()) == 1
         assert gateway.request("GET", "/health/liveliness").status_code == 200
         other: Final = scenario.key(models=[model])

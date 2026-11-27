@@ -40,6 +40,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.langfuse.langfuse import PROMPT_CACHE_TTL_ENV, parse_langfuse_debug, whole_number
 from litellm.integrations.langfuse.langfuse_otel_attributes import serialize_langfuse_datetime
+from litellm.integrations.langfuse.trace_id import resolve_trace_id
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -73,7 +74,6 @@ __all__ = (
     "trace_attributes",
 )
 
-_TRACE_ID_PATTERN: Final = re.compile(r"^(?=.*[1-9a-f])[0-9a-f]{32}$")
 _OBSERVATION_ID_PATTERN: Final = re.compile(r"^(?=.*[1-9a-f])[0-9a-f]{16}$")
 _TRACER_NAME: Final = "langfuse-sdk"
 _LANGFUSE_INGESTION_VERSION_HEADER: Final = "x-langfuse-ingestion-version"
@@ -134,17 +134,6 @@ def to_unix_nanos(value: datetime | float | None) -> int | None:
         return None
     seconds: Final = value.timestamp() if isinstance(value, datetime) else float(value)
     return int(seconds * 1_000_000_000)
-
-
-def resolve_trace_id(trace_id: object | None) -> str:
-    """Map a caller's trace id onto the 32 lowercase hex characters v4 requires."""
-    serialized: Final = "" if trace_id is None else str(trace_id)
-    normalized: Final = serialized.lower().replace("-", "")
-    if _TRACE_ID_PATTERN.fullmatch(normalized):
-        return normalized
-    if not serialized:
-        return format(RandomIdGenerator().generate_trace_id(), "032x")
-    return sha256(serialized.encode("utf-8")).digest()[:16].hex()
 
 
 def resolve_observation_id(observation_id: object | None) -> str | None:

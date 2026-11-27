@@ -9,6 +9,7 @@ import httpx
 import pytest
 from aiohttp import ClientSession
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from opentelemetry.trace import Span
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
@@ -93,6 +94,10 @@ CONNECTION_NAMES: Final = (
     "litellm_credential_name",
     "github_copilot_auth_type",
     "github_copilot_host",
+    "github_copilot_app_id",
+    "github_copilot_app_installation_id",
+    "github_copilot_app_private_key_ref",
+    "github_copilot_app_private_key",
     "configurable_clientside_auth_params",
     "use_xai_oauth",
     "chatgpt_auth_file",
@@ -129,6 +134,11 @@ CONNECTION_NAMES: Final = (
     "openai_identity_provider_id",
     "openai_service_account_id",
     "openai_identity_token_file",
+    "oauth_client_credentials",
+    "oauth_token_url",
+    "oauth_client_id",
+    "oauth_client_secret",
+    "oauth_scope",
 )
 
 OPTION_NAMES: Final = (
@@ -184,6 +194,7 @@ OPTION_NAMES: Final = (
     "quality_router_default_model",
     "caching",
     "cache",
+    "allowed_response_cache_overrides",
     "ttl",
     "enable_prompt_caching",
     "caching_groups",
@@ -227,6 +238,7 @@ OPTION_NAMES: Final = (
     "enable_json_schema_validation",
     "complete_response",
     "stream_chunk_size",
+    "fake_stream",
     "keepalive_seconds",
     "allow_client_keepalive_override",
     "mock_response",
@@ -238,6 +250,7 @@ AGENTIC_LOOP_STATE_NAMES: Final = (
     "_agentic_loop_depth",
     "_agentic_loop_fingerprints",
     "_agentic_loop_api_surface",
+    "_agentic_loop_tool_choice",
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
@@ -259,8 +272,13 @@ INTERNAL_STATE_NAMES: Final = (
     "preset_cache_key",
     "cache_key",
     "stream_response",
+    "parent_otel_span",
     "_context_compaction_state",
+    "_litellm_prompt_management_applied",
     *AGENTIC_LOOP_STATE_NAMES,
+    "_skip_mcp_handler",
+    "skip_mcp_handler",
+    "mcp_handler_context",
     "_router_weights",
     "_encrypted_content_affinity_pinned",
     "fallback_depth",
@@ -537,6 +555,7 @@ TYPE_HINT_NAMESPACE: Final[Mapping[str, object]] = {
     "HeadroomRequestContext": HeadroomRequestContext,
     "RouterWeights": RouterWeights,
     "AttemptedFallbackTargets": AttemptedFallbackTargets,
+    "Span": Span,
 }
 
 LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
@@ -564,7 +583,7 @@ LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
     litellm_params.GuardrailOptions: {"guardrails": ("default",)},
     litellm_params.PromptOptions: {"prompt_id": "prompt", "prompt_variables": {"name": "value"}},
     litellm_params.ResponseOptions: {"keepalive_seconds": 1.5},
-    litellm_params.ControlOptions: {"stream_chunk_size": 64},
+    litellm_params.ControlOptions: {"stream_chunk_size": 64, "fake_stream": True},
     litellm_params.MockOptions: {"mock_timeout": True},
     litellm_params.CallState: {
         "completion_call_id": "call",
@@ -572,6 +591,7 @@ LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
         "data_residency": "us",
     },
     litellm_params.AgenticLoopState: {"api_surface": "chat_completions", "depth": 1},
+    litellm_params.McpHandlerState: {"recursion_guard": True, "mcp_handler_context": {"server": "docs"}},
     litellm_params.RouterState: {"fallback_depth": 1},
     litellm_params.ProxyRequestState: {
         "proxy_server_request": {"path": "/chat/completions"},
@@ -600,6 +620,7 @@ LEAF_BAD_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
     litellm_params.MockOptions: {"mock_timeout": "true"},
     litellm_params.CallState: {"completion_call_id": 1},
     litellm_params.AgenticLoopState: {"depth": "1"},
+    litellm_params.McpHandlerState: {"recursion_guard": "true"},
     litellm_params.RouterState: {"fallback_depth": "1"},
     litellm_params.ProxyRequestState: {"proxy_server_request": "request"},
     litellm_params.EntrypointState: {"acompletion": "true"},
@@ -679,6 +700,10 @@ def test_routing_options_accept_every_strategy_the_router_accepts(strategy: str)
 NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "credentials": (
+            "github_copilot_app_id",
+            "github_copilot_app_installation_id",
+            "github_copilot_app_private_key_ref",
+            "github_copilot_app_private_key",
             "anthropic_disable_workload_identity_federation",
             "anthropic_federation_rule_id",
             "anthropic_federation_workspace_id",

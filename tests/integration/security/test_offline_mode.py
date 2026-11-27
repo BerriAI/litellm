@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, object_value
+from integration._support.client import Gateway, eventually, object_value
 from integration._support.forward_proxy import refusing_forward_proxy
 from integration._support.process import owned_proxy
 from pydantic import JsonValue
@@ -120,7 +120,19 @@ def test_offline_mode_stops_every_self_initiated_request(
             source: Final = object_value(_json(isolated, "GET", "/model/cost_map/source"))
             reloaded: Final = isolated.request("POST", "/reload/model_cost_map")
             beta_headers: Final = object_value(_json(isolated, "POST", "/reload/anthropic_beta_headers"))
-            release: Final = _json(isolated, "GET", "/get/latest_release_info")
+            release: Final = isolated.request("GET", "/get/latest_release_info")
+            assert (release.status_code, release.json()) == (202 if offline_mode is None else 200, None), release.text
+            if offline_mode is None:
+                settled_release: Final = eventually(
+                    lambda: isolated.request("GET", "/get/latest_release_info"),
+                    lambda response: response.status_code != 202,
+                )
+                assert (settled_release.status_code, settled_release.json()) == (
+                    502,
+                    {"detail": "Latest release info unavailable"},
+                ), settled_release.text
+            else:
+                assert _json(isolated, "GET", "/get/latest_release_info") is None
             presets: Final = object_value(_json(isolated, "GET", "/public/autorouter_presets"))
             templates: Final = _json(isolated, "GET", "/policy/templates")
             blog: Final = object_value(_json(isolated, "GET", "/public/litellm_blog_posts"))
@@ -164,7 +176,6 @@ def test_offline_mode_stops_every_self_initiated_request(
     assert source["is_env_forced"] is (offline_mode is not None), source
     assert reloaded.status_code == reload_status, reloaded.text
     assert beta_headers["status"] == "success", beta_headers
-    assert release is None
     assert sorted(presets) == sorted(object_value(_bundled("proxy/public_endpoints/autorouter_presets.json")))
     assert templates == _bundled("policy_templates_backup.json")
     assert [object_value(post)["url"] for post in _list(blog["posts"])] == [

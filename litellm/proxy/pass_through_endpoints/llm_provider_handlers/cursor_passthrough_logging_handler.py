@@ -5,6 +5,7 @@ Transforms Cursor API responses into standardized logging payloads
 so they appear cleanly in the LiteLLM Logs page.
 """
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Final
 
@@ -66,15 +67,15 @@ class CursorPassthroughLoggingHandler:
     @staticmethod
     def cursor_passthrough_handler(
         httpx_response: httpx.Response,
-        response_body: dict,
+        response_body: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        request_body: dict,
-        **kwargs,
+        request_body: Mapping[str, object],
+        **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Transform a Cursor API response into a standard logging payload.
@@ -90,7 +91,7 @@ class CursorPassthroughLoggingHandler:
 
             model_name: Final = f"cursor/{operation}"
 
-            summary_parts: Final = []
+            summary_parts: Final[list[str]] = []
             if agent_id:
                 summary_parts.append(f"id={agent_id}")
             if agent_name:

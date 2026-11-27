@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT $2 = ANY (COALESCE(teams, '{}')) AS \"holds!\"\nFROM \"LiteLLM_UserTable\"\nWHERE user_id = $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "holds!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "76d5f605433a3df23e3e7ceb975cdd3d12160e29eb4bd2d6261e4b50b9cd1551"
+}

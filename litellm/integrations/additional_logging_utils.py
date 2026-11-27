@@ -27,7 +27,7 @@ class AdditionalLoggingUtils(ABC):
         request_id: str,
         start_time_utc: datetime | None,
         end_time_utc: datetime | None,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Get the request and response payload for a given `request_id`
         """

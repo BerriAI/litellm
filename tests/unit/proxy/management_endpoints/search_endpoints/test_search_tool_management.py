@@ -3,6 +3,7 @@ import json
 from collections.abc import Callable
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,6 +26,16 @@ from litellm.types.search import SearchToolInfoResponse
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 client = TestClient(app)
+
+
+def test_dashboard_discovers_webiq_with_its_display_name() -> None:
+    with _override_auth(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)):
+        response: Final = client.get("/search_tools/ui/available_providers")
+
+    assert response.status_code == 200, response.text
+    assert [provider for provider in response.json()["providers"] if provider["provider_name"] == "webiq"] == [
+        {"provider_name": "webiq", "ui_friendly_name": "Microsoft Web IQ"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -1118,7 +1129,8 @@ def _search_caller(
 @pytest.fixture
 def search_permission_cache(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[str] | None], None]:
     from litellm.proxy._types import LiteLLM_UserTable
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     cache = UserApiKeyCache()
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
@@ -1126,10 +1138,11 @@ def search_permission_cache(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[s
 
     def grant_user(search_tools: list[str] | None) -> None:
         cache.set_cache(
-            key="internal_user", value=LiteLLM_UserTable(user_id="internal_user", object_permission_id="op-user")
+            key=AuthObject.user("internal_user"),
+            value=LiteLLM_UserTable(user_id="internal_user", object_permission_id="op-user"),
         )
         cache.set_cache(
-            key=object_permission_cache_key("op-user"),
+            key=AuthObject.object_permission("op-user"),
             value=LiteLLM_ObjectPermissionTable(object_permission_id="op-user", search_tools=search_tools),
         )
 

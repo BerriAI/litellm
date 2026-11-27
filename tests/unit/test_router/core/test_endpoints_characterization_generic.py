@@ -22,6 +22,7 @@ import pytest
 import litellm
 from litellm.constants import REALTIME_SESSION_ENDED_ABNORMALLY_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_core import RouterCore
 from litellm.types.videos.utils import encode_video_id_with_provider
@@ -195,7 +196,7 @@ async def test_sync_generic_endpoints_set_no_routing_hidden_params(
     assert response._hidden_params == {}
 
 
-@pytest.mark.parametrize("endpoint", ["ocr", "generate_content"])
+@pytest.mark.parametrize("endpoint", ["ocr", "video_generation"])
 async def test_sync_generic_endpoints_are_not_retried(make_core: MakeCore, host: EndpointHost, endpoint: str):
     host.answer("openai/d1", litellm.InternalServerError(message="boom", llm_provider="openai", model="d1"))
     _, request = ROUTED_SYNC[endpoint]
@@ -431,6 +432,32 @@ async def test_a_plain_response_id_without_a_model_fails_with_type_error(make_co
     assert host.calls == []
 
 
+@pytest.mark.parametrize("retrieval_query_param", ["retrievalQuery", "retrieval_query"])
+@pytest.mark.parametrize("endpoint", ["avector_store_search", "vector_store_search"])
+async def test_a_deployments_raw_retrieval_query_never_reaches_a_routed_vector_store_search(
+    make_core: MakeCore, host: EndpointHost, endpoint: str, retrieval_query_param: str
+):
+    from_deployment: Final = {"text": "from the deployment"}
+    core: Final = make_core(
+        model_list=[
+            deployment(
+                "g",
+                "d1",
+                **{
+                    retrieval_query_param: from_deployment,
+                    "extra_body": {retrieval_query_param: from_deployment, "kept": 1},
+                },
+            )
+        ]
+    )
+
+    await _call(core, endpoint, {"model": "g", "vector_store_id": "v", "query": "q"})
+
+    sent: Final = host.calls[0].kwargs
+    assert retrieval_query_param not in sent
+    assert sent["extra_body"] == {"kept": 1}
+
+
 # --- container ids ------------------------------------------------------------------------
 
 ENCODED_CONTAINER_ID: Final = ResponsesAPIRequestUtils.build_container_id("azure", "d2", "cntr_upstream")
@@ -548,6 +575,84 @@ async def test_llm_passthrough_rewrites_the_group_name_in_the_endpoint_to_the_pr
         "/model/us.anthropic.claude/invoke",
         "bedrock",
     )
+
+
+@pytest.mark.parametrize(
+    "model, endpoint, expected",
+    [
+        (
+            "bedrock/invoke/us.anthropic.claude-sonnet-5-5",
+            "/model/g/invoke-with-response-stream",
+            "/model/us.anthropic.claude-sonnet-5-5/invoke-with-response-stream",
+        ),
+        (
+            "bedrock/converse/us.anthropic.claude-sonnet-5-5",
+            "/model/g/converse-stream",
+            "/model/us.anthropic.claude-sonnet-5-5/converse-stream",
+        ),
+        ("hosted_vllm/openai/gpt-oss-20b", "/v1/models/g", "/v1/models/openai/gpt-oss-20b"),
+    ],
+)
+async def test_llm_passthrough_sends_the_provider_model_id_without_a_bedrock_route_marker(
+    make_core: MakeCore, host: EndpointHost, model: str, endpoint: str, expected: str
+):
+    core: Final = make_core(model_list=[deployment("g", "d1", model=model)])
+    await core.allm_passthrough_route(model="g", method="POST", endpoint=endpoint)
+    assert host.calls[0].kwargs["endpoint"] == expected
+
+
+@pytest.mark.parametrize("route", ["bedrock/", "bedrock/invoke/", "bedrock/converse/"])
+async def test_llm_passthrough_drops_the_region_path_from_a_bedrock_model(
+    make_core: MakeCore, host: EndpointHost, route: str
+):
+    core: Final = make_core(
+        model_list=[deployment("g", "d1", model=f"{route}us-west-2/us.anthropic.claude-sonnet-5-5")]
+    )
+    await core.allm_passthrough_route(model="g", method="POST", endpoint="/model/g/invoke")
+    assert host.calls[0].kwargs["endpoint"] == "/model/us.anthropic.claude-sonnet-5-5/invoke"
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        (
+            "bedrock/llama/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123def456",
+            "/model/arn:aws:bedrock:us-east-1:123456789012:imported-model%2Fabc123def456/invoke",
+        ),
+        (
+            "bedrock/invoke/arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/abc123def456",
+            "/model/arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment%2Fabc123def456/invoke",
+        ),
+        (
+            "bedrock/us-west-2/arn:aws:bedrock:us-west-2:123456789012:application-inference-profile/abc123",
+            "/model/arn:aws:bedrock:us-west-2:123456789012:application-inference-profile%2Fabc123/invoke",
+        ),
+    ],
+)
+async def test_llm_passthrough_sends_a_bedrock_arn_model_as_one_path_segment_without_its_spec_marker(
+    make_core: MakeCore, host: EndpointHost, model: str, expected: str
+):
+    core: Final = make_core(model_list=[deployment("g", "d1", model=model)])
+    await core.allm_passthrough_route(model="g", method="POST", endpoint="/model/g/invoke")
+    assert host.calls[0].kwargs["endpoint"] == expected
+
+
+@pytest.mark.parametrize("route", ["bedrock/", "bedrock/invoke/", "bedrock/converse/"])
+async def test_llm_passthrough_sends_the_cost_map_target_of_a_bedrock_latest_alias(
+    make_core: MakeCore, host: EndpointHost, route: str
+):
+    target: Final = get_model_latest_aliases()["bedrock"]["claude-haiku-latest"]
+    core: Final = make_core(model_list=[deployment("g", "d1", model=f"{route}claude-haiku-latest")])
+    await core.allm_passthrough_route(model="g", method="POST", endpoint="/model/g/invoke")
+    assert host.calls[0].kwargs["endpoint"] == f"/model/{target}/invoke"
+
+
+async def test_llm_passthrough_sends_a_callback_routed_model_with_no_provider_as_written(
+    make_core: MakeCore, host: EndpointHost
+):
+    core: Final = make_core(model_list=[deployment("g", "d1", model="arize/my-prompt")])
+    await core.allm_passthrough_route(model="g", method="POST", endpoint="/model/g/invoke")
+    assert host.calls[0].kwargs["endpoint"] == "/model/arize/my-prompt/invoke"
 
 
 async def test_llm_passthrough_forwards_the_request_client(make_core: MakeCore, host: EndpointHost):

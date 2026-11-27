@@ -617,6 +617,47 @@ class TestContentFilterGuardrail:
         assert content_by_choice[1] == "Email [EMAIL_REDACTED] for support"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("ends_with_finish_reason", [True, False])
+    async def test_streaming_hook_masks_a_refusal_beside_content_in_its_own_field(self, ends_with_finish_reason: bool):
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="test-streaming-mask-refusal",
+            patterns=[
+                ContentFilterPattern(pattern_type="prebuilt", pattern_name="email", action=ContentFilterAction.MASK)
+            ],
+            event_hook=GuardrailEventHooks.during_call,
+        )
+        deltas: Final = (
+            Delta(content="Mail first@ex"),
+            Delta(refusal="I cannot write to second@ex"),
+            Delta(content="ample.com now", refusal="ample.com"),
+            *((Delta(),) if ends_with_finish_reason else ()),
+        )
+
+        async def refusal_stream() -> AsyncIterator[ModelResponseStream]:
+            for position, delta in enumerate(deltas, start=1):
+                finish_reason: Final = "stop" if ends_with_finish_reason and position == len(deltas) else None
+                yield ModelResponseStream(
+                    id=f"chunk{position}",
+                    choices=[StreamingChoices(delta=delta, index=0, finish_reason=finish_reason)],
+                    model="gpt-4",
+                )
+
+        delivered: Final = [
+            chunk
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=MagicMock(), response=refusal_stream(), request_data={}
+            )
+        ]
+
+        def streamed(field: str) -> str:
+            return "".join(stream_item_field(chunk.choices[0].delta, field) or "" for chunk in delivered)
+
+        assert (streamed("content"), streamed("refusal")) == (
+            "Mail [EMAIL_REDACTED] now",
+            "I cannot write to [EMAIL_REDACTED]",
+        )
+
+    @pytest.mark.asyncio
     async def test_streaming_hook_block(self):
         """
         Test streaming hook with BLOCK action
@@ -3849,3 +3890,36 @@ async def test_streaming_hook_blocks_a_word_split_across_text_completion_chunks(
 
     assert exc_info.value.status_code == 400
     assert "kumquat" in str(exc_info.value.detail)
+
+
+class _UpstreamStreamError(Exception):
+    pass
+
+
+async def _chat_stream_then_upstream_error() -> AsyncGenerator[ModelResponseStream, None]:
+    for content in (_LONG_TAIL[:30], _LONG_TAIL[30:]):
+        yield ModelResponseStream(
+            id="chatcmpl-stream",
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=0, delta=Delta(content=content))],
+        )
+    raise _UpstreamStreamError("Upstream generation aborted (finish_reason=abort)")
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_releases_the_held_tail_before_an_upstream_error() -> None:
+    delivered: Final[list[ModelResponseStream | TextCompletionResponse]] = []
+    hook_stream: Final = _fruit_word_filter().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=MagicMock(), response=_chat_stream_then_upstream_error(), request_data={}
+    )
+
+    async def drain() -> None:
+        async for chunk in hook_stream:
+            delivered.append(chunk)
+
+    with pytest.raises(_UpstreamStreamError):
+        await drain()
+
+    assert "".join(_streamed_text(chunk, 0) for chunk in delivered) == _LONG_TAIL.replace(
+        "persimmon", "[KEYWORD_REDACTED]"
+    )

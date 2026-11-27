@@ -4,7 +4,7 @@ import importlib
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from email.utils import formatdate
 from pathlib import Path
@@ -86,7 +86,7 @@ class OCIRequestWrapper:
 
     method: str
     url: str
-    headers: dict
+    headers: dict[str, str]
     body: bytes
 
     @property
@@ -97,20 +97,16 @@ class OCIRequestWrapper:
 
 
 def sha256_base64(data: bytes) -> str:
-    # SHA-256 is used here to compute the x-content-sha256 header required by the
-    # OCI HTTP signing specification (RSA-SHA256 request signing), not for password
-    # or secret hashing.  This is the correct and mandated algorithm for this purpose.
+    # Computes the x-content-sha256 header required by the OCI HTTP signing
+    # specification. The RSA-SHA256 request signature covers this header, so the
+    # digest is a security use of the hash.
     # See: https://docs.oracle.com/en-us/iaas/Content/API/Concepts/signingrequests.htm
-    #
-    # ``usedforsecurity=False`` declares non-security intent to static analyzers
-    # (CodeQL ``py/weak-sensitive-data-hashing``) — without it the request body
-    # gets flagged as "password-like data" via taint tracking.
-    digest: Final = hashlib.sha256(data, usedforsecurity=False).digest()  # noqa: S324
+    digest: Final = hashlib.sha256(data).digest()
     return base64.b64encode(digest).decode()
 
 
-def build_signature_string(method: str, path: str, headers: dict, signed_headers: list) -> str:
-    lines: Final = []
+def build_signature_string(method: str, path: str, headers: Mapping[str, object], signed_headers: Sequence[str]) -> str:
+    lines: Final[list[str]] = []
     for header in signed_headers:
         if header == "(request-target)":
             value = f"{method.lower()} {path}"
@@ -341,11 +337,11 @@ def get_oci_base_url(optional_params: Mapping[str, object], api_base: str | None
 
 
 def sign_with_oci_signer(
-    headers: dict,
+    headers: dict[str, str],
     optional_params: dict,
-    request_data: dict,
+    request_data: Mapping[str, object],
     api_base: str,
-) -> tuple[dict, bytes]:
+) -> tuple[dict[str, str], bytes]:
     """Sign a request using an OCI SDK Signer object passed in optional_params."""
     oci_signer: Final = optional_params.get("oci_signer")
     body: Final = json.dumps(request_data).encode("utf-8")
@@ -381,11 +377,11 @@ def sign_with_oci_signer(
 
 
 def sign_with_manual_credentials(
-    headers: dict,
-    optional_params: dict,
-    request_data: dict,
+    headers: dict[str, str],
+    optional_params: Mapping[str, object],
+    request_data: Mapping[str, object],
     api_base: str,
-) -> tuple[dict, bytes]:
+) -> tuple[dict[str, str], bytes]:
     """Sign a request using manually provided OCI credentials (user/fingerprint/tenancy/key)."""
     creds: Final = resolve_oci_credentials(optional_params)
     oci_user: Final = creds["oci_user"]
@@ -494,15 +490,15 @@ def sign_with_manual_credentials(
 
 
 def sign_oci_request(
-    headers: dict,
-    optional_params: dict,
-    request_data: dict,
+    headers: dict[str, str],
+    optional_params: dict[str, object],
+    request_data: Mapping[str, object],
     api_base: str,
     api_key: str | None = None,
     model: str | None = None,
     stream: bool | None = None,
     fake_stream: bool | None = None,
-) -> tuple[dict, bytes]:
+) -> tuple[dict[str, str], bytes]:
     """
     Route to the appropriate OCI signing method based on what credentials are present.
 
@@ -519,10 +515,10 @@ def sign_oci_request(
 
 
 def validate_oci_environment(
-    headers: dict,
-    optional_params: dict,
+    headers: dict[str, str],
+    optional_params: Mapping[str, object],
     api_key: str | None = None,
-) -> dict:
+) -> dict[str, str]:
     """
     Populate common OCI request headers (content-type, user-agent).
 
@@ -668,7 +664,7 @@ def enrich_cohere_param_description(description: str, param_schema: dict[str, Js
     if "format" in param_schema:
         parts.append(f"Format: {param_schema['format']}")
     if "minimum" in param_schema or "maximum" in param_schema:
-        range_parts: Final = []
+        range_parts: Final[list[str]] = []
         if "minimum" in param_schema:
             range_parts.append(f"min={param_schema['minimum']}")
         if "maximum" in param_schema:

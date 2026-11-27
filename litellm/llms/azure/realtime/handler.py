@@ -83,6 +83,8 @@ def azure_realtime_protocol_for_client(
     query_params: RealtimeQueryParams | None,
     websocket: ScopedWebSocket,
 ) -> AzureRealtimeProtocol:
+    if (query_params or {}).get("call_id"):
+        return AzureRealtimeProtocol(name="GA")
     serves_a_ga_only_session: Final = (
         realtime_mode == "translation" or (query_params or {}).get("intent") == "transcription"
     )
@@ -169,8 +171,10 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             if _is_ga
             else "/openai/realtime"
         )
+        call_id: Final = (query_params or {}).get("call_id")
         base_query_parts: Final = (
-            (urlencode((("model", model),)),)
+            # Azure opens a new translation session, and never joins the call, when the join also names a model.
+            (() if call_id else (urlencode((("model", model),)),))
             if realtime_mode == "translation"
             else (
                 (urlencode((("model", model),)),)
@@ -181,7 +185,11 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             else (urlencode((("api-version", api_version), ("deployment", model))),)
         )
 
-        query_parts: Final = (*base_query_parts, urlencode((("intent", intent),))) if intent else base_query_parts
+        query_parts: Final = (
+            *base_query_parts,
+            *((urlencode((("intent", intent),)),) if intent else ()),
+            *((urlencode((("call_id", call_id),)),) if call_id else ()),
+        )
 
         qs: Final = "&".join(query_parts)
         endpoint_url: Final = join_api_base(api_base, path)
@@ -211,7 +219,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         realtime_protocol: str | None = None,
         query_params: RealtimeQueryParams | None = None,
         user_api_key_dict: object | None = None,
-        litellm_metadata: dict | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
         realtime_mode: str = "realtime",
         bridges_beta_client_to_ga: bool = False,
         drop_params: bool = False,
@@ -258,11 +266,12 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                     translation_session=realtime_mode == "translation",
                     bridges_beta_client_to_ga=bridges_beta_client_to_ga,
                     drop_params=drop_params,
+                    listens_only=bool((query_params or {}).get("call_id")),
                 )
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatus as e:
-            verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")
+            verbose_proxy_logger.warning("Azure refused the realtime handshake with HTTP %s", e.response.status_code)
             await close_after_upstream_handshake_refusal(websocket, e.response.status_code)
         except Exception:
             verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")

@@ -20,12 +20,14 @@ from openai.types.responses.tool_param import Mcp
 from typing_extensions import ReadOnly
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.fireworks_ai.responses.transformation import FireworksAIResponsesAPIConfig
 from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
 from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponseInputParam, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+from tests.unit.llms.fireworks_ai.latest_router_aliases import LATEST_ROUTER_ALIAS_TARGETS
 
 FIREWORKS_RESPONSES_URL: Final = "https://api.fireworks.ai/inference/v1/responses"
 HTTPX_CLIENT_FACTORY: Final = "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client"
@@ -250,6 +252,27 @@ def test_responses_call_keeps_developer_items_in_place_for_a_model_the_cost_map_
 
 
 @respx.mock
+@pytest.mark.parametrize(("alias", "target"), LATEST_ROUTER_ALIAS_TARGETS)
+def test_latest_router_alias_places_developer_items_like_the_model_it_points_to(alias: str, target: str) -> None:
+    route: Final = _fireworks_responses_route(alias)
+    for model in (alias, target):
+        litellm.responses(
+            model=f"fireworks_ai/{model}",
+            input=[
+                {"role": "user", "content": "Hi there"},
+                {"role": "developer", "content": "Answer with exactly one word."},
+                {"role": "user", "content": "What is the capital of France?"},
+                {"type": "message", "role": "assistant", "content": "Paris"},
+                {"role": "developer", "content": "Reply with PONG."},
+            ],
+            api_key="fw-test-key",
+        )
+    alias_body, target_body = (json.loads(call.request.content) for call in route.calls)
+    assert alias_body["model"] == alias
+    assert {**alias_body, "model": target} == target_body
+
+
+@respx.mock
 def test_responses_call_folds_developer_items_when_the_loaded_cost_map_turns_the_flag_off(
     declare_mid_conversation_system: Callable[[str, bool], None],
 ) -> None:
@@ -419,6 +442,59 @@ def test_responses_call_keeps_a_mid_conversation_system_item_in_place() -> None:
         {"role": "system", "content": "Switch to French."},
         {"role": "user", "content": "What is the capital of France?"},
     )
+
+
+_LATER_SYSTEM_FIREWORKS_INPUT: Final = (
+    {"role": "user", "content": "Hi there"},
+    {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"},
+    {"role": "system", "content": "Reply in French."},
+    {"type": "function_call_output", "call_id": "call_1", "output": "21C"},
+    {"type": "message", "role": "assistant", "content": "Il fait 21C."},
+    {"role": "system", "content": [{"type": "input_text", "text": "Stay brief."}]},
+)
+
+
+def _fireworks_reminder_as_user_item(text: str) -> Mapping[str, object]:
+    return {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": CONVERTED_SYSTEM_NOTE}, {"type": "input_text", "text": text}],
+    }
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("model_info", "expected_input"),
+    [
+        pytest.param(None, _LATER_SYSTEM_FIREWORKS_INPUT, id="undeclared"),
+        pytest.param(
+            {"id": "deployment-1", "supports_mid_conversation_system": False},
+            (
+                _LATER_SYSTEM_FIREWORKS_INPUT[0],
+                _LATER_SYSTEM_FIREWORKS_INPUT[1],
+                _LATER_SYSTEM_FIREWORKS_INPUT[3],
+                _fireworks_reminder_as_user_item("Reply in French."),
+                _LATER_SYSTEM_FIREWORKS_INPUT[4],
+                _fireworks_reminder_as_user_item("Stay brief."),
+            ),
+            id="declared-system-first",
+        ),
+    ],
+)
+def test_responses_call_sends_later_system_items_as_user_turns_only_for_a_declared_system_first_deployment(
+    model_info: Mapping[str, object] | None, expected_input: tuple[Mapping[str, object], ...]
+) -> None:
+    route: Final = _fireworks_responses_route("accounts/fireworks/models/qwen3p8-2p4t-a95b")
+    litellm.responses(
+        model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
+        instructions="You are terse.",
+        input=list(_LATER_SYSTEM_FIREWORKS_INPUT),
+        model_info=model_info,
+        api_key="fw-test-key",
+    )
+    body: Final = _routed_body(route)
+    assert body["instructions"] == "You are terse."
+    assert tuple(body["input"]) == expected_input
 
 
 def test_responses_call_keeps_a_developer_item_with_non_text_parts_in_place_as_a_system_item() -> None:
