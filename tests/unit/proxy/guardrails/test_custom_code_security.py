@@ -596,9 +596,7 @@ async def test_caller_headers_pass_through_untouched_when_url_validation_is_disa
 @pytest.mark.parametrize(("method", "body"), [("PUT", "put"), ("DELETE", "deleted"), ("PATCH", "patched")])
 async def test_http_request_other_methods_reach_an_allowlisted_host(local_server, monkeypatch, method, body):
     monkeypatch.setattr(litellm, "user_url_allowed_hosts", [f"127.0.0.1:{local_server.port}"])
-    guardrail = _reporting_guardrail(
-        f'http_request("http://127.0.0.1:{local_server.port}/marker", method="{method}")'
-    )
+    guardrail = _reporting_guardrail(f'http_request("http://127.0.0.1:{local_server.port}/marker", method="{method}")')
 
     reason = await _block_reason(guardrail)
 
@@ -875,3 +873,32 @@ def test_config_without_timeout_uses_the_default():
         _initialize_from_config("custom-code-default-timeout", {}).execution_timeout
         == DEFAULT_EXECUTION_TIMEOUT_SECONDS
     )
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        # Every one of these compiles fine and then raises
+        # "NameError: name '_unpack_sequence_' is not defined" at call time when
+        # the guard is missing from the sandbox globals.
+        ("    a, b = inputs['pair']\n    return a + b\n", 3),
+        ("    a, (b, c) = inputs['nested']\n    return a + b + c\n", 6),
+        ("    a, *rest = inputs['seq']\n    return rest\n", [2, 3]),
+        ("    with inputs['ctx'] as (a, b):\n        return a + b\n", 15),
+    ],
+)
+def test_tuple_unpacking_runs(body: str, expected):
+    """Ordinary tuple unpacking must work inside a guardrail, not NameError."""
+
+    class _Ctx:
+        def __enter__(self):
+            return (7, 8)
+
+        def __exit__(self, *args):
+            return False
+
+    guardrail = _compile("def apply_guardrail(inputs, request_data, input_type):\n" + body)
+    fn = guardrail._compiled_function
+    assert fn is not None
+    inputs = {"pair": (1, 2), "nested": (1, (2, 3)), "seq": [1, 2, 3], "ctx": _Ctx()}
+    assert fn(inputs, {}, "request") == expected
