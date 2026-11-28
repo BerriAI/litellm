@@ -1,0 +1,26 @@
+{
+  "provider": "fireworks_ai",
+  "endpoint": "https://api.fireworks.ai/inference/v1/responses",
+  "model": "accounts/fireworks/models/kimi-k3p1-pro",
+  "scenario": "mcp_max_tool_calls",
+  "recorded_at": "2026-11-24T03:25:06.112371+00:00",
+  "http_status": 200,
+  "request_body": {
+    "model": "accounts/fireworks/models/kimi-k3p1-pro",
+    "stream": true,
+    "max_output_tokens": 1500,
+    "input": "Call the deepwiki ask_question tool exactly once for repo BerriAI/litellm, then tell me in one sentence what the repo is.",
+    "tools": [
+      {
+        "type": "mcp",
+        "server_label": "deepwiki",
+        "server_url": "https://mcp.deepwiki.com/mcp",
+        "require_approval": "never"
+      }
+    ],
+    "max_tool_calls": 1,
+    "reasoning": {
+      "effort": "low"
+    }
+  }
+}

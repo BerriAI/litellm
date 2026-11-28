@@ -1,0 +1,14 @@
+{
+  "provider": "perplexity",
+  "endpoint": "https://api.perplexity.ai/v1/responses",
+  "model": "openai/gpt-6.2-sol",
+  "scenario": "text",
+  "recorded_at": "2026-11-24T03:20:20.997780+00:00",
+  "http_status": 200,
+  "request_body": {
+    "model": "openai/gpt-6.2-sol",
+    "stream": true,
+    "max_output_tokens": 60,
+    "input": "Say hi in five words."
+  }
+}

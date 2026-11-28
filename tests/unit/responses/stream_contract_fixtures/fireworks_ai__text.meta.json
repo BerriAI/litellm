@@ -1,0 +1,17 @@
+{
+  "provider": "fireworks_ai",
+  "endpoint": "https://api.fireworks.ai/inference/v1/responses",
+  "model": "accounts/fireworks/models/kimi-k3p1-pro",
+  "scenario": "text",
+  "recorded_at": "2026-11-24T03:14:18.380541+00:00",
+  "http_status": 200,
+  "request_body": {
+    "model": "accounts/fireworks/models/kimi-k3p1-pro",
+    "stream": true,
+    "max_output_tokens": 60,
+    "input": "Say hi in five words.",
+    "reasoning": {
+      "effort": "none"
+    }
+  }
+}

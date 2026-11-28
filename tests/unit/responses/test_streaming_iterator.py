@@ -3569,7 +3569,7 @@ def test_streamed_tool_input_that_is_not_a_string_reaches_the_client_as_its_json
 ):
     fields: Final = _streamed_event_fields(provider_config, {"type": event_type, field: value})
 
-    assert fields["type"] == event_type
+    assert fields["type"] == event_type.replace("mcp_call.arguments", "mcp_call_arguments")
     assert isinstance(fields[field], str)
     assert json.loads(fields[field]) == value
     assert "\\u" not in fields[field]

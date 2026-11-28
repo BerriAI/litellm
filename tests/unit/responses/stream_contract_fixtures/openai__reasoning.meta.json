@@ -1,0 +1,18 @@
+{
+  "provider": "openai",
+  "endpoint": "https://api.openai.com/v1/responses",
+  "model": "gpt-6.2-sol",
+  "scenario": "reasoning",
+  "recorded_at": "2026-11-24T03:18:56.351185+00:00",
+  "http_status": 200,
+  "request_body": {
+    "model": "gpt-6.2-sol",
+    "stream": true,
+    "max_output_tokens": 3000,
+    "input": "Find the number of ordered pairs of positive integers (a,b) with a*b = 720 and gcd(a,b) = 1... no wait, with lcm(a,b) = 720. Reply with just the number.",
+    "reasoning": {
+      "effort": "high",
+      "summary": "detailed"
+    }
+  }
+}

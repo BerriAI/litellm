@@ -229,12 +229,11 @@ class BigModelResponsesAPIConfig(OpenAIResponsesAPIConfig):
             ),
             **({"item": _normalize_output_item(item)} if "item" in chunk else {}),
         }
-        event_model: Final = self.get_event_model_class(str(normalized.get("type")))
         match chunk.get("type"):
-            case "response.output_text.done":
-                return event_model.model_validate({"logprobs": [], **normalized})
             case "response.content_part.done":
-                return event_model.model_validate({**normalized, "part": _normalize_stream_part(chunk.get("part"))})
+                return self.stream_event_or_passthrough(
+                    {**normalized, "part": _normalize_stream_part(chunk.get("part"))}
+                )
             case "error":
                 error: Final = chunk.get("error")
                 error_fields: Final = error if isinstance(error, dict) else chunk
@@ -242,9 +241,9 @@ class BigModelResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     **normalized,
                     "error": {"type": "api_error", **error_fields, "code": error_fields.get("code") or "unknown_error"},
                 }
-                return event_model.model_validate(normalized_error)
+                return self.stream_event_or_passthrough(normalized_error)
             case _:
-                return event_model.model_validate(normalized)
+                return self.stream_event_or_passthrough(normalized)
 
     def transform_cancel_response_api_request(
         self, response_id: str, api_base: str, litellm_params: GenericLiteLLMParams, headers: Mapping[str, str]
