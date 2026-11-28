@@ -1704,3 +1704,102 @@ class TestDeleteAnswersWithTheIdTheClientHolds:
         assert [hook._decrypt_response_id(logged_id) for logged_id in recorder.callback_response_ids] == [
             (_RAW_UPSTREAM_RESPONSE_ID, "admin-user", "admin-team")
         ]
+
+
+class TestForgedPlaintextResponseIdIsRejected:
+    """Unencrypted strings carrying the internal managed prefix must never pass decryption or authorization."""
+
+    _FORGED_THREE_PART_ID: Final = (
+        f"resp_{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}"
+        ":responses_api:response_id:msg_victim_123;user_id:owner-user;team_id:owner-team"
+    )
+    _FORGED_TWO_PART_ID: Final = (
+        f"resp_{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}"
+        ":responses_api:response_id:msg_victim_123;user_id:owner-user"
+    )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", sorted(_ADDRESSED_ID_FIELD_BY_CALL_TYPE))
+    async def test_forged_plaintext_managed_id_is_rejected_on_every_route(
+        self, mock_cache: MagicMock, salt_key_env: str, call_type: CallTypesLiteral
+    ) -> None:
+        field: Final = _ADDRESSED_ID_FIELD_BY_CALL_TYPE[call_type]
+        data: Final[dict[str, object]] = {field: self._FORGED_THREE_PART_ID}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _hook(signing_key=salt_key_env).async_pre_call_hook(
+                user_api_key_dict=_auth(),
+                cache=mock_cache,
+                data=data,
+                call_type=call_type,
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "allow_unmanaged_response_ids" in exc_info.value.detail
+        assert data[field] == self._FORGED_THREE_PART_ID
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", (False, True))
+    async def test_forged_plaintext_comparison_id_is_rejected(self, salt_key_env: str, nested: bool) -> None:
+        request: Final = _comparison_request(self._FORGED_THREE_PART_ID, nested)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _hook(signing_key=salt_key_env).async_pre_call_hook(
+                user_api_key_dict=_auth(),
+                cache=DualCache(),
+                data=request,
+                call_type="aresponses",
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "allow_unmanaged_response_ids" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_forged_two_part_plaintext_id_is_rejected_without_index_error(
+        self, mock_cache: MagicMock, salt_key_env: str
+    ) -> None:
+        data: Final[dict[str, object]] = {"response_id": self._FORGED_TWO_PART_ID}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _hook(signing_key=salt_key_env).async_pre_call_hook(
+                user_api_key_dict=_auth(),
+                cache=mock_cache,
+                data=data,
+                call_type="aget_responses",
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "allow_unmanaged_response_ids" in exc_info.value.detail
+
+    def test_legacy_two_part_encrypted_id_decrypts_with_none_team_id(self, salt_key_env: str) -> None:
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+        hook: Final = _hook(signing_key=salt_key_env)
+        legacy_payload: Final = (
+            f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}"
+            ":responses_api:response_id:resp_legacy_123;user_id:owner-user"
+        )
+        encrypted_legacy_id: Final = f"resp_{encrypt_value_helper(value=legacy_payload)}"
+
+        assert hook._is_encrypted_response_id(encrypted_legacy_id) is True
+        assert hook._decrypt_response_id(encrypted_legacy_id) == ("resp_legacy_123", "owner-user", None)
+
+    @pytest.mark.asyncio
+    async def test_valid_ciphertext_with_non_resp_prefix_is_not_treated_as_managed(
+        self, mock_cache: MagicMock, salt_key_env: str
+    ) -> None:
+        hook: Final = _hook(signing_key=salt_key_env)
+        owner: Final = _auth()
+        prefixed_id: Final = f"extra_{_issue_managed_id(hook, owner)}"
+
+        assert hook._is_encrypted_response_id(prefixed_id) is False
+        with pytest.raises(HTTPException) as exc_info:
+            await hook.async_pre_call_hook(
+                user_api_key_dict=owner,
+                cache=mock_cache,
+                data={"response_id": prefixed_id},
+                call_type="aget_responses",
+            )
+
+        assert exc_info.value.status_code == 403
+        assert "allow_unmanaged_response_ids" in exc_info.value.detail
