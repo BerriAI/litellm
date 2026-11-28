@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -69,6 +69,19 @@ def _streaming_buffer_until_moderated(litellm_params: LitellmParams) -> bool | N
     return value
 
 
+def _screen_scope(litellm_params: LitellmParams) -> Literal["all", "new_messages", "latest_turn"]:
+    value: Final[object] = getattr(litellm_params, "screen_scope", None)
+    if value is None:
+        return "all"
+    if not isinstance(value, str):
+        raise TypeError(f"decision_model guardrail screen_scope must be a string, got {value!r}")
+    if value not in ("all", "new_messages", "latest_turn"):
+        raise ValueError(
+            f"decision_model guardrail screen_scope must be one of 'all', 'new_messages', 'latest_turn', got {value!r}"
+        )
+    return value
+
+
 def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) -> DecisionModelGuardrail:
     import litellm
 
@@ -95,6 +108,7 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
         streaming_end_of_stream_only=_streaming_end_of_stream_only(litellm_params),
         streaming_sampling_rate=_streaming_sampling_rate(litellm_params),
         streaming_buffer_until_moderated=_streaming_buffer_until_moderated(litellm_params),
+        screen_scope=_screen_scope(litellm_params),
     )
     litellm.logging_callback_manager.add_litellm_callback(  # pyright: ignore[reportUnknownMemberType]  # callback manager is untyped
         _callback
