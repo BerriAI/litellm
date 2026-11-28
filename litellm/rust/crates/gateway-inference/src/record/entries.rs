@@ -101,6 +101,8 @@ pub struct CallState {
     pub call_id: Option<String>,
     /// Python's `litellm_trace_id`, which groups the call's spend log row as its session.
     pub trace_id: String,
+    /// The request's `user-agent` header as Starlette decodes one, each byte a character.
+    pub user_agent: Option<String>,
     /// Who the call is charged to, which the callbacks name once they begin.
     pub charged: Charged,
     start: SystemTime,
@@ -148,6 +150,7 @@ impl CallState {
             call_type: None,
             call_id: None,
             trace_id,
+            user_agent: None,
             charged: Charged::default(),
             start: SystemTime::now(),
             api_call_start: None,

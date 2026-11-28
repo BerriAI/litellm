@@ -1362,8 +1362,9 @@ mod tests {
     async fn pod_for(config: &Config, held: &Held) -> Auth<NativeRows> {
         let resources = crate::Resources::build(config).unwrap();
         let clients = crate::redis::connect(config, &resources).await.unwrap();
+        let cache = crate::state::auth_cache(config, &clients, litellm_redis_store::system_clock());
         let store = crate::state::auth_store(
-            config,
+            Arc::new(cache),
             &clients,
             held.database(),
             Arc::new(SpendCounters::new(None)),

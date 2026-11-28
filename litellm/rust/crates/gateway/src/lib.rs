@@ -242,6 +242,7 @@ mod tests {
             &held.database(),
             &RedisClients::default(),
             &Environment::default(),
+            crate::host::auth::keys::memory_cache(),
         );
         let inference = build_inference(
             &config,

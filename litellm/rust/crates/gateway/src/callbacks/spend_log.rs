@@ -18,7 +18,7 @@ use litellm_callbacks_budgets::{Budgets, SpendReader};
 use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
 use litellm_config::Environment;
 use litellm_redaction::TokenRedactor;
-use litellm_redis_store::{Remote, spend_counters::SpendCounters};
+use litellm_redis_store::{Remote, auth_cache::AuthCache, spend_counters::SpendCounters};
 use litellm_repositories::{Database, SpendLogRepository};
 use litellm_spend_log_writer::{
     LedgerStore, PgLedgerStore, SpendLogFlusher, SpendLogWriter, WriterSettings,
@@ -87,8 +87,14 @@ pub struct SpendLog {
 
 impl SpendLog {
     /// The callback over `database`, charging spend counters in `redis`'s coordination client
-    /// when there is one, and the writer it queues to, whose flush loop runs from here on.
-    pub fn start(database: &Database, redis: &RedisClients, environment: &Environment) -> Self {
+    /// when there is one, and the writer it queues to, whose flush loop runs from here on. A cold
+    /// counter with no row starts from the spend `auth_cache` holds.
+    pub fn start(
+        database: &Database,
+        redis: &RedisClients,
+        environment: &Environment,
+        auth_cache: Arc<AuthCache>,
+    ) -> Self {
         let settings = settings(environment);
         let store = PgLedgerStore::new(
             SpendLogRepository::new(database.clone()),
@@ -112,7 +118,7 @@ impl SpendLog {
         Self {
             logs,
             callback: Arc::new(callback),
-            host: Arc::new(RustSpendLogHost::new(Some(rows.clone()))),
+            host: Arc::new(RustSpendLogHost::new(Some(rows.clone()), Some(auth_cache))),
             budgets,
             rows,
         }

@@ -111,7 +111,21 @@ struct Metadata<'a> {
     model_group: &'a str,
     model_info: ModelInfo<'a>,
     deployment: &'a str,
+    /// The tags Python logs and charges the call under. A served request names none of its own,
+    /// since `admit` sends one that does to Python, so these are its user agent's.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
     status: &'static str,
+}
+
+/// `_get_user_agent_tags`: the client the header names before a `/`, when it names one, and then
+/// the header whole.
+fn user_agent_tags(user_agent: &str) -> impl Iterator<Item = String> {
+    let client = user_agent.split_once('/').map(|(client, _)| client);
+    client
+        .into_iter()
+        .chain([user_agent])
+        .map(|agent| format!("User-Agent: {agent}"))
 }
 
 #[derive(Serialize)]
@@ -163,6 +177,7 @@ pub(super) struct Served<'a> {
     pub(super) start: SystemTime,
     pub(super) end: SystemTime,
     pub(super) provider: Option<&'a str>,
+    pub(super) user_agent: Option<&'a str>,
     pub(super) call: &'a ServedCall,
 }
 
@@ -201,6 +216,11 @@ pub(super) fn success(served: &Served<'_>) -> Option<serde_json::Value> {
             model_group: &served.call.model_group,
             model_info: ModelInfo { id: &deployment.id },
             deployment: model,
+            tags: served
+                .user_agent
+                .into_iter()
+                .flat_map(user_agent_tags)
+                .collect(),
             status: "success",
         },
         litellm_params: LitellmParams {
@@ -295,6 +315,15 @@ mod tests {
     }
 
     fn input(charged: &Charged, call: &ServedCall, stream: bool) -> Value {
+        sent_by(None, charged, call, stream)
+    }
+
+    fn sent_by(
+        user_agent: Option<&str>,
+        charged: &Charged,
+        call: &ServedCall,
+        stream: bool,
+    ) -> Value {
         success(&Served {
             call_type: CallType::AnthropicMessages,
             route: "/v1/messages",
@@ -305,6 +334,7 @@ mod tests {
             start: at(1_795_000_000, 250_000),
             end: at(1_795_000_002, 0),
             provider: Some("anthropic"),
+            user_agent,
             call,
         })
         .unwrap()
@@ -401,6 +431,21 @@ mod tests {
                 SpendLogStatus::Success,
             )
         );
+    }
+
+    #[rstest]
+    #[case::that_sent_none(None, "[]")]
+    #[case::that_names_a_client_and_its_version(
+        Some("claude-cli/2.1.0 (external, cli)"),
+        r#"["User-Agent: claude-cli", "User-Agent: claude-cli/2.1.0 (external, cli)"]"#
+    )]
+    #[case::that_names_only_a_client(Some("probe"), r#"["User-Agent: probe"]"#)]
+    fn a_served_calls_row_is_tagged_with_its_user_agent(
+        #[case] user_agent: Option<&str>,
+        #[case] logged: &str,
+    ) {
+        let row = row(&sent_by(user_agent, &key(), &call(None), false));
+        assert_eq!(row.request_tags, logged);
     }
 
     #[rstest]

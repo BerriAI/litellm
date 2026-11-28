@@ -5,7 +5,8 @@
 //! organization, budget or access group, since `host/auth` declines any other. So the key's
 //! identity is already whole and its charge debits no budget window, customer, access group or
 //! committed counter. A lifetime counter's stored spend is read from its row (`Rows`), which a
-//! spend reader seeds and floors a counter from too. The work Python does after a row is written
+//! spend reader seeds and floors a counter from too. A counter with no row of its own, as a tag's
+//! is, starts from the spend the auth cache holds. The work Python does after a row is written
 //! or charged, its alerts and the logging payload's cost have no counterpart here yet and are
 //! answered with nothing.
 
@@ -18,7 +19,12 @@ use litellm_callbacks_spend_logger::host::{
     AccountingContext, AfterCharge, AfterWrite, BatchAccounting, EnrichKeyIdentity,
     FailedTrackingAlert, IncrementSearchFreeTier, LoggedCost,
 };
-use litellm_redis_store::spend_counters::SpendCounter;
+use litellm_python_compat::Value as CachedValue;
+use litellm_redis_store::{
+    Number,
+    auth_cache::{AuthCache, AuthObject},
+    spend_counters::SpendCounter,
+};
 use litellm_repositories::{
     Database, EndUserRecord, EndUserRepository, KeyRepository, Organization,
     OrganizationRepository, Project, ProjectRepository, Side, SignIn, Team, TeamMembership,
@@ -51,7 +57,7 @@ struct Entities {
 
 #[derive(Deserialize)]
 struct Sources {
-    sources: Vec<serde::de::IgnoredAny>,
+    sources: Vec<Vec<AuthObject>>,
 }
 
 #[derive(Deserialize)]
@@ -70,6 +76,18 @@ struct StoredSpend {
 struct Alert {
     error_message: String,
     failing_model: String,
+}
+
+/// `entry["spend"] or 0.0` of a cached object.
+fn spend(entry: &CachedValue) -> f64 {
+    let CachedValue::Dict(members) = entry else {
+        return 0.0;
+    };
+    members
+        .iter()
+        .find(|(name, _)| matches!(name, CachedValue::Str(name) if name == "spend"))
+        .and_then(|(_, spend)| Number::from_value(spend))
+        .map_or(0.0, Number::as_f64)
 }
 
 fn parsed<T: DeserializeOwned>(request: Value) -> Result<T, HostFault> {
@@ -161,15 +179,34 @@ impl RowSpend for Rows {
     }
 }
 
-/// Answers the spend log callback's host calls from the gateway's database, `None` when no
-/// database is configured.
+/// Answers the spend log callback's host calls from the gateway's database and auth cache, each
+/// `None` when no database is configured.
 pub struct RustSpendLogHost {
     rows: Option<Arc<Rows>>,
+    cache: Option<Arc<AuthCache>>,
 }
 
 impl RustSpendLogHost {
-    pub fn new(rows: Option<Arc<Rows>>) -> Self {
-        Self { rows }
+    pub fn new(rows: Option<Arc<Rows>>, cache: Option<Arc<AuthCache>>) -> Self {
+        Self { rows, cache }
+    }
+
+    /// `_get_source_cache_base_spend`: the spend on the first of `sources` the auth cache holds,
+    /// and nothing when it holds none. A read that fails is a miss, as it is to Python's cache.
+    async fn cached(&self, sources: Vec<AuthObject>) -> f64 {
+        let Some(cache) = &self.cache else {
+            return 0.0;
+        };
+        for source in &sources {
+            match cache.get(None, source).await {
+                Ok(Some(entry)) => return spend(&entry),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(error = %litellm_error::Report::new(&error), key = source.key(), "a cached object's spend could not be read");
+                }
+            }
+        }
+        0.0
     }
 
     async fn stored(&self, counter: StoredCounter) -> Option<f64> {
@@ -211,7 +248,13 @@ impl RustSpendLogHost {
             }
             CACHED_SPEND => {
                 let asked: Sources = parsed(request)?;
-                Ok(json!(vec![0.0; asked.sources.len()]))
+                let cached = join_all(
+                    asked
+                        .sources
+                        .into_iter()
+                        .map(|sources| self.cached(sources)),
+                );
+                Ok(json!(cached.await))
             }
             FailedTrackingAlert::NAME => {
                 let alert: Alert = parsed(request)?;
@@ -246,7 +289,7 @@ mod tests {
     use litellm_callbacks_budgets::Budgets;
     use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
     use litellm_redaction::TokenRedactor;
-    use litellm_redis_store::{Number, spend_counters::SpendCounters};
+    use litellm_redis_store::spend_counters::SpendCounters;
     use litellm_repositories::SpendLogWrite;
     use litellm_spend_log_writer::{LedgerStore, SpendLogFlusher, SpendLogWriter, WriterSettings};
     use rstest::rstest;
@@ -308,6 +351,10 @@ mod tests {
     }
 
     fn input(cost: Option<f64>) -> HookInput {
+        input_of(served(), cost)
+    }
+
+    fn input_of(served: Value, cost: Option<f64>) -> HookInput {
         let reads = FieldSet::of(&[
             Field::Outcome,
             Field::SpendLogInput,
@@ -317,7 +364,7 @@ mod tests {
         ]);
         let fields = FieldValues::new(reads)
             .with(Field::Outcome, json!("success"))
-            .with(Field::SpendLogInput, served())
+            .with(Field::SpendLogInput, served)
             .with(Field::SpendLogId, json!({"id": "msg_1"}));
         let fields = match cost {
             Some(cost) => fields.with(Field::Cost, json!({"response_cost": cost})),
@@ -338,6 +385,23 @@ mod tests {
     /// One success through the spend log callback with this host answering it.
     async fn charge(cost: Option<f64>) -> Charged {
         let counters = Arc::new(SpendCounters::new(None));
+        let rows = charged_on(&counters, &RustSpendLogHost::new(None, None), input(cost)).await;
+        let counter = SpendCounter::Key {
+            token: KEY.to_owned(),
+            window: None,
+        };
+        Charged {
+            rows,
+            key_spend: counters.get_local(&counter).unwrap().map(Number::as_f64),
+        }
+    }
+
+    /// The rows one success queues, charged on `counters` with `host` answering its host calls.
+    async fn charged_on(
+        counters: &Arc<SpendCounters>,
+        host: &RustSpendLogHost,
+        input: HookInput,
+    ) -> Vec<Value> {
         let writer = Arc::new(SpendLogWriter::new(
             SpendLogFlusher::new(Store, WriterSettings::default()),
             || {},
@@ -347,27 +411,14 @@ mod tests {
             budgets: Arc::new(Budgets::new(counters.clone())),
             tokens: Arc::new(TokenRedactor::new(0, Vec::new())),
         }));
-        let host = RustSpendLogHost::new(None);
-        hosted::turn(
-            callback as Arc<dyn ErasedCallback>,
-            input(cost),
-            None,
-            &host,
-        )
-        .await
-        .unwrap();
-        let counter = SpendCounter::Key {
-            token: KEY.to_owned(),
-            window: None,
-        };
-        Charged {
-            rows: writer
-                .take(10)
-                .iter()
-                .map(|row| serde_json::from_str(&row.to_json()).unwrap())
-                .collect(),
-            key_spend: counters.get_local(&counter).unwrap().map(Number::as_f64),
-        }
+        hosted::turn(callback as Arc<dyn ErasedCallback>, input, None, host)
+            .await
+            .unwrap();
+        writer
+            .take(10)
+            .iter()
+            .map(|row| serde_json::from_str(&row.to_json()).unwrap())
+            .collect()
     }
 
     #[rstest]
@@ -402,6 +453,44 @@ mod tests {
         assert_eq!((charged.rows.len(), charged.key_spend), (0, None));
     }
 
+    /// A tag has no row the counter step reads, so its cold counter starts from the spend the auth
+    /// cache holds for the tag, as the proxy's does.
+    #[rstest]
+    #[case::that_the_cache_does_not_hold(None, 0.25)]
+    #[case::that_the_cache_holds_with_what_it_spent(Some(12.5), 12.75)]
+    #[tokio::test]
+    async fn a_call_is_charged_to_each_tag_it_carries(
+        #[case] cached: Option<f64>,
+        #[case] spent: f64,
+    ) {
+        let cache = crate::host::auth::keys::memory_cache();
+        if let Some(spend) = cached {
+            let tag =
+                litellm_python_compat::json::from_json(json!({"tag_name": "paid", "spend": spend}));
+            cache
+                .set(None, &AuthObject::Tag("paid".to_owned()), tag, None)
+                .await
+                .unwrap();
+        }
+        let mut served = served();
+        served["row"]["row"]["metadata"]["tags"] = json!(["paid", "eu"]);
+        let counters = Arc::new(SpendCounters::new(None));
+        let host = RustSpendLogHost::new(None, Some(cache));
+
+        let rows = charged_on(&counters, &host, input_of(served, Some(0.25))).await;
+
+        let spend = |tag: &str| {
+            counters
+                .get_local(&SpendCounter::Tag(tag.to_owned()))
+                .unwrap()
+                .map(Number::as_f64)
+        };
+        assert_eq!(
+            (rows[0]["request_tags"].clone(), spend("paid"), spend("eu")),
+            (json!(r#"["paid", "eu"]"#), Some(spent), Some(0.25))
+        );
+    }
+
     const ROWS: &str = r#"
         INSERT INTO "LiteLLM_TeamTable" (team_id, spend) VALUES ('team', 2.5);
         INSERT INTO "LiteLLM_UserTable" (user_id, spend) VALUES ('user', 3.5);
@@ -422,7 +511,7 @@ mod tests {
         let held = Held::holding(TOKEN, json!({"spend": 1.5})).await;
         held.execute(ROWS).await;
         let rows = Arc::new(Rows::new(held.database()));
-        let host = RustSpendLogHost::new(Some(rows.clone()));
+        let host = RustSpendLogHost::new(Some(rows.clone()), None);
         let key = Token::new(TOKEN).hash().as_str().to_owned();
         let counters = [
             format!("spend:key:{key}"),
@@ -458,7 +547,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn a_host_call_the_gateway_does_not_know_is_refused() {
-        let host = RustSpendLogHost::new(None);
+        let host = RustSpendLogHost::new(None, None);
         assert!(matches!(
             host.reply("reseed_counter", json!({})).await,
             Err(HostFault::Malformed(_))
