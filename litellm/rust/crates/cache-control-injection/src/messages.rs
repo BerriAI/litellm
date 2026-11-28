@@ -1,5 +1,4 @@
-//! A deployment's `cache_control_injection_points` on a Messages request: the prompt cache
-//! breakpoints LiteLLM adds where the caller sent none. Python's
+//! The injection points on a Messages request. Python's
 //! `AnthropicCacheControlHook.apply_to_anthropic_messages_request`.
 //!
 //! [`inject`] is three steps over plain data. [`Census`] counts the breakpoints the request
@@ -19,12 +18,14 @@
 
 use litellm_llms_types::{
     formats::messages::{
-        CacheControl, CacheControlInjectionPoint, ContentBlock, ContentBlockType, Message,
-        MessageContent, MessagesOptionalParams, MessagesRequest, MessagesTool, SystemPrompt,
+        CacheControl, ContentBlock, ContentBlockType, Message, MessageContent,
+        MessagesOptionalParams, MessagesRequest, MessagesTool, SystemPrompt,
     },
     recognized::Recognized,
 };
 use serde_json::{Map, Value};
+
+use crate::CacheControlInjectionPoint;
 
 /// "A maximum of 4 blocks with cache_control may be provided."
 const LIMIT: usize = 4;

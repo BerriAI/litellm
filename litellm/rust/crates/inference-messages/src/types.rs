@@ -1,13 +1,11 @@
 use std::time::Duration;
 
 use bytes::Bytes;
+use litellm_cache_control_injection::messages::CachePoints;
 use litellm_host::call::CallOutput;
 use litellm_llms::{
     ErrorDetail,
-    base_llm::messages::{
-        cache_points::CachePoints,
-        context::{MessagesModelCapabilities, MessagesShapeOptions},
-    },
+    base_llm::messages::context::{MessagesModelCapabilities, MessagesShapeOptions},
 };
 use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},

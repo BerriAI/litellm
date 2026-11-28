@@ -21,6 +21,7 @@
 use std::time::Duration;
 
 use litellm_auth::{AuthServices, CredentialPlacement};
+use litellm_cache_control_injection::messages::inject;
 use litellm_core_utils::{
     dot_notation_indexing::{OverlappingPaths, delete_nested_values},
     get_provider_specific_headers::get_provider_specific_headers,
@@ -36,7 +37,6 @@ use litellm_llms::base_llm::{
         resolve_auth,
     },
     messages::{
-        cache_points::inject,
         context::MessagesTransformContext,
         tools::ToolCustomField,
         transformation::{BaseMessagesConfig, FederatedEnvironment},

@@ -6616,7 +6616,7 @@ def test_cache_control_as_prompt_cache_breakpoints_leaves_unmarked_parts_with_no
 def test_messages_points_match_the_rust_route(
     points: list[dict[str, object]], request_body: dict[str, object], sent: dict[str, object]
 ) -> None:
-    """The cases `litellm/rust/crates/llms/src/base_llm/messages/cache_points.rs` holds the Rust route to."""
+    """The cases `litellm/rust/crates/cache-control-injection/src/messages.rs` holds the Rust route to."""
     body: Final = copy.deepcopy(request_body)
     kwargs: Final[dict[str, object]] = {
         "cache_control_injection_points": copy.deepcopy(points),

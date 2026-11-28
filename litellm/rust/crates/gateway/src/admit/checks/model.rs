@@ -5,10 +5,10 @@
 //! serve as Python does sends its whole group to Python, and so does a fallback to such a group.
 
 use axum::http::Uri;
+use litellm_cache_control_injection::messages::CachePoints;
 use litellm_config::{LitellmParams, Model, Spelled};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_inference::provider::resolve_llm_provider;
-use litellm_llms::base_llm::messages::cache_points::CachePoints;
 use litellm_model_catalog::Catalog;
 use litellm_router_core::{Reached, registry::DeploymentFilter};
 use serde_json::{Map, Value};

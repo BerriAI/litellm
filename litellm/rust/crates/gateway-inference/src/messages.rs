@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use axum::{Json, body::Bytes, http::HeaderMap, response::Response};
 use futures_util::StreamExt;
+use litellm_cache_control_injection::messages::CachePoints;
 use litellm_cache_response::CachePolicy;
 use litellm_config::Spelled;
 use litellm_framer::sse;
@@ -14,7 +15,6 @@ use litellm_inference_messages::{
     messages_body, route::Messages,
 };
 use litellm_llms::anthropic::model_capabilities::messages_route_capabilities;
-use litellm_llms::base_llm::messages::cache_points::CachePoints;
 use litellm_llms::vertex_ai::common_utils::supported_regions;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_llms_types::formats::messages::{

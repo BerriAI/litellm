@@ -1,8 +1,9 @@
-use super::CacheControl;
+use litellm_llms_types::formats::messages::CacheControl;
+use serde::{Deserialize, Serialize};
 
 /// One entry of a deployment's `cache_control_injection_points`: where LiteLLM puts a
 /// `cache_control` breakpoint the caller did not send. Python's `CacheControlInjectionPoint`.
-#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "location")]
 pub enum CacheControlInjectionPoint {
     /// A breakpoint on the system prompt (`role: system`), on the message at `index`, counted
@@ -29,8 +30,9 @@ mod tests {
     use rstest::rstest;
     use serde_json::{Value, json};
 
+    use litellm_llms_types::recognized::Recognized;
+
     use super::CacheControlInjectionPoint;
-    use crate::recognized::Recognized;
 
     #[rstest]
     #[case::system(json!({"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}}))]

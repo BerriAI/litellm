@@ -2,7 +2,8 @@ use std::{collections::BTreeMap, fmt, ops::Deref};
 
 use jiff::civil::Time;
 use litellm_auth_types::{AwsParams, ClaudePlatformParams, ParamSpec, VertexParams};
-use litellm_llms_types::{formats::messages::CacheControlInjectionPoint, recognized::Recognized};
+use litellm_cache_control_injection::CacheControlInjectionPoint;
+use litellm_llms_types::recognized::Recognized;
 use litellm_secret_value::SecretValue;
 
 use serde::Deserialize;
