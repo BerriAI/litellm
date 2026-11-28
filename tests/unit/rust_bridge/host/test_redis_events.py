@@ -1,13 +1,16 @@
 import asyncio
 import queue
 import threading
-from collections.abc import Iterator
+from collections.abc import Awaitable, Iterator, Mapping
+from contextlib import nullcontext
+from contextvars import copy_context
 from dataclasses import asdict
 from typing import Final
 
 import pytest
 from fakeredis import TcpFakeServer
 from opentelemetry import trace
+from opentelemetry.context import attach, detach
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -17,14 +20,28 @@ from redis import exceptions as redis_exceptions
 
 import litellm
 from litellm import Router
-from litellm._internal_context import service_target, set_request_parent_otel_span
+from litellm._internal_context import (
+    post_response_phase,
+    request_parent_otel_span,
+    service_target,
+    set_request_parent_otel_span,
+)
 from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.caching.redis_cache import RedisCache
+from litellm.integrations.custom_logger_v2.call import CallContext
+from litellm.integrations.custom_logger_v2.enums import Hook
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.otel import OpenTelemetryV2Config
 from litellm.integrations.otel.logger import OpenTelemetryV2
+from litellm.integrations.otel.model.baggage import BAGGAGE_PROMOTED_KEYS
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
+from litellm.integrations.otel.model.semconv import LiteLLM
 from litellm.integrations.otel.plumbing import providers
-from litellm.redis.stores.auth_cache import AUTH_CACHE_TARGET, AuthCacheSettings, AuthCacheStore
+from litellm.integrations.otel.plumbing.context import set_request_baggage
+from litellm.litellm_core_utils.litellm_logging import V2_ASYNC_LOGGING_LINE
+from litellm.proxy import proxy_server
+from litellm.proxy.hooks.rust_spend_logger import _SpendLogRustLogger
+from litellm.redis.stores.auth_cache import AUTH_CACHE_TARGET, AuthCacheSettings, AuthCacheStore, AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import RouterUsageStore, UsageCounter
 from litellm.redis.stores.spend_counters import SpendCounterStore
@@ -46,6 +63,10 @@ def _sample(name: str, labels: dict[str, str]) -> float:
 def prometheus(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "service_callback", ["prometheus_system"])
     redis_events._service_logging.cache_clear()
+    logger = redis_events._service_logging().prometheusServicesLogger
+    for collector in (logger.redis_breaker_state, logger.redis_breaker_transitions, logger.redis_breaker_failures):
+        if collector not in REGISTRY._collector_to_names:
+            REGISTRY.register(collector)
     yield
     redis_events._service_logging.cache_clear()
 
@@ -130,11 +151,135 @@ def test_breaker_transitions_are_counted_by_state(prometheus: None, state: redis
 
 @pytest.fixture
 def otel(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TracerProvider, InMemorySpanExporter]]:
-    config: Final = OpenTelemetryV2Config(exporter="in_memory")
+    config: Final = OpenTelemetryV2Config(
+        exporter="in_memory", baggage_promoted_keys=[*BAGGAGE_PROMOTED_KEYS, LiteLLM.END_USER]
+    )
     exporter: Final = InMemorySpanExporter()
     provider: Final = providers.build_tracer_provider(config, exporter=exporter)
     monkeypatch.setattr(litellm, "service_callback", [OpenTelemetryV2(config=config, tracer_provider=provider)])
     yield provider, exporter
+
+
+@pytest.fixture
+def background_otel(
+    monkeypatch: pytest.MonkeyPatch, otel: tuple[TracerProvider, InMemorySpanExporter]
+) -> Iterator[OpenTelemetryV2]:
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    logger = litellm.service_callback[0]
+    assert isinstance(logger, OpenTelemetryV2)
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    yield logger
+    is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_a_parentless_rust_redis_event_is_grouped_only_when_background_tracing_is_enabled(
+    enabled: bool, background_otel: OpenTelemetryV2, otel: tuple[TracerProvider, InMemorySpanExporter]
+) -> None:
+    _, exporter = otel
+    background_otel.background_service_spans_db_override = enabled
+
+    redis_events.record_redis_call(None, "GET", 10.0, 10.25, None)
+
+    spans = exporter.get_finished_spans()
+    if not enabled:
+        assert spans == ()
+        return
+    child, root = spans
+    assert (root.name, root.kind, root.parent) == ("litellm.background.rust_redis", trace.SpanKind.INTERNAL, None)
+    assert child.name == "redis GET"
+    assert child.parent == root.context
+    assert root.start_time == child.start_time
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_a_rust_redis_event_preserves_an_explicit_request_parent(
+    enabled: bool, background_otel: OpenTelemetryV2, otel: tuple[TracerProvider, InMemorySpanExporter]
+) -> None:
+    provider, exporter = otel
+    background_otel.background_service_spans_db_override = enabled
+    parent: Final = provider.get_tracer(__name__).start_span("request")
+
+    with request_parent_otel_span(parent):
+        redis_events.record_redis_call(None, "GET", 10.0, 10.25, None)
+    parent.end()
+
+    assert [(span.name, span.parent) for span in exporter.get_finished_spans()] == [
+        ("redis GET", parent.get_span_context()),
+        ("request", None),
+    ]
+
+
+class _SpendRedisReport:
+    def manifest(self) -> str:
+        return ""
+
+    def request_state(self) -> object:
+        return None
+
+    def handle(
+        self, hook: str, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object, /
+    ) -> Awaitable[object]:
+        report_context: Final = copy_context()
+
+        async def run() -> None:
+            await asyncio.to_thread(report_context.run, redis_events.record_redis_call, None, "MGET", 10.0, 10.25, None)
+            await asyncio.to_thread(redis_events.record_redis_call, None, "GET", 10.0, 10.25, None)
+
+        return run()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("post_response", "enabled"), [(True, True), (True, False), (False, False)])
+async def test_spend_redis_leaves_the_request_trace_only_after_the_response(
+    post_response: bool,
+    enabled: bool,
+    background_otel: OpenTelemetryV2,
+    otel: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    provider, exporter = otel
+    background_otel.background_service_spans_db_override = enabled
+    logger: Final = _SpendLogRustLogger(_SpendRedisReport())
+    token: Final = V2_ASYNC_LOGGING_LINE.set(True)
+    identity: Final = {LiteLLM.TEAM_ID: "spend-team", LiteLLM.END_USER: "spend-user"}
+    baggage_token: Final = attach(set_request_baggage(identity))
+    try:
+        with (
+            provider.get_tracer(__name__).start_as_current_span("request") as request,
+            request_parent_otel_span(request),
+        ):
+            with post_response_phase() if post_response else nullcontext():
+                _ = await logger.run_rust(
+                    Hook.attempt_ended, frozenset(), object(), CallContext(Hook.attempt_ended, None, None)
+                )
+            assert trace.get_current_span() is request
+    finally:
+        detach(baggage_token)
+        V2_ASYNC_LOGGING_LINE.reset(token)
+
+    spans: Final = exporter.get_finished_spans()
+    if post_response and enabled:
+        assert [span.name for span in spans] == ["redis MGET", "redis GET", "litellm.background.spend_log", "request"]
+        child, existing, root, _ = spans
+        assert (root.kind, root.parent, root.links) == (trace.SpanKind.INTERNAL, None, ())
+        assert (child.parent, child.links) == (root.context, ())
+        assert root.attributes is not None and child.attributes is not None
+        assert {key: root.attributes.get(key) for key in identity} == identity
+        assert {key: child.attributes.get(key) for key in identity} == identity
+        assert existing.parent is None
+        assert [link.context for link in existing.links] == [request.get_span_context()]
+    elif post_response:
+        assert [span.name for span in spans] == ["redis GET", "request"]
+        existing, _ = spans
+        assert existing.parent is None
+        assert [link.context for link in existing.links] == [request.get_span_context()]
+    else:
+        assert [(span.name, span.parent, span.links) for span in spans] == [
+            ("redis MGET", request.get_span_context(), ()),
+            ("redis GET", request.get_span_context(), ()),
+            ("request", None, ()),
+        ]
 
 
 @pytest.fixture
@@ -175,7 +320,7 @@ async def test_a_native_auth_cache_read_reports_the_redis_span_redis_cache_repor
         with service_target(AUTH_CACHE_TARGET):
             await redis_cache.async_get_cache("python-key", parent_otel_span=python_request)
     with trace.use_span(native_request, end_on_exit=True):
-        await store.get("native-key")
+        await store.get(AuthObject.user("native-key"))
 
     reported_by_redis_cache: Final = await _spans_under(exporter, python_request)
     assert reported_by_redis_cache
@@ -222,7 +367,7 @@ async def test_a_native_read_in_a_legacy_otel_request_reports_its_redis_span_und
 
     async def native_request_read() -> None:
         set_request_parent_otel_span(native_request)
-        await store.get("native-key")
+        await store.get(AuthObject.user("native-key"))
 
     with service_target(AUTH_CACHE_TARGET):
         await redis_cache.async_get_cache("python-key", parent_otel_span=python_request)

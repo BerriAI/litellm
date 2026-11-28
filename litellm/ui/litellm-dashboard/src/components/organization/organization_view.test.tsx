@@ -1,5 +1,6 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { I18nextProvider } from "react-i18next";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { NuqsTestingAdapter, type OnUrlUpdateFunction } from "nuqs/adapters/testing";
@@ -8,6 +9,7 @@ import { renderWithProviders, testQueryClient } from "../../../tests/test-utils"
 import OrganizationInfoView from "./organization_view";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
+import i18n from "@/i18n/i18n";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -22,6 +24,7 @@ vi.mock("../networking", () => {
     organizationMemberAddCall: vi.fn(),
     organizationMemberUpdateCall: vi.fn(),
     organizationMemberDeleteCall: vi.fn(),
+    userFilterUICall: vi.fn().mockResolvedValue([]),
     serverRootPath: "",
   };
 });
@@ -52,10 +55,6 @@ vi.mock("../object_permissions_view", () => ({
   default: () => <div data-testid="object-permissions-view" />,
 }));
 vi.mock("../team/edit_membership", () => ({
-  __esModule: true,
-  default: () => null,
-}));
-vi.mock("../common_components/user_search_modal", () => ({
   __esModule: true,
   default: () => null,
 }));
@@ -131,6 +130,36 @@ test("renders organization view after loading data", async () => {
   expect(orgName).toBeInTheDocument();
 });
 
+test("updates organization dates when the dashboard language changes", async () => {
+  const locale = i18n.cloneInstance({ lng: "en", forkResourceStore: true });
+  locale.addResourceBundle("zh-CN", "translation", {});
+  const created = new Date(2026, 10, 27, 13, 45);
+  const updated = new Date(2026, 11, 12, 13, 45);
+  const org = { ...mockOrg, created_at: created.toISOString(), updated_at: updated.toISOString() };
+  mockUseOrganization.mockReturnValue({ data: org, isLoading: false } as ReturnType<typeof useOrganization>);
+
+  renderWithProviders(
+    <I18nextProvider i18n={locale}>
+      <OrganizationInfoView
+        organizationId="org_123"
+        onClose={() => {}}
+        accessToken="test-token"
+        is_org_admin={false}
+        is_proxy_admin={false}
+        userModels={[]}
+      />
+    </I18nextProvider>,
+  );
+
+  const hasDate = (date: string) => (text: string) => text.includes(date);
+  expect(screen.getByText(hasDate(created.toLocaleDateString()))).toBeInTheDocument();
+  await act(() => locale.changeLanguage("zh-CN"));
+  expect(screen.getByText(hasDate("2026年11月27日"))).toBeInTheDocument();
+  expect(screen.getByText(hasDate("2026年12月12日"))).toBeInTheDocument();
+  await act(() => locale.changeLanguage("en"));
+  expect(screen.getByText(hasDate(created.toLocaleDateString()))).toBeInTheDocument();
+});
+
 test("shows the creator alias as a link to the user page", async () => {
   mockUseOrganization.mockReturnValue({
     data: { ...mockOrg, created_by: "org-user-1" },
@@ -181,6 +210,29 @@ test("should display empty state when organization has no members", async () => 
   await waitFor(() => {
     expect(screen.getByText("No members found")).toBeInTheDocument();
   });
+});
+
+test("shows the saved organization member role as a translated label", async () => {
+  mockUseOrganization.mockReturnValue({
+    data: { ...mockOrg, members: [{ user_id: "viewer-1", user_role: "internal_user_viewer" }] },
+    isLoading: false,
+  } as unknown as ReturnType<typeof useOrganization>);
+  renderWithProviders(renderOrgView(), { searchParams: "?org=org_123&org_tab=members" });
+
+  expect(screen.getByRole("cell", { name: "Internal User Viewer" })).toBeInTheDocument();
+});
+
+test("labels the default and available roles in Add Organization Member", async () => {
+  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as ReturnType<typeof useOrganization>);
+  const user = userEvent.setup();
+  renderWithProviders(renderOrgView({ is_proxy_admin: true }), { searchParams: "?org=org_123&org_tab=members" });
+
+  await user.click(screen.getByRole("button", { name: /add member/i }));
+  const role = screen.getByRole("combobox", { name: "Member Role" });
+  expect(role).toHaveTextContent("Internal User");
+  await user.click(role);
+  expect(screen.getByRole("option", { name: /^Org Admin/ })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /^Internal User Viewer/ })).toBeInTheDocument();
 });
 
 test("keeps the members pager on its page when an admin opens a member's edit dialog", async () => {

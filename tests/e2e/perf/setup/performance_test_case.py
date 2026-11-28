@@ -38,7 +38,6 @@ Metric = Literal[
     "prometheus_redis_latency_mean_seconds",
     "postgres_active_sessions",
     "postgres_slowest_statement_seconds",
-    "postgres_peak_connections",
     "sustained_rps",
 ]
 

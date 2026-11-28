@@ -75,6 +75,7 @@ class SpanRole(str, Enum):
     GUARDRAIL = "guardrail"
     DB_CALL = "db_call"
     SERVICE = "service"
+    BACKGROUND_JOB = "background_job"
 
 
 class LiteLLMSpanKind(str, Enum):
@@ -106,6 +107,7 @@ SPAN_REGISTRY: Final[dict[SpanRole, SpanSpec]] = {
     SpanRole.GUARDRAIL: SpanSpec(SpanRole.GUARDRAIL, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
     SpanRole.DB_CALL: SpanSpec(SpanRole.DB_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
     SpanRole.SERVICE: SpanSpec(SpanRole.SERVICE, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
+    SpanRole.BACKGROUND_JOB: SpanSpec(SpanRole.BACKGROUND_JOB, LiteLLMSpanKind.INTERNAL, parent=None),
 }
 
 
@@ -268,6 +270,8 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_CustomerMemberTable",
         "LiteLLM_CustomerBudgetIncreaseRequest",
         "LiteLLM_AppTable",
+        "LiteLLM_AppGroupTable",
+        "LiteLLM_AppGroupCustomerOrgTable",
         "LiteLLM_AppCustomerOrgTable",
         "LiteLLM_AppCustomerMemberTable",
         "LiteLLM_CredentialsTable",
@@ -302,6 +306,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_BudgetWindowSpend",
         "LiteLLM_BackgroundInteractionSettlement",
         "LiteLLM_BackgroundResponseSettlement",
+        "LiteLLM_BackgroundResponseCreator",
         "LiteLLM_ErrorLogs",
         "LiteLLM_UserNotifications",
         "LiteLLM_UserProviderCredentials",

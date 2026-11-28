@@ -325,7 +325,7 @@ class DeepKeepGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -359,11 +359,9 @@ class DeepKeepGuardrail(CustomGuardrail):
         if request_data is None:
             request_data = {}
 
-        request_body: Final = request_data.get("body") or {}
-
         # Merge additional provider-specific params from config and dynamic params
         additional_params: Final[dict[str, object]] = {"firewall_id": self.firewall_id}
-        dynamic_params: Final = self.get_guardrail_dynamic_request_body_params(request_body)
+        dynamic_params: Final = self.get_guardrail_dynamic_request_body_params(request_data)
         if dynamic_params:
             additional_params.update({k: v for k, v in dynamic_params.items() if k != "firewall_id"})
 

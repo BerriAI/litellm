@@ -320,7 +320,7 @@ class BlackForestLabsImageEdit:
     def _poll_for_result_sync(
         self,
         initial_response: _BFLSubmitResponse,
-        headers: dict,
+        headers: Mapping[str, object],
         sync_client: HTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,
@@ -421,7 +421,7 @@ class BlackForestLabsImageEdit:
     async def _poll_for_result_async(
         self,
         initial_response: _BFLSubmitResponse,
-        headers: dict,
+        headers: Mapping[str, object],
         async_client: AsyncHTTPHandler,
         max_wait: float = DEFAULT_MAX_POLLING_TIME,
         interval: float = DEFAULT_POLLING_INTERVAL,

@@ -1,4 +1,5 @@
 use serde_json::{Map, Value};
+use struct_field_names_as_array::FieldNamesAsSlice;
 use strum::IntoStaticStr;
 
 use crate::formats::chat_completions::ReasoningEffort;
@@ -75,7 +76,11 @@ pub struct ContentBlock {
         deserialize_with = "crate::recognized::null_or_known"
     )]
     pub block_type: Option<Recognized<ContentBlockType>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::recognized::non_null"
+    )]
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
@@ -392,7 +397,7 @@ where
 }
 
 #[macro_rules_attribute::apply(crate::wire_type)]
-#[derive(Default)]
+#[derive(Default, FieldNamesAsSlice)]
 pub struct MessagesOptionalParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<Recognized<u64>>,
@@ -448,11 +453,24 @@ pub struct MessagesOptionalParams {
     pub reasoning_effort: Option<Recognized<ReasoningEffort>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compaction: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub safeguards: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<Value>,
     #[serde(flatten)]
+    #[field_names_as_slice(skip)]
     pub extra: Map<String, Value>,
 }
 
 impl MessagesOptionalParams {
+    pub fn fields() -> impl Iterator<Item = &'static str> {
+        Self::FIELD_NAMES_AS_SLICE.iter().copied()
+    }
+
     pub fn streams(&self) -> bool {
         self.stream.as_ref().is_some_and(Recognized::is_truthy)
     }
@@ -487,6 +505,21 @@ mod tests {
     use crate::recognized::Recognized;
 
     use serde_json::{Map, Value};
+
+    fn with_required_fields(params: &Value) -> Value {
+        Value::Object(
+            [
+                ("model".to_string(), json!("m")),
+                (
+                    "messages".to_string(),
+                    json!([{"role": "user", "content": "hi"}]),
+                ),
+            ]
+            .into_iter()
+            .chain(params.as_object().unwrap().clone())
+            .collect(),
+        )
+    }
 
     fn round_trip<T: serde::de::DeserializeOwned + serde::Serialize>(value: &Value) -> Value {
         let parsed: T = serde_json::from_value(value.clone()).unwrap();
@@ -523,14 +556,15 @@ mod tests {
         assert_eq!(round_trip::<ContentBlock>(&block), block);
     }
 
-    #[test]
+    #[rstest]
     fn request_splits_required_fields_from_optional_params() {
         let body = json!({
             "model": "m",
             "messages": [{"role": "user", "content": "hi"}],
             "max_tokens": 16,
             "stream": true,
-            "safeguards": [{"type": "dangerous_tool_use"}]
+            "safeguards": [{"type": "dangerous_tool_use"}],
+            "not_a_param": {"kept": true}
         });
         let request: MessagesRequest = serde_json::from_value(body.clone()).unwrap();
 
@@ -538,6 +572,7 @@ mod tests {
             (
                 request.params.max_tokens.clone(),
                 request.params.stream.clone(),
+                request.params.safeguards.clone(),
                 request
                     .params
                     .extra
@@ -548,10 +583,59 @@ mod tests {
             (
                 Some(Recognized::Known(16_u64)),
                 Some(Recognized::Known(true)),
-                vec!["safeguards"]
+                Some(json!([{"type": "dangerous_tool_use"}])),
+                vec!["not_a_param"]
             )
         );
         assert_eq!(serde_json::to_value(request).unwrap(), body);
+    }
+
+    #[rstest]
+    fn a_body_of_every_named_field_leaves_no_key_untyped() {
+        let body: Map<String, Value> = MessagesOptionalParams::fields()
+            .map(|name| (name.to_owned(), Value::Null))
+            .chain([
+                ("model".to_owned(), json!("m")),
+                ("messages".to_owned(), json!([])),
+            ])
+            .collect();
+
+        let request: MessagesRequest = serde_json::from_value(Value::Object(body)).unwrap();
+
+        assert_eq!(request.params.extra, Map::new());
+    }
+
+    #[rstest]
+    #[case::cache_control(json!({"cache_control": {"type": "ephemeral"}}))]
+    #[case::safeguards(json!({"safeguards": [{"type": "dangerous_tool_use"}]}))]
+    #[case::thread(json!({"thread": {"type": "continue", "previous_message_id": "msg_1"}}))]
+    #[case::thread_of_any_shape(json!({"thread": "opaque"}))]
+    fn a_typed_param_of_any_shape_is_sent_on_as_given(#[case] params: Value) {
+        let body = with_required_fields(&params);
+
+        let request: MessagesRequest = serde_json::from_value(body.clone()).unwrap();
+
+        assert_eq!(
+            (
+                request.params.extra.clone(),
+                serde_json::to_value(request).unwrap()
+            ),
+            (Map::new(), body)
+        );
+    }
+
+    #[rstest]
+    #[case::cache_control("cache_control")]
+    #[case::safeguards("safeguards")]
+    #[case::thread("thread")]
+    fn a_null_param_is_left_out_of_the_body(#[case] name: &str) {
+        let request: MessagesRequest =
+            serde_json::from_value(with_required_fields(&json!({name: null}))).unwrap();
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            with_required_fields(&json!({}))
+        );
     }
 
     #[rstest]
@@ -563,18 +647,7 @@ mod tests {
     #[case::wide_integers(json!({"max_tokens": 18_446_744_073_709_551_615_u64, "top_k": 9_223_372_036_854_775_808_u64}))]
     #[case::nested(json!({"temperature": [1], "top_p": {"p": 1}}))]
     fn scalar_params_of_any_type_round_trip_unchanged(#[case] params: Value) {
-        let body = Value::Object(
-            [
-                ("model".to_string(), json!("m")),
-                (
-                    "messages".to_string(),
-                    json!([{"role": "user", "content": "hi"}]),
-                ),
-            ]
-            .into_iter()
-            .chain(params.as_object().unwrap().clone())
-            .collect(),
-        );
+        let body = with_required_fields(&params);
         assert_eq!(round_trip::<MessagesRequest>(&body), body);
     }
 
@@ -922,6 +995,27 @@ mod tests {
     #[case::enum_object(json!({"text": null}))]
     fn block_type_rejects_non_string_values(#[case] value: Value) {
         assert!(serde_json::from_value::<ContentBlock>(json!({"type": value})).is_err());
+    }
+
+    #[rstest]
+    #[case::null(json!(null))]
+    #[case::number(json!(5))]
+    #[case::object(json!({"value": "hi"}))]
+    fn a_message_whose_block_text_is_not_a_string_stays_as_sent(#[case] text: Value) {
+        let message = json!({"role": "user", "content": [{"type": "text", "text": text}]});
+        assert!(
+            serde_json::from_value::<ContentBlock>(json!({"type": "text", "text": text})).is_err()
+        );
+        assert_eq!(
+            serde_json::from_value::<Recognized<Message>>(message.clone()).unwrap(),
+            Recognized::Unrecognized(message)
+        );
+    }
+
+    #[rstest]
+    fn a_block_without_text_still_parses() {
+        let block: ContentBlock = serde_json::from_value(json!({"type": "text"})).unwrap();
+        assert_eq!(block.text, None);
     }
 
     #[rstest]

@@ -11,7 +11,8 @@ vi.mock("@/components/key_team_helpers/fetch_available_models_team_key", () => (
   getModelDisplayName: vi.fn((model: string) => model),
 }));
 
-vi.mock("@/utils/roles", () => ({
+vi.mock("@/utils/roles", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/roles")>()),
   all_admin_roles: ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer", "org_admin"],
   isProxyAdminRole: (role: string) => role === "Admin" || role === "proxy_admin",
 }));
@@ -80,6 +81,26 @@ describe("UserEditView", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
     });
+  });
+
+  it("uses translated role names instead of backend labels in the role dropdown", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <UserEditView
+        {...defaultProps}
+        possibleUIRoles={{
+          proxy_admin_viewer: { ui_label: "Admin (View Only)", description: "" },
+          internal_user_viewer: { ui_label: "Internal User (View Only)", description: "" },
+          custom_role: { ui_label: "Custom Role", description: "" },
+        }}
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: /Global Proxy Role/i }));
+
+    expect(await screen.findByRole("option", { name: "Proxy Admin Viewer" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Internal User Viewer" })).toBeInTheDocument();
+    expect(await screen.findByRole("option", { name: "Custom Role" })).toBeInTheDocument();
   });
 
   it("should display user ID field when not in bulk edit mode", async () => {
@@ -322,6 +343,35 @@ describe("UserEditView", () => {
     expect(callArgs.max_budget).toBe(100.5);
     expect(callArgs.budget_duration).toBe("30d");
     expect(callArgs.metadata).toEqual(MOCK_USER_DATA.user_info.metadata);
+  });
+
+  it("submits a semantic cache TTL alongside existing user metadata", async () => {
+    const onSubmit = vi.fn();
+    renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText("TTL in seconds"), { target: { value: "37" } });
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].metadata).toEqual({
+      ...MOCK_USER_DATA.user_info.metadata,
+      cache_params: { ttl: 37 },
+    });
+  });
+
+  it("submits a semantic cache clear when it was the only user metadata", async () => {
+    const onSubmit = vi.fn();
+    const userData = {
+      ...MOCK_USER_DATA,
+      user_info: { ...MOCK_USER_DATA.user_info, metadata: { cache_params: { enabled: false } } },
+    };
+    renderWithProviders(<UserEditView {...defaultProps} userData={userData} onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText("Cache mode"), { target: { value: "" } });
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].metadata).toEqual({ cache_params: null });
   });
 
   it("uses No change for an unset reset period in bulk edit", async () => {
@@ -892,7 +942,7 @@ describe("UserEditView", () => {
           />,
         );
 
-        const [aliasRow, canonicalRow] = await screen.findAllByPlaceholderText("Max spend ($)");
+        const [aliasRow, canonicalRow] = await screen.findAllByPlaceholderText("Max Budget");
         expect(aliasRow).toHaveValue(5);
 
         fireEvent.change(canonicalRow, { target: { value: "3" } });
@@ -924,11 +974,11 @@ describe("UserEditView", () => {
         const { rerender } = renderWithProviders(
           <UserEditView {...defaultProps} premiumUser={true} userData={withBudget(5, "user-a")} />,
         );
-        expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(5);
+        expect(await screen.findByPlaceholderText("Max Budget")).toHaveValue(5);
 
         rerender(<UserEditView {...defaultProps} premiumUser={true} userData={withBudget(99, "user-b")} />);
 
-        expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(99);
+        expect(await screen.findByPlaceholderText("Max Budget")).toHaveValue(99);
       });
 
       // BulkEditUsers copies a fixed field list into its payload and never reads
@@ -952,19 +1002,19 @@ describe("UserEditView", () => {
         );
 
         await screen.findByRole("button", { name: /save changes/i });
-        expect(screen.queryByPlaceholderText("Max spend ($)")).not.toBeInTheDocument();
+        expect(screen.queryByPlaceholderText("Max Budget")).not.toBeInTheDocument();
       });
 
       it("should lock the editor when the proxy has no enterprise license", async () => {
         renderWithProviders(<UserEditView {...defaultProps} userData={withStoredBudgets} />);
 
-        expect(await screen.findByPlaceholderText("Max spend ($)")).toBeDisabled();
+        expect(await screen.findByPlaceholderText("Max Budget")).toBeDisabled();
       });
 
       it("should leave the editor usable when the proxy has one", async () => {
         renderWithProviders(<UserEditView {...defaultProps} userData={withStoredBudgets} premiumUser={true} />);
 
-        expect(await screen.findByPlaceholderText("Max spend ($)")).toBeEnabled();
+        expect(await screen.findByPlaceholderText("Max Budget")).toBeEnabled();
       });
     });
 

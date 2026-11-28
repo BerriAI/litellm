@@ -41,7 +41,6 @@ CLI_STATE_PREFIX: Final = "litellm-session-token"
 DEVICE_CODE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
 POLL_SECRET_HEADER: Final = "x-litellm-cli-poll-secret"
 DISABLED_PAGE_TITLE: Final = "<title>Admin UI Disabled</title>"
-LOGIN_FORM_TITLE: Final = "<title>LiteLLM Login</title>"
 CLI_LOGIN_PAGE_TITLE: Final = "<title>LiteLLM CLI Login</title>"
 CLI_SUCCESS_PAGE_TITLE: Final = "<title>CLI Authentication Successful - LiteLLM</title>"
 SESSION_GONE: Final = "CLI login session not found or expired"
@@ -426,8 +425,9 @@ def test_malformed_cli_keys_answer_400_when_the_ui_is_disabled(
 
 
 def test_login_form_and_cli_validation_when_the_flag_is_unset(gateway: Gateway) -> None:
-    form: Final = gateway.client.get("/sso/key/generate")
-    assert form.status_code == 200 and LOGIN_FORM_TITLE in form.text, f"{form.status_code} {form.text}"
+    login: Final = gateway.client.get("/sso/key/generate", follow_redirects=False)
+    assert login.status_code == 303, f"{login.status_code} {login.text}"
+    assert login.headers["location"] == str(gateway.client.base_url.join("/ui/login"))
     unknown: Final = gateway.client.get(
         "/sso/key/generate", params={"source": CLI_SOURCE, "key": f"cli-{secrets.token_urlsafe(24)}"}
     )

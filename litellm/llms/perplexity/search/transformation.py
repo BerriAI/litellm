@@ -2,7 +2,7 @@
 Calls Perplexity's /search endpoint to search the web.
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final, TypedDict
 
 import httpx
@@ -48,11 +48,11 @@ class PerplexitySearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         """
@@ -72,9 +72,9 @@ class PerplexitySearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        optional_params: Mapping[str, object],
+        data: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint.
@@ -116,7 +116,7 @@ class PerplexitySearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform Perplexity API response to standard SearchResponse format.
@@ -131,7 +131,7 @@ class PerplexitySearchConfig(BaseSearchConfig):
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
-        results: Final = []
+        results: Final[list[SearchResult]] = []
         for raw_result in _JSON_VALUES.validate_python(response_json.get("results", [])):
             result = _JSON_OBJECT.validate_python(raw_result)
             search_result = SearchResult.model_validate(

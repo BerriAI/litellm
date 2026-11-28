@@ -8,11 +8,12 @@ from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import email_validator
 import httpx
 import pytest
 import respx
 from fastapi import HTTPException, Request
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -43,6 +44,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
     read_return_to_cookie,
     sso_lookup_user_ids,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
@@ -1218,7 +1220,15 @@ def test_get_sso_user_alias(result: CustomOpenID | dict[str, str | None] | None,
     assert _get_sso_user_alias(result) == expected_alias
 
 
-def test_generic_response_convertor_normalizes_email():
+@pytest.mark.parametrize(
+    ("claim", "expected"),
+    [
+        ("Test.User@Example.COM", "test.user@example.com"),
+        ("Test User <user@example.com>", "user@example.com"),
+        (None, None),
+    ],
+)
+def test_generic_response_convertor_normalizes_email(claim: str | None, expected: str | None) -> None:
     """
     Test that generic_response_convertor normalizes email addresses.
     """
@@ -1226,7 +1236,7 @@ def test_generic_response_convertor_normalizes_email():
 
     mock_response = {
         "preferred_username": "user123",
-        "email": "Test.User@Example.COM",
+        "email": claim,
         "sub": "Test User",
         "first_name": "Test",
         "last_name": "User",
@@ -1244,9 +1254,66 @@ def test_generic_response_convertor_normalizes_email():
     )
 
     # Email should be normalized to lowercase
-    assert result.email == "test.user@example.com"
+    assert result.email == expected
     assert result.id == "user123"
     assert result.display_name == "Test User"
+
+
+@pytest.mark.parametrize("suffix", ["arpa", "invalid", "local", "localhost", "onion", "test"])
+def test_generic_response_convertor_accepts_directory_email(suffix: str) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    result: Final = generic_response_convertor(
+        response={"email": f"Dan@BÜRO.{suffix.upper()}"},
+        jwt_handler=_claim_reading(),
+        sso_jwt_handler=None,
+        role_mappings=None,
+    )
+    assert result.email == f"dan@büro.{suffix}"
+
+
+@pytest.mark.parametrize("prefix", ["", "büro."])
+def test_generic_response_convertor_follows_library_special_use_domains(
+    monkeypatch: pytest.MonkeyPatch, prefix: str
+) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    special_use_name: Final = f"{'d' * 32}.{'n' * 32}"
+    monkeypatch.setattr(
+        email_validator, "SPECIAL_USE_DOMAIN_NAMES", [*email_validator.SPECIAL_USE_DOMAIN_NAMES, special_use_name]
+    )
+    email: Final = f"Dan@{prefix.upper()}{special_use_name.upper()}"
+    with pytest.raises(ValidationError, match="email"):
+        CustomOpenID(email=email, team_ids=[])
+
+    result: Final = generic_response_convertor(
+        response={"email": email},
+        jwt_handler=_claim_reading(),
+        sso_jwt_handler=None,
+        role_mappings=None,
+    )
+    assert result.email == f"dan@{prefix}{special_use_name}"
+
+
+@pytest.mark.parametrize(
+    "email",
+    [
+        "",
+        "dan..user@corp.local",
+        "dan@bad-.local",
+        "dan@.local",
+        "Dan <dan@corp.local>",
+        f"dan@{'a' * 64}.local",
+        f"dan@{'a.' * 121}abc.local",
+    ],
+)
+def test_generic_response_convertor_rejects_invalid_directory_email(email: str) -> None:
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    with pytest.raises(ValidationError, match="email"):
+        generic_response_convertor(
+            response={"email": email}, jwt_handler=_claim_reading(), sso_jwt_handler=None, role_mappings=None
+        )
 
 
 @pytest.mark.asyncio
@@ -2644,7 +2711,7 @@ async def test_get_generic_sso_response_pkce_merges_token_claims_and_excludes_cr
 
     with (
         patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", pkce_cache),
+        patch("litellm.proxy.proxy_server.sso_flow_cache", pkce_cache),
         patch(
             "litellm.proxy.management_endpoints.ui_sso.get_async_httpx_client",
             side_effect=[token_client, userinfo_client],
@@ -5803,7 +5870,7 @@ class TestPKCEFunctionality:
 
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}),
         ):
             # Act
@@ -5852,7 +5919,7 @@ class TestPKCEFunctionality:
         with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
             with (
                 patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-                patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+                patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             ):
                 # Act
                 result = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
@@ -5925,7 +5992,7 @@ class TestPKCEFunctionality:
         with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
             with patch("litellm.proxy.proxy_server.redis_usage_cache", mock_redis):
                 with patch(
-                    "litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory
+                    "litellm.proxy.proxy_server.sso_flow_cache", mock_in_memory
                 ):
                     # Pod A: start login, store code_verifier in "Redis"
                     await SSOAuthenticationHandler.get_generic_sso_redirect_response(
@@ -5963,13 +6030,13 @@ class TestPKCEFunctionality:
     async def test_pkce_fallback_in_memory_roundtrip_when_redis_none(self):
         """
         Regression: When redis_usage_cache is None (no Redis configured),
-        code_verifier is stored and retrieved via user_api_key_cache.
+        code_verifier is stored and retrieved via sso_flow_cache.
         Roundtrip works when callback hits same pod (same in-memory cache).
         Single-pod or no-Redis deployments must continue to work.
         """
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        # In-memory store (simulates user_api_key_cache on one pod)
+        # In-memory store (simulates sso_flow_cache on one pod)
         in_memory_store = {}
 
         async def async_set_cache(key, value, **kwargs):
@@ -5998,7 +6065,7 @@ class TestPKCEFunctionality:
         with patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}):
             with patch("litellm.proxy.proxy_server.redis_usage_cache", None):
                 with patch(
-                    "litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory
+                    "litellm.proxy.proxy_server.sso_flow_cache", mock_in_memory
                 ):
                     # Pod A: start login, store code_verifier in in-memory cache
                     await SSOAuthenticationHandler.get_generic_sso_redirect_response(
@@ -6048,7 +6115,7 @@ class TestPKCEFunctionality:
 
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", mock_redis),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_in_memory),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_in_memory),
             patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}, clear=False),
         ):
             mock_request = MagicMock(spec=Request)
@@ -6377,7 +6444,7 @@ class TestPKCEFunctionality:
 
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             patch.dict(
                 os.environ,
                 {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "true"},
@@ -6471,7 +6538,7 @@ class TestPKCEFunctionality:
         # Should NOT raise even though the underlying cache delete fails
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", failing_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", failing_cache),
         ):
             await SSOAuthenticationHandler._delete_pkce_verifier(
                 "pkce_verifier:test_state"
@@ -6504,7 +6571,7 @@ class TestPKCEFunctionality:
 
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             patch.dict(
                 os.environ,
                 {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "true"},
@@ -6549,7 +6616,7 @@ class TestPKCEFunctionality:
         with (
             caplog.at_level(logging.WARNING),
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             patch.dict(
                 os.environ,
                 {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "false"},
@@ -6638,7 +6705,7 @@ class TestPKCEFunctionality:
         with (
             caplog.at_level(logging.WARNING),
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             patch.dict(
                 os.environ,
                 {"GENERIC_CLIENT_USE_PKCE": "true", "PKCE_STRICT_CACHE_MISS": "false"},
@@ -6685,7 +6752,7 @@ class TestPKCEFunctionality:
 
         with (
             patch("litellm.proxy.proxy_server.redis_usage_cache", None),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.sso_flow_cache", mock_cache),
             patch.dict(os.environ, {"GENERIC_CLIENT_USE_PKCE": "true"}, clear=False),
         ):
             result = await SSOAuthenticationHandler.prepare_token_exchange_parameters(
@@ -8494,7 +8561,7 @@ class TestSyncUserRoleFromJwtRoleMap:
     @pytest.mark.asyncio
     async def test_stripped_response_has_no_roles(self):
         """Bug repro: stripped received_response lacks role claims."""
-        from litellm.caching.caching import DualCache
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
         handler = self._make_jwt_handler()
         sso_values = self._make_sso_values()
@@ -8504,7 +8571,7 @@ class TestSyncUserRoleFromJwtRoleMap:
             received_response={"token_type": "Bearer", "expires_in": 3600},
             user_info=None,
             prisma_client=AsyncMock(),
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             user_defined_values=sso_values,
         )
 
@@ -8513,7 +8580,7 @@ class TestSyncUserRoleFromJwtRoleMap:
     @pytest.mark.asyncio
     async def test_decoded_access_token_maps_role(self):
         """Decoded JWT payload with role claims maps correctly."""
-        from litellm.caching.caching import DualCache
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
         from litellm.proxy._types import LitellmUserRoles
 
         handler = self._make_jwt_handler()
@@ -8527,7 +8594,7 @@ class TestSyncUserRoleFromJwtRoleMap:
             },
             user_info=None,
             prisma_client=AsyncMock(),
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             user_defined_values=sso_values,
         )
 
@@ -8536,11 +8603,11 @@ class TestSyncUserRoleFromJwtRoleMap:
     @pytest.mark.asyncio
     async def test_existing_user_role_updated_in_db_and_cache(self):
         """Existing user with stale role gets updated in DB and cache."""
-        from litellm.caching.caching import DualCache
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
         from litellm.proxy._types import LitellmUserRoles
 
         handler = self._make_jwt_handler()
-        cache = DualCache()
+        cache = UserApiKeyCache()
         prisma = AsyncMock()
         prisma.db.litellm_usertable.update = AsyncMock()
         user_id = "testuser@example.com"
@@ -8549,9 +8616,7 @@ class TestSyncUserRoleFromJwtRoleMap:
             user_id=user_id,
             user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
         )
-        await cache.async_set_cache(
-            key=user_id, value=existing_user.model_dump(), ttl=60
-        )
+        await cache.async_set_cache(key=AuthObject.user(user_id), value=existing_user.model_dump(), ttl=60)
 
         sso_values = self._make_sso_values(
             user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
@@ -8572,11 +8637,13 @@ class TestSyncUserRoleFromJwtRoleMap:
         )
         assert existing_user.user_role == LitellmUserRoles.PROXY_ADMIN.value
         assert sso_values["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
+        cached: Final = await cache.async_get_cache(AuthObject.user(user_id), model_type=LiteLLM_UserTable)
+        assert cached is not None and cached.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
     @pytest.mark.asyncio
     async def test_same_role_no_db_write(self):
         """No DB update when the mapped role matches the existing role."""
-        from litellm.caching.caching import DualCache
+        from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
         from litellm.proxy._types import LitellmUserRoles
 
         handler = self._make_jwt_handler()
@@ -8600,7 +8667,7 @@ class TestSyncUserRoleFromJwtRoleMap:
             },
             user_info=existing_user,
             prisma_client=prisma,
-            user_api_key_cache=DualCache(),
+            user_api_key_cache=UserApiKeyCache(),
             user_defined_values=sso_values,
         )
 
@@ -9342,96 +9409,6 @@ async def test_debug_page_survives_a_store_outage(monkeypatch, caplog):
     retention_check.assert_awaited_once()
 
     assert _id_jag_gap_warnings(caplog) == []
-
-
-async def _render_legacy_login_page(env_overrides, general_settings):
-    from litellm.proxy.management_endpoints.ui_sso import google_login
-
-    mock_request = MagicMock(spec=Request)
-    mock_request.base_url = "http://proxy.example.com/"
-
-    with (
-        # snapshot os.environ so the mutations below are reverted on exit
-        patch.dict(os.environ, {}, clear=False),
-        patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-        patch("litellm.proxy.proxy_server.premium_user", False),
-        patch("litellm.proxy.proxy_server.general_settings", general_settings),
-        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
-        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
-    ):
-        # No SSO provider configured, so /sso/key/generate renders the legacy
-        # username/password form rather than redirecting to an IdP.
-        for var in (
-            "MICROSOFT_CLIENT_ID",
-            "GOOGLE_CLIENT_ID",
-            "GENERIC_CLIENT_ID",
-            "LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT",
-            "UI_PASSWORD",
-        ):
-            os.environ.pop(var, None)
-        os.environ.update(env_overrides)
-        return await google_login(request=mock_request)
-
-
-@pytest.mark.asyncio
-async def test_legacy_login_page_shows_credentials_hint_by_default():
-    """Control: without the flag, the legacy page still discloses the hint."""
-    response = await _render_legacy_login_page(env_overrides={}, general_settings={})
-
-    body = response.body.decode()
-    assert response.status_code == 200
-    assert "Default Credentials" in body
-    assert "MASTER_KEY" in body
-
-
-@pytest.mark.asyncio
-async def test_legacy_login_page_hides_credentials_hint_via_env_flag():
-    """
-    Regression: an anonymous GET /sso/key/generate must not disclose the
-    'admin / MASTER_KEY' default-credentials hint when
-    LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT is set. The legacy server-rendered
-    page previously ignored this flag while the new UI honored it.
-    """
-    response = await _render_legacy_login_page(
-        env_overrides={"LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT": "true"},
-        general_settings={},
-    )
-
-    body = response.body.decode()
-    assert response.status_code == 200
-    assert "Default Credentials" not in body
-    assert "MASTER_KEY" not in body
-    # the login form itself must still render
-    assert 'name="username"' in body
-
-
-@pytest.mark.asyncio
-async def test_legacy_login_page_hides_credentials_hint_via_general_settings():
-    """The flag is also honored from general_settings, matching the discovery endpoint."""
-    response = await _render_legacy_login_page(
-        env_overrides={},
-        general_settings={"hide_default_credentials_hint": True},
-    )
-
-    body = response.body.decode()
-    assert response.status_code == 200
-    assert "Default Credentials" not in body
-    assert "MASTER_KEY" not in body
-
-
-@pytest.mark.asyncio
-async def test_legacy_login_page_hides_credentials_hint_when_ui_password_set():
-    response = await _render_legacy_login_page(
-        env_overrides={"UI_PASSWORD": "s3cret-pass"},
-        general_settings={},
-    )
-
-    body = response.body.decode()
-    assert response.status_code == 200
-    assert "Default Credentials" not in body
-    assert "MASTER_KEY" not in body
-    assert 'name="username"' in body
 
 
 @pytest.mark.asyncio

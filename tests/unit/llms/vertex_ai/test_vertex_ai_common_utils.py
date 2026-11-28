@@ -1,9 +1,11 @@
 import copy
 import threading
 import time
+import tracemalloc
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from enum import Enum
+from functools import reduce
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,13 +22,17 @@ from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_hand
 from litellm.llms.vertex_ai.common_utils import (
     VertexAITokenCounter,
     _fix_enum_types,
+    build_json_schema,
     build_vertex_schema,
     convert_anyof_null_to_nullable,
     convert_vertex_datetime_to_openai_datetime,
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
+    enums_fit,
     get_vertex_url,
+    has_const,
     needs_parameters_json_schema,
+    parameters_json_schema_for,
     pop_vertex_request_labels,
     set_schema_property_ordering,
     supports_response_json_schema,
@@ -69,6 +75,7 @@ async def test_vertex_gemini_rejects_non_text_system_blocks_before_request(
         "codestral-2501",
         "openai/gpt-oss-120b-maas",
         "google/gemma-4-26b-a4b-it-maas",
+        "meta/muse-spark-1.3",
     ),
 )
 async def test_vertex_partner_model_without_an_inference_matching_count_answers_400_naming_the_model(
@@ -211,6 +218,25 @@ async def test_vertex_gemini_count_rejects_a_non_string_tool_result_text_without
     assert result.error is True
     assert result.status_code == 400
     assert result.error_message == "tool_result toolu_01 content.0.text: Input should be a valid string"
+    assert peer.requests == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5))
+async def test_vertex_gemini_count_rejects_a_non_string_user_text_without_request(text: JsonValue) -> None:
+    with _vertex_count_tokens_peer(200) as peer:
+        result: Final = await VertexAITokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": text}]}],
+            contents=None,
+            deployment=_VERTEX_DEPLOYMENT,
+            request_model="vertex_ai/gemini-2.5-flash",
+            messages_format="anthropic",
+        )
+
+    assert result is not None
+    assert (result.error, result.status_code) == (True, 400)
+    assert result.error_message == "messages.0.content.1.text: Input should be a valid string"
     assert peer.requests == ()
 
 
@@ -1579,7 +1605,6 @@ def test_fix_enum_types():
     assert input_schema["properties"]["enabled"]["type"] == "boolean"
 
 
-
 def test_build_vertex_schema_sends_integer_enum_as_string_values():
     """An integer enum tool parameter reaches Gemini as INTEGER with string values and no enum format."""
     from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
@@ -1660,6 +1685,251 @@ def test_map_function_keeps_integer_enum_when_tools_are_reused():
     assert sent[0] == sent[1]
 
 
+@pytest.mark.parametrize(
+    ("parameters", "expected"),
+    [
+        (
+            {"type": "object", "properties": {"kinds": {"type": "array", "items": {"const": "card"}}}},
+            {
+                "type": "object",
+                "properties": {"kinds": {"type": "array", "items": {"type": "string", "enum": ["card"]}}},
+            },
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"kind": {"anyOf": [{"const": "card", "type": "string"}, {"type": "null"}]}},
+            },
+            {
+                "type": "object",
+                "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["card"], "nullable": True}]}},
+            },
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"payment": {"$ref": "#/$defs/Card"}},
+                "$defs": {"Card": {"type": "object", "properties": {"kind": {"const": "card"}}, "required": ["kind"]}},
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "payment": {
+                        "type": "object",
+                        "properties": {"kind": {"type": "string", "enum": ["card"]}},
+                        "required": ["kind"],
+                    }
+                },
+            },
+        ),
+        (
+            {"type": "object", "properties": {"code": {"type": "string", "const": 7}}},
+            {"type": "object", "properties": {"code": {"type": "string"}}},
+        ),
+        (
+            {"type": "object", "properties": {"kind": {"type": ["string", "null"], "const": "card"}}},
+            {"type": "object", "properties": {"kind": {"type": "string", "enum": ["card"]}}},
+        ),
+        (
+            {"type": "object", "properties": {"note": {"type": "string", "const": ""}}},
+            {"type": "object", "properties": {"note": {"type": "string"}}},
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"kind": {"anyOf": [{"type": "string"}, {"type": "null"}], "const": "card"}},
+            },
+            {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["card"]}]}}},
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"kind": {"anyOf": [{"type": "string"}, {"type": "integer"}], "const": "card"}},
+            },
+            {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["card"]}]}}},
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"kind": {"anyOf": [{"const": "card"}, {"const": "bank"}], "const": "bank"}},
+            },
+            {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["bank"]}]}}},
+        ),
+        (
+            {"type": "object", "properties": {"note": {"const": ""}}},
+            {"type": "object", "properties": {"note": {"type": "string"}}},
+        ),
+    ],
+    ids=[
+        "items",
+        "any-of-branch",
+        "ref-to-defs",
+        "const-the-type-cannot-hold",
+        "nullable-type-list",
+        "empty-string",
+        "const-beside-any-of",
+        "const-beside-mixed-type-any-of",
+        "const-beside-branches-with-other-consts",
+        "typeless-empty-string",
+    ],
+)
+def test_build_vertex_schema_pins_a_nested_const_as_a_one_value_enum(
+    parameters: dict[str, JsonValue], expected: dict[str, JsonValue]
+) -> None:
+    assert build_vertex_schema(parameters) == expected
+
+
+_PINNED_CARD: Final = {"type": "string", "enum": ["card"]}
+
+
+_SUBSCHEMA_PLACES: Final[tuple[Callable[[JsonValue], dict[str, JsonValue]], ...]] = (
+    lambda schema: {"type": "object", "properties": {"kind": schema}},
+    lambda schema: {"type": "object", "patternProperties": {"^kind$": schema}},
+    lambda schema: {"type": "object", "additionalProperties": schema},
+    lambda schema: {"$ref": "#/$defs/Kind", "$defs": {"Kind": schema}},
+    lambda schema: {"$ref": "#/definitions/Kind", "definitions": {"Kind": schema}},
+    lambda schema: {"type": "array", "items": schema},
+    lambda schema: {"type": "array", "items": [schema]},
+    lambda schema: {"type": "array", "prefixItems": [schema]},
+    lambda schema: {"type": "array", "contains": schema},
+    lambda schema: {"not": schema},
+    lambda schema: {"anyOf": [schema]},
+    lambda schema: {"oneOf": [schema]},
+    lambda schema: {"allOf": [schema]},
+)
+
+
+@pytest.mark.parametrize(
+    "place",
+    _SUBSCHEMA_PLACES,
+    ids=[
+        "properties",
+        "pattern-properties",
+        "additional-properties",
+        "defs",
+        "definitions",
+        "items",
+        "items-list",
+        "prefix-items",
+        "contains",
+        "not",
+        "any-of",
+        "one-of",
+        "all-of",
+    ],
+)
+def test_build_json_schema_pins_a_const_in_every_subschema_keyword(
+    place: Callable[[JsonValue], dict[str, JsonValue]],
+) -> None:
+    assert build_json_schema(place({"const": "card"})) == place(_PINNED_CARD)
+
+
+def _payment_union(other: JsonValue) -> dict[str, JsonValue]:
+    return {"anyOf": [{"type": "object", "properties": {"kind": {"const": "card"}, "other": other}}]}
+
+
+@pytest.mark.parametrize(
+    "build",
+    [build_json_schema, parameters_json_schema_for],
+    ids=["response-json-schema", "parameters-json-schema"],
+)
+@pytest.mark.parametrize(
+    ("other", "expected_other"),
+    [
+        ({"type": "object", "default": {"const": "bank"}}, {"type": "object", "default": {"const": "bank"}}),
+        ({"type": "object", "examples": [{"const": "bank"}]}, {"type": "object", "examples": [{"const": "bank"}]}),
+        ({"type": "object", "properties": {"const": True}}, {"type": "object", "properties": {"const": True}}),
+        ({"const": None}, {"const": None}),
+        ({"const": {"kind": "bank"}}, {"const": {"kind": "bank"}}),
+        ({"const": ["bank"]}, {"const": ["bank"]}),
+        ({"const": "bank", "type": ["string", "null"]}, {"type": "string", "enum": ["bank"]}),
+        ({"const": 7.0, "type": "integer"}, {"type": "integer", "enum": [7]}),
+        ({"const": 7.0, "type": "number"}, {"type": "number", "enum": [7.0]}),
+        ({"const": ""}, {"type": "string", "enum": [""]}),
+        ({"const": 2**53}, {"const": 2**53}),
+        ({"const": 1e16, "type": "integer"}, {"const": 1e16, "type": "integer"}),
+        (
+            {"anyOf": [{"type": "string"}, {"type": "null"}], "const": "bank"},
+            {"anyOf": [{"type": "string", "enum": ["bank"]}]},
+        ),
+        (
+            {"anyOf": [{"type": "string"}, {"type": "integer"}], "const": "bank"},
+            {"anyOf": [{"type": "string", "enum": ["bank"]}]},
+        ),
+        (
+            {"anyOf": [{"type": "integer"}, {"type": "null"}], "const": "bank"},
+            {"anyOf": [{"type": "integer"}, {"type": "null"}], "const": "bank"},
+        ),
+        ({"oneOf": [{"type": "string"}], "const": "bank"}, {"oneOf": [{"type": "string", "enum": ["bank"]}]}),
+        ({"const": 7, "type": "number"}, {"type": "number", "enum": [7]}),
+        ({"const": "bank", "type": "STRING"}, {"type": "STRING", "enum": ["bank"]}),
+        ({"const": 7, "type": "string"}, {"const": 7, "type": "string"}),
+        ({"const": "7", "type": ["integer", "null"]}, {"const": "7", "type": ["integer", "null"]}),
+    ],
+    ids=[
+        "default",
+        "examples",
+        "property-named-const",
+        "null-const",
+        "object-const",
+        "array-const",
+        "typed-const",
+        "whole-float-const-under-integer",
+        "whole-float-const-under-number",
+        "empty-string-const",
+        "integer-const-past-exact-range",
+        "whole-float-const-past-exact-range",
+        "const-beside-any-of",
+        "const-beside-mixed-type-any-of",
+        "const-no-branch-holds",
+        "const-beside-one-of",
+        "integer-const-under-number",
+        "upper-case-type",
+        "const-the-type-cannot-hold",
+        "const-no-listed-type-holds",
+    ],
+)
+def test_json_schema_builders_pin_only_scalar_consts_their_declared_type_can_hold(
+    build: Callable[[dict[str, JsonValue]], Mapping[str, JsonValue] | None],
+    other: JsonValue,
+    expected_other: JsonValue,
+) -> None:
+    assert build(_payment_union(other)) == {
+        "anyOf": [{"type": "object", "properties": {"kind": _PINNED_CARD, "other": expected_other}}]
+    }
+
+
+@pytest.mark.parametrize("build", [build_vertex_schema, build_json_schema], ids=["parameters", "response-json-schema"])
+def test_schema_builders_keep_a_const_out_of_a_branch_another_property_shares(
+    build: Callable[[dict[str, JsonValue]], dict[str, object]],
+) -> None:
+    shared: Final[dict[str, JsonValue]] = {"type": "string"}
+    sent: Final[dict[str, JsonValue]] = {
+        "type": "object",
+        "properties": {"kind": {"anyOf": [shared, {"type": "null"}], "const": "card"}, "memo": shared},
+    }
+
+    assert build(sent)["properties"] == {"kind": {"anyOf": [_PINNED_CARD]}, "memo": {"type": "string"}}
+
+
+def _kind_beside_a_leaf_at_depth(kind: JsonValue, depth: int, leaf: JsonValue) -> dict[str, JsonValue]:
+    nested: Final = reduce(lambda inner, _: {"type": "object", "properties": {"next": inner}}, range(depth - 1), leaf)
+    return {"type": "object", "properties": {"kind": kind, "next": nested}}
+
+
+@pytest.mark.parametrize(
+    ("depth", "expected_leaf"),
+    [(DEFAULT_MAX_RECURSE_DEPTH, _PINNED_CARD), (DEFAULT_MAX_RECURSE_DEPTH + 1, {"const": "card"})],
+    ids=["at-the-cap", "past-the-cap"],
+)
+def test_build_json_schema_pins_consts_down_to_the_recursion_cap_and_sends_deeper_ones_as_given(
+    depth: int, expected_leaf: JsonValue
+) -> None:
+    sent: Final = _kind_beside_a_leaf_at_depth({"const": "card"}, depth, {"const": "card"})
+
+    assert build_json_schema(sent) == _kind_beside_a_leaf_at_depth(_PINNED_CARD, depth, expected_leaf)
+
+
 _OBJECT_BRANCH: Final = {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
 _DEEP_ROOT_REF_CHAIN_LENGTH: Final = 3000
 
@@ -1692,10 +1962,29 @@ def _deep_root_ref_chain(end: Mapping[str, JsonValue]) -> Mapping[str, JsonValue
         ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"anyOf": [_OBJECT_BRANCH]}}}, True),
         ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": _OBJECT_BRANCH}}, False),
         ({"$ref": "#/$defs/Lookup", "anyOf": [{"required": ["a"]}], "$defs": {"Lookup": _OBJECT_BRANCH}}, True),
-        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B", "oneOf": [_OBJECT_BRANCH]}, "B": _OBJECT_BRANCH}}, True),
+        (
+            {
+                "$ref": "#/$defs/A",
+                "$defs": {"A": {"$ref": "#/$defs/B", "oneOf": [_OBJECT_BRANCH]}, "B": _OBJECT_BRANCH},
+            },
+            True,
+        ),
         ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}}}, False),
-        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A", "anyOf": [_OBJECT_BRANCH]}}}, False),
-        ({"$ref": "#/$defs/A", "anyOf": [{"required": ["a"]}], "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}}}, False),
+        (
+            {
+                "$ref": "#/$defs/A",
+                "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A", "anyOf": [_OBJECT_BRANCH]}},
+            },
+            False,
+        ),
+        (
+            {
+                "$ref": "#/$defs/A",
+                "anyOf": [{"required": ["a"]}],
+                "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}},
+            },
+            False,
+        ),
         (_deep_root_ref_chain({"anyOf": [_OBJECT_BRANCH]}), True),
         (_deep_root_ref_chain(_OBJECT_BRANCH), False),
     ],
@@ -1796,6 +2085,7 @@ def test_fix_enum_types_sends_only_integer_enums_gemini_accepts(
 
     assert schema.get("enum") == expected_enum
     assert "format" not in schema
+
 
 def test_get_token_url():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -1992,7 +2282,9 @@ async def test_vertex_claude_count_forwards_the_context_edits_and_beta_vertex_in
     fake_http_client: Final = FakeHttpClient()
     spec: Final[dict[str, JsonValue]] = {"edits": [{"type": edit_type}]}
     application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
-    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
+    monkeypatch.setattr(
+        "google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project")
+    )
     with patch.object(handler, "get_async_httpx_client", return_value=fake_http_client):
         result: Final = await VertexAITokenCounter().count_tokens(
             model_to_use="claude-opus-4-8",
@@ -2037,7 +2329,9 @@ async def test_vertex_claude_count_sends_the_thinking_vertex_inference_sends(
 
     fake_http_client: Final = FakeHttpClient()
     application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
-    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
+    monkeypatch.setattr(
+        "google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project")
+    )
     with patch.object(handler, "get_async_httpx_client", return_value=fake_http_client):
         result: Final = await VertexAITokenCounter().count_tokens(
             model_to_use="claude-opus-4-8",
@@ -2085,7 +2379,9 @@ async def test_vertex_claude_count_with_an_edit_fetches_the_remote_beta_config_o
     monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
     fetch_threads: Final = FetchThreads()
     application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
-    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
+    monkeypatch.setattr(
+        "google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project")
+    )
     with patch.object(handler, "get_async_httpx_client", return_value=FakeHttpClient()), respx.mock:
         respx.get(litellm.anthropic_beta_headers_url).mock(side_effect=fetch_threads)
         result: Final = await VertexAITokenCounter().count_tokens(
@@ -2936,3 +3232,38 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
         )
 
     assert (None if result is None else result.total_tokens) == vertex_counted_tokens
+
+
+
+@pytest.mark.timeout(10)
+def test_const_and_enum_walks_end_on_a_schema_that_contains_itself() -> None:
+    node: Final[dict[str, JsonValue]] = {"type": "object"}
+    node["properties"] = {  # rebind-ok: a schema that contains itself needs a store after it exists
+        "left": node,
+        "right": node,
+        "kind": {"type": "string", "enum": ["x" * 2001]},
+    }
+
+    assert has_const(node) is False
+    assert enums_fit(node) is False
+
+
+def test_const_and_enum_walks_keep_memory_flat_on_a_deep_schema_with_many_branches() -> None:
+    wide: Final[JsonValue] = {"anyOf": [{"not": {}} for _ in range(20_000)]}
+    schema: Final = reduce(lambda inner, _: {"not": inner}, range(64), wide)
+    tracemalloc.start()
+    try:
+        answers: Final = (has_const(schema), enums_fit(schema))
+        peak: Final = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert answers == (False, True)
+    assert peak < 8 * 1024 * 1024
+
+
+@pytest.mark.timeout(10)
+def test_enum_budget_answers_fast_when_one_huge_enum_value_repeats_across_branches() -> None:
+    huge: Final = "x" * (8 * 1024 * 1024)
+
+    assert enums_fit({"anyOf": [{"type": "string", "enum": [huge]} for _ in range(20_000)]}) is False

@@ -1,0 +1,20 @@
+{
+  "cases": [
+    {
+      "name": "fips_api_key",
+      "plaintext": "sk-proj-credential-value",
+      "stored": "v2:gcm:rjyzhXWHVIr5JOh6I5BphCL1iqGmcJMyUDjdvgx1_OfX6OyI1tX3uhtuQ6v6zVP8Rs2vNA=="
+    },
+    {
+      "name": "fips_empty",
+      "plaintext": "",
+      "stored": "v2:gcm:kkcpK9KldPeDpRFkAPMw89_O2sHLPHVB6xU_AQ=="
+    },
+    {
+      "name": "fips_unicode",
+      "plaintext": "clé secrète ✓ 鍵",
+      "stored": "v2:gcm:BgxnB20qzlwsvXSoiNY9bGcuO3Sp8Kxf8p1I7ZchvmlJp5qXmDaxxnPi2H3rNcTOnQ=="
+    }
+  ],
+  "salt_key": "sk-at-rest-fips-fixture-salt-key"
+}

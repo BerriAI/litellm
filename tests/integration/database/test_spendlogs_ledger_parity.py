@@ -27,10 +27,12 @@ from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.model_usage_rollup import flush_model_usage_transactions
 from litellm.proxy.guardrails.usage_tracking import PendingRollups, process_spend_logs_guardrail_usage
 from litellm.proxy.utils import PrismaClient
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy.hooks.model_budget_shared_windows import DatabaseSharedWindows
 from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
 from litellm.repositories.accounting_delivery_repository import AccountingDeliveryRepository
-from litellm.repositories.table_repositories import SpendLogsRepository
+from litellm.repositories.database import Database
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.utils import ModelResponse, Usage
 from tests.integration._support.database import scratch_database
@@ -374,6 +376,9 @@ async def _assert_legacy_database_parity(
     monkeypatch.setattr(proxy_server, "prisma_client", client)
     monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
     await client.db.connect()
+    database: Final = await Database.open(
+        client, parity_database, None, writer_connections=2, reader_connections=0
+    )
     results = []
     try:
         for path in ("legacy", "ledger"):
@@ -386,7 +391,10 @@ async def _assert_legacy_database_parity(
             monkeypatch.setattr(proxy_server.proxy_logging_obj, "db_spend_update_writer", writer)
             monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
             monkeypatch.setattr(proxy_server, "spend_counter_cache", DualCache())
-            for cache_key in ("2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683", "team_id:team"):
+            for cache_key in (
+                AuthObject.virtual_key("2c70e12b7a0646f92279f427c7b38e7334d8e5389cff167a1dc30e73f826b683"),
+                AuthObject.team("team"),
+            ):
                 await proxy_server.user_api_key_cache.async_set_cache(
                     key=cache_key,
                     value={
@@ -598,7 +606,7 @@ async def _assert_legacy_database_parity(
         if reset_kind == "team_member":
             assert results[-1]["LiteLLM_TeamMembership"][0]["spend"] == cost
     finally:
-        await client.db.disconnect()
+        await database.aclose()
 
 
 @pytest.mark.parametrize(

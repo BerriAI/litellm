@@ -1,6 +1,6 @@
 import React from "react";
 import CacheFormField, { EmbeddingModelOption } from "./CacheFormField";
-import { fieldsForSection } from "./cacheSettingsUtils";
+import { fieldsForSection } from "./mapper";
 import { CacheSection, RedisType } from "./cacheSettingsFields";
 
 interface CacheFieldSectionProps {

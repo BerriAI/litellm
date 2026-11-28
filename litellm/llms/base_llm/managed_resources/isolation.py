@@ -109,8 +109,8 @@ def build_owner_filter(
 
 def can_access_resource(
     user_api_key_dict: UserAPIKeyAuth,
-    created_by: str | None,
-    resource_team_id: str | None,
+    created_by: object,
+    resource_team_id: object,
 ) -> bool:
     """Return True iff the caller may read/modify a managed resource.
 

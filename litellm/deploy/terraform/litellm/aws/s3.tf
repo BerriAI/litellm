@@ -94,10 +94,10 @@ resource "aws_iam_role_policy_attachment" "task_s3_access" {
 # ecs.tf) so a config edit produces a new task-def revision and ECS rolls
 # both services automatically.
 resource "aws_s3_object" "proxy_config" {
-  count = length(keys(var.proxy_config)) > 0 ? 1 : 0
+  count = local.proxy_config_enabled ? 1 : 0
 
   bucket       = aws_s3_bucket.this.id
   key          = "config/litellm-config.yaml"
-  content      = yamlencode(var.proxy_config)
+  content      = yamlencode(local.proxy_config)
   content_type = "application/yaml"
 }

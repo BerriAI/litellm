@@ -1,4 +1,5 @@
 import datetime
+from collections.abc import Callable
 from typing import Final
 
 import litellm
@@ -30,7 +31,9 @@ class AthinaLogger:
             "custom_attributes",
         ]
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self, kwargs, response_obj, start_time: object, end_time: object, print_verbose: Callable[[str], object]
+    ):
         import json
         import traceback
 

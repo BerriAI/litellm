@@ -44,6 +44,8 @@ export const EMPTY_DAILY_ACTIVITY_METADATA: DailyActivityMetadata = {
   total_completion_tokens: 0,
   total_cache_read_input_tokens: 0,
   total_cache_creation_input_tokens: 0,
+  total_cache_cost: 0,
+  total_priced_cache_tokens: 0,
   total_compression_saved_tokens: 0,
   total_compression_savings_spend: 0,
   total_prompt_caching_savings_spend: 0,

@@ -1,24 +1,22 @@
 "use client";
 
 import { useState } from "react";
+import { Controller } from "react-hook-form";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { $api } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { CustomerBudgetDialog, CustomerBudgetForm } from "./CustomerBudgetDialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  buildCustomerOrganizationBody,
-  initialCustomerOrganizationFields,
-  type CustomerOrganizationFormError,
-} from "./customerOrganizationForm";
-
-import CustomerBudgetInput from "./CustomerBudgetInput";
+import { ErrorState } from "@/components/shared/ErrorState";
+import type { CustomerOrganizationFormError } from "./customerOrganizationForm";
+import { customerCreateDefaults, toCustomerCreateBody } from "./customer-create/mapper";
+import { customerCreateSchema } from "./customer-create/schema";
+import CustomerLimitsFields from "./CustomerLimitsFields";
 import CustomerBudgetGroupsEditor from "./CustomerBudgetGroupsEditor";
-import { CustomerRateLimitFields } from "./CustomerRateLimits";
 
 interface Props {
   open: boolean;
@@ -26,17 +24,25 @@ interface Props {
   onCreated: (customerOrgId: string) => void;
 }
 
+const limitsIdPrefix = "cc";
+
 export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: Props) {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
-  const [fields, setFields] = useState(initialCustomerOrganizationFields);
+  const { control, watch, getValues, reset } = useZodForm(customerCreateSchema, {
+    defaultValues: customerCreateDefaults(),
+  });
+  const name = watch("name");
   const [error, setError] = useState<CustomerOrganizationFormError | null>(null);
+  const groups = $api.useQuery("get", "/management/v1/customer_organization_budget_groups", {}, { enabled: open });
+  const defaultBudgetId = groups.data?.default_budget_template_id;
+  const defaultBudgetMode = defaultBudgetId ? ("profile" as const) : ("custom" as const);
   const create = $api.useMutation("post", "/management/v1/customer_organizations", {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["get", "/management/v1/customer_portal/limits"] }),
     onSuccess: (customer) => {
-      toast.success(t("customerPortal.toasts.created", { name: customer.alias || fields.name.trim() }));
+      toast.success(t("customerPortal.toasts.created", { name: customer.alias || name.trim() }));
       onCreated(customer.customer_org_id);
-      setFields(initialCustomerOrganizationFields());
+      reset(customerCreateDefaults());
       setError(null);
       onOpenChange(false);
     },
@@ -45,8 +51,10 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
   });
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (create.isPending) return;
-    const result = buildCustomerOrganizationBody(fields);
+    if (create.isPending || groups.isPending) return;
+    const fields = getValues();
+    const parsed = customerCreateSchema.safeParse(fields);
+    const result = parsed.success ? parsed.data : toCustomerCreateBody(fields);
     if (!result.ok) {
       setError(result.error);
       return;
@@ -55,78 +63,111 @@ export default function CreateCustomerDialog({ open, onOpenChange, onCreated }: 
     create.mutate({ body: result.body });
   };
   return (
-    <Dialog open={open} onOpenChange={(next) => !create.isPending && onOpenChange(next)}>
-      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
-        <form onSubmit={submit} className="space-y-5">
-          <DialogHeader>
-            <DialogTitle>{t("customerPortal.createDialog.title")}</DialogTitle>
-          </DialogHeader>
-          <fieldset disabled={create.isPending} className="space-y-5">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="cc-name">{t("customerPortal.createDialog.name")}</Label>
+    <CustomerBudgetDialog
+      open={open}
+      onClose={() => onOpenChange(false)}
+      pending={create.isPending}
+      title={t("customerPortal.createDialog.title")}
+      className="max-h-[90dvh] w-[calc(100%-2rem)] sm:max-w-5xl"
+    >
+      <CustomerBudgetForm
+        onSubmit={submit}
+        pending={create.isPending}
+        error={error ? t(`customerPortal.createDialog.errors.${error}`) : null}
+        onClose={() => onOpenChange(false)}
+        dirty={Boolean(name.trim()) && !groups.isPending}
+        saveLabel={t(create.isPending ? "customerPortal.createDialog.creating" : "customerPortal.createDialog.submit")}
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="cc-name" className="font-normal text-muted-foreground">
+              {t("customerPortal.createDialog.name")}
+            </Label>
+            <Controller
+              control={control}
+              name="name"
+              render={({ field }) => (
                 <Input
                   id="cc-name"
-                  value={fields.name}
-                  onChange={(event) => setFields({ ...fields, name: event.target.value })}
+                  ref={field.ref}
+                  value={field.value}
+                  onChange={field.onChange}
                   placeholder={t("customerPortal.createDialog.namePlaceholder")}
                   autoFocus
                   required
                 />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="cc-org-id">{t("customerPortal.createDialog.customerId")}</Label>
+              )}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="cc-org-id" className="font-normal text-muted-foreground">
+              {t("customerPortal.createDialog.customerIdOptional")}
+            </Label>
+            <Controller
+              control={control}
+              name="customerOrgId"
+              render={({ field }) => (
                 <Input
                   id="cc-org-id"
-                  value={fields.customerOrgId}
-                  onChange={(event) => setFields({ ...fields, customerOrgId: event.target.value })}
+                  ref={field.ref}
+                  value={field.value}
+                  onChange={field.onChange}
                   placeholder={t("customerPortal.createDialog.customerIdPlaceholder")}
-                  aria-describedby="cc-org-id-help"
                 />
-                <p id="cc-org-id-help" className="text-xs text-muted-foreground">
-                  {t("customerPortal.createDialog.customerIdHelp")}
-                </p>
-              </div>
-            </div>
-            <CustomerBudgetInput
-              id="cc-budget"
-              budgetId={fields.budgetId}
-              amount={fields.monthlyBudget}
-              onChange={(budgetId, monthlyBudget) => setFields({ ...fields, budgetId, monthlyBudget })}
+              )}
             />
-            {!fields.budgetId && (
-              <CustomerRateLimitFields
-                id="cc"
-                tpm={fields.tpm}
-                rpm={fields.rpm}
-                onChange={(field, value) => setFields({ ...fields, [field]: value })}
+          </div>
+        </div>
+        <Controller
+          control={control}
+          name="limits"
+          render={({ field }) => {
+            const effectiveFields =
+              field.value.budgetMode === "inherit" && groups.isSuccess
+                ? {
+                    ...field.value,
+                    budgetMode: defaultBudgetMode,
+                    budgetId: defaultBudgetId ?? "",
+                  }
+                : field.value;
+            return (
+              <CustomerLimitsFields
+                fields={effectiveFields}
+                profiles={groups.data?.default_budgets ?? []}
+                title={t("customerPortal.createDialog.organizationLimits")}
+                description={t("customerPortal.createDialog.organizationLimitsHelp")}
+                idPrefix={limitsIdPrefix}
+                loading={groups.isPending}
+                inheritedOption={{
+                  label: t("customerPortal.budgetGroups.organizationDefault"),
+                  summary: t("customerPortal.budgetGroups.organizationDefaultHelp"),
+                }}
+                disabled={create.isPending}
+                onChange={(patch) => {
+                  field.onChange({ ...effectiveFields, ...patch });
+                  setError(null);
+                }}
               />
-            )}
+            );
+          }}
+        />
+        {groups.isError && <ErrorState onRetry={() => void groups.refetch()} />}
+        <Controller
+          control={control}
+          name="budgetGroups"
+          render={({ field }) => (
             <CustomerBudgetGroupsEditor
-              groups={fields.groups}
-              defaultGroupId={fields.defaultGroupId}
+              groups={field.value.groups}
+              defaultGroupId={field.value.defaultGroupId}
               disabled={create.isPending}
               onChange={(groups, defaultGroupId) => {
-                setFields({ ...fields, groups, defaultGroupId });
+                field.onChange({ groups, defaultGroupId });
                 setError(null);
               }}
             />
-          </fieldset>
-          {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {t(`customerPortal.createDialog.errors.${error}`)}
-            </p>
           )}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={create.isPending}>
-              {t("customerPortal.common.cancel")}
-            </Button>
-            <Button type="submit" disabled={!fields.name.trim() || create.isPending}>
-              {create.isPending ? t("customerPortal.createDialog.creating") : t("customerPortal.createDialog.submit")}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+        />
+      </CustomerBudgetForm>
+    </CustomerBudgetDialog>
   );
 }

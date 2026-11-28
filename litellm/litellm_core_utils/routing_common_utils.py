@@ -161,8 +161,10 @@ def request_user_api_key_auth(request_kwargs: Mapping[str, object]) -> object:
     """The caller's auth object, from whichever metadata bucket this surface writes to."""
     metadata_value: Final = request_kwargs.get("metadata")
     litellm_metadata_value: Final = request_kwargs.get("litellm_metadata")
-    metadata: Final = metadata_value if isinstance(metadata_value, Mapping) else {}
-    litellm_metadata: Final = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
+    metadata: Final[Mapping[object, object]] = metadata_value if isinstance(metadata_value, Mapping) else {}
+    litellm_metadata: Final[Mapping[object, object]] = (
+        litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
+    )
     return metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
 
 
@@ -361,7 +363,7 @@ def format_content_policy_no_fallback_note(
     return hint + format_no_fallback_group_message(lookup_groups, fallback_entries)
 
 
-def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
+def get_litellm_params_sensitive_credential_hash(litellm_params: Mapping[str, object]) -> str:
     """
     Hash of the credential params, used for mapping the file id to the right model
     """
@@ -369,7 +371,9 @@ def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
     return hashlib.sha256(json.dumps(sensitive_params.model_dump()).encode()).hexdigest()
 
 
-def add_model_file_id_mappings(healthy_deployments: list[dict] | dict, responses: list["OpenAIFileObject"]) -> dict:
+def add_model_file_id_mappings(
+    healthy_deployments: list[dict] | dict, responses: list["OpenAIFileObject"]
+) -> dict[str, str]:
     """
     Create a mapping of model id to file id
     {
@@ -397,7 +401,7 @@ def add_model_file_id_mappings(healthy_deployments: list[dict] | dict, responses
 def filter_team_based_models(
     healthy_deployments: list[dict] | dict,
     request_kwargs: dict | None = None,
-) -> list[dict] | dict:
+) -> list[dict[str, object]] | dict[str, object]:
     """
     If a model has a team_id
 
@@ -444,7 +448,7 @@ def filter_team_based_models(
         if matches_requested_model:
             return healthy_deployments
 
-    ids_to_remove: Final = set()
+    ids_to_remove: Final[set[object]] = set()
     if isinstance(healthy_deployments, dict):
         # A deployment asked for by id is filtered like any other: another team's is not served.
         return [] if _owner_team(healthy_deployments) not in (None, request_team_id) else healthy_deployments  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # the legacy untyped deployment dict
@@ -519,8 +523,8 @@ def is_web_search_request(request_kwargs: Mapping[str, object]) -> bool:
 
 def filter_web_search_deployments(
     healthy_deployments: list[dict] | dict,
-    request_kwargs: dict | None = None,
-) -> list[dict] | dict:
+    request_kwargs: Mapping[str, object] | None = None,
+) -> list[dict[str, object]] | dict[str, object]:
     """
     If the request is websearch, filter out deployments that don't support web search
     """
@@ -690,5 +694,5 @@ def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mappin
 
 def _owner_team(deployment: Mapping[str, object]) -> object:
     """The team a deployment belongs to (``model_info.team_id``), or None."""
-    model_info: Final = deployment.get("model_info")
-    return model_info.get("team_id") if isinstance(model_info, Mapping) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a deployment dict's model_info
+    model_info: Final = as_str_mapping(deployment.get("model_info"))
+    return model_info.get("team_id") if model_info is not None else None

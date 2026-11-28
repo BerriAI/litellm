@@ -37,10 +37,17 @@ KEEPALIVE_FLAG: Final = "--timeout-keep-alive"
 
 def uvicorn_argv(argv: Sequence[str], environ: Mapping[str, str]) -> tuple[str, ...]:
     """Honor ``KEEPALIVE_TIMEOUT`` like ``proxy_cli.py`` does, unless the flag was passed explicitly."""
-    keepalive: Final = environ.get("KEEPALIVE_TIMEOUT")
-    if keepalive is None or any(arg == KEEPALIVE_FLAG or arg.startswith(f"{KEEPALIVE_FLAG}=") for arg in argv):
+    if any(arg == KEEPALIVE_FLAG or arg.startswith(f"{KEEPALIVE_FLAG}=") for arg in argv):
         return (GATEWAY_APP, "--factory", *argv)
-    return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, keepalive)
+    keepalive: Final = environ.get("KEEPALIVE_TIMEOUT")
+    if keepalive is not None:
+        return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, keepalive)
+    if environ.get("UVICORN_TIMEOUT_KEEP_ALIVE"):
+        return (GATEWAY_APP, "--factory", *argv)
+
+    from litellm.constants import DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS
+
+    return (GATEWAY_APP, "--factory", *argv, KEEPALIVE_FLAG, str(DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS))
 
 
 def pool_database_url(
@@ -80,7 +87,7 @@ def _serve(argv: Sequence[str]) -> None:
 
 def python_server(argv: Sequence[str]) -> "PythonServer":
     """What uvicorn would serve the public port with, read from the same flags and environment it reads."""
-    from litellm.proxy.rust_forward.server import PythonServer, Server, UvicornCliParams
+    from litellm.proxy.rust_forward.server import PythonServer, Server, UvicornCliParams, local_config_path
     from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
     params: Final = UvicornCliParams.model_validate(
@@ -96,6 +103,7 @@ def python_server(argv: Sequence[str]) -> "PythonServer":
         if params.timeout_graceful_shutdown is None
         else params.timeout_graceful_shutdown,
         trusted_proxies=params.trusted_proxies,
+        config_path=local_config_path(None, os.environ),
     )
 
 

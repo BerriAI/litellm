@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use litellm_auth::AuthServices;
+use litellm_auth_aws::{WebIdentityTokenFuture, WebIdentityTokenSource};
 use litellm_config::Config;
 use litellm_config_load::{ConfigEnvironment, environment_values};
 use litellm_env::{Lookup, ProcessEnvironment};
@@ -28,9 +30,32 @@ impl Resources {
         Self::over(config, Arc::new(ProcessEnvironment))
     }
 
-    pub(crate) fn over(
+    /// The resources of `config` over `process` as the process environment.
+    ///
+    /// Provider auth resolves an `oidc/` AWS web identity token, for Bedrock and for Claude on
+    /// Vertex AI's AWS federation, through the secrets of this first config, as Python's
+    /// `get_secret` does. Like the client pool, it lives as long as the process.
+    pub fn over(config: &Config, process: Arc<dyn Lookup + Send + Sync>) -> Result<Self, Error> {
+        let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
+        let unauthenticated = Self::sharing(config, process, CoreResources::new(pool.clone()))?;
+        let auth = AuthServices::with_web_identity_tokens(Arc::new(SecretWebIdentityTokens(
+            unauthenticated.secrets.clone(),
+        )));
+        Ok(Self {
+            core: CoreResources {
+                pool,
+                auth: Arc::new(auth),
+            },
+            ..unauthenticated
+        })
+    }
+
+    /// The resources of `config` over `process`, sharing the client pool and provider auth of
+    /// `core`, which another config's resources made, so a new config reuses their connections.
+    pub(crate) fn sharing(
         config: &Config,
         process: Arc<dyn Lookup + Send + Sync>,
+        core: CoreResources,
     ) -> Result<Self, Error> {
         let environment: Arc<dyn Lookup + Send + Sync> = Arc::new(ConfigEnvironment::new(
             environment_values(&config.environment_variables)?,
@@ -58,14 +83,72 @@ impl Resources {
             },
         ]);
         let http = Resolution::from(&http_settings).config;
-        let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
-        let client = pool.client(&http, ClientVariant::Provider)?;
+        let client = core.pool.client(&http, ClientVariant::Provider)?;
         let secrets = Arc::new(crate::environment_secrets(environment.clone(), client));
         Ok(Self {
             environment,
             secrets,
             http,
-            core: CoreResources::new(pool),
+            core,
         })
+    }
+}
+
+/// An AWS web identity token reference read as Python's `get_secret` reads it, so an `oidc/`
+/// reference names the token's source rather than the token.
+struct SecretWebIdentityTokens(Arc<SecretResolver>);
+
+impl std::fmt::Debug for SecretWebIdentityTokens {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SecretWebIdentityTokens")
+            .finish_non_exhaustive()
+    }
+}
+
+impl WebIdentityTokenSource for SecretWebIdentityTokens {
+    fn web_identity_token<'a>(&'a self, reference: &'a str) -> WebIdentityTokenFuture<'a> {
+        Box::pin(async move {
+            self.0
+                .get_secret_str(reference, None)
+                .await
+                .map_err(litellm_error::Source::new)
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use litellm_config::Config;
+    use litellm_env::Lookup;
+    use rstest::rstest;
+
+    use super::*;
+
+    struct NoProcessEnvironment;
+
+    impl Lookup for NoProcessEnvironment {
+        fn get(&self, _: &str) -> Option<String> {
+            None
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn an_oidc_web_identity_token_reads_the_source_it_names() {
+        let config =
+            Config::from_yaml("environment_variables:\n  WEB_TOKEN: federated-token\n").unwrap();
+        let resources = Resources::over(&config, Arc::new(NoProcessEnvironment)).unwrap();
+        let tokens = SecretWebIdentityTokens(resources.secrets.clone());
+
+        let token = tokens
+            .web_identity_token("oidc/env/WEB_TOKEN")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            token.map(|token| token.expose().to_owned()).as_deref(),
+            Some("federated-token")
+        );
     }
 }

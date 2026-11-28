@@ -1,11 +1,12 @@
 //! The user repository: resolves a sign-in to its `LiteLLM_UserTable` row by id, then by SSO id, then by email,
 //! linking the SSO id the way the Python `get_user_object` did, and backfills a missing email.
 
-use litellm_db::{Call, Statements};
-use sqlx::PgConnection;
+use jiff::Timestamp;
+use litellm_db::Call;
+use serde_json::Value;
 
 use super::queries::{self, User};
-use crate::{Database, Side};
+use crate::{Database, Inserted, Side, database::Connections};
 
 const GET_USER_OBJECT: Call = Call {
     call_type: "get_user_object",
@@ -31,9 +32,15 @@ const UPDATE_USER: Call = Call {
     operation: Some("update"),
 };
 
+const CREATE_USER: Call = Call {
+    call_type: "create",
+    table: Some("LiteLLM_UserTable"),
+    operation: Some("insert"),
+};
+
 /// Who is signing in: the requested id plus the sign-in's SSO id and email. `links_any_user` is
 /// `LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER`, which lets an email match any row and skips the SSO link guards.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SignIn {
     pub user_id: String,
     pub sso_user_id: Option<String>,
@@ -42,7 +49,61 @@ pub struct SignIn {
     pub links_any_user: bool,
 }
 
-/// Reads and links `LiteLLM_UserTable` rows.
+impl SignIn {
+    /// A sign-in that carries only `user_id`, as a plain lookup by id makes it.
+    pub fn by_id(user_id: &str) -> Self {
+        Self {
+            user_id: user_id.to_owned(),
+            sso_user_id: None,
+            user_email: None,
+            email_verified: None,
+            links_any_user: false,
+        }
+    }
+}
+
+/// What `default_internal_user_params` sets on a user created at sign-in. The host resolves them, the reset time
+/// of `budget_duration` and the opening windows of `budget_limits` included. `None` leaves the column unset.
+#[derive(Clone, Debug, Default)]
+pub struct NewUserDefaults {
+    pub user_role: Option<String>,
+    pub max_budget: Option<f64>,
+    pub budget_duration: Option<String>,
+    pub budget_reset_at: Option<Timestamp>,
+    pub models: Option<Vec<String>>,
+    pub budget_limits: Option<Value>,
+    pub tpm_limit: Option<i64>,
+    pub rpm_limit: Option<i64>,
+    pub max_parallel_requests: Option<i32>,
+    pub user_alias: Option<String>,
+    pub team_id: Option<String>,
+    pub organization_id: Option<String>,
+    pub object_permission_id: Option<String>,
+    pub password_reset_required: Option<bool>,
+    pub metadata: Option<Value>,
+    pub allowed_cache_controls: Option<Vec<String>>,
+    pub policies: Option<Vec<String>>,
+    pub model_max_budget: Option<Value>,
+}
+
+/// Whether resolving a sign-in stored its SSO id on the user it found. `Linked` is written by the time the
+/// resolve returns, `Pending` is written in the background after it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SsoLink {
+    Unchanged,
+    Linked,
+    Pending,
+}
+
+/// The user a sign-in resolved to, as read before any link, except that an email match linked in line carries
+/// its new SSO id, and how its SSO id was linked.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Resolution {
+    pub user: User,
+    pub sso_link: SsoLink,
+}
+
+/// Reads, links and provisions `LiteLLM_UserTable` rows.
 pub struct UserRepository {
     database: Database,
 }
@@ -69,6 +130,44 @@ impl UserRepository {
             self.set_sso_user_id_later(user_id, sso_user_id);
         }
         Ok(resolved.user)
+    }
+
+    /// [`Self::resolve`], with whether it linked the sign-in's SSO id to the user it found. A link under
+    /// `links_any_user` is `Pending`, made in the background after this returns.
+    pub async fn resolve_sign_in(
+        &self,
+        sign_in: &SignIn,
+        side: Side,
+    ) -> Result<Option<Resolution>, litellm_db::Error> {
+        let resolved = self
+            .database
+            .run(GET_USER_OBJECT, || async {
+                resolve_once(&mut &self.database, sign_in, side).await
+            })
+            .await?;
+        let sso_link = match (&resolved.link_later, resolved.linked) {
+            (Some(_), _) => SsoLink::Pending,
+            (None, true) => SsoLink::Linked,
+            (None, false) => SsoLink::Unchanged,
+        };
+        if let Some((user_id, sso_user_id)) = resolved.link_later {
+            self.set_sso_user_id_later(user_id, sso_user_id);
+        }
+        Ok(resolved.user.map(|user| Resolution { user, sso_link }))
+    }
+
+    /// The user `sign_in` resolves to, read without linking its SSO id: the id or SSO id match, else the email
+    /// match [`Self::resolve`] would link. For a caller that decides on the user before it lets anything be written.
+    pub async fn find(
+        &self,
+        sign_in: &SignIn,
+        side: Side,
+    ) -> Result<Option<User>, litellm_db::Error> {
+        self.database
+            .run(GET_USER_OBJECT, || async {
+                find_once(&mut &self.database, sign_in, side).await
+            })
+            .await
     }
 
     /// Whether a user other than `user_id` holds `user_email`, ignoring case.
@@ -108,11 +207,55 @@ impl UserRepository {
             .await
     }
 
+    /// [`Self::backfill_email`], returning the row as stored rather than its email, or `None` when another user
+    /// holds the email or the row is gone.
+    pub async fn backfill_email_returning(
+        &self,
+        user_id: &str,
+        user_email: &str,
+        links_any_user: bool,
+    ) -> Result<Option<User>, litellm_db::Error> {
+        self.database
+            .run(UPDATE_MANY_USERS, || async {
+                backfill_once(&mut &self.database, user_id, user_email, links_any_user).await
+            })
+            .await
+    }
+
+    /// Sets the role of `user_id` and returns the row as stored, or `None` when no row has that id.
+    pub async fn set_role(
+        &self,
+        user_id: &str,
+        user_role: &str,
+    ) -> Result<Option<User>, litellm_db::Error> {
+        self.database
+            .run(UPDATE_USER, || async {
+                let mut session = self.database.session(Side::Writer).await?;
+                queries::set_user_role(session.executor(), user_id, user_role).await
+            })
+            .await
+    }
+
+    /// Creates the user `sign_in` names with `defaults`, as `get_user_object` did under `user_id_upsert`. The
+    /// email is stored unless another user holds it and `links_any_user` is off, and the SSO id only while
+    /// `links_any_user` is off. A sign-in that loses to a concurrent one gets the row that won.
+    pub async fn insert(
+        &self,
+        sign_in: &SignIn,
+        defaults: &NewUserDefaults,
+    ) -> Result<Inserted<User>, litellm_db::Error> {
+        self.database
+            .run(CREATE_USER, || async {
+                insert_once(&mut &self.database, sign_in, defaults).await
+            })
+            .await
+    }
+
     /// Records `sso_user_id` on `user_id` in the background, as Python did for an email match under
     /// `links_any_user`; the sign-in does not wait for it.
     fn set_sso_user_id_later(&self, user_id: String, sso_user_id: String) {
         let database = self.database.clone();
-        tokio::spawn(async move {
+        litellm_call_scope::spawn_in_call(async move {
             let outcome = database
                 .run(UPDATE_USER, || async {
                     let mut session = database.session(Side::Writer).await?;
@@ -129,30 +272,68 @@ impl UserRepository {
     }
 }
 
-/// Where the steps of one resolve take their connection: a session per step from the database, one after the
-/// other so a resolve never holds two, or a single transaction in tests.
-pub(super) trait Connections {
-    async fn with<T>(
-        &mut self,
-        side: Side,
-        step: impl for<'e> AsyncFnOnce(Statements<&'e mut PgConnection>) -> Result<T, litellm_db::Error>,
-    ) -> Result<T, litellm_db::Error>;
-}
-
-impl Connections for &Database {
-    async fn with<T>(
-        &mut self,
-        side: Side,
-        step: impl for<'e> AsyncFnOnce(Statements<&'e mut PgConnection>) -> Result<T, litellm_db::Error>,
-    ) -> Result<T, litellm_db::Error> {
-        let mut session = self.session(side).await?;
-        step(session.executor()).await
+/// The fill, then, when it filled nothing, the stored row in a statement of its own, since a fill that waited on a
+/// concurrent one cannot see the email that one committed.
+pub(super) async fn backfill_once(
+    connections: &mut impl Connections,
+    user_id: &str,
+    user_email: &str,
+    links_any_user: bool,
+) -> Result<Option<User>, litellm_db::Error> {
+    let filled = connections
+        .with(Side::Writer, async |db| {
+            queries::fill_missing_user_email(db, user_id, user_email, links_any_user).await
+        })
+        .await?;
+    if filled.is_some() {
+        return Ok(filled);
     }
+    connections
+        .with(Side::Writer, async |db| {
+            queries::find_user_with_stored_email(db, user_id, user_email, links_any_user).await
+        })
+        .await
 }
 
-/// What a resolve found, and the SSO id link it leaves for the background under `links_any_user`.
+/// The insert, then on a conflict the read a later sign-in would make, in a statement of its own because the
+/// insert cannot see a row committed after it began.
+pub(super) async fn insert_once(
+    connections: &mut impl Connections,
+    sign_in: &SignIn,
+    defaults: &NewUserDefaults,
+) -> Result<Inserted<User>, litellm_db::Error> {
+    let sso_user_id = sign_in
+        .sso_user_id
+        .as_deref()
+        .filter(|_| !sign_in.links_any_user);
+    let new_user = queries::NewUser {
+        user_id: &sign_in.user_id,
+        user_email: sign_in.user_email.as_deref(),
+        email_may_be_shared: sign_in.links_any_user,
+        sso_user_id,
+        defaults,
+    };
+    let created = connections
+        .with(Side::Writer, async |db| {
+            queries::insert_user(db, &new_user).await
+        })
+        .await?;
+    if let Some(user) = created {
+        return Ok(Inserted::Created(user));
+    }
+    connections
+        .with(Side::Writer, async |db| {
+            queries::find_user(db, Some(&sign_in.user_id), sso_user_id).await
+        })
+        .await
+        .map(Inserted::Conflict)
+}
+
+/// What a resolve found, whether it linked the sign-in's SSO id in line, and the link it leaves for the
+/// background under `links_any_user`.
 pub(super) struct Resolved {
     pub user: Option<User>,
+    pub linked: bool,
     pub link_later: Option<(String, String)>,
 }
 
@@ -160,6 +341,7 @@ impl From<Option<User>> for Resolved {
     fn from(user: Option<User>) -> Self {
         Self {
             user,
+            linked: false,
             link_later: None,
         }
     }
@@ -183,11 +365,15 @@ pub(super) async fn resolve_once(
                 && sign_in.sso_user_id.as_deref() == Some(user.user_id.as_str())
                 && !sign_in.links_any_user
             {
-                connections
+                let linked = connections
                     .with(Side::Writer, async |db| {
                         queries::link_null_sso_user_id(db, &user.user_id, &user.user_id).await
                     })
                     .await?;
+                return Ok(Resolved {
+                    linked,
+                    ..Some(user).into()
+                });
             }
             Ok(Some(user).into())
         }
@@ -196,19 +382,46 @@ pub(super) async fn resolve_once(
     }
 }
 
+/// The id or SSO id match, else the email match, with nothing linked.
+pub(super) async fn find_once(
+    connections: &mut impl Connections,
+    sign_in: &SignIn,
+    side: Side,
+) -> Result<Option<User>, litellm_db::Error> {
+    let found = connections
+        .with(side, async |db| {
+            queries::find_user(db, Some(&sign_in.user_id), sign_in.sso_user_id.as_deref()).await
+        })
+        .await?;
+    let (None, Some((user_email, unlinked_only))) = (&found, email_match(sign_in)) else {
+        return Ok(found);
+    };
+    connections
+        .with(Side::Read, async |db| {
+            queries::find_user_by_email(db, user_email, unlinked_only).await
+        })
+        .await
+}
+
+/// The email a sign-in may be matched by, and whether only a row with no SSO id matches it, which holds for a
+/// sign-in that carries an SSO id. `None` without an email or with an unverified one.
+fn email_match(sign_in: &SignIn) -> Option<(&str, bool)> {
+    let user_email = sign_in.user_email.as_deref()?;
+    (sign_in.links_any_user || sign_in.email_verified != Some(false)).then_some((
+        user_email,
+        !sign_in.links_any_user && sign_in.sso_user_id.is_some(),
+    ))
+}
+
 /// A user with no row for the requested id or SSO id, found by email unless the email is unverified. With an SSO
 /// id, only an unlinked row matches, and it is linked only if no other sign-in linked that SSO id first.
 async fn resolve_by_email(
     connections: &mut impl Connections,
     sign_in: &SignIn,
 ) -> Result<Resolved, litellm_db::Error> {
-    let Some(user_email) = &sign_in.user_email else {
+    let Some((user_email, unlinked_only)) = email_match(sign_in) else {
         return Ok(None.into());
     };
-    if !(sign_in.links_any_user || sign_in.email_verified != Some(false)) {
-        return Ok(None.into());
-    }
-    let unlinked_only = !sign_in.links_any_user && sign_in.sso_user_id.is_some();
     let by_email = connections
         .with(Side::Read, async |db| {
             queries::find_user_by_email(db, user_email, unlinked_only).await
@@ -223,6 +436,7 @@ async fn resolve_by_email(
             .map(|user| (user.user_id.clone(), sso_user_id.clone()));
         return Ok(Resolved {
             user: by_email,
+            linked: false,
             link_later,
         });
     }
@@ -234,7 +448,10 @@ async fn resolve_by_email(
             .await?;
         if linked {
             user.sso_user_id = Some(sso_user_id.clone());
-            return Ok(Some(user).into());
+            return Ok(Resolved {
+                linked,
+                ..Some(user).into()
+            });
         }
     }
     connections

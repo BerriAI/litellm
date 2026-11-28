@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from collections.abc import Iterator, Mapping
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import parse_qs
 
 import pytest
@@ -445,6 +445,20 @@ PARAM_GRID: Final = [
 ]
 
 
+@contextmanager
+def _failures() -> Iterator[MagicMock]:
+    reported: Final = threading.Semaphore(0)
+    with patch.object(s3_v2._Host, "callback_failed", side_effect=reported.release) as failures:
+        failures.reported = reported
+        yield failures
+
+
+async def _reported(failures: MagicMock, count: object) -> None:
+    assert isinstance(count, int)
+    for _ in range(count):
+        _ = await asyncio.to_thread(failures.reported.acquire, timeout=10)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("extra", PARAM_GRID)
 async def test_both_loggers_put_the_same_objects(
@@ -505,9 +519,10 @@ async def test_both_loggers_skip_and_count_the_same_bad_payloads(
     golden: Golden, bucket: FakeBucket, monkeypatch: pytest.MonkeyPatch, payload: object
 ) -> None:
     logger = await _logger(monkeypatch, bucket, {"s3_use_team_prefix": True})
-    with patch.object(s3_v2._Host, "callback_failed") as rust_failures:
+    with _failures() as rust_failures:
         await _log(logger, payload)
         await logger.flush_queue()
+        await _reported(rust_failures, golden.expected("failures"))
         await asyncio.sleep(0.2)
     assert _expected_puts(golden) == bucket.puts() == []
     assert golden.expected("queue") == []
@@ -735,9 +750,10 @@ async def test_without_a_region_param_both_sign_with_the_same_environment_region
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
     logger = await _logger(monkeypatch, bucket, {"s3_region_name": None})
-    with patch.object(s3_v2._Host, "callback_failed") as rust_failures:
+    with _failures() as rust_failures:
         await _log(logger, _payload())
         await logger.flush_queue()
+        await _reported(rust_failures, golden.expected("failures"))
         await asyncio.sleep(0.2)
     python_puts: Final = golden.expected("put-count")
     python_failure_count: Final = golden.expected("failures")
@@ -863,9 +879,10 @@ async def test_a_web_identity_token_botocore_rejects_fails_both_before_sts(
         "s3_aws_sts_endpoint": f"http://127.0.0.1:{sts.port}",
     }
     logger = await _logger(monkeypatch, bucket, identity)
-    with patch.object(s3_v2._Host, "callback_failed") as rust_failures:
+    with _failures() as rust_failures:
         await _log(logger, _payload())
         await logger.flush_queue()
+        await _reported(rust_failures, golden.expected("failures"))
     assert sts.calls == []
     assert _expected_puts(golden) == bucket.puts() == []
     assert golden.expected("failures") == rust_failures.call_count
@@ -979,10 +996,11 @@ async def test_a_payload_that_changes_while_it_is_rendered_is_kept_for_retry_by_
     metadata: Final = racing["metadata"]
     assert isinstance(metadata, dict)
     metadata["mutating"] = _Mutating(metadata)  # pyright: ignore[reportUnknownArgumentType]  # the metadata dict _payload builds
-    with patch.object(s3_v2._Host, "callback_failed") as rust_failures:
+    with _failures() as rust_failures:
         await _log_native(logger, {"standard_logging_object": racing})
         await _log(logger, _payload("steady"))
         await logger.flush_queue()
+        await _reported(rust_failures, golden.expected("failures"))
         await asyncio.sleep(0.2)
     assert logger.sink.queued_keys() == golden.expected("queue")
     assert len(logger.sink.queued_keys()) == 1
@@ -1216,16 +1234,17 @@ async def test_audit_events_flush_at_the_same_batch_size(
 async def test_both_loggers_keep_uploads_that_fail_in_transport(
     golden: Golden, bucket: FakeBucket, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
-    monkeypatch.setattr(s3_v2, "S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", 0.3)
     if failure == "timeout":
+        monkeypatch.setattr(s3_v2, "S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", 0.3)
         bucket.delays.append(("_a\\.json", 1.0))
     else:
         bucket.failures.append(("_a\\.json", 0, ""))
     logger = await _logger(monkeypatch, bucket, {})
-    with patch.object(s3_v2._Host, "callback_failed") as rust_failures:
+    with _failures() as rust_failures:
         for response_id in ("a", "b"):
             await _log(logger, _payload(response_id))
         await logger.flush_queue()
+        await _reported(rust_failures, golden.expected("failures"))
         await asyncio.sleep(0.2)
     python_queue, rust_queue = _queues(golden, logger)
     assert rust_queue == python_queue
@@ -1236,7 +1255,15 @@ async def test_both_loggers_keep_uploads_that_fail_in_transport(
     python_paths: Final = golden.expected("put-paths")
     assert isinstance(python_paths, list)
     assert [str(path).rsplit("_", 1)[-1] for path in python_paths].count("a.json") == attempts
-    assert [path.rsplit("_", 1)[-1] for path in _put_paths(bucket)].count("a.json") == attempts
+    assert (await _put_names_once_received(bucket, "a.json", attempts)).count("a.json") == attempts
+
+
+async def _put_names_once_received(bucket: FakeBucket, name: str, count: int) -> list[str]:
+    for _ in range(500):
+        if [path.rsplit("_", 1)[-1] for path in _put_paths(bucket)].count(name) >= count:
+            break
+        await asyncio.sleep(0.02)
+    return [path.rsplit("_", 1)[-1] for path in _put_paths(bucket)]
 
 
 _NO_METADATA: Final = object()
@@ -1262,9 +1289,10 @@ async def test_cold_storage_handles_odd_metadata_like_python(
         del payload["metadata"]
     else:
         payload["metadata"] = metadata
-    with patch.object(s3_v2._Host, "callback_failed") as rust_failures:
+    with _failures() as rust_failures:
         await _log(logger, payload)
         await logger.flush_queue()
+        await _reported(rust_failures, golden.expected("failures"))
         await asyncio.sleep(0.2)
     _assert_same_puts(golden, bucket, puts)
     assert golden.expected("failures") == rust_failures.call_count
@@ -1369,9 +1397,10 @@ async def test_a_payload_whose_alias_lookup_fails_is_counted_and_released(
     golden: Golden, bucket: FakeBucket, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     logger = await _logger(monkeypatch, bucket, {"s3_use_team_prefix": True})
-    with patch.object(s3_v2._Host, "callback_failed") as rust_failures:
+    with _failures() as rust_failures:
         await _log(logger, _payload(metadata=_AliasLookupFails(team="t")))
         await logger.flush_queue()
+        await _reported(rust_failures, golden.expected("failures"))
         await asyncio.sleep(0.2)
     _assert_same_puts(golden, bucket, 0)
     assert golden.expected("failures") == rust_failures.call_count

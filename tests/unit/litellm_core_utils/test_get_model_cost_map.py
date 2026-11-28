@@ -7,13 +7,15 @@ import asyncio
 import json
 import logging
 import re
+import sys
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Final
 
 import pytest
 
 import litellm
+from litellm.constants import BEDROCK_CONVERSE_MODELS
 from litellm.litellm_core_utils.fallback_generalizations import (
     get_fallback_generalization_rules,
     match_routing_generalization,
@@ -241,6 +243,188 @@ def test_a_reload_adds_the_models_it_serves_to_the_provider_sets():
     install_model_cost_map(_document_with(**{"lit-reloaded-chat": {"litellm_provider": "openai", "mode": "chat"}}))
 
     assert "lit-reloaded-chat" in litellm.models_by_provider["openai"]
+
+
+def _known_as_openai(model: str) -> tuple[bool, bool, bool, str]:
+    return (
+        model in litellm.open_ai_chat_completion_models,
+        model in litellm.models_by_provider["openai"],
+        model in litellm.model_list_set,
+        litellm.get_llm_provider(f"azure_ai/{model}", api_base="http://127.0.0.1:1")[1],
+    )
+
+
+class _WatchedModels(set[str]):  # mutable-ok: stands in for a live provider set
+    """A provider set that remembers the names removed from it, and calls ``before_removing`` at the moment another
+    thread could still read or register them."""
+
+    def __init__(self, names: Iterable[str], before_removing: Callable[[frozenset[str]], None]) -> None:
+        super().__init__(names)
+        self.taken_out: frozenset[str] = frozenset()
+        self._before_removing: Final = before_removing
+
+    def difference_update(self, *others: Iterable[str]) -> None:
+        leaving: Final = frozenset(self.intersection(frozenset[str]().union(*others)))
+        self.taken_out = self.taken_out | leaving
+        self._before_removing(leaving)
+        super().difference_update(*others)
+
+
+def _nothing_happens(_leaving: frozenset[str]) -> None:
+    return None
+
+
+@pytest.fixture
+def watch_the_openai_models(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., _WatchedModels]]:
+    """Swaps the live OpenAI model set for a watched copy, and writes what became of it back when the test ends."""
+    live: Final = litellm.open_ai_chat_completion_models
+
+    def watch(before_removing: Callable[[frozenset[str]], None] = _nothing_happens) -> _WatchedModels:
+        watched: Final = _WatchedModels(litellm.open_ai_chat_completion_models, before_removing)
+        monkeypatch.setattr(litellm, "open_ai_chat_completion_models", watched)
+        return watched
+
+    yield watch
+    live.intersection_update(litellm.open_ai_chat_completion_models)
+    live.update(litellm.open_ai_chat_completion_models)
+
+
+@pytest.fixture
+def forget_the_models_it_adds() -> Iterator[None]:
+    """Forgets the names a test registers once it ends, so they keep no name in the sets through a later test's
+    reload."""
+    added: Final = litellm._ProviderModelSources.added
+    before: Final = {listing: frozenset(names) for listing, names in added.items()}
+    yield
+    for listing, names in before.items():
+        added[listing].intersection_update(names)
+
+
+@pytest.mark.usefixtures("own_model_cost")
+def test_a_reload_retires_the_models_only_the_previous_map_served(
+    watch_the_openai_models: Callable[..., _WatchedModels],
+):
+    serving: Final = _document_with(
+        **{
+            "lit-dropped-chat": {"litellm_provider": "openai", "mode": "chat"},
+            "lit-dropped-embedding": {"litellm_provider": "vertex_ai-embedding-models", "mode": "embedding"},
+        }
+    )
+    install_model_cost_map(serving)
+    openai_models: Final = watch_the_openai_models()
+    install_model_cost_map(serving)
+    assert "lit-dropped-chat" not in openai_models.taken_out
+    assert _known_as_openai("lit-dropped-chat") == (True, True, True, "azure")
+    assert "lit-dropped-embedding" in litellm.all_embedding_models
+
+    install_model_cost_map(_BUNDLED)
+
+    assert _known_as_openai("lit-dropped-chat") == (False, False, False, "azure_ai")
+    assert "lit-dropped-embedding" not in litellm.all_embedding_models
+
+
+@pytest.mark.parametrize("registered_first", [True, False])
+@pytest.mark.usefixtures("own_model_cost", "forget_the_models_it_adds")
+def test_a_reload_keeps_a_registered_model_the_new_map_lacks(
+    registered_first: bool, watch_the_openai_models: Callable[..., _WatchedModels]
+):
+    row: Final = {"litellm_provider": "openai", "mode": "chat"}
+    if registered_first:
+        litellm.register_model({"lit-registered-chat": row})
+    install_model_cost_map(_document_with(**{"lit-registered-chat": row}))
+    if not registered_first:
+        litellm.register_model({"lit-registered-chat": row})
+    litellm.register_model({"lit-registered-later": row})
+
+    openai_models: Final = watch_the_openai_models()
+
+    install_model_cost_map(_BUNDLED)
+
+    assert "lit-registered-chat" not in openai_models.taken_out
+    assert _known_as_openai("lit-registered-chat") == (True, True, True, "azure")
+
+
+@pytest.mark.usefixtures("own_model_cost", "forget_the_models_it_adds")
+def test_a_reload_keeps_a_model_registered_while_it_takes_that_model_out(
+    watch_the_openai_models: Callable[..., _WatchedModels],
+):
+    row: Final = {"litellm_provider": "openai", "mode": "chat"}
+
+    def register_it(leaving: frozenset[str]) -> None:
+        if "lit-registered-mid-install" in leaving:
+            litellm.register_model({"lit-registered-mid-install": row})
+
+    install_model_cost_map(_document_with(**{"lit-registered-mid-install": row}))
+
+    watch_the_openai_models(before_removing=register_it)
+
+    install_model_cost_map(_BUNDLED)
+
+    assert _known_as_openai("lit-registered-mid-install") == (True, True, True, "azure")
+
+
+@pytest.mark.usefixtures("own_model_cost", "forget_the_models_it_adds")
+def test_a_reload_retires_a_registered_model_the_new_map_marks_as_retired():
+    row: Final = {"litellm_provider": "together_ai", "mode": "chat"}
+    install_model_cost_map(_document_with(**{"lit-registered-then-retired": row}))
+    litellm.register_model({"lit-registered-then-retired": row})
+    try:
+        assert "lit-registered-then-retired" in litellm.together_ai_models
+
+        install_model_cost_map(
+            _document_with(**{"lit-registered-then-retired": {**row, "deprecation_date": "2000-01-01"}})
+        )
+
+        assert "lit-registered-then-retired" not in litellm.together_ai_models
+    finally:
+        install_model_cost_map(_BUNDLED)
+
+
+@pytest.mark.usefixtures("own_model_cost", "forget_the_models_it_adds")
+def test_a_reload_keeps_every_model_registered_from_several_threads_at_once():
+    row: Final = {"litellm_provider": "openai", "mode": "chat"}
+    registering_threads: Final = 8
+    names: Final = tuple(f"lit-registered-at-once-{number}" for number in range(registering_threads * 25))
+    install_model_cost_map(_document_with(**dict.fromkeys(names, row)))
+    start: Final = threading.Barrier(registering_threads)
+
+    def register(mine: tuple[str, ...]) -> None:
+        start.wait()
+        for name in mine:
+            litellm.register_model({name: row})
+
+    threads: Final = tuple(
+        threading.Thread(target=register, args=(names[first::registering_threads],))
+        for first in range(registering_threads)
+    )
+    switch_interval: Final = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        sys.setswitchinterval(switch_interval)
+
+    install_model_cost_map(_BUNDLED)
+
+    assert frozenset(names) - litellm.open_ai_chat_completion_models == frozenset()
+
+
+@pytest.mark.usefixtures("own_model_cost")
+def test_a_reload_keeps_a_model_litellm_ships_in_code_when_the_new_map_lacks_its_row():
+    bundled: Final[Mapping[str, Mapping[str, object]]] = json.loads(_BUNDLED)
+    shipped: Final = next(
+        name for name in BEDROCK_CONVERSE_MODELS if bundled.get(name, {}).get("litellm_provider") == "bedrock_converse"
+    )
+    try:
+        install_model_cost_map(json.dumps({key: row for key, row in bundled.items() if key != shipped}).encode())
+
+        assert shipped not in litellm.model_cost
+        assert shipped in litellm.bedrock_converse_models
+    finally:
+        install_model_cost_map(_BUNDLED)
 
 
 @pytest.mark.usefixtures("own_model_cost")

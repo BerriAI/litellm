@@ -73,11 +73,15 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         r"(?:master_key|xai_key|database_url|db_url|connection_string|"
         r"aws_secret_access_key|aws_session_token|aws_access_key_id|s3_secret_access_key|s3_access_key_id|"
         r"signing_key|encryption_key|"
-        r"auth_token|access_token|refresh_token|"
+        r"auth_token|access_token|refresh_token|authorization_token|"
         r"slack_webhook_url|webhook_url|"
         r"database_connection_string|"
         r"huggingface_token|jwt_secret)"
-        r"""['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+""",
+        r"""['\"]?\s*[:=]\s*['\"]?(?:(?:Bearer|Basic)\s+)?[^\s,'\"})\]{}>]+""",
+        # A quoted authorization key (a Responses MCP tool's credential) unless null, a boolean, or already masked
+        r"""\bauthorization['\"]\s*[:=]\s*['\"]?"""
+        r"""(?!(?:null|None|true|false)(?![^\s,'\"})\]{}>])|(?:(?:Bearer|Basic)\s+)?[^\s,'\"})\]{}>]*\*{3})"""
+        r"""(?:(?:Bearer|Basic)\s+)?[^\s,'\"})\]{}>]+""",
         # Raw JWTs (without Bearer prefix)
         r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*",
         # Azure SAS tokens in URLs. The delimiter is a lookbehind, like the

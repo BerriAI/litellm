@@ -6,20 +6,24 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+aws-lc-rs.workspace = true
 base64.workspace = true
+hex.workspace = true
 http.workspace = true
 jiff.workspace = true
 jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
 litellm-config.workspace = true
 litellm-fnmatch.workspace = true
 litellm-python-compat.workspace = true
+litellm-router-types.workspace = true
 litellm-secret-value.workspace = true
 litellm-starlette.workspace = true
-serde_json.workspace = true
-sha2.workspace = true
+fancy-regex.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 strum.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+veil.workspace = true
 
 [dev-dependencies]
 jsonwebtoken = { workspace = true, features = ["rust_crypto", "use_pem"] }

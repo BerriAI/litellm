@@ -92,8 +92,8 @@ def _chat_messages(kwargs: Mapping[str, object]) -> tuple[Mapping[str, object], 
 
 def _proxy_wire_body(kwargs: Mapping[str, object]) -> Mapping[str, object]:
     litellm_params: Final = kwargs.get("litellm_params")
-    request: Final = litellm_params.get("proxy_server_request") if isinstance(litellm_params, Mapping) else None
-    body: Final = request.get("body") if isinstance(request, Mapping) else None
+    request: Final[object] = litellm_params.get("proxy_server_request") if isinstance(litellm_params, Mapping) else None
+    body: Final[object] = request.get("body") if isinstance(request, Mapping) else None
     return body if isinstance(body, Mapping) else _EMPTY_METADATA
 
 
@@ -272,7 +272,9 @@ def _responses_final_text(response_obj: object) -> str:
     output: Final = getattr(response, "output", None)
     if not isinstance(output, Sequence):
         return ""
-    items: Final = tuple(item.model_dump() if isinstance(item, BaseModel) else item for item in output)
+    items: Final[tuple[object, ...]] = tuple(
+        item.model_dump() if isinstance(item, BaseModel) else item for item in output
+    )
     if any(not isinstance(item, Mapping) for item in items):
         return ""
     calls: Final = tuple(
@@ -328,7 +330,7 @@ def _guardrail_is_non_mutating(entry: Mapping[str, object], allowed_modes: froze
 
 def _request_mutating_guardrail_ran(request_metadata: Mapping[str, object]) -> bool:
     raw: Final = request_metadata.get("standard_logging_guardrail_information")
-    entries: Final = raw if isinstance(raw, Sequence) else ()
+    entries: Final[Sequence[object]] = raw if isinstance(raw, Sequence) else ()
     return any(
         not _guardrail_is_non_mutating(entry, _NON_MUTATING_GUARDRAIL_MODES)
         for entry in entries
@@ -338,7 +340,7 @@ def _request_mutating_guardrail_ran(request_metadata: Mapping[str, object]) -> b
 
 def request_guardrail_fingerprint(request_metadata: Mapping[str, object]) -> str | None:
     raw: Final = request_metadata.get("standard_logging_guardrail_information")
-    entries: Final = raw if isinstance(raw, Sequence) else ()
+    entries: Final[Sequence[object]] = raw if isinstance(raw, Sequence) else ()
     replay_safe_modes: Final = _NON_MUTATING_GUARDRAIL_MODES - frozenset(("logging_only",))
     relevant: Final = tuple(
         entry
@@ -380,7 +382,7 @@ def _post_guardrail_kwargs(
         return None
     raw_params: Final = kwargs.get("litellm_params")
     litellm_params: Final = raw_params if isinstance(raw_params, Mapping) else _EMPTY_METADATA
-    raw_request: Final = litellm_params.get("proxy_server_request")
+    raw_request: Final[object] = litellm_params.get("proxy_server_request")
     request: Final = raw_request if isinstance(raw_request, Mapping) else _EMPTY_METADATA
     body: Final = guardrail_snapshot.body
     return MappingProxyType(
@@ -656,7 +658,7 @@ def _tool_definitions_text(tools: object) -> str:
     forwarding parameter schemas it does not need to score that."""
     if not isinstance(tools, Sequence) or isinstance(tools, str):
         return ""
-    entries: Final = tuple(
+    entries: Final[tuple[object, ...]] = tuple(
         _field_reader(t)("function") or _field_reader(t)("custom") or t for t in tools if not isinstance(t, str)
     )
     lines: Final = tuple(

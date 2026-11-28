@@ -5,13 +5,15 @@ import time
 import traceback
 import types
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial, reduce
 from types import EllipsisType
-from typing import Any, Final, NoReturn, TypeAlias, overload
+from typing import Final, NoReturn, Protocol, TypeAlias, overload
+from urllib.parse import urlsplit
 
 import anyio
 from fastapi import HTTPException
@@ -56,12 +58,13 @@ from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     MCP_TOOL_LISTING_TIMEOUT,
 )
+from litellm.integrations.lens.policy import LENS_LOGGING_POLICY_PARAM, LensLoggingPolicy, lens_logging_enabled
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-    publish_auth_cache_invalidation,
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
+    publish_cache_invalidation,
 )
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.litellm_pre_call_utils import (
@@ -88,6 +91,7 @@ from litellm.proxy.mcp_server.contracts import (
     AuthorizedToolCall,
     OperationContext,
     ProgressCallback,
+    ToolCallLoggingData,
 )
 from litellm.proxy.mcp_server.db import OAuthCredentialPayload
 from litellm.proxy.mcp_server.exceptions import (
@@ -141,7 +145,9 @@ from litellm.proxy.mcp_server.result_conversion import (
     WireCompat,
     complete_call_tool_result,
     handler_outcome,
+    is_url_elicitation_required,
     to_call_tool_result,
+    url_elicitation_as_error_result,
 )
 from litellm.proxy.mcp_server.stdio_gate import is_mcp_stdio_blocked
 from litellm.proxy.mcp_server.tool_registry import (
@@ -233,7 +239,7 @@ async def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
     """Drop a stored-or-deleted BYOK credential from this worker's cache and from every peer worker's."""
     cache_key: Final = byok_credential_cache_key(user_id, server_id)
     byok_credential_cache.delete_cache(cache_key)
-    await publish_auth_cache_invalidation(cache_key=cache_key)
+    await publish_cache_invalidation(cache_key=cache_key)
 
 
 def _mcp_session_id_from_headers(
@@ -284,6 +290,36 @@ _ResourceOwnerFailure: TypeAlias = (
 )
 
 
+def _resource_uri_without_query(uri: str) -> tuple[str, str, str, str] | None:
+    try:
+        parts: Final = urlsplit(uri)
+    except ValueError:
+        return None
+    if not parts.scheme:
+        return None
+    return parts.scheme, parts.netloc, parts.path, parts.fragment
+
+
+def _resolve_resource_path_owner(
+    listings: Sequence[tuple[MCPServer, tuple[Resource, ...]]], requested_uri: str
+) -> MCPServer | _ResourceOwnerAmbiguous | None:
+    if not any(server.resource_uri_match == "path_only" for server, _ in listings):
+        return None
+    requested: Final = _resource_uri_without_query(requested_uri)
+    if requested is None:
+        return None
+    owners: Final = tuple(
+        server
+        for server, listing in listings
+        if any(_resource_uri_without_query(str(resource.uri)) == requested for resource in listing)
+    )
+    if len(owners) == 1:
+        return owners[0] if owners[0].resource_uri_match == "path_only" else None
+    if any(owner.resource_uri_match == "path_only" for owner in owners):
+        return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in owners))
+    return None
+
+
 def _withhold_fanned_out_caller_authorization(
     server: MCPServer, extra_headers: dict[str, str] | None, scope_servers: Sequence[MCPServer]
 ) -> dict[str, str] | None:
@@ -296,7 +332,7 @@ def _withhold_fanned_out_caller_authorization(
     return extra_headers
 
 
-def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl) -> NoReturn:
+def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl | str) -> NoReturn:
     match failure:
         case _ResourceOwnerRateLimited(error=error):
             raise error
@@ -322,6 +358,26 @@ def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl) -
 _mcp_server_admission_memo: Final[ContextVar[dict[str, asyncio.Task[ProxyRateLimitError | None]] | None]] = ContextVar(
     "mcp_server_admission_memo", default=None
 )
+
+
+_mcp_listing_credential_scope: Final[ContextVar[tuple[MCPServer, ...]]] = ContextVar(
+    "mcp_listing_credential_scope", default=()
+)
+
+
+@contextmanager
+def shared_mcp_listing(servers: Sequence[MCPServer]) -> Generator[None]:
+    """Treat every listing made inside the block as one discovery over ``servers``: each server's rate
+    limit is charged once, and the caller's request-wide Authorization is withheld as if all of them
+    were listed together."""
+    credential_scope: Final = _mcp_listing_credential_scope.set((*_mcp_listing_credential_scope.get(), *servers))
+    admission: Final = _mcp_server_admission_memo.set({}) if _mcp_server_admission_memo.get() is None else None
+    try:
+        yield
+    finally:
+        if admission is not None:
+            _mcp_server_admission_memo.reset(admission)
+        _mcp_listing_credential_scope.reset(credential_scope)
 
 
 async def _enforce_mcp_server_rate_limit(
@@ -1089,7 +1145,7 @@ def _prepare_mcp_server_headers(
     # the extra_headers copy loop below honor it — otherwise a server that lists Authorization in
     # extra_headers would re-copy the withheld bearer from raw_headers and replay it anyway.
     withhold_forwarded_authorization: Final = is_client_forwarded_mode and caller_authorization_fans_out(
-        server, scope_servers
+        server, None if scope_servers is None else (*scope_servers, *_mcp_listing_credential_scope.get())
     )
     if server.auth_type == MCPAuth.oauth2:
         # For OAuth2 M2M servers, upstream Authorization must come from
@@ -1572,7 +1628,7 @@ async def _get_prompts_from_mcp_servers(
     )
 
     # Get prompts from each allowed server
-    all_prompts: Final = []
+    all_prompts: Final[list[Prompt]] = []
     for server in allowed_mcp_servers:
         if server is None:
             continue
@@ -2160,7 +2216,8 @@ async def execute_mcp_tool(
     input_responses: InputResponses | None = None,
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
-    **kwargs: object,  # kwargs-ok: preserves the existing REST and decorated logging call contract
+    flatten_url_elicitation: bool = False,
+    **kwargs: Unpack[ToolCallLoggingData],  # kwargs-ok: preserves the existing REST and decorated logging call contract
 ) -> CallToolResult | InputRequiredResult:
     context: Final = prepare_context(
         user_api_key_auth=user_api_key_auth,
@@ -2180,9 +2237,10 @@ async def execute_mcp_tool(
         host_progress_callback=host_progress_callback,
         guardrail_context=guardrail_context,
         guardrail_auth=guardrail_auth,
-        logging_data=types.MappingProxyType(kwargs),
+        logging_data=kwargs,
         input_responses=input_responses,
         request_state=request_state,
+        flatten_url_elicitation=flatten_url_elicitation,
     )
     return await GatewayOperations().execute(operation, context)
 
@@ -2205,7 +2263,8 @@ async def _execute_mcp_tool(
     input_responses: InputResponses | None = None,
     request_state: str | None = None,
     incoming_bearer_token: SecretStr | None | EllipsisType = ...,
-    **kwargs: Any,
+    flatten_url_elicitation: bool = False,
+    **kwargs: Unpack[ToolCallLoggingData],
 ) -> CallToolResult | InputRequiredResult:
     """
     Execute MCP tool.
@@ -2499,7 +2558,7 @@ async def _execute_mcp_tool(
     # Primary and recommended way to use external MCP servers
     #########################################################
     elif mcp_server:
-        response = await _handle_managed_mcp_tool(
+        managed_execution: Final = _handle_managed_mcp_tool(
             server_name=server_name,
             name=original_tool_name,
             arguments=arguments,
@@ -2524,6 +2583,18 @@ async def _execute_mcp_tool(
             input_responses=input_responses,
             request_state=request_state,
             incoming_bearer_token=incoming_bearer_token,
+        )
+        response = await (
+            url_elicitation_as_error_result(managed_execution)
+            if flatten_url_elicitation
+            else _relay_guarded_url_elicitation(
+                managed_execution,
+                logging_obj=litellm_logging_obj,
+                original_auth=user_api_key_auth,
+                guardrail_auth=effective_guardrail_auth,
+                request_data=kwargs,
+                start_time=start_time,
+            )
         )
 
     # Fall back to local tool registry with original name (legacy support)
@@ -2617,6 +2688,92 @@ async def _execute_mcp_tool(
         original_auth=user_api_key_auth,
         guardrail_auth=effective_guardrail_auth,
         request_data=kwargs,
+    )
+
+
+class _CarriesData(Protocol):
+    @property
+    def data(self) -> object: ...
+
+
+def _error_data(error: _CarriesData) -> object:
+    return error.data
+
+
+def _json_object(value: object) -> Mapping[str, JsonValue] | None:
+    return TypeAdapter(dict[str, JsonValue]).validate_python(value) if isinstance(value, dict) else None
+
+
+def _elicitation_message(elicitation: Mapping[str, JsonValue] | None) -> str | None:
+    message: Final = elicitation.get("message") if elicitation is not None else None
+    return message if isinstance(message, str) else None
+
+
+async def _result_or_url_elicitation(
+    execution: Awaitable[CallToolResult | InputRequiredResult],
+) -> CallToolResult | InputRequiredResult | MCPError:
+    try:
+        return await execution
+    except MCPError as error:
+        if not is_url_elicitation_required(error):
+            raise
+        return error
+
+
+async def _relay_guarded_url_elicitation(
+    execution: Awaitable[CallToolResult | InputRequiredResult],
+    logging_obj: LiteLLMLoggingObj | None,
+    original_auth: UserAPIKeyAuth | None,
+    guardrail_auth: UserAPIKeyAuth | None,
+    request_data: Mapping[str, object],
+    start_time: datetime,
+) -> CallToolResult | InputRequiredResult:
+    elicitation_error: Final = await _result_or_url_elicitation(execution)
+    if not isinstance(elicitation_error, MCPError):
+        return elicitation_error
+    raw_data: Final = _error_data(elicitation_error.error)
+    data: Final = _json_object(raw_data)
+    listed: Final = data.get("elicitations") if data is not None else None
+    elicitations: Final = TypeAdapter(list[JsonValue]).validate_python(listed) if isinstance(listed, list) else []
+    entries: Final = tuple(_json_object(elicitation) for elicitation in elicitations)
+    messages: Final = tuple(_elicitation_message(entry) for entry in entries)
+    guarded: Final = tuple(index for index, message in enumerate(messages) if message is not None)
+    guarded_result: Final = await _run_post_mcp_call_guardrails(
+        CallToolResult(
+            content=[
+                TextContent(type="text", text=elicitation_error.error.message),
+                *(TextContent(type="text", text=message) for message in messages if message is not None),
+            ]
+        ),
+        litellm_logging_obj=logging_obj,
+        original_auth=original_auth,
+        guardrail_auth=guardrail_auth,
+        request_data=request_data,
+    )
+    checked: Final = (
+        await logging_obj.async_post_mcp_tool_call_hook(  # pyright: ignore[reportUnknownMemberType]  # hook takes the logger's untyped call details
+            kwargs=logging_obj.model_call_details,
+            response_obj=guarded_result,
+            start_time=start_time,
+            end_time=datetime.now(),  # noqa: DTZ005  # matches the logging pipeline start time
+        )
+        if logging_obj is not None
+        else guarded_result
+    )
+    texts: Final = tuple(TextContent.model_validate(block).text for block in checked.content)
+    replaced: Final = dict(zip(guarded, texts[1:], strict=True))
+    raise MCPError(
+        code=elicitation_error.error.code,
+        message=texts[0],
+        data={
+            **data,
+            "elicitations": [
+                {**entry, "message": replaced[index]} if entry is not None and index in replaced else elicitation
+                for index, (elicitation, entry) in enumerate(zip(elicitations, entries, strict=True))
+            ],
+        }
+        if data is not None and replaced
+        else raw_data,
     )
 
 
@@ -2913,7 +3070,10 @@ async def log_mcp_sdk_rejection(
         metadata=metadata,
     )
     logging_obj.update_environment_variables(  # pyright: ignore[reportUnknownMemberType]  # untyped legacy signature
-        litellm_params={"metadata": metadata},
+        litellm_params={
+            "metadata": metadata,
+            LENS_LOGGING_POLICY_PARAM: LensLoggingPolicy(enabled=lens_logging_enabled(user_api_key_auth)),
+        },
         optional_params={},
         user=user_api_key_auth.user_id,
     )
@@ -3162,7 +3322,7 @@ async def mcp_get_prompt(
 
 
 async def mcp_read_resource(
-    url: AnyUrl,
+    url: AnyUrl | str,
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
     mcp_servers: list[str] | None = None,
@@ -3190,7 +3350,7 @@ async def mcp_read_resource(
 
     candidates: Final = tuple(server for server in allowed_mcp_servers if not is_mcp_stdio_blocked(server.transport))
 
-    async def owner(candidate: MCPServer) -> MCPServer | ResourceListingFailed | None:
+    async def list_candidate(candidate: MCPServer) -> tuple[MCPServer, tuple[Resource, ...] | ResourceListingFailed]:
         candidate_auth, candidate_headers = _prepare_mcp_server_headers(
             server=candidate,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -3209,30 +3369,30 @@ async def mcp_read_resource(
             raw_headers=raw_headers,
             client_ip=client_ip,
         )
-        if isinstance(listing, ResourceListingFailed):
-            return listing
-        return candidate if any(str(resource.uri) == str(url) for resource in listing) else None
+        return candidate, listing
 
     async def resolve_owner() -> MCPServer | _ResourceOwnerFailure:
         admission: Final = await _admit_mcp_servers(candidates, user_api_key_auth)
         if admission.rejected_servers:
             return _ResourceOwnerRateLimited(error=admission.rejected_servers[0][1])
-        lookups: Final = tuple(asyncio.create_task(owner(candidate)) for candidate in candidates)
-        try:
-            for lookup in asyncio.as_completed(lookups):
-                if isinstance(failure := await lookup, ResourceListingFailed):
-                    return failure
-        finally:
-            for lookup in lookups:
-                lookup.cancel()
-            await asyncio.gather(*lookups, return_exceptions=True)
-        results: Final = tuple(lookup.result() for lookup in lookups)
-        owners: Final = tuple(result for result in results if isinstance(result, MCPServer))
-        if len(owners) == 1:
-            return owners[0]
-        if not owners:
-            return _ResourceOwnerMissing()
-        return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in owners))
+        results: Final = await asyncio.gather(*(list_candidate(candidate) for candidate in candidates))
+        failures: Final = tuple(listing for _, listing in results if isinstance(listing, ResourceListingFailed))
+        listings: Final = tuple(
+            (candidate, listing) for candidate, listing in results if not isinstance(listing, ResourceListingFailed)
+        )
+        requested_uri: Final = str(url)
+        exact_owners: Final = tuple(
+            candidate
+            for candidate, listing in listings
+            if any(str(resource.uri) == requested_uri for resource in listing)
+        )
+        if len(exact_owners) == 1:
+            return exact_owners[0]
+        if len(exact_owners) > 1:
+            return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in exact_owners))
+        if failures:
+            return failures[0]
+        return _resolve_resource_path_owner(listings, requested_uri) or _ResourceOwnerMissing()
 
     if len(allowed_mcp_servers) == 1:
         await _enforce_mcp_server_rate_limit(user_api_key_auth, allowed_mcp_servers[0])
@@ -3642,6 +3802,8 @@ async def _execute_mcp_server_tool_call(
             is_error=True,
         )
     except Exception as e:
+        if is_url_elicitation_required(e):
+            raise
         verbose_logger.exception("MCP mcp_server_tool_call - error: %s", e)
         return CallToolResult(
             content=[TextContent(text=f"Error: {e}", type="text")],
@@ -4054,6 +4216,7 @@ class GatewayOperations:
                     input_responses=operation.input_responses,
                     request_state=operation.request_state,
                     incoming_bearer_token=context.incoming_bearer_token,
+                    flatten_url_elicitation=operation.flatten_url_elicitation,
                     **operation.logging_data,
                 )
             case ListToolsRequest(params=params):

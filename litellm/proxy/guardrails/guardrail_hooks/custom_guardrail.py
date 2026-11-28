@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, Literal
 
 import litellm
@@ -8,6 +9,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.utils import LLMResponseTypes
 
 
 class myCustomGuardrail(CustomGuardrail):
@@ -95,9 +97,9 @@ class myCustomGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         """
         Runs on response from LLM API call

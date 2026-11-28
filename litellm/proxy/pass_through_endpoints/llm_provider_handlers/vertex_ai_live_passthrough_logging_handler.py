@@ -118,7 +118,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
     - Tool use tokens
     """
 
-    def _build_complete_streaming_response(self, *args, **kwargs):
+    def _build_complete_streaming_response(self, *args: object, **kwargs: object):
         """Not applicable for WebSocket passthrough."""
         return
 
@@ -188,7 +188,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
     @staticmethod
     def _extract_usage_metadata_from_websocket_messages(
         websocket_messages: Sequence[object],
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Extract and aggregate usage metadata from a list of WebSocket messages.
 
@@ -367,8 +367,8 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         url_route: str,
         start_time: datetime,
         end_time: datetime,
-        request_body: dict,
-        **kwargs,
+        request_body: Mapping[str, object],
+        **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Handle cost tracking and logging for Vertex AI Live API WebSocket passthrough.

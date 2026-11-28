@@ -1,6 +1,7 @@
+use crate::error::InvalidCredentials;
 use crate::{
     BudgetExceeded, Error, JwtDenial, KeyDenial, KeyFailure, KeyHash, ModelAccessDenied,
-    PremiumRequired, RbacDenial, TeamDenial, VerifyDenial,
+    PremiumRequired, RbacDenial, RequestDenial, TeamDenial, VerifyDenial,
 };
 
 /// `ProxyErrorTypes` values a denial carries.
@@ -92,6 +93,12 @@ impl PremiumRequired {
     }
 }
 
+impl RequestDenial {
+    pub fn public(&self) -> PublicDenial {
+        http(403, self)
+    }
+}
+
 impl Error {
     /// The exception Python raises for this error, or `None` when the host surfaces its own failure.
     pub fn public(&self) -> Option<PublicDenial> {
@@ -99,8 +106,10 @@ impl Error {
             Self::PremiumRequired(premium) => premium.public(),
             Self::Key(denial) => denial.public(),
             Self::Jwt(denial) => denial.public(),
-            Self::BudgetExceeded(exceeded) => PublicDenial::BudgetExceeded(exceeded.clone()),
-            Self::HostFailed => return None,
+            Self::BudgetExceeded(exceeded) | Self::EndUserBudgetExceeded(exceeded) => {
+                PublicDenial::BudgetExceeded(exceeded.clone())
+            }
+            Self::HostFailed | Self::HostDeclined => return None,
         })
     }
 }
@@ -198,7 +207,7 @@ impl RbacDenial {
 impl TeamDenial {
     pub(crate) fn public(&self) -> PublicDenial {
         match self {
-            Self::TeamNotFound { .. } | Self::TeamAliasNotFound { .. } => http(404, self),
+            Self::TeamNotFound { .. } | Self::TeamAliasNotFound { .. } => auth(&InvalidCredentials),
             Self::TeamAliasAmbiguous { .. } => http(400, self),
             Self::NoDb | Self::NoTeamInToken { .. } => plain(self),
             Self::NoTeamsInToken
@@ -290,6 +299,10 @@ mod tests {
     )]
     #[case::budget(
         Error::BudgetExceeded(over_budget()),
+        PublicDenial::BudgetExceeded(over_budget())
+    )]
+    #[case::end_user_budget(
+        Error::EndUserBudgetExceeded(over_budget()),
         PublicDenial::BudgetExceeded(over_budget())
     )]
     #[case::expired_key(
@@ -391,11 +404,11 @@ mod tests {
     )]
     #[case::team_not_found(
         TeamDenial::TeamNotFound { team_id: "t".to_owned() },
-        http(404, "Team doesn't exist in db. Team=t. Create team via `/team/new` call.")
+        auth(&"Authentication Error, invalid credentials")
     )]
     #[case::alias_not_found(
         TeamDenial::TeamAliasNotFound { alias: "eng".to_owned() },
-        http(404, "Team with alias 'eng' doesn't exist in db. Create team via `/team/new` call.")
+        auth(&"Authentication Error, invalid credentials")
     )]
     #[case::alias_ambiguous(
         TeamDenial::TeamAliasAmbiguous { alias: "eng".to_owned() },

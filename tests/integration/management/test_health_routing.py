@@ -37,7 +37,7 @@ def test_public_readiness_reports_database_outage_and_allow_unavailable_setting(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with scratch_database() as database_url:
-        with database_relay(database_url, _READINESS_PROBE_QUERY) as (relay, relayed_url):
+        with database_relay(database_url, _READINESS_PROBE_QUERY, outage_seconds=None) as (relay, relayed_url):
             with owned_proxy(
                 gateway,
                 tmp_path,
@@ -70,7 +70,7 @@ def test_public_readiness_reports_database_outage_and_allow_unavailable_setting(
             tmp_path,
             {"allow_requests_on_db_unavailable": True},
         )
-        with database_relay(database_url, _READINESS_PROBE_QUERY) as (relay, relayed_url):
+        with database_relay(database_url, _READINESS_PROBE_QUERY, outage_seconds=None) as (relay, relayed_url):
             with owned_proxy(
                 gateway,
                 tmp_path,

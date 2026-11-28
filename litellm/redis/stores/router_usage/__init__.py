@@ -86,6 +86,10 @@ class RouterUsageStore:
     def __init__(self, handle: RouterUsageHandle) -> None:
         self._handle: Final = handle
 
+    def flush_local(self) -> None:
+        """Drops everything this process holds in memory and leaves Redis alone, for test harnesses that reuse a process."""
+        self._handle.flush_local()
+
     @property
     def has_redis(self) -> bool:
         return self._handle.has_redis
@@ -179,11 +183,12 @@ class RouterUsageStore:
         try:
             return await self._handle.increment_remote(increments)
         except NativeRedisStoreError as e:
+            details: Final[tuple[object, ...]] = e.args[1:]
             match e.args[:1]:
                 case ("breaker_open",):
-                    raise RedisCircuitBreakerOpenError(*e.args[1:]) from e
+                    raise RedisCircuitBreakerOpenError(*details) from e
                 case ("timeout",):
-                    raise TimeoutError(*e.args[1:]) from e
+                    raise TimeoutError(*details) from e
                 case _:
                     raise
 

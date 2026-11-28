@@ -84,16 +84,16 @@ fn decode_ssl_verify(field: &Field<'_>) -> Result<Option<SslVerify>, ProjectionE
     Err(field.invalid("a Boolean, Boolean string, CA path, or None"))
 }
 
-static RESOURCES: LazyLock<litellm_inference::resources::CoreResources> =
-    LazyLock::new(|| litellm_inference::resources::CoreResources {
+static RESOURCES: LazyLock<litellm_inference::resources::CoreResources> = LazyLock::new(|| {
+    // Bedrock and Claude on Vertex's explicit AWS keys resolve an `oidc/` web identity token
+    // through the same host secrets.
+    litellm_inference::resources::CoreResources {
         pool: Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver))),
-        auth: Arc::new(litellm_auth::AuthServices {
-            aws: litellm_auth_aws::AwsAuthService::with_web_identity_tokens(Arc::new(
-                crate::secrets::HostWebIdentityTokens,
-            )),
-            ..litellm_auth::AuthServices::default()
-        }),
-    });
+        auth: Arc::new(litellm_auth::AuthServices::with_web_identity_tokens(
+            Arc::new(crate::secrets::HostWebIdentityTokens),
+        )),
+    }
+});
 
 pub(crate) fn resources() -> &'static litellm_inference::resources::CoreResources {
     &RESOURCES
@@ -174,7 +174,7 @@ fn resolution(settings: HttpSettings) -> Resolution {
 fn resolved(py: Python<'_>, settings: HttpSettings) -> HttpClientConfig {
     let resolution = resolution(settings);
     for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
-        crate::logger::capture(py).scope(|| litellm_tracing::warn!("{unsupported}"));
+        crate::logger::capture(py).scope(|| tracing::warn!("{unsupported}"));
     }
     resolution.config
 }

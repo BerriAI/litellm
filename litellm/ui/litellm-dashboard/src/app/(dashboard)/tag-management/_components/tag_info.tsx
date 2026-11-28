@@ -1,5 +1,6 @@
 "use client";
 
+import { displayTimestamp } from "@/i18n/displayDate";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { SimpleTooltip } from "@/components/ui/tooltip";
@@ -208,7 +209,7 @@ interface TagInfoViewProps {
 }
 
 const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, is_admin, editTag }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [tagDetails, setTagDetails] = useState<Tag | null>(null);
   const [isEditing, setIsEditing] = useState<boolean>(editTag);
   const [userModels, setUserModels] = useState<string[]>([]);
@@ -276,7 +277,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
   }
 
   return (
-    <div className="p-4">
+    <div>
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button onClick={onClose} className="mb-4">
@@ -352,11 +353,15 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
                 </div>
                 <div>
                   <p className="font-medium">{t("tagManagement.info.details.created")}</p>
-                  <p>{tagDetails.created_at ? new Date(tagDetails.created_at).toLocaleString() : "-"}</p>
+                  <p>
+                    {tagDetails.created_at ? displayTimestamp(new Date(tagDetails.created_at), locale.language) : "-"}
+                  </p>
                 </div>
                 <div>
                   <p className="font-medium">{t("tagManagement.info.details.lastUpdated")}</p>
-                  <p>{tagDetails.updated_at ? new Date(tagDetails.updated_at).toLocaleString() : "-"}</p>
+                  <p>
+                    {tagDetails.updated_at ? displayTimestamp(new Date(tagDetails.updated_at), locale.language) : "-"}
+                  </p>
                 </div>
               </div>
             </CardContent>

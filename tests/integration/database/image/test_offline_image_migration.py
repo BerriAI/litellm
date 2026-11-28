@@ -76,6 +76,20 @@ def offline_postgres():
         _docker("network", "rm", network, check=False)
 
 
+def test_prisma_openssl_abi_uses_the_lts_series() -> None:
+    assert IMAGE is not None
+    probe: Final = _docker(
+        "run", "--rm", "--user", NON_ROOT_UID, "--entrypoint", "python", IMAGE, "-c",
+        "from ctypes import CDLL, c_char_p;"
+        " lib = CDLL('libssl.so.3');"
+        " lib.OpenSSL_version.restype = c_char_p;"
+        " print(lib.OpenSSL_version(0).decode())",
+        check=False,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert probe.stdout.startswith("OpenSSL 3.5."), probe.stdout
+
+
 def _wait_until_ready(pg: str, attempts: int = 60) -> None:
     for _ in range(attempts):
         running = _docker(

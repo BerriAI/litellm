@@ -11,7 +11,6 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
-from litellm.caching.dual_cache import DualCache
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 from litellm.llms.anthropic.messages.native.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,
@@ -32,10 +31,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    model_access_group_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.budget_reservation import (
     estimate_request_max_cost,
     invalidate_budget_reservation_counters,
@@ -50,6 +46,7 @@ from litellm.proxy.spend_tracking.input_tokens import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore, model_access_group_counter
 from tests.unit.proxy.rust_auth_stores import GroupBudget, RustAuthStores, install_rust_auth_stores
@@ -338,7 +335,7 @@ async def test_should_shrink_second_tag_reservation_to_remaining_budget(
     request_body = _request_body()
     request_body["metadata"] = {"tags": ["tag-budget-race", "tag-without-budget", "tag-budget-race"]}
     await key_cache.async_set_cache(
-        key="tag:tag-budget-race",
+        key=AuthObject.tag("tag-budget-race"),
         value=LiteLLM_TagTable(
             tag_name="tag-budget-race",
             spend=0.0,
@@ -347,7 +344,7 @@ async def test_should_shrink_second_tag_reservation_to_remaining_budget(
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="tag:tag-without-budget",
+        key=AuthObject.tag("tag-without-budget"),
         value=LiteLLM_TagTable(
             tag_name="tag-without-budget",
             spend=0.0,
@@ -453,7 +450,7 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
         spend=0.0,
     )
     await key_cache.async_set_cache(
-        key="team_membership:user-budget-shared:team-budget-shared",
+        key=AuthObject.team_membership_reservation(user_id="user-budget-shared", team_id="team-budget-shared"),
         value=LiteLLM_TeamMembership(
             user_id="user-budget-shared",
             team_id="team-budget-shared",
@@ -462,7 +459,7 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="org_id:org-budget-shared:with_budget",
+        key=AuthObject.org_with_budget("org-budget-shared"),
         value=LiteLLM_OrganizationTable(
             organization_id="org-budget-shared",
             organization_alias="shared-org",
@@ -508,14 +505,14 @@ def _project_scoped_token() -> UserAPIKeyAuth:
 
 
 async def _seed_project_scoped_budgets(
-    key_cache: DualCache,
+    key_cache: UserApiKeyCache,
     team_member_spend: float,
     team_member_max_budget: float,
     project_spend: float,
     project_max_budget: float,
 ) -> None:
     await key_cache.async_set_cache(
-        key="team_membership:user-proj:team-proj",
+        key=AuthObject.team_membership_reservation(user_id="user-proj", team_id="team-proj"),
         value=LiteLLM_TeamMembership(
             user_id="user-proj",
             team_id="team-proj",
@@ -524,7 +521,7 @@ async def _seed_project_scoped_budgets(
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="project_id:proj-1",
+        key=AuthObject.project("proj-1"),
         value=LiteLLM_ProjectTableCachedObj(
             project_id="proj-1",
             team_id="team-proj",
@@ -860,7 +857,7 @@ async def test_should_clamp_reservation_to_default_when_output_cap_missing(
         max_budget=10000.0,
     )
     await key_cache.async_set_cache(
-        key="key-budget-uncapped",
+        key=AuthObject.virtual_key("key-budget-uncapped"),
         value=valid_token,
     )
     request_body = _request_body()
@@ -997,7 +994,7 @@ async def test_should_clamp_reservation_to_model_ceiling_when_caller_overrequest
         max_budget=10000.0,
     )
     await key_cache.async_set_cache(
-        key="key-budget-overrequest",
+        key=AuthObject.virtual_key("key-budget-overrequest"),
         value=valid_token,
     )
 
@@ -1051,7 +1048,7 @@ async def test_should_use_token_pricing_for_chat_model_with_image_cost_field(
         spend=0.0,
         max_budget=10.0,
     )
-    await key_cache.async_set_cache(key="key-multimodal-chat", value=valid_token)
+    await key_cache.async_set_cache(key=AuthObject.virtual_key("key-multimodal-chat"), value=valid_token)
 
     # Roughly the gemini-3.1-pro-preview shape: chat-mode model that
     # carries an output_cost_per_image alongside token pricing.
@@ -1479,7 +1476,7 @@ async def test_should_not_block_concurrent_team_request_when_first_request_lacks
         spend=0.144,
     )
     await key_cache.async_set_cache(
-        key=f"team_id:{team_object.team_id}",
+        key=AuthObject.team(team_object.team_id),
         value=team_object,
     )
 
@@ -1734,7 +1731,7 @@ async def test_should_preserve_budget_error_and_continue_partial_cleanup(
         max_budget=0.3,
     )
     await key_cache.async_set_cache(
-        key="team_id:team-budget-cleanup-failure",
+        key=AuthObject.team("team-budget-cleanup-failure"),
         value=team_object,
     )
     redis = RespRedis(values={})
@@ -1764,7 +1761,12 @@ async def test_should_preserve_budget_error_and_continue_partial_cleanup(
 
     assert store.get_local("spend:key:key-budget-cleanup-failure") is None
     assert store.get_local("spend:team:team-budget-cleanup-failure") == pytest.approx(0.3)
-    assert "Failed to release partial budget reservation during exception cleanup" in caplog.text
+    cleanup_failure: Final = "Failed to release partial budget reservation during exception cleanup"
+    for _ in range(500):  # the Rust record reaches Python's logging from a background queue
+        if cleanup_failure in caplog.text:
+            break
+        await asyncio.sleep(0.01)
+    assert cleanup_failure in caplog.text
 
 
 @pytest.mark.asyncio
@@ -2189,8 +2191,13 @@ async def test_streaming_cancel_while_holding_back_provider_output_keeps_reserva
             {
                 "model_name": "claude-haiku-4-5",
                 "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-test"},
-            }
-        ]
+            },
+            {
+                "model_name": "claude-sonnet-5",
+                "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "sk-test"},
+            },
+        ],
+        fallbacks=[{"claude-haiku-4-5": ["claude-sonnet-5"]}],
     )
     provider_response = AnthropicMessagesStreamingResponse(
         completion_stream=held_back, hidden_params={"additional_headers": {}}
@@ -2643,7 +2650,7 @@ async def test_model_access_group_counter_blocks_a_request_over_the_group_budget
 
 async def _cache_model_access_group_budget(key_cache, group, spend, max_budget=None):
     await key_cache.async_set_cache(
-        key=model_access_group_cache_key(group),
+        key=AuthObject.model_access_group(group),
         value=ModelAccessGroupBudget(access_group_name=group, spend=spend, max_budget=max_budget),
         model_type=ModelAccessGroupBudget,
     )
@@ -2741,7 +2748,7 @@ async def test_should_reserve_image_generation_cost_per_image(
         spend=0.0,
         max_budget=10.0,
     )
-    await key_cache.async_set_cache(key="key-image-gen", value=valid_token)
+    await key_cache.async_set_cache(key=AuthObject.virtual_key("key-image-gen"), value=valid_token)
 
     request_body = {"model": "dall-e-3", "prompt": "a cat", "n": 3}
 
@@ -2790,7 +2797,7 @@ async def test_should_reject_concurrent_image_request_against_depleted_budget(
         spend=0.0,
     )
     await key_cache.async_set_cache(
-        key=f"team_id:{team_object.team_id}",
+        key=AuthObject.team(team_object.team_id),
         value=team_object,
     )
 
@@ -2846,7 +2853,7 @@ async def test_should_reserve_image_edit_cost_per_image(
         spend=0.0,
         max_budget=10.0,
     )
-    await key_cache.async_set_cache(key="key-image-edit", value=valid_token)
+    await key_cache.async_set_cache(key=AuthObject.virtual_key("key-image-edit"), value=valid_token)
 
     request_body = {"model": "stability/inpaint", "prompt": "a cat", "n": 2}
 

@@ -4,9 +4,10 @@ use crate::{
     MasterKey,
     authn::{jwt::JwtSettings, key::KeySettings},
     authz::RoutePolicy,
+    client_address::ClientAddresses,
     identity::jwt::TeamSettings,
     plan,
-    routes::{RouteGroup, RouteGroups},
+    routes::{ExposedRoutes, RouteGroup, RouteGroups},
 };
 
 /// What the host knows that `general_settings` does not say.
@@ -29,6 +30,22 @@ pub struct HostFacts {
     pub route_groups: RouteGroups,
 }
 
+/// The proxy's two allowlists, which it checks before it reads a credential.
+#[derive(Clone, Debug, Default)]
+pub struct Allowlists {
+    pub client_addresses: ClientAddresses,
+    pub exposed_routes: ExposedRoutes,
+}
+
+impl Allowlists {
+    pub fn new(general: &GeneralSettings) -> Self {
+        Self {
+            client_addresses: ClientAddresses::new(general),
+            exposed_routes: ExposedRoutes::new(general),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub plan: plan::Settings,
@@ -43,10 +60,13 @@ fn jwt_settings(
 ) -> JwtSettings {
     JwtSettings {
         config: jwt.clone(),
-        public_key_urls: env("JWT_PUBLIC_KEY_URL")
+        public_key_urls: jwt
+            .public_key_url
+            .clone()
+            .or_else(|| env("JWT_PUBLIC_KEY_URL"))
             .map(|urls| urls.split(',').map(|url| url.trim().to_owned()).collect())
             .unwrap_or_default(),
-        audience: env("JWT_AUDIENCE"),
+        audience: jwt.audience.clone().or_else(|| env("JWT_AUDIENCE")),
         issuer: env("JWT_ISSUER"),
         leeway_seconds: 0,
         role_permissions: role_permissions.unwrap_or_default().into(),
@@ -114,5 +134,51 @@ impl From<&JwtAuthSettings> for TeamSettings {
             fallback_to_db_teams: jwt.fallback_to_db_teams,
             team_claim_fallback: jwt.team_claim_fallback,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    const ENVIRONMENT: &[(&str, &str)] = &[
+        (
+            "JWT_PUBLIC_KEY_URL",
+            "https://env.example/a, https://env.example/b",
+        ),
+        ("JWT_AUDIENCE", "env-audience"),
+    ];
+
+    #[rstest]
+    #[case::config_only(Some("https://config.example/keys"), Some("config-audience"), &[], &["https://config.example/keys"], Some("config-audience"))]
+    #[case::environment_only(None, None, ENVIRONMENT, &["https://env.example/a", "https://env.example/b"], Some("env-audience"))]
+    #[case::config_beats_environment(Some("https://config.example/a,https://config.example/b"), Some("config-audience"), ENVIRONMENT, &["https://config.example/a", "https://config.example/b"], Some("config-audience"))]
+    #[case::each_key_falls_back_on_its_own(Some("https://config.example/keys"), None, ENVIRONMENT, &["https://config.example/keys"], Some("env-audience"))]
+    #[case::neither(None, None, &[], &[], None)]
+    fn global_jwks_and_audience_prefer_litellm_jwtauth_over_the_environment(
+        #[case] public_key_url: Option<&str>,
+        #[case] audience: Option<&str>,
+        #[case] environment: &[(&str, &str)],
+        #[case] expected_urls: &[&str],
+        #[case] expected_audience: Option<&str>,
+    ) {
+        let jwt = JwtAuthSettings {
+            public_key_url: public_key_url.map(str::to_owned),
+            audience: audience.map(str::to_owned),
+            ..JwtAuthSettings::default()
+        };
+        let env = |name: &str| {
+            environment
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_owned())
+        };
+
+        let settings = jwt_settings(&jwt, None, &env);
+
+        assert_eq!(settings.public_key_urls, expected_urls);
+        assert_eq!(settings.audience.as_deref(), expected_audience);
     }
 }

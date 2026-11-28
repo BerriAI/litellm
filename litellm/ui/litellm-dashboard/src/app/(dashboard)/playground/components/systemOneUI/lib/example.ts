@@ -201,7 +201,5 @@ export const emptyPayload = (endpoint: PresetEndpoint, model?: string): string =
     2,
   );
 
-export const decisionsExample = (model?: string): DecisionRequest => toSystemOneRequest(bugTriage, model);
-
 export const openAIDecisionsExample = (model?: string): OpenAIDecisionsRequest =>
   toOpenAIDecisionsRequest(bugTriage, model);

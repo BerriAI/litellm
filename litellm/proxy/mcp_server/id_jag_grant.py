@@ -26,6 +26,7 @@ from fastapi import Request
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import IdJagRequestingApp
 from litellm.proxy.auth import jwt as proxy_jwt
@@ -73,7 +74,7 @@ def granted_scope(claim: object, *, mcp_resource: bool) -> GrantedScope | Subjec
     MCP routes whatever the claim says: ``litellm:llm`` cannot be granted and is refused."""
     if claim is not None and not isinstance(claim, str):
         return SubjectTokenRefusal(error="invalid_scope", description=_SCOPE_DESCRIPTION)
-    requested: Final = frozenset(claim.split()) if claim else frozenset()
+    requested: Final = frozenset(claim.split()) if claim else frozenset[str]()
     if not requested <= SCOPE_ROUTE_GROUPS.keys():
         return SubjectTokenRefusal(error="invalid_scope", description=_SCOPE_DESCRIPTION)
     if mcp_resource:
@@ -89,7 +90,7 @@ def granted_scope(claim: object, *, mcp_resource: bool) -> GrantedScope | Subjec
 def names_mcp_resource(aud: object, base_url: str | None) -> bool:
     """Whether the verified ``aud`` names only the MCP resource, ``{base}/mcp``, and not the
     authorization server itself (the bare origin)."""
-    audiences: Final = frozenset((aud,) if isinstance(aud, str) else aud if isinstance(aud, list) else ())
+    audiences: Final = frozenset[object]((aud,) if isinstance(aud, str) else as_object_list(aud) or ())
     return base_url is not None and f"{base_url}/mcp" in audiences and base_url not in audiences
 
 

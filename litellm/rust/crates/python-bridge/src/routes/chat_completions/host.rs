@@ -37,6 +37,7 @@ pub(super) fn project(
 impl PythonBinding for ChatCompletionsPythonHost {
     type Protocol = ChatCompletions;
     type Failure = PyErr;
+    type Decoded = ChatCompletionsCall;
 
     fn decode_request(
         &mut self,

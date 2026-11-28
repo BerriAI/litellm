@@ -470,10 +470,11 @@ class OptionalChecks:
             *self._policies_not_set_globally(),
         )
 
-    def has_filters(self) -> bool:
-        """Whether ``filter_deployments`` would run any callback: without one it keeps every deployment."""
+    def has_filters(self, request: Mapping[str, object]) -> bool:
+        """Whether ``filter_deployments`` would run a callback for ``request``: without one it keeps
+        every deployment."""
         callbacks: Final = tuple(self.routing_callbacks())
-        return any(filters_deployments(callback) for callback in callbacks) or (
+        return any(_filters_request(callback, request) for callback in callbacks) or (
             Hook.filter_deployments in CustomLoggerV2.declared_hooks
             and hook_subscribers(Hook.filter_deployments, callbacks, admit=Admit.every_logger).has_v2
         )
@@ -638,6 +639,14 @@ def filters_deployments(callback: object) -> bool:
     return isinstance(callback, CustomLogger) and type(callback).async_filter_deployments is not base  # pyright: ignore[reportUnknownMemberType]  # see above
 
 
+def _filters_request(callback: object, request: Mapping[str, object]) -> bool:
+    return (
+        isinstance(callback, CustomLogger)
+        and filters_deployments(callback)
+        and callback.filters_deployments_for(request)
+    )
+
+
 def filtered_ids(remaining: Iterable[object], candidates: Sequence[str]) -> list[str]:  # mutable-ok: a JSON list
     """The ids of the deployments the filters left, in their order, among the candidates."""
     allowed: Final = frozenset(candidates)
@@ -765,7 +774,7 @@ class RustOptionalChecks:
         from litellm.router_rust.core import attempt_failure
 
         candidates: Final = [str(id) for id in step.get("candidates") or ()]  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType, reportUnknownArgumentType]  # the step's id list
-        if not self._opt.has_filters():
+        if not self._opt.has_filters(request):
             return (list(dict.fromkeys(candidates)), None), None
         records: Final = self._records_of(candidates)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]  # RustCore's deployment dicts
         narrowed: Final = _request_with_failed_ids(request, step)

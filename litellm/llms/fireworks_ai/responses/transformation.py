@@ -19,7 +19,11 @@ from litellm.llms.fireworks_ai.common_utils import (
     with_fireworks_session_affinity,
     without_caller_user,
 )
-from litellm.llms.openai.responses.instruction_items import developer_items_as_system, instruction_items_folded
+from litellm.llms.openai.responses.instruction_items import (
+    developer_items_as_system,
+    instruction_items_folded,
+    later_system_items_as_user,
+)
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
 from litellm.secret_managers.main import get_secret_str
@@ -76,7 +80,7 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         headers: Mapping[str, str],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:  # mutable-ok: overrides the base class signature
+    ) -> dict[str, str]:  # mutable-ok: overrides the base class signature
         params: Final = litellm_params or GenericLiteLLMParams()
         api_key: Final = resolve_fireworks_api_key(params.api_key)
         if api_key is None:
@@ -131,7 +135,7 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         placed_input, placed_params = folded or (developer_items_as_system(hoisted.input), hoisted_params)
         request: Final = super().transform_responses_api_request(
             model=resolve_fireworks_resource_name(model),
-            input=placed_input,
+            input=later_system_items_as_user(placed_input) if declared is False else placed_input,
             response_api_optional_request_params=dict(placed_params),
             litellm_params=litellm_params,
             headers=headers,

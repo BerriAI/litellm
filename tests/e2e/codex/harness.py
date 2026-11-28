@@ -8,13 +8,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
-from typing import Final
+from types import MappingProxyType
+from typing import Final, Literal
 
 from cli_harness.lockdown import isolated_home, locked_down_env
 from cli_harness.rate_limiter import RateBucket, RateLimiter
 from codex.rollout import Compaction, Subagent, rollout_compactions, rollout_parent_thread, rollout_subagent
 from codex.run import CodexRun, codex_run
 from e2e_metadata import step
+from pydantic import BaseModel, ConfigDict
 
 CODEX_CLI: Final = "codex"
 EXEC_TIMEOUT_SECONDS: Final = 600.0
@@ -38,6 +40,29 @@ model_catalog_url = "{gateway}/v1/models"
 """
 
 
+type CodexCatalog = Literal["gateway", "openai", "amazon-bedrock", "amazon-bedrock-runtime"]
+
+
+class _CatalogTier(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+
+
+class _CatalogModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    slug: str
+    service_tiers: tuple[_CatalogTier, ...] = ()
+    tool_mode: str | None = None
+
+
+class _Catalog(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    models: tuple[_CatalogModel, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class McpServer:
     command: str
@@ -57,6 +82,10 @@ class CodexHarness:
     @property
     def codex_home(self) -> Path:
         return self.home / ".codex"
+
+    @step('Run Codex on {model} through the proxy with the flags {flags} and the prompt "{prompt}"')
+    def exec_with_flags(self, prompt: str, *, model: str, cwd: Path, flags: tuple[str, ...]) -> CodexRun:
+        return self._run(("exec",), (*flags, "--model", model, "--", prompt), cwd)
 
     @step("Create a workspace folder holding the test's files")
     def new_workspace(self, files: Mapping[str, str]) -> Path:
@@ -80,12 +109,14 @@ class CodexHarness:
         compact_after_tokens: int | None = None,
         enable: tuple[str, ...] = (),
         disable: tuple[str, ...] = (),
+        fast: bool = False,
     ) -> CodexRun:
         return self._run(
             ("exec",),
             (
                 *_compaction_flags(compact_after_tokens),
                 *_feature_flags(enable=enable, disable=disable),
+                *_fast_mode_flags(fast),
                 "--model",
                 model,
                 "--",
@@ -114,14 +145,43 @@ class CodexHarness:
         )
         return tuple(rollout_subagent(rollout) for rollout in rollouts if rollout_parent_thread(rollout) == thread_id)
 
+    @step("Read the service tiers Codex's catalog from the gateway offers each model")
+    def service_tiers(self) -> Mapping[str, frozenset[str]]:
+        return MappingProxyType(
+            {
+                model.slug: frozenset(tier.id for tier in model.service_tiers)
+                for model in self._catalog("gateway").models
+            }
+        )
+
+    @step("Read the tool mode the {source} catalog gives each model in Codex")
+    def tool_modes(self, source: CodexCatalog = "gateway") -> Mapping[str, str | None]:
+        return MappingProxyType({model.slug: model.tool_mode for model in self._catalog(source).models})
+
+    def _catalog(self, source: CodexCatalog) -> _Catalog:
+        completed: Final = subprocess.run(
+            (self.cli, *_catalog_args(source)),
+            cwd=self.home,
+            env=self._env(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout_seconds,
+            check=True,
+        )
+        return _Catalog.model_validate_json(completed.stdout)
+
+    def _env(self) -> Mapping[str, str]:
+        return locked_down_env(
+            home=self.home, overrides={"CODEX_HOME": str(self.codex_home), _API_KEY_ENV: self.api_key}
+        )
+
     def _run(self, subcommand: tuple[str, ...], args: tuple[str, ...], cwd: Path) -> CodexRun:
         _ = self.limiter.acquire(self.rate_bucket)
         completed: Final = subprocess.run(
             (self.cli, *subcommand, "--json", "--skip-git-repo-check", *args),
             cwd=cwd,
-            env=locked_down_env(
-                home=self.home, overrides={"CODEX_HOME": str(self.codex_home), _API_KEY_ENV: self.api_key}
-            ),
+            env=self._env(),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
@@ -139,6 +199,7 @@ def _mcp_server_table(name: str, server: McpServer) -> str:
         f"args = {json.dumps(server.args)}\n"
         f"env = {{ {env} }}\n"
         'default_tools_approval_mode = "approve"\n'
+        "required = true\n"
     )
 
 
@@ -147,6 +208,16 @@ def _feature_flags(*, enable: tuple[str, ...], disable: tuple[str, ...]) -> tupl
         *chain.from_iterable(("--enable", feature) for feature in enable),
         *chain.from_iterable(("--disable", feature) for feature in disable),
     )
+
+
+def _catalog_args(catalog: CodexCatalog) -> tuple[str, ...]:
+    match catalog:
+        case "gateway":
+            return ("debug", "models")
+        case "openai":
+            return ("debug", "models", "--bundled")
+        case "amazon-bedrock" | "amazon-bedrock-runtime":
+            return ("--config", f'model_provider="{catalog}"', "debug", "models")
 
 
 def _compaction_flags(after_tokens: int | None) -> tuple[str, ...]:
@@ -162,6 +233,10 @@ def _compaction_flags(after_tokens: int | None) -> tuple[str, ...]:
                 "--config",
                 f"model_auto_compact_token_limit={after_tokens}",
             )
+
+
+def _fast_mode_flags(fast: bool) -> tuple[str, ...]:
+    return ("--config", 'service_tier="priority"') if fast else ()
 
 
 @step("Give Codex a fresh empty home whose config sends every request to the proxy")

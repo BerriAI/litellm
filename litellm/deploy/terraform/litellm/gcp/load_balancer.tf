@@ -10,11 +10,12 @@
 # is rewritten to redirect HTTP→HTTPS via a redirect-only URL map.
 
 locals {
+  public_lb   = var.create_runtime && var.private_ingress == null
   tls_enabled = length(var.lb_domains) > 0
 }
 
 resource "google_compute_global_address" "lb" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   name   = "${local.name}-lb-ip"
   labels = local.labels
@@ -59,7 +60,7 @@ resource "google_compute_region_network_endpoint_group" "ui" {
 
 # Backend services wrap each NEG.
 resource "google_compute_backend_service" "gateway" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   name                  = "${local.name}-gateway-bs"
   protocol              = "HTTP"
@@ -71,7 +72,7 @@ resource "google_compute_backend_service" "gateway" {
 }
 
 resource "google_compute_backend_service" "backend" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   name                  = "${local.name}-backend-bs"
   protocol              = "HTTP"
@@ -83,7 +84,7 @@ resource "google_compute_backend_service" "backend" {
 }
 
 resource "google_compute_backend_service" "ui" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   name                  = "${local.name}-ui-bs"
   protocol              = "HTTP"
@@ -97,7 +98,7 @@ resource "google_compute_backend_service" "ui" {
 # URL map. Default → backend (management API). Path matchers route the
 # gateway and UI prefixes elsewhere.
 resource "google_compute_url_map" "this" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   name            = local.name
   default_service = google_compute_backend_service.backend[0].id
@@ -134,7 +135,7 @@ resource "google_compute_url_map" "this" {
 # target proxy when TLS is enabled; otherwise the regular path-routing
 # URL map is attached to the HTTP proxy and everything stays plaintext.
 resource "google_compute_url_map" "https_redirect" {
-  count = var.create_runtime && local.tls_enabled ? 1 : 0
+  count = local.public_lb && local.tls_enabled ? 1 : 0
   name  = "${local.name}-redirect"
 
   default_url_redirect {
@@ -145,7 +146,7 @@ resource "google_compute_url_map" "https_redirect" {
 }
 
 resource "google_compute_target_http_proxy" "this" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   name    = "${local.name}-http"
   url_map = local.tls_enabled ? google_compute_url_map.https_redirect[0].id : google_compute_url_map.this[0].id
@@ -161,7 +162,7 @@ resource "google_compute_target_http_proxy" "this" {
 }
 
 resource "google_compute_global_forwarding_rule" "http" {
-  count = var.create_runtime ? 1 : 0
+  count = local.public_lb ? 1 : 0
 
   name                  = "${local.name}-http"
   ip_protocol           = "TCP"
@@ -181,7 +182,7 @@ resource "google_compute_global_forwarding_rule" "http" {
 # transitions to ACTIVE.
 
 resource "google_compute_managed_ssl_certificate" "this" {
-  count = var.create_runtime && local.tls_enabled ? 1 : 0
+  count = local.public_lb && local.tls_enabled ? 1 : 0
 
   # A managed cert's `domains` is immutable, so changing var.lb_domains
   # forces replacement, and the cert is referenced by the HTTPS target
@@ -201,14 +202,14 @@ resource "google_compute_managed_ssl_certificate" "this" {
 }
 
 resource "google_compute_target_https_proxy" "this" {
-  count            = var.create_runtime && local.tls_enabled ? 1 : 0
+  count            = local.public_lb && local.tls_enabled ? 1 : 0
   name             = "${local.name}-https"
   url_map          = google_compute_url_map.this[0].id
   ssl_certificates = [google_compute_managed_ssl_certificate.this[0].id]
 }
 
 resource "google_compute_global_forwarding_rule" "https" {
-  count                 = var.create_runtime && local.tls_enabled ? 1 : 0
+  count                 = local.public_lb && local.tls_enabled ? 1 : 0
   name                  = "${local.name}-https"
   ip_protocol           = "TCP"
   port_range            = "443"

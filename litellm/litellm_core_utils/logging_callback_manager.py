@@ -86,7 +86,7 @@ class LoggingCallbackManager:
                 parent_list=litellm.callbacks,
             )
 
-    def add_litellm_success_callback(self, callback: CustomLogger | str | Callable[..., object] | CustomLoggerV2):
+    def add_litellm_success_callback(self, callback: object):
         """
         Add a success callback to `litellm.success_callback`.
         Auto-routes async callbacks to litellm._async_success_callback.
@@ -103,7 +103,7 @@ class LoggingCallbackManager:
             else:
                 self._safe_add_callback_to_list(callback=callback, parent_list=litellm.success_callback)
 
-    def add_litellm_failure_callback(self, callback: CustomLogger | str | Callable[..., object] | CustomLoggerV2):
+    def add_litellm_failure_callback(self, callback: object):
         """
         Add a failure callback to `litellm.failure_callback`.
         Auto-routes async callbacks to litellm._async_failure_callback.
@@ -128,7 +128,9 @@ class LoggingCallbackManager:
         with _callback_lists_lock:
             self._safe_add_callback_to_list(callback=callback, parent_list=litellm._async_failure_callback)
 
-    def remove_callback_from_list_by_object(self, callback_list, obj, require_self=True):
+    def remove_callback_from_list_by_object(
+        self, callback_list: object, obj: object, require_self: bool = True
+    ) -> None:
         """
         Remove callbacks that are methods of a particular object (e.g., router cleanup)
         """
@@ -144,7 +146,7 @@ class LoggingCallbackManager:
             for c in remove_list:
                 callback_list.remove(c)
 
-    def remove_callbacks_by_type(self, callback_list, callback_type):
+    def remove_callbacks_by_type(self, callback_list: object, callback_type: type[object]) -> None:
         """
         Remove all callbacks of a specific type from a callback list.
 
@@ -291,7 +293,7 @@ class LoggingCallbackManager:
 
     def _safe_add_callback_to_list(
         self,
-        callback: CustomLogger | CustomLoggerV2 | Callable[..., object] | str,
+        callback: object,
         parent_list: list[CustomLogger | Callable[..., object] | str],
     ):
         """
@@ -538,7 +540,7 @@ class LoggingCallbackManager:
         Get all custom loggers that are instances of the given class type
         """
         # ensure we don't have duplicate instances
-        all_callbacks: Final = []
+        all_callbacks: Final[list[CustomLogger]] = []
         for callback in self.get_all_callbacks():
             if isinstance(callback, callback_type) and callback not in all_callbacks:
                 all_callbacks.append(callback)
@@ -588,7 +590,7 @@ class LoggingCallbackManager:
 
         return result
 
-    def get_callback_objects(self) -> tuple[tuple[str, CustomLogger | Callable], ...]:
+    def get_callback_objects(self) -> tuple[tuple[str, CustomLogger | Callable[..., object]], ...]:
         return tuple(
             (self._get_callback_string(callback), callback)
             for callback in self.get_all_callbacks()

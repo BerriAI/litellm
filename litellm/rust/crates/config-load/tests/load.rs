@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use litellm_config::Spelled;
 use litellm_config_load::Error;
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 use rstest::{fixture, rstest};
@@ -130,4 +131,58 @@ async fn resolves_nested_includes_once_in_breadth_first_order(secrets: SecretRes
         "third"
     );
     assert!(config.include.is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_key_the_config_leaves_unset_is_read_from_a_variable_it_exports(
+    directory: TempDir,
+    secrets: SecretResolver,
+) {
+    let path = directory.path().join("config.yaml");
+    std::fs::write(
+        &path,
+        "environment_variables:\n  LITELLM_DROP_PARAMS: \"true\"\n",
+    )
+    .unwrap();
+
+    let config = litellm_config_load::load(path, secrets).await.unwrap();
+
+    assert_eq!(
+        (
+            config.litellm_settings.drop_params,
+            config.origins.variable("litellm_settings.drop_params")
+        ),
+        (Some(true), Some("LITELLM_DROP_PARAMS"))
+    );
+}
+
+#[rstest]
+#[case::only_the_config_exports_it(None, None)]
+#[case::the_process_sets_it_too(Some("5"), Some(5.0))]
+#[tokio::test]
+async fn a_request_timeout_is_read_from_the_process_and_never_from_what_the_config_exports(
+    directory: TempDir,
+    #[case] process: Option<&'static str>,
+    #[case] seconds: Option<f64>,
+) {
+    let path = directory.path().join("config.yaml");
+    std::fs::write(&path, "environment_variables:\n  REQUEST_TIMEOUT: \"2\"\n").unwrap();
+    let secrets = SecretResolver::new_python_compatible(
+        Arc::new(SecretManagerState::default()),
+        Arc::new(move |name: &str| {
+            (name == "REQUEST_TIMEOUT")
+                .then_some(process)
+                .flatten()
+                .map(str::to_owned)
+        }),
+        OidcResolver::new(litellm_http::Client::for_test()),
+    );
+
+    let config = litellm_config_load::load(path, secrets).await.unwrap();
+
+    assert_eq!(
+        config.litellm_settings.request_timeout,
+        seconds.map(Spelled::Value)
+    );
 }

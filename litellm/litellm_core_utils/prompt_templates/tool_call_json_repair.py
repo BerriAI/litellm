@@ -1,5 +1,5 @@
 import json
-from typing import Any, Final  # noqa: TID251  # Existing annotations retained unchanged in this pure move
+from typing import Final
 
 from pydantic import TypeAdapter
 
@@ -36,7 +36,7 @@ def _attempt_json_repair(s: str) -> object | None:
         return None
 
     # Track the stack of unmatched openers to respect nesting order
-    opener_stack: Final[list] = []
+    opener_stack: Final[list[str]] = []
     in_string = False
     escape_next = False
 
@@ -82,7 +82,7 @@ def parse_tool_call_arguments(
     arguments: str | None,
     tool_name: str | None = None,
     context: str | None = None,
-) -> Any:
+) -> object:
     """
     Parse tool call arguments from a JSON string.
 

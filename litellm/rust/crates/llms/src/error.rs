@@ -80,6 +80,19 @@ impl Error {
         }
     }
 
+    /// Why the transformation refused the provider's reply.
+    pub fn invalid_response(&self) -> Option<&ErrorDetail> {
+        match self {
+            Self::InvalidResponse(detail) => Some(detail),
+            Self::InvalidType { .. }
+            | Self::MissingField(_)
+            | Self::InvalidRequest(_)
+            | Self::Declined(_)
+            | Self::Auth(_)
+            | Self::Http(_) => None,
+        }
+    }
+
     pub fn declined(&self) -> Option<&Decline> {
         match self {
             Self::Declined(decline) => Some(decline),
@@ -101,6 +114,13 @@ impl Error {
 
     pub fn is_body_read_timeout(&self) -> bool {
         matches!(self, Self::Http(error) if error.is_body_read_timeout())
+    }
+
+    pub fn connect_origin(&self) -> Option<&str> {
+        match self {
+            Self::Http(error) => error.connect_origin(),
+            _ => None,
+        }
     }
 
     pub fn body_cut(&self) -> Option<litellm_http::BodyCut> {
@@ -146,6 +166,10 @@ pub enum ErrorDetail {
     },
     #[error("{route} requires at least one message")]
     NoMessages { route: &'static str },
+    #[error("messages: no message has content left after dropping empty or non-string text blocks")]
+    EmptiedMessages,
+    #[error("{path}: Input should be a valid string")]
+    NonStringText { path: String },
     #[error("{subject} must be {expected}")]
     Expected {
         subject: &'static str,
@@ -179,7 +203,7 @@ pub enum ErrorDetail {
         model: String,
     },
     #[error(
-        "{model} does not support {param}={value}. {hint}To drop unsupported params, set `litellm.drop_params = True`."
+        "{model} does not support {param}={value}. {hint}To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     UnsupportedParameter {
         model: String,
@@ -187,6 +211,15 @@ pub enum ErrorDetail {
         value: String,
         hint: String,
     },
+    /// Python's Vertex config attributes this refusal to `vertex_ai` and the model.
+    #[error(
+        "{model} does not support anthropic-version={value}. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
+    )]
+    UnsupportedVertexAnthropicVersion { model: String, value: String },
+    #[error(
+        "{model} on vertex_ai needs `output_format` to be a JSON object, got {actual}. To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+    )]
+    NonObjectVertexOutputFormat { model: String, actual: &'static str },
     #[error(
         "thinking.budget_tokens must be a number, got {actual}. To drop it, set `litellm.drop_params=True`, or `drop_params: true` under `litellm_settings` on the proxy"
     )]
@@ -205,6 +238,26 @@ pub enum ErrorDetail {
         "Missing Azure API Base - Please set `api_base` or `AZURE_API_BASE` environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
     )]
     MissingAzureApiBase,
+    /// Python's `BaseAWSLLM.validate_aws_region_name` refusal of a Mantle region.
+    #[error(
+        "Invalid AWS region format: '{}'. Region names must contain only lowercase letters, digits, and hyphens.",
+        region.escape_debug()
+    )]
+    InvalidMantleRegion {
+        region: String,
+        check: MantleRegionCheck,
+    },
+    /// Python's `BaseAWSLLM._validate_aws_region_name` refusal of a Claude Platform region, raised
+    /// as a bare `ValueError` while the call is built.
+    #[error(
+        "Invalid AWS region format: '{}'. Region names must contain only lowercase letters, digits, and hyphens.",
+        region.escape_debug()
+    )]
+    InvalidAwsRegion { region: String },
+    /// A Mantle reply whose `usage` is present but is not an object of token counts, which litellm
+    /// cannot bill.
+    #[error("Bedrock Mantle returned a `usage` litellm cannot bill: {reason}")]
+    UnbillableUsage { reason: String },
     #[error(
         "Missing API Base - A call is being made to LLM Provider but no api base is set either in the environment variables ({{LLM_PROVIDER}}_API_KEY) or via params"
     )]
@@ -229,6 +282,14 @@ pub enum ErrorDetail {
         operation: &'static str,
         detail: serde_json::Value,
     },
+}
+
+/// Where Python validates a Mantle region: `get_llm_provider` wraps a refusal while resolving the
+/// `bedrock_mantle/` provider into its `BadRequestError`, later checks raise the bare `ValueError`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MantleRegionCheck {
+    ProviderResolution,
+    Request,
 }
 
 impl ErrorDetail {

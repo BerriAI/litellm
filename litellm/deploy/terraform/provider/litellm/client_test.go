@@ -84,10 +84,10 @@ func TestRedactSensitiveDataNestedCredentialValues(t *testing.T) {
 func TestRedactSensitiveDataDeeplyNestedSensitiveKeys(t *testing.T) {
 	c := NewClient("http://localhost:4000", "sk-test", false)
 
-	input := `{"data":[{"litellm_params":{"model":"gpt-4","api_key":"sk-deep-456","aws_secret_access_key":"aws-secret"}}]}`
+	input := `{"data":[{"litellm_params":{"model":"gpt-4","api_key":"sk-deep-456","aws_secret_access_key":"aws-secret"}},{"credentials":{"client_private_key":"private-key-fixture","client_secret":"oauth-secret-fixture","id_jag_resource_client_secret":"id-jag-fixture"}}]}`
 	got := c.redactSensitiveData(input)
 
-	for _, leaked := range []string{"sk-deep-456", "aws-secret"} {
+	for _, leaked := range []string{"sk-deep-456", "aws-secret", "private-key-fixture", "oauth-secret-fixture", "id-jag-fixture"} {
 		if strings.Contains(got, leaked) {
 			t.Errorf("redacted output leaked %q: %s", leaked, got)
 		}
@@ -124,5 +124,42 @@ func TestRedactSensitiveDataNonJSONFallback(t *testing.T) {
 	}
 	if !strings.Contains(got, "[REDACTED]") {
 		t.Errorf("fallback redaction did not redact: %s", got)
+	}
+}
+
+func TestSendRequestRedactsCallbackDataInErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		status   int
+		body     string
+		mustHide []string
+	}{
+		{
+			name: "structured API error", status: http.StatusBadRequest,
+			body:     `{"detail":{"callback_vars":{"custom_value":"fixture-private"},"provider_secret":"fixture-suffix","provider_secret_key":"fixture-key","provider_api_key":"fixture-api"}}`,
+			mustHide: []string{"fixture-private", "fixture-suffix", "fixture-key", "fixture-api"},
+		},
+		{
+			name: "non-JSON response", status: http.StatusOK,
+			body:     `unexpected "provider_secret_key": "fixture-unstructured"`,
+			mustHide: []string{"fixture-unstructured"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+			_, err := NewClient(srv.URL, "test-key", true).sendRequest("POST", "/key/update", nil)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			for _, value := range tt.mustHide {
+				if strings.Contains(err.Error(), value) {
+					t.Errorf("error exposed %q: %v", value, err)
+				}
+			}
+		})
 	}
 }

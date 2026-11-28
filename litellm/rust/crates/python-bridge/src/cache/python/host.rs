@@ -1,6 +1,9 @@
 use litellm_cache::Error;
+use litellm_cache_response::ResponseEnvelope;
 use litellm_host::protocol::Reply;
 use litellm_host_python::{json_from_py, to_py};
+use litellm_inference::caching::CachedOutput;
+use litellm_inference_messages::CacheCall;
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -8,8 +11,35 @@ use pyo3::{
 };
 use serde_json::Value;
 
-use super::service::CacheCall;
 use crate::cache::{CACHE_HOST_MODULE, HandleError};
+
+const STREAM_EVENTS_KEY: &str = "litellm_cached_anthropic_sse_events";
+
+fn from_python(value: Value) -> Result<Value, Error> {
+    let output = match value.get(STREAM_EVENTS_KEY) {
+        Some(events) => {
+            let events: Vec<String> =
+                serde_json::from_value(events.clone()).map_err(Error::invalid_entry)?;
+            CachedOutput::Stream(events.concat())
+        }
+        None => CachedOutput::Response(value),
+    };
+    serde_json::to_value(ResponseEnvelope::new("messages", output)).map_err(Error::invalid_entry)
+}
+
+fn to_python(value: Value) -> Result<Value, Error> {
+    let envelope: ResponseEnvelope<CachedOutput<Value>> =
+        serde_json::from_value(value).map_err(Error::invalid_entry)?;
+    match envelope
+        .decode("messages")
+        .ok_or(Error::InvalidEntry(None))?
+    {
+        CachedOutput::Response(response) => Ok(response),
+        CachedOutput::Stream(text) => Ok(serde_json::json!({
+            STREAM_EVENTS_KEY: text.split_inclusive("\n\n").collect::<Vec<_>>()
+        })),
+    }
+}
 
 enum Pending {
     Lookup(Reply<Result<Option<Value>, Error>>),
@@ -76,14 +106,19 @@ impl PythonCache {
                     None,
                 )
             }
-            CacheCall::Store {
-                unary: true, reply, ..
-            } if self.asynchronous => {
-                self.deferred = true;
-                reply.send(Ok(()));
-                return Ok(None);
-            }
-            CacheCall::Store { value, reply, .. } => {
+            CacheCall::Store { value, reply } => {
+                let value = match to_python(value) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        reply.send(Err(error));
+                        return Ok(None);
+                    }
+                };
+                if self.asynchronous && value.get(STREAM_EVENTS_KEY).is_none() {
+                    self.deferred = true;
+                    reply.send(Ok(()));
+                    return Ok(None);
+                }
                 self.pending = Some(Pending::Store(reply));
                 (
                     if self.asynchronous {
@@ -178,8 +213,9 @@ impl PythonCache {
                         Ok(None)
                     } else {
                         json_from_py(value.bind(py))
-                            .map(Some)
                             .map_err(Error::invalid_entry)
+                            .and_then(from_python)
+                            .map(Some)
                     }
                 });
                 reply.send(value);

@@ -109,7 +109,7 @@ impl NativeRouterUsage {
     #[new]
     fn new(py: Python<'_>, client: Option<PyRef<'_, NativeRedisClient>>) -> PyResult<Self> {
         let remote = client.map(|client| remote(&client));
-        let policy = router_tier_policies(py)?.usage;
+        let policy = router_tier_policies(py)?.usage();
         Ok(Self(Arc::new(RouterUsage::new(remote, policy))))
     }
 
@@ -356,6 +356,10 @@ impl NativeRouterUsage {
 
     fn flush_local_counters(&self) -> PyResult<()> {
         self.0.flush_local_counters().map_err(kind_error)
+    }
+
+    fn flush_local(&self) -> PyResult<()> {
+        self.0.flush_local().map_err(kind_error)
     }
 
     fn snapshot(&self) -> PyResult<HashMap<String, PyNumber>> {

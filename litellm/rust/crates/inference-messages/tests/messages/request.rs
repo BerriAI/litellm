@@ -917,6 +917,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 api_key: Some("sk".into()),
                 api_base: Some(upstream.uri()),
                 shaping: MessagesShaping {
+                    vertex: Default::default(),
                     capabilities,
                     settings: MessagesSettings {
                         drop_params,
@@ -1011,6 +1012,7 @@ async fn additional_drop_params_clear_a_param_the_model_does_not_support(call: M
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
         shaping: MessagesShaping {
+            vertex: Default::default(),
             capabilities: sampling_removed(),
             settings: MessagesSettings {
                 additional_drop_params: vec!["top_k".into()],
@@ -1044,6 +1046,7 @@ async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
+                vertex: Default::default(),
                 settings: MessagesSettings {
                     reasoning_auto_summary: true,
                     ..MessagesSettings::default()
@@ -1172,6 +1175,148 @@ async fn replayed_history_is_cleaned_before_sending(
     assert_eq!(only_request(&upstream).await.json()["messages"], expected);
 }
 
+fn replayed_tool_round() -> Value {
+    json!([
+        {"role": "user", "content": "run it"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [
+            {"type": "text", "text": "Note.", "id": 5},
+            {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}
+        ]}
+    ])
+}
+
+fn sent_tool_round(id: &str) -> Value {
+    json!([
+        {"role": "user", "content": "run it"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [
+            {"type": "text", "text": "Note.", "id": 5},
+            {"type": "tool_result", "tool_use_id": id, "content": "ok"}
+        ]}
+    ])
+}
+
+#[rstest]
+#[case::other_model("kimi-k2", false, sent_tool_round("functions.Bash:0"))]
+#[case::other_model_python_prepared("kimi-k2", true, replayed_tool_round())]
+#[case::claude_name(MODEL, false, sent_tool_round("functions.Bash:0"))]
+#[tokio::test]
+async fn a_custom_anthropic_base_gets_the_callers_tool_use_ids_whatever_the_model_name(
+    call: MessagesCall,
+    #[case] model: &str,
+    #[case] presanitized: bool,
+    #[case] sent: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(with_fields(
+        MessagesCall {
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    presanitized,
+                    ..MessagesSettings::default()
+                },
+                ..MessagesShaping::default()
+            },
+            ..call
+        },
+        json!({"model": model, "messages": replayed_tool_round()}),
+    ))
+    .await;
+
+    assert_eq!(only_request(&upstream).await.json()["messages"], sent);
+}
+
+#[rstest]
+#[case::azure("azure_ai", "claude-deployment")]
+#[case::deepseek("deepseek", "my-deployment")]
+#[tokio::test]
+async fn providers_sharing_the_anthropic_shaping_still_rewrite_tool_use_ids(
+    call: MessagesCall,
+    #[case] provider: &str,
+    #[case] model: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({"model": model, "messages": replayed_tool_round()}),
+    ))
+    .await;
+
+    assert_eq!(
+        only_request(&upstream).await.json()["messages"],
+        sent_tool_round("functions_Bash_0")
+    );
+}
+
+#[rstest]
+#[case::api_base("ANTHROPIC_API_BASE")]
+#[case::base_url("ANTHROPIC_BASE_URL")]
+#[tokio::test]
+async fn an_env_anthropic_base_gets_the_callers_tool_use_ids_for_a_model_that_is_not_claude(
+    call: MessagesCall,
+    #[case] base_env: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+    let uri = upstream.uri();
+
+    run_with(
+        Arc::new(RecordingSecrets::new([
+            ("ANTHROPIC_API_KEY", "sk-env"),
+            (base_env, uri.as_str()),
+        ])),
+        with_fields(
+            call,
+            json!({"model": "kimi-k2", "messages": replayed_tool_round()}),
+        ),
+    )
+    .await
+    .expect("messages call reaches the env base");
+
+    assert_eq!(
+        only_request(&upstream).await.json()["messages"],
+        sent_tool_round("functions.Bash:0")
+    );
+}
+
+#[rstest]
+#[case::deepseek("deepseek")]
+#[case::minimax("minimax")]
+#[case::tencent("tencent")]
+#[tokio::test]
+async fn unsigned_thinking_is_replayed_to_an_anthropic_compatible_provider(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+    let history = json!([{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+        {"type": "text", "text": "kept"}
+    ]}]);
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({"messages": history.clone()}),
+    ))
+    .await;
+
+    assert_eq!(only_request(&upstream).await.json()["messages"], history);
+}
+
 #[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure("azure_ai")]
@@ -1235,6 +1380,27 @@ async fn deepseek_sends_neither_billing_blocks_nor_the_custom_tool_discriminator
     );
 }
 
+async fn run_with_google_token(call: MessagesCall) -> Result<MessagesOutput, Error> {
+    let route = messages_route_with_auth(
+        Arc::new(RecordingSecrets::empty()),
+        litellm_auth::AuthServices {
+            vertex_login: litellm_auth_gcp::vertex::VertexLoginService::new(Arc::new(
+                litellm_auth_gcp::google::OnGce {
+                    project: "token-project",
+                    token: "google-token",
+                },
+            )),
+            ..litellm_auth::AuthServices::default()
+        },
+    );
+    let host = LocalMessagesHost::new(call);
+    litellm_host_native::in_process::run_hosted(
+        route.machine(host.request()?, None),
+        host.runtime(),
+    )
+    .await
+}
+
 #[rstest]
 #[case::not_streaming(false, ":rawPredict")]
 #[case::streaming(true, ":streamRawPredict?alt=sse")]
@@ -1250,7 +1416,7 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
     );
     let upstream = upstream([if stream { streamed } else { message_response() }]).await;
 
-    run(with_fields(
+    run_with_google_token(with_fields(
         MessagesCall {
             custom_llm_provider: Some("vertex_ai".into()),
             litellm_params: LitellmParams {
@@ -1277,7 +1443,7 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
             "/v1/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929{suffix}"
         )
     );
-    assert_eq!(request.header("authorization"), Some("Bearer caller-token"));
+    assert_eq!(request.header("authorization"), Some("Bearer google-token"));
     assert_eq!(request.header("anthropic-version"), None);
     let body = request.json();
     assert_eq!(body.get("model"), None);

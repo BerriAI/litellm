@@ -377,6 +377,24 @@ describe("KeyEditView", () => {
     expect(JSON.parse(onSubmit.mock.calls[0][0].metadata).store_prompts_in_spend_logs).toBe(false);
   });
 
+  it("submits an explicitly disabled semantic cache in key metadata", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmit}
+        accessToken=""
+        userID=""
+        userRole="Admin"
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Cache mode"), { target: { value: "false" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(onSubmit.mock.calls[0][0].metadata).cache_params).toEqual({ enabled: false });
+  });
+
   it("should render tags", async () => {
     renderWithProviders(
       <KeyEditView
@@ -1413,7 +1431,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const maxBudgetInput = await screen.findByPlaceholderText("Max spend ($)");
+    const maxBudgetInput = await screen.findByPlaceholderText("Max Budget");
     await userEvent.clear(maxBudgetInput);
     await userEvent.type(maxBudgetInput, "200");
 
@@ -1445,7 +1463,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const maxBudgetInput = await screen.findByPlaceholderText("Max spend ($)");
+    const maxBudgetInput = await screen.findByPlaceholderText("Max Budget");
     await userEvent.clear(maxBudgetInput);
 
     const submitButton = screen.getByRole("button", { name: /save changes/i });
@@ -1501,7 +1519,7 @@ describe("KeyEditView", () => {
           premiumUser={true}
         />,
       );
-      expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(5);
+      expect(await screen.findByPlaceholderText("Max Budget")).toHaveValue(5);
 
       rerender(
         <KeyEditView
@@ -1515,7 +1533,7 @@ describe("KeyEditView", () => {
         />,
       );
 
-      expect(await screen.findByPlaceholderText("Max spend ($)")).toHaveValue(99);
+      expect(await screen.findByPlaceholderText("Max Budget")).toHaveValue(99);
     });
 
     it("should say why the editor is locked when the proxy has no enterprise license", async () => {
@@ -2928,7 +2946,7 @@ describe("KeyEditView", () => {
       renderForPayload(onSubmitMock);
       await screen.findByRole("button", { name: /save changes/i });
 
-      await pickFromCombobox(/allowed pass through routes/, /\/bria/);
+      await pickFromCombobox(/allowed pass-through routes/, /\/bria/);
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

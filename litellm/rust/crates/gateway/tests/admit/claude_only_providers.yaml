@@ -1,0 +1,62 @@
+# Outside anthropic the native route serves only the Claude models a provider serves through the
+# Messages API, as Python's own routing does. Python translates every other model of the same
+# provider, so a group or fallback that can reach one goes to Python.
+config:
+  model_list:
+    - model_name: azure-claude
+      litellm_params:
+        model: azure_ai/claude-haiku-5-5
+        api_key: provider-key
+        api_base: https://example.services.ai.azure.com
+    - model_name: azure-gpt
+      litellm_params:
+        model: azure_ai/gpt-5.5
+        api_key: provider-key
+        api_base: https://example.services.ai.azure.com
+    - model_name: azure-mixed
+      litellm_params:
+        model: azure_ai/claude-haiku-5-5
+        api_key: provider-key
+        api_base: https://example.services.ai.azure.com
+    - model_name: azure-mixed
+      litellm_params:
+        model: azure_ai/gpt-5.5
+        api_key: provider-key
+        api_base: https://example.services.ai.azure.com
+    - model_name: azure-claude-backed
+      litellm_params:
+        model: azure_ai/claude-haiku-5-5
+        api_key: provider-key
+        api_base: https://example.services.ai.azure.com
+  router_settings:
+    fallbacks:
+      - azure-claude-backed: [azure-gpt]
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: a claude deployment
+    headers: {authorization: Bearer gateway-key}
+    body: {model: azure-claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a model python translates
+    headers: {authorization: Bearer gateway-key}
+    body: {model: azure-gpt, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model azure_ai/gpt-5.5 is bridged to chat completions
+
+  - name: a group that mixes claude with a translated model
+    headers: {authorization: Bearer gateway-key}
+    body: {model: azure-mixed, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.model azure_ai/gpt-5.5 is bridged to chat completions
+
+  - name: a claude group that falls back to a translated model
+    headers: {authorization: Bearer gateway-key}
+    body: {model: azure-claude-backed, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: 'router_settings fallback to azure-gpt: model_list.litellm_params.model azure_ai/gpt-5.5 is bridged to chat completions'

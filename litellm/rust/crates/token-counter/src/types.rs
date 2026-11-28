@@ -154,16 +154,24 @@ pub(crate) enum MessageContent {
     Blocks(Vec<ContentItem>),
 }
 
+/// One item of a message's content, as the counter reads it.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(untagged)]
-pub(crate) enum ContentItem {
+pub enum ContentItem {
     Text(String),
     Block(CountableContentBlock),
 }
 
+impl ContentItem {
+    /// Whether the counter counts it. Any other block makes the whole request unsupported.
+    pub fn is_counted(&self) -> bool {
+        !matches!(self, Self::Block(CountableContentBlock::Unsupported))
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(tag = "type")]
-pub(crate) enum CountableContentBlock {
+pub enum CountableContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "thinking")]

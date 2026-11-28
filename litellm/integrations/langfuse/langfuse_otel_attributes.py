@@ -18,15 +18,8 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
 )
 from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import jsonable_or_str
-from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
-from litellm.types.utils import (
-    EmbeddingResponse,
-    ImageResponse,
-    ModelResponse,
-    RerankResponse,
-    TextCompletionResponse,
-    TranscriptionResponse,
-)
+from litellm.types.llms.openai import HttpxBinaryResponseContent
+from litellm.types.utils import EmbeddingResponse
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -41,17 +34,7 @@ def serialize_langfuse_datetime(value: datetime) -> str:
 
 
 def get_output_content_by_type(
-    response_obj: None
-    | dict
-    | EmbeddingResponse
-    | ModelResponse
-    | TextCompletionResponse
-    | ImageResponse
-    | TranscriptionResponse
-    | RerankResponse
-    | HttpxBinaryResponseContent
-    | ResponsesAPIResponse
-    | list,
+    response_obj: object,
     kwargs: Mapping[str, object] | None = None,
 ) -> str:
     """
@@ -108,7 +91,7 @@ class LangfuseLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
 
     @staticmethod
     @override
-    def set_response_output_messages(span: "Span", response_obj):
+    def set_response_output_messages(span: "Span", response_obj: object):
         safe_set_attribute(
             span,
             "langfuse.observation.output",

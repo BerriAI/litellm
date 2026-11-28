@@ -1,12 +1,11 @@
 "use client";
 
-import { ArrowRight, Plus, Rocket, Sparkles } from "lucide-react";
+import { ArrowRight, House, Plus, Rocket, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Page } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { uiHref } from "@/utils/uiHref";
 import { Leaderboard, useBreakdown } from "@/app/(dashboard)/usage/_components/components/overview/BreakdownChart";
@@ -21,7 +20,7 @@ import { HOME_USAGE_DAYS, useHomeUsage } from "./useHomeUsage";
 const LEADERBOARD = { metric: "tokens", dimension: "model_groups" } as const;
 
 export default function HomePage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { isViewOnly } = useAuthorized();
   const usage = useHomeUsage();
   const blog = useBlogPosts();
@@ -29,9 +28,12 @@ export default function HomePage() {
   const { series, ranking } = useBreakdown(usage.results, LEADERBOARD, 8);
 
   return (
-    <Page>
+    <>
       <PageHeader>
-        <PageHeaderTitle>{t("home.page.title")}</PageHeaderTitle>
+        <PageHeaderTitle>
+          <House />
+          {t("home.page.title")}
+        </PageHeaderTitle>
         {!isViewOnly && (
           <PageHeaderControls>
             <Button render={<a href={uiHref("api-keys?create=true")} />}>
@@ -87,7 +89,7 @@ export default function HomePage() {
                         <div className="line-clamp-2 text-base font-semibold leading-tight">{cardTitle(post)}</div>
                         <p className="m-0 line-clamp-3 text-sm text-muted-foreground">{cardSummary(post)}</p>
                         <div className="mt-auto flex items-center justify-between pt-1 text-xs text-muted-foreground">
-                          <span>{formatPublishedOn(post.date)}</span>
+                          <span>{formatPublishedOn(post.date, i18n.language)}</span>
                           <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
                         </div>
                       </Card>
@@ -116,6 +118,6 @@ export default function HomePage() {
 
         <UpdatesFeed className="self-start" />
       </div>
-    </Page>
+    </>
   );
 }

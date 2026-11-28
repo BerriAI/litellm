@@ -5,9 +5,10 @@ use std::sync::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_tracing::{ByteChunk, Level, Logger, Metadata, Record, Sink, info, warn};
+use litellm_tracing::{ByteChunk, Level, Logger, Metadata, Record, Scrubbed, Sink};
 use rstest::rstest;
 use serde_json::{Value, json};
+use tracing::{info, warn};
 
 struct Output {
     enabled: Arc<AtomicBool>,
@@ -184,43 +185,26 @@ fn spans_inherit_fields_accept_updates_and_close_once() {
 }
 
 #[rstest]
-fn sink_layers_filter_independently_and_recheck_span_delivery() {
-    use tracing_subscriber::prelude::*;
-
-    let (first_sender, first) = mpsc::channel();
-    let (second_sender, second) = mpsc::channel();
-    let enabled = Arc::new(AtomicBool::new(false));
-    let subscriber = tracing_subscriber::Registry::default()
-        .with(litellm_tracing::sink_layer(Output {
-            enabled: enabled.clone(),
-            sender: first_sender,
-        }))
-        .with(litellm_tracing::sink_layer(Output {
-            enabled: Arc::new(AtomicBool::new(true)),
-            sender: second_sender,
-        }));
-    tracing::subscriber::with_default(subscriber, || {
-        info!("second only");
-        enabled.store(true, Ordering::Relaxed);
+fn a_span_that_closes_after_its_sink_stopped_listening_is_not_reported() {
+    let (sender, receiver) = mpsc::channel();
+    let enabled = Arc::new(AtomicBool::new(true));
+    let logger = Logger::new(Output {
+        enabled: enabled.clone(),
+        sender,
+    });
+    logger.scope(|| {
         let span = tracing::info_span!("shared", route = "responses");
-        span.in_scope(|| info!("both"));
+        span.in_scope(|| info!("inside"));
         enabled.store(false, Ordering::Relaxed);
         drop(span);
     });
     assert_eq!(
-        first.try_iter().map(|record| record.0).collect::<Vec<_>>(),
-        ["both"]
-    );
-    let records = second.try_iter().collect::<Vec<_>>();
-    assert_eq!(
-        records
-            .iter()
-            .map(|record| record.0.as_str())
+        receiver
+            .try_iter()
+            .map(|record| record.0)
             .collect::<Vec<_>>(),
-        ["second only", "both", "span closed"]
+        ["inside"]
     );
-    assert_eq!(records[1].1["route"], "responses");
-    assert_eq!(records[2].1["route"], "responses");
 }
 
 #[rstest]
@@ -278,4 +262,186 @@ async fn instrumented_futures_keep_span_fields_in_their_captured_sink() {
         assert_eq!(records[1].1["id"], id);
         assert_eq!(records[1].1["span_name"], "worker");
     }
+}
+
+#[rstest]
+#[case::bearer_in_the_message("Authorization: Bearer abcdefghijklmnop")]
+#[case::url_userinfo_in_the_message("postgres://user:credential-value@database.internal/name")]
+fn a_scrubbed_sink_never_sees_a_secret(#[case] secret: &str) {
+    let (sender, receiver) = mpsc::channel();
+    let logger = Logger::new(Scrubbed::new(
+        Output {
+            enabled: Arc::new(AtomicBool::new(true)),
+            sender,
+        },
+        16,
+    ));
+
+    logger.scope(|| {
+        warn!(
+            api_key = "credential-value",
+            detail = secret,
+            attempt = 3_u64,
+            "upstream said {secret}"
+        )
+    });
+
+    let (message, fields, ..) = receiver.try_recv().unwrap();
+    let line = format!("{message} {fields}");
+    assert!(!line.contains("credential-value"), "{line}");
+    assert!(!line.contains("abcdefghijklmnop"), "{line}");
+    assert!(message.starts_with("upstream said "), "{message}");
+    assert_eq!(fields["api_key"], "REDACTED");
+    assert_eq!(fields["attempt"], 3);
+}
+
+#[rstest]
+fn a_scrubbed_sink_scrubs_a_logged_json_body_value_by_value() {
+    let (sender, receiver) = mpsc::channel();
+    let logger = Logger::new(Scrubbed::new(
+        Output {
+            enabled: Arc::new(AtomicBool::new(true)),
+            sender,
+        },
+        16,
+    ));
+    let pasted = json!({"password": "credential-value"}).to_string();
+    let body = json!({
+        "model": "claude-haiku",
+        "max_tokens": 20,
+        "api_key": "another-credential",
+        "mcp_servers": [{"name": "docs", "authorization_token": "opaque-mcp-credential"}],
+        "tools": [{"type": "mcp", "server_label": "docs", "authorization": "opaque-mcp-credential"}],
+        "messages": [{"role": "user", "content": format!("my config is {pasted}")}],
+    })
+    .to_string();
+    assert!(body.contains(r#"\"password\""#));
+
+    logger.scope(|| warn!(chunk = body, "body chunk"));
+
+    let (_, fields, ..) = receiver.try_recv().unwrap();
+    let chunk: Value = serde_json::from_str(fields["chunk"].as_str().unwrap()).unwrap();
+    assert!(!chunk.to_string().contains("credential"), "{chunk}");
+    assert_eq!(chunk["model"], "claude-haiku");
+    assert_eq!(chunk["max_tokens"], 20);
+    assert_eq!(chunk["api_key"], "REDACTED");
+    assert_eq!(chunk["mcp_servers"][0]["name"], "docs");
+    assert_eq!(chunk["mcp_servers"][0]["authorization_token"], "REDACTED");
+    assert_eq!(chunk["tools"][0]["server_label"], "docs");
+    assert_eq!(chunk["tools"][0]["authorization"], "REDACTED");
+    assert_eq!(chunk["messages"][0]["role"], "user");
+    assert!(
+        chunk["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("my config is ")
+    );
+}
+
+#[rstest]
+fn a_scrubbed_sink_scrubs_the_json_of_each_stream_event_and_a_secret_number() {
+    let (sender, receiver) = mpsc::channel();
+    let logger = Logger::new(Scrubbed::new(
+        Output {
+            enabled: Arc::new(AtomicBool::new(true)),
+            sender,
+        },
+        16,
+    ));
+    let pasted = json!({"password": "credential-value"}).to_string();
+    let delta = json!({
+        "type": "content_block_delta",
+        "delta": {"type": "text_delta", "text": pasted},
+    });
+    let frame = format!(
+        "event: content_block_delta\r\ndata: {delta}\r\n\r\nevent: ping\ndata: not json\n\n"
+    );
+    let body = json!({
+        "password": 12345678,
+        "max_tokens": 20,
+        "input": {"sk-abcdefghijklmnopqrstuvwxyz": 1, "city": "Paris"},
+    })
+    .to_string();
+
+    logger.scope(|| warn!(chunk = frame, body, max_tokens = 20_u64, "body chunk"));
+
+    let (_, fields, ..) = receiver.try_recv().unwrap();
+    let chunk = fields["chunk"].as_str().unwrap();
+    assert!(!chunk.contains("credential-value"), "{chunk}");
+    let lines: Vec<&str> = chunk.split("\n").collect();
+    assert_eq!(lines[0], "event: content_block_delta\r");
+    let data: Value =
+        serde_json::from_str(lines[1].strip_prefix("data: ").unwrap().trim_end()).unwrap();
+    assert_eq!(data["type"], "content_block_delta");
+    assert_eq!(data["delta"]["type"], "text_delta");
+    assert_eq!(&lines[2..], ["\r", "event: ping", "data: not json", "", ""]);
+    let body: Value = serde_json::from_str(fields["body"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        body,
+        json!({
+            "password": "REDACTED",
+            "max_tokens": 20,
+            "input": {"REDACTED": "REDACTED", "city": "Paris"},
+        })
+    );
+    assert_eq!(fields["max_tokens"], 20);
+}
+
+#[rstest]
+fn a_scrubbed_sink_takes_a_key_length_set_after_it_is_installed() {
+    let (sender, receiver) = mpsc::channel();
+    let scrubbed = Scrubbed::new(
+        Output {
+            enabled: Arc::new(AtomicBool::new(true)),
+            sender,
+        },
+        16,
+    );
+    let key_length = scrubbed.key_length();
+    let logger = Logger::new(scrubbed);
+
+    logger.scope(|| warn!("key sk-abcde rejected"));
+    key_length.set(8);
+    logger.scope(|| warn!("key sk-abcde rejected"));
+
+    let messages: Vec<String> = receiver.try_iter().map(|record| record.0).collect();
+    assert_eq!(messages, ["key sk-abcde rejected", "key REDACTED rejected"]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn work_scoped_to_a_logger_within_a_span_inherits_the_spans_fields() {
+    let (sender, receiver) = mpsc::channel();
+    let logger = Logger::new(Output {
+        enabled: Arc::new(AtomicBool::new(true)),
+        sender,
+    });
+    let call = logger.within(|| tracing::info_span!("call", request = "first"));
+
+    logger.scope(|| warn!("outside the call"));
+    call.scope(|| warn!("sync inside the call"));
+    call.instrument(async {
+        tokio::task::yield_now().await;
+        warn!(attempt = 2_u64, "async inside the call");
+    })
+    .await;
+
+    let records: Vec<(String, Value)> = receiver
+        .try_iter()
+        .map(|(message, fields, ..)| (message, fields))
+        .collect();
+    assert_eq!(
+        records,
+        [
+            ("outside the call".to_owned(), json!({})),
+            (
+                "sync inside the call".to_owned(),
+                json!({"request": "first"})
+            ),
+            (
+                "async inside the call".to_owned(),
+                json!({"request": "first", "attempt": 2})
+            ),
+        ]
+    );
 }

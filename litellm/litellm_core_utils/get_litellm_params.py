@@ -7,10 +7,11 @@ from typing import Final, cast
 from pydantic import TypeAdapter, ValidationError
 
 from litellm.constants import CONTROL_OPTIONS_KEY, SESSION_ID_FROM_TRACE_ID_PARAM_KEY
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import SupportsGet, normalize_drop_params, require_get
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
 from litellm.types.router import CustomPricingLiteLLMParams
+from litellm.types.utils import provider_oauth_litellm_params
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
@@ -105,6 +106,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
     | ANTHROPIC_WIF_KWARGS_KEYS
     | OPENAI_WIF_KWARGS_KEYS
     | OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS
+    | frozenset(provider_oauth_litellm_params)
     | AGENTIC_LOOP_CONTROL_KWARGS_KEYS
     | frozenset(CustomPricingLiteLLMParams.model_fields)
 )
@@ -173,7 +175,7 @@ def with_control_options(litellm_params: Mapping[str, object], control: ControlO
 
 
 def get_base_model_from_litellm_call_metadata(
-    metadata: Mapping[str, object] | None,
+    metadata: SupportsGet | None,
 ) -> str | None:
     if metadata is None:
         return None
@@ -190,61 +192,61 @@ _get_base_model_from_litellm_call_metadata = get_base_model_from_litellm_call_me
 
 
 def get_litellm_params(
-    api_key: str | None = None,
-    force_timeout=600,
-    azure=False,
-    logger_fn=None,
-    verbose=False,
-    hugging_face=False,
-    replicate=False,
-    together_ai=False,
-    custom_llm_provider: str | None = None,
-    api_base: str | None = None,
-    litellm_call_id=None,
-    model_alias_map=None,
-    completion_call_id=None,
-    metadata: dict | None = None,
-    model_info=None,
-    proxy_server_request=None,
-    acompletion=None,
-    aembedding=None,
-    allm_passthrough_route=None,
-    preset_cache_key=None,
-    no_log=None,
-    cost_per_second: float | None = None,
-    input_cost_per_second=None,
-    input_cost_per_token=None,
-    output_cost_per_token=None,
-    output_cost_per_second=None,
-    cost_per_query=None,
-    cooldown_time=None,
-    text_completion=None,
-    azure_ad_token_provider=None,
-    user_continue_message=None,
-    base_model: str | None = None,
-    litellm_trace_id: str | None = None,
-    litellm_session_id: str | None = None,
-    hf_model_name: str | None = None,
-    custom_prompt_dict: dict | None = None,
-    litellm_metadata: dict | None = None,
-    disable_add_transform_inline_image_block: bool | None = None,
-    drop_params: bool | str | None = None,
-    prompt_id: str | None = None,
-    prompt_variables: dict | None = None,
-    async_call: bool | None = None,
-    ssl_verify: bool | None = None,
-    merge_reasoning_content_in_choices: bool | None = None,
-    use_litellm_proxy: bool | None = None,
-    api_version: str | None = None,
-    max_retries: int | None = None,
-    litellm_request_debug: bool | None = None,
-    **kwargs,
+    api_key: object = None,
+    force_timeout: object = 600,
+    azure: object = False,
+    logger_fn: object = None,
+    verbose: object = False,
+    hugging_face: object = False,
+    replicate: object = False,
+    together_ai: object = False,
+    custom_llm_provider: object = None,
+    api_base: object = None,
+    litellm_call_id: object = None,
+    model_alias_map: object = None,
+    completion_call_id: object = None,
+    metadata: object = None,
+    model_info: object = None,
+    proxy_server_request: object = None,
+    acompletion: object = None,
+    aembedding: object = None,
+    allm_passthrough_route: object = None,
+    preset_cache_key: object = None,
+    no_log: object = None,
+    cost_per_second: object = None,
+    input_cost_per_second: object = None,
+    input_cost_per_token: object = None,
+    output_cost_per_token: object = None,
+    output_cost_per_second: object = None,
+    cost_per_query: object = None,
+    cooldown_time: object = None,
+    text_completion: object = None,
+    azure_ad_token_provider: object = None,
+    user_continue_message: object = None,
+    base_model: object = None,
+    litellm_trace_id: object = None,
+    litellm_session_id: object = None,
+    hf_model_name: object = None,
+    custom_prompt_dict: object = None,
+    litellm_metadata: object = None,
+    disable_add_transform_inline_image_block: object = None,
+    drop_params: object = None,
+    prompt_id: object = None,
+    prompt_variables: object = None,
+    async_call: object = None,
+    ssl_verify: object = None,
+    merge_reasoning_content_in_choices: object = None,
+    use_litellm_proxy: object = None,
+    api_version: object = None,
+    max_retries: object = None,
+    litellm_request_debug: object = None,
+    **kwargs: object,
 ) -> dict:
     _litellm_metadata_dict: Final = litellm_metadata if isinstance(litellm_metadata, dict) else None
     resolved_metadata: Final = _litellm_metadata_dict.copy() if not metadata and _litellm_metadata_dict else metadata
 
     # Derive litellm_session_id / litellm_trace_id from metadata when not provided (call chaining)
-    _meta: Final = resolved_metadata or {}
+    _meta: Final = require_get(resolved_metadata or {})
     session_id_from_trace_id: Final = (
         litellm_session_id is None and not _meta.get("session_id") and bool(_meta.get("trace_id"))
     )
@@ -287,7 +289,7 @@ def get_litellm_params(
         "azure_ad_token_provider": azure_ad_token_provider,
         "user_continue_message": user_continue_message,
         "base_model": base_model
-        or (get_base_model_from_litellm_call_metadata(metadata=metadata) if metadata else None),
+        or (get_base_model_from_litellm_call_metadata(metadata=require_get(metadata)) if metadata else None),
         "litellm_trace_id": litellm_trace_id,
         "litellm_session_id": litellm_session_id,
         **({SESSION_ID_FROM_TRACE_ID_PARAM_KEY: True} if session_id_from_trace_id else {}),

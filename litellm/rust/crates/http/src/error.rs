@@ -59,8 +59,13 @@ pub(crate) enum Repr {
     #[error("request signing failed")]
     Signature(#[source] litellm_error::Source),
 
+    /// `origin` is the `scheme://host:port` the client could not connect to.
     #[error("could not reach the provider")]
-    Connect(#[source] reqwest::Error),
+    Connect {
+        #[source]
+        source: reqwest::Error,
+        origin: Option<String>,
+    },
     #[error("upstream network error")]
     Network(#[source] reqwest::Error),
     #[error("upstream network error")]
@@ -238,6 +243,14 @@ impl Error {
         .into()
     }
 
+    /// The `scheme://host:port` a request that never connected was sent to.
+    pub fn connect_origin(&self) -> Option<&str> {
+        match &*self.0 {
+            Repr::Connect { origin, .. } => origin.as_deref(),
+            _ => None,
+        }
+    }
+
     pub fn body_cut(&self) -> Option<BodyCut> {
         match &*self.0 {
             Repr::BodyCut { cut, .. } => Some(*cut),
@@ -289,7 +302,7 @@ impl Error {
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::WebSocketUrl(_)
             | Repr::WebSocketScheme(_)
             | Repr::WebSocketSchemeRewrite(_)
@@ -326,7 +339,7 @@ impl Error {
             | Repr::RequestBody(_)
             | Repr::UnsignableBody
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::Network(_)
             | Repr::BodyCut { .. }
             | Repr::Timeout(_)
@@ -359,7 +372,7 @@ impl Error {
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::Network(_)
             | Repr::BodyCut { .. }
             | Repr::Timeout(_)
@@ -383,9 +396,48 @@ impl Error {
         }
     }
 
+    pub fn is_unreachable_media(&self) -> bool {
+        match &*self.0 {
+            Repr::Resolve(_)
+            | Repr::MissingRedirectLocation
+            | Repr::InvalidRedirect(_)
+            | Repr::Download(_) => true,
+            Repr::Read { .. }
+            | Repr::InvalidPem { .. }
+            | Repr::Client(_)
+            | Repr::TlsConfig(_)
+            | Repr::RequestBody(_)
+            | Repr::Request(_)
+            | Repr::RequestUrl(_)
+            | Repr::ParseUrl(_)
+            | Repr::UnsignableBody
+            | Repr::UnsignableHeader(_)
+            | Repr::Signature(_)
+            | Repr::Connect { .. }
+            | Repr::Network(_)
+            | Repr::BodyCut { .. }
+            | Repr::Timeout(_)
+            | Repr::ReadTimeout { .. }
+            | Repr::Status { .. }
+            | Repr::WebSocketUrl(_)
+            | Repr::WebSocketScheme(_)
+            | Repr::WebSocketSchemeRewrite(_)
+            | Repr::Handshake(_)
+            | Repr::HandshakeTimeout(_)
+            | Repr::WebSocket(_)
+            | Repr::WebSocketClosed
+            | Repr::BlockedUrl
+            | Repr::DownloadDisabled
+            | Repr::DownloadTooLarge
+            | Repr::TooManyRedirects
+            | Repr::DownloadStatus(_)
+            | Repr::DownloadTimeout(_) => false,
+        }
+    }
+
     pub fn is_connect(&self) -> bool {
         match &*self.0 {
-            Repr::Connect(_) => true,
+            Repr::Connect { .. } => true,
             Repr::Read { .. }
             | Repr::InvalidPem { .. }
             | Repr::Client(_)
@@ -439,7 +491,7 @@ impl Error {
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::Network(_)
             | Repr::BodyCut { .. }
             | Repr::Status { .. }
@@ -475,7 +527,7 @@ impl Error {
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::Network(_)
             | Repr::BodyCut { .. }
             | Repr::Timeout(_)
@@ -515,7 +567,7 @@ impl Error {
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::Network(_)
             | Repr::BodyCut { .. }
             | Repr::WebSocketUrl(_)
@@ -550,7 +602,7 @@ impl Error {
             | Repr::UnsignableBody
             | Repr::UnsignableHeader(_)
             | Repr::Signature(_)
-            | Repr::Connect(_)
+            | Repr::Connect { .. }
             | Repr::Network(_)
             | Repr::BodyCut { .. }
             | Repr::Timeout(_)
@@ -619,15 +671,29 @@ impl From<Repr> for Error {
 
 impl From<reqwest::Error> for Error {
     fn from(error: reqwest::Error) -> Self {
+        let origin = error.url().and_then(url_origin);
         let error = error.without_url();
         if error.is_timeout() {
             Repr::Timeout(error).into()
         } else if error.is_connect() || error.is_builder() {
-            Repr::Connect(error).into()
+            Repr::Connect {
+                source: error,
+                origin,
+            }
+            .into()
         } else {
             Repr::Network(error).into()
         }
     }
+}
+
+fn url_origin(url: &url::Url) -> Option<String> {
+    Some(format!(
+        "{}://{}:{}",
+        url.scheme(),
+        url.host_str()?,
+        url.port_or_known_default()?
+    ))
 }
 
 impl From<tungstenite::Error> for Error {
@@ -641,7 +707,7 @@ mod tests {
     use litellm_error::Report;
     use rstest::rstest;
 
-    use super::{TRUNCATION_MARKER, UPSTREAM_BODY_MAX_CHARS};
+    use super::{Error, Repr, TRUNCATION_MARKER, UPSTREAM_BODY_MAX_CHARS};
 
     #[tokio::test]
     async fn transport_errors_remove_urls_and_keep_dispatch_context() {
@@ -658,6 +724,82 @@ mod tests {
         assert!(!error.dispatched());
         assert!(!report.contains("secret"), "{report}");
         assert!(!report.contains("private"), "{report}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_connection_names_only_the_origin_it_was_sent_to() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        drop(listener);
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client")
+            .post(format!(
+                "http://{address}/model/private/invoke?api_key=secret"
+            ))
+            .send()
+            .await
+            .expect_err("nothing listens");
+
+        let error = crate::Error::from(error);
+
+        assert_eq!(
+            error.connect_origin(),
+            Some(format!("http://{address}").as_str())
+        );
+    }
+
+    #[rstest]
+    #[case::default_https_port(
+        "https://bedrock-mantle.us-east-1.api.aws/v1/messages",
+        "https://bedrock-mantle.us-east-1.api.aws:443"
+    )]
+    #[case::explicit_port("http://[::1]:8080/v1?x=1", "http://[::1]:8080")]
+    fn an_origin_keeps_the_scheme_host_and_port(#[case] url: &str, #[case] origin: &str) {
+        assert_eq!(
+            super::url_origin(&url::Url::parse(url).unwrap()).as_deref(),
+            Some(origin)
+        );
+    }
+
+    #[rstest]
+    #[case::unresolvable_host(Repr::Resolve(std::io::Error::other("no such host")), true)]
+    #[case::redirect_without_a_location(Repr::MissingRedirectLocation, true)]
+    #[case::redirect_to_an_invalid_url(
+        Repr::InvalidRedirect(url::ParseError::EmptyHost.into()),
+        true
+    )]
+    #[case::not_found(Repr::DownloadStatus(404), false)]
+    #[case::blocked(Repr::BlockedUrl, false)]
+    #[case::disabled(Repr::DownloadDisabled, false)]
+    #[case::too_large(Repr::DownloadTooLarge, false)]
+    #[case::too_many_redirects(Repr::TooManyRedirects, false)]
+    fn unreachable_media_is_neither_an_answer_nor_a_refusal(
+        #[case] repr: Repr,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(Error::from(repr).is_unreachable_media(), expected);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_failed_download_is_unreachable_media_and_a_refused_provider_is_not() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        drop(listener);
+        let refused = || async {
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .expect("client")
+                .get(format!("http://{address}/"))
+                .send()
+                .await
+                .expect_err("nothing listens")
+        };
+        assert!(Error::from(Repr::download(refused().await)).is_unreachable_media());
+        assert!(!Error::from(refused().await).is_unreachable_media());
     }
 
     fn root_cause<'a>(

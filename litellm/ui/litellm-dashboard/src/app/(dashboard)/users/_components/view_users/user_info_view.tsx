@@ -1,7 +1,9 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import { MemberRoleSelect } from "./MemberRoleSelect";
 import React, { useState } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -30,14 +32,17 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
-import { hasProxyWideSpendView, rolesWithWriteAccess } from "@/utils/roles";
+import { availableRoleDisplayLabel, hasProxyWideSpendView, rolesWithWriteAccess } from "@/utils/roles";
 import { teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { ArrowLeft, CheckIcon, CopyIcon, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
+import { addTeamToMember, emptyAddTeam } from "./add_team_form/mapper";
+import { addTeamSchema } from "./add_team_form/schema";
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -49,7 +54,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import ScopedSavingsTab from "@/components/shared/ScopedSavingsTab";
 import { AutoRouterUsageView } from "@/app/(dashboard)/cost-optimization/_components/AutoRouterBenchmarksTab";
 import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
-import { BudgetPeriodTooltip } from "@/components/shared/BudgetPeriodTooltip";
+import { UserSpendCard } from "./UserSpendCard";
 
 interface UserInfoViewProps {
   userId: string;
@@ -75,6 +80,9 @@ interface TeamOption {
   team_alias: string;
 }
 
+const shouldRefreshBudget = (user: UserInfoV2Response, changes: Record<string, unknown>) =>
+  user.rollover_max_budget != null || changes.rollover_max_budget !== undefined;
+
 export default function UserInfoView({
   userId,
   onClose,
@@ -85,7 +93,7 @@ export default function UserInfoView({
   initialTab = 0,
   startInEditMode = false,
 }: UserInfoViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const { premiumUser, userId: signedInUserId } = useAuthorized();
   const canViewAutoRouterUsage = hasProxyWideSpendView(userRole);
   const canViewUserUsage = canViewAutoRouterUsage || (Boolean(userId.trim()) && userId === signedInUserId);
@@ -115,9 +123,10 @@ export default function UserInfoView({
   const [isAddingTeam, setIsAddingTeam] = useState(false);
   const [isRemovingTeam, setIsRemovingTeam] = useState(false);
   const [allTeams, setAllTeams] = useState<Array<{ team_id: string; team_alias: string }>>([]);
-  const [selectedTeamId, setSelectedTeamId] = useState<string>("");
-  const [selectedRole, setSelectedRole] = useState<string>("user");
-  const [isLoadingTeams, setIsLoadingTeams] = useState(false);
+  const addTeamForm = useZodForm(addTeamSchema, { defaultValues: emptyAddTeam });
+  const { field: teamIdField } = useController({ control: addTeamForm.control, name: "team_id" });
+  const { field: roleField } = useController({ control: addTeamForm.control, name: "role" });
+  const selectedTeamId = teamIdField.value;
   const { data: allMcpServers = [] } = useMCPServers();
   const { data: allMcpToolsets = [] } = useMCPToolsets();
 
@@ -173,7 +182,6 @@ export default function UserInfoView({
 
   const fetchAllTeams = async () => {
     if (!accessToken) return;
-    setIsLoadingTeams(true);
     try {
       const teams = await teamListCall(accessToken, null);
       setAllTeams(
@@ -184,14 +192,11 @@ export default function UserInfoView({
       );
     } catch (error) {
       console.error("Error fetching teams:", error);
-    } finally {
-      setIsLoadingTeams(false);
     }
   };
 
   const handleOpenAddTeamModal = () => {
-    setSelectedTeamId("");
-    setSelectedRole("user");
+    addTeamForm.reset(emptyAddTeam);
     setIsAddTeamModalOpen(true);
     fetchAllTeams();
   };
@@ -200,11 +205,7 @@ export default function UserInfoView({
     if (!accessToken || !selectedTeamId) return;
     setIsAddingTeam(true);
     try {
-      const member: Member = {
-        role: selectedRole,
-        user_id: userId,
-      };
-      await teamMemberAddCall(accessToken, selectedTeamId, member);
+      await teamMemberAddCall(accessToken, selectedTeamId, addTeamToMember(addTeamForm.getValues(), userId));
       toast.success(t("users.userInfo.toasts.addedToTeam"));
       setIsAddTeamModalOpen(false);
       // Re-fetch user data to refresh teams
@@ -340,22 +341,26 @@ export default function UserInfoView({
       );
 
       // Update local state with new values
-      setUserData({
-        ...userData,
-        user_email: formValues.user_email ?? userData.user_email,
-        user_alias: formValues.user_alias ?? userData.user_alias,
-        models: formValues.models ?? userData.models,
-        max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
-        tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
-        rpm_limit: formValues.rpm_limit === undefined ? userData.rpm_limit : formValues.rpm_limit,
-        budget_duration:
-          formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
-        metadata: formValues.metadata ?? userData.metadata,
-        model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
-        object_permission: objectPermission
-          ? { ...userData.object_permission, ...objectPermission }
-          : userData.object_permission,
-      });
+      if (shouldRefreshBudget(userData, formValues)) {
+        setUserData(await userGetInfoV2(accessToken, userData.user_id));
+      } else
+        setUserData({
+          ...userData,
+          user_email: formValues.user_email ?? userData.user_email,
+          user_alias: formValues.user_alias ?? userData.user_alias,
+          user_role: formValues.user_role ?? userData.user_role,
+          models: formValues.models ?? userData.models,
+          max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
+          tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
+          rpm_limit: formValues.rpm_limit === undefined ? userData.rpm_limit : formValues.rpm_limit,
+          budget_duration:
+            formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
+          metadata: formValues.metadata ?? userData.metadata,
+          model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
+          object_permission: objectPermission
+            ? { ...userData.object_permission, ...objectPermission }
+            : userData.object_permission,
+        });
 
       toast.success(t("users.userInfo.toasts.updated"));
       setIsEditing(false);
@@ -367,7 +372,7 @@ export default function UserInfoView({
 
   if (isLoading) {
     return (
-      <div className="p-4">
+      <div>
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft />
           {t("users.userInfo.backToUsers")}
@@ -379,7 +384,7 @@ export default function UserInfoView({
 
   if (!userData) {
     return (
-      <div className="p-4">
+      <div>
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft />
           {t("users.userInfo.backToUsers")}
@@ -400,9 +405,7 @@ export default function UserInfoView({
   };
 
   const unknownTimestamp = t("users.userInfo.details.unknown");
-  const unlimitedLabel = t("users.userInfo.unlimited");
-  const budgetLimit =
-    userData.max_budget !== null ? `$${formatNumberWithCommas(userData.max_budget, 2)}` : unlimitedLabel;
+  const unlimited = t("users.userInfo.unlimited");
   const teamPickerPlaceholder = t("users.userInfo.addTeamDialog.teamPlaceholder");
 
   // Build a legacy-compatible shape for UserEditView
@@ -414,6 +417,7 @@ export default function UserInfoView({
       user_role: userData.user_role,
       models: userData.models,
       max_budget: userData.max_budget,
+      rollover_max_budget: userData.rollover_max_budget,
       tpm_limit: userData.tpm_limit,
       rpm_limit: userData.rpm_limit,
       budget_duration: userData.budget_duration,
@@ -425,8 +429,9 @@ export default function UserInfoView({
     },
   };
 
+  const roleId = userData.user_role;
   return (
-    <div className="p-4">
+    <div>
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button variant="ghost" onClick={onClose} className="mb-4">
@@ -478,7 +483,7 @@ export default function UserInfoView({
           { label: t("users.userInfo.deleteModal.userId"), value: userData.user_id, code: true },
           {
             label: t("users.userInfo.deleteModal.globalProxyRole"),
-            value: (userData.user_role && possibleUIRoles?.[userData.user_role]?.ui_label) || userData.user_role || "-",
+            value: (roleId && availableRoleDisplayLabel(roleId, possibleUIRoles?.[roleId]?.ui_label)) || "-",
           },
           {
             label: t("users.userInfo.deleteModal.totalSpend"),
@@ -528,21 +533,7 @@ export default function UserInfoView({
         {/* Overview Panel */}
         <TabsContent value="overview" keepMounted>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            <Card className="block p-6">
-              <p>
-                {t("users.userInfo.overview.spend")}
-                <BudgetPeriodTooltip
-                  spend={userData.spend}
-                  maxBudget={userData.max_budget}
-                  budgetDuration={userData.budget_duration}
-                  budgetResetAt={userData.budget_reset_at}
-                />
-              </p>
-              <div className="mt-2">
-                <h3 className="text-lg font-medium">${formatNumberWithCommas(userData.spend || 0, 2)}</h3>
-                <p>{t("users.userInfo.overview.budgetOf", { budget: budgetLimit })}</p>
-              </div>
-            </Card>
+            <UserSpendCard user={userData} />
 
             <Card className="block p-6">
               <div className="flex justify-between items-center mb-2">
@@ -680,17 +671,25 @@ export default function UserInfoView({
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.globalProxyRole")}</p>
-                  <p>{userData.user_role || t("users.userInfo.details.notSet")}</p>
+                  <p>{availableRoleDisplayLabel(roleId || "") || t("users.userInfo.details.notSet")}</p>
                 </div>
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.created")}</p>
-                  <p>{userData.created_at ? new Date(userData.created_at).toLocaleString() : unknownTimestamp}</p>
+                  <p>
+                    {userData.created_at
+                      ? displayTimestamp(new Date(userData.created_at), locale.language)
+                      : unknownTimestamp}
+                  </p>
                 </div>
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.lastUpdated")}</p>
-                  <p>{userData.updated_at ? new Date(userData.updated_at).toLocaleString() : unknownTimestamp}</p>
+                  <p>
+                    {userData.updated_at
+                      ? displayTimestamp(new Date(userData.updated_at), locale.language)
+                      : unknownTimestamp}
+                  </p>
                 </div>
 
                 <div>
@@ -713,7 +712,7 @@ export default function UserInfoView({
                   <p>
                     {userData.max_budget !== null && userData.max_budget !== undefined
                       ? `$${formatNumberWithCommas(userData.max_budget, 4)}`
-                      : unlimitedLabel}
+                      : unlimited}
                   </p>
                 </div>
 
@@ -831,7 +830,7 @@ export default function UserInfoView({
                 <Combobox
                   items={availableTeamsForAdd}
                   value={selectedTeamOption}
-                  onValueChange={(team: TeamOption | null) => setSelectedTeamId(team?.team_id ?? "")}
+                  onValueChange={(team: TeamOption | null) => teamIdField.onChange(team?.team_id ?? "")}
                   itemToStringLabel={(team: TeamOption) => team.team_alias}
                   isItemEqualToValue={(team: TeamOption, value: TeamOption) => team.team_id === value.team_id}
                 >
@@ -849,7 +848,7 @@ export default function UserInfoView({
                 </Combobox>
               </Field>
 
-              <MemberRoleSelect value={selectedRole} onChange={setSelectedRole} />
+              <MemberRoleSelect value={roleField.value} onChange={roleField.onChange} />
             </FieldGroup>
 
             <div className="text-right mt-4">

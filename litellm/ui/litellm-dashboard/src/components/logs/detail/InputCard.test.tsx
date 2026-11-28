@@ -2,6 +2,9 @@ import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { I18nextProvider } from "react-i18next";
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 import { InputCard } from "./InputCard";
 import { ParsedMessage } from "./prettyMessagesTypes";
 import { copyToClipboard } from "@/utils/dataUtils";
@@ -65,6 +68,25 @@ describe("InputCard", () => {
     ];
     render(<InputCard messages={messagesWithHistory} />);
     expect(screen.getByText("Last message")).toBeInTheDocument();
+  });
+
+  it("keeps protocol role labels and prompt text unchanged in Chinese", async () => {
+    const locale = i18n.cloneInstance({ forkResourceStore: true });
+    locale.addResourceBundle("zh-CN", "translation", zh);
+    await locale.changeLanguage("zh-CN");
+    const messages: ParsedMessage[] = [
+      { role: "system", content: "You are a helpful assistant" },
+      { role: "user", content: "Hello" },
+    ];
+    render(
+      <I18nextProvider i18n={locale}>
+        <InputCard messages={messages} />
+      </I18nextProvider>,
+    );
+
+    expect(screen.getByText("SYSTEM")).toBeInTheDocument();
+    expect(screen.getByText("USER")).toBeInTheDocument();
+    expect(screen.getByText("You are a helpful assistant")).toBeInTheDocument();
   });
 
   it("should display last message content", () => {

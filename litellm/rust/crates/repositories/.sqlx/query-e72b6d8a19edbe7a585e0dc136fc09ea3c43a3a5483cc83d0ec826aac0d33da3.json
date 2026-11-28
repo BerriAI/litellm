@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_SpendLogDelivery\" (delivery_id, request_id, accounting_payload, is_batch, next_attempt_at, created_at)\nSELECT delivery_id, request_id, accounting_payload, is_batch, NOW() AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC' FROM jsonb_to_recordset($1::jsonb)\nAS inputs(delivery_id text, request_id text, accounting_payload jsonb, is_batch boolean)\nON CONFLICT (delivery_id) DO NOTHING RETURNING delivery_id\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "delivery_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_SpendLogDelivery\"",
+            "name": "delivery_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e72b6d8a19edbe7a585e0dc136fc09ea3c43a3a5483cc83d0ec826aac0d33da3"
+}

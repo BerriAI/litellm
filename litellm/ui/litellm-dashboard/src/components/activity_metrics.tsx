@@ -50,29 +50,35 @@ const modelAverageResponseTimeMs = (metrics: ModelActivityData): number | null =
 
 const formatSpend = (value: number) => `$${formatNumberWithCommas(value, 2, true)}`;
 
-export const ResponseTimeTooltip = ({ active, payload, label }: ChartTooltipProps) => (
-  <ValueTooltip
-    active={active}
-    payload={payload?.map((item) => ({ ...item, name: formatCategoryName(String(item.dataKey ?? "")) }))}
-    label={label}
-    valueFormatter={formatResponseTime}
-  />
-);
+export const ResponseTimeTooltip = ({ active, payload, label }: ChartTooltipProps) => {
+  const { t } = useTranslation();
+  return (
+    <ValueTooltip
+      active={active}
+      payload={payload?.map((item) => ({ ...item, name: formatCategoryName(String(item.dataKey ?? ""), t) }))}
+      label={label}
+      valueFormatter={formatResponseTime}
+    />
+  );
+};
 
-const SeriesKey = ({ categories, colors }: { categories: readonly string[]; colors: readonly ChartColor[] }) => (
-  <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-    {categories.map((category, idx) => (
-      <span key={category} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <span
-          aria-hidden="true"
-          className="size-2 shrink-0 rounded-[2px]"
-          style={{ backgroundColor: chartColorValue(colors[idx % colors.length]) }}
-        />
-        {formatCategoryName(category)}
-      </span>
-    ))}
-  </div>
-);
+const SeriesKey = ({ categories, colors }: { categories: readonly string[]; colors: readonly ChartColor[] }) => {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+      {categories.map((category, idx) => (
+        <span key={category} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span
+            aria-hidden="true"
+            className="size-2 shrink-0 rounded-[2px]"
+            style={{ backgroundColor: chartColorValue(colors[idx % colors.length]) }}
+          />
+          {formatCategoryName(category, t)}
+        </span>
+      ))}
+    </div>
+  );
+};
 
 /** A stat value kept as a heading so it stays addressable by its accessible name. */
 const StatValue = ({ children }: { children: ReactNode }) => <h4 className="truncate">{children}</h4>;
@@ -322,6 +328,7 @@ export const ModelSection = ({
           data={metrics.daily_data}
           index="date"
           categories={["metrics.spend"]}
+          categoryLabels={{ "metrics.spend": t("activityMetrics.series.spend") }}
           colors={[BRAND]}
           maxBarSize={28}
           valueFormatter={formatSpend}

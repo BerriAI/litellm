@@ -304,7 +304,9 @@ SERVER_TOOLS: Final = [
 ]
 
 
-async def _workspace_request(max_tokens: int = 64, **request_params: object) -> httpx.Request:
+async def _workspace_request(
+    max_tokens: int = 64, model: str = CLAUDE_MODEL, **request_params: object
+) -> httpx.Request:
     received: Final[list[httpx.Request]] = []  # mutable-ok: the fake workspace records what litellm sent
 
     def workspace_answers(request: httpx.Request) -> httpx.Response:
@@ -328,7 +330,7 @@ async def _workspace_request(max_tokens: int = 64, **request_params: object) -> 
         await litellm.anthropic.messages.acreate(
             max_tokens=max_tokens,
             messages=USER_TURN,
-            model=f"databricks/{CLAUDE_MODEL}",
+            model=f"databricks/{model}",
             api_key=DATABRICKS_API_KEY,
             api_base=DATABRICKS_API_BASE,
             client=upstream,
@@ -340,8 +342,10 @@ async def _workspace_request(max_tokens: int = 64, **request_params: object) -> 
     return received[0]
 
 
-async def _workspace_request_body(**request_params: object) -> dict[str, object]:
-    return json.loads((await _workspace_request(**request_params)).content)
+async def _workspace_request_body(
+    max_tokens: int = 64, model: str = CLAUDE_MODEL, **request_params: object
+) -> dict[str, object]:
+    return json.loads((await _workspace_request(max_tokens=max_tokens, model=model, **request_params)).content)
 
 
 @pytest.mark.asyncio
@@ -361,6 +365,57 @@ async def test_bound_thinking_with_display_updates_reaches_the_workspace_with_bo
     assert {"thinking-binding-controls-2026-08-01", "thinking-display-updates-2026-08-18"} <= set(
         request.headers["anthropic-beta"].split(",")
     )
+
+
+SERVER_SIDE_FALLBACK_BETA: Final = "server-side-fallback-2026-06-01"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "drop_params", "model_info", "expected_beta"),
+    [
+        pytest.param("databricks-claude-opus-4-1", True, {}, None, id="opus_4_1_under_drop_params"),
+        pytest.param(
+            "databricks-claude-opus-4-1", False, {}, SERVER_SIDE_FALLBACK_BETA, id="opus_4_1_without_drop_params"
+        ),
+        pytest.param("databricks-claude-haiku-4-5", True, {}, SERVER_SIDE_FALLBACK_BETA, id="haiku_4_5"),
+        pytest.param(
+            "databricks-claude-haiku-4-5",
+            True,
+            {"supports_server_side_fallback": False},
+            None,
+            id="deployment_turns_it_off",
+        ),
+        pytest.param(
+            "databricks-claude-opus-4-1",
+            True,
+            {"supports_server_side_fallback": True},
+            SERVER_SIDE_FALLBACK_BETA,
+            id="deployment_turns_it_on",
+        ),
+    ],
+)
+async def test_server_side_fallback_beta_reaches_the_workspace_unless_drop_params_finds_the_model_lacks_it(
+    model: str,
+    drop_params: bool,
+    model_info: dict[str, bool],
+    expected_beta: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+    local_beta_headers_config: None,
+) -> None:
+    """On 2026-11-23 Databricks answered 400 to a `fallback` history without server-side-fallback-2026-06-01 and 200
+    with it on databricks-claude-haiku-4-5, and 400 invalid beta flag to the beta on databricks-claude-opus-4-1."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    request: Final = await _workspace_request(
+        model=model,
+        drop_params=drop_params,
+        model_info=model_info,
+        extra_headers={"anthropic-beta": SERVER_SIDE_FALLBACK_BETA},
+    )
+
+    assert request.headers.get("anthropic-beta") == expected_beta
 
 
 @pytest.mark.asyncio
@@ -796,3 +851,45 @@ async def test_streamed_message_stop_drops_the_bedrock_invocation_metrics(chunk_
         json.loads(line.removeprefix(b"data:")) for line in relayed.splitlines() if line.startswith(b"data:")
     ]
     assert relayed_events == [*(payload for _, payload in events[:-1]), {"type": "message_stop"}], relayed.decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "undecodable_metrics", ["[" * 100_000 + "]" * 100_000, "9" * 5000], ids=["nested-too-deep", "number-too-long"]
+)
+async def test_streamed_metrics_line_json_cannot_decode_is_relayed_as_sent(undecodable_metrics: str) -> None:
+    message_start: Final = {"type": "message_start", "message": {**MESSAGE, "content": [], "stop_reason": None}}
+    undecodable_frame: Final = f'event: ping\ndata: {{"amazon-bedrock-invocationMetrics": {undecodable_metrics}}}\n\n'
+    message_stop: Final = {"type": "message_stop", "amazon-bedrock-invocationMetrics": {"inputTokenCount": 18}}
+    sse_body: Final = (
+        f"event: message_start\ndata: {json.dumps(message_start)}\n\n"
+        + undecodable_frame
+        + f"event: message_stop\ndata: {json.dumps(message_stop)}\n\n"
+    ).encode()
+
+    def workspace_streams(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            stream=_ChunkedStream(sse_body, 4096),
+            request=request,
+        )
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(workspace_streams))
+    try:
+        stream = await litellm.anthropic.messages.acreate(
+            max_tokens=64,
+            messages=USER_TURN,
+            model=f"databricks/{CLAUDE_MODEL}",
+            api_key=DATABRICKS_API_KEY,
+            api_base=DATABRICKS_API_BASE,
+            stream=True,
+            client=upstream,
+        )
+        relayed_chunks: Final[list[bytes]] = [chunk async for chunk in stream]
+    finally:
+        await upstream.close()
+
+    relayed: Final = b"".join(relayed_chunks)
+    assert undecodable_frame.encode() in relayed
+    assert relayed.rstrip().splitlines()[-1] == b'data: {"type":"message_stop"}'

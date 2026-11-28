@@ -1,0 +1,12 @@
+- One file per middleware, named for what it does. `mod.rs` holds the `Settings` aggregate, `global`, `inference` and the layer order, and nothing a single middleware owns
+- Each file exposes one entry point, in one of two shapes
+  - `layer(...)` when the middleware is assembled from tower-http or `tower::util` layers. It returns the concrete layer type, or a tuple of them
+  - one `async fn(State<Arc<T>>, Request, Next) -> Response` named as a verb when it needs logic of its own, next to its state `T` and `T::new`. `mod.rs` wraps it with `from_fn` or `from_fn_with_state`, because the type of a `from_fn` layer cannot be written as a return type
+- What an `async fn` middleware keeps past `next.run`, and anything with a type of its own, arrives as an extractor argument, such as `Method`, `Uri`, `Option<Extension<T>>`, `call_id::CallId` or `Surface`. A borrow that ends before `next.run` reads `request` directly, as `request.uri().path()`
+- A middleware whose behavior depends on the license takes `Extension<Arc<Entitlements>>`, which `global` sets for everything inside it. Its state never holds the license, and its inline tests add the `Extension` layer themselves
+- Never hand-write a `Layer` or `Service` impl. Reach for tower-http first, then a `tower::util` combinator, then `from_fn`
+- The entry point is `pub(super)` and only `mod.rs` calls it. `root_path::layer` is `pub` because the host applies it outside the router, and `request_allowlist::checked` is `pub(crate)` because `admit` asks it first
+- What a file reads from config or the environment is a `Settings` struct in that file, and only a file with `Settings` is a `pub mod`. Settings from `general_settings` are built by `Settings::from_general`, settings from the environment by `Settings::from_environment` out of `litellm_config::Environment`, which the host deserializes once. A file never names an environment variable, derives `Deserialize` or parses a Python boolean itself, and its `Settings` holds values already resolved, such as a default applied or a list split. `mod.rs` never reads a field of either
+- A rejection answers with the OpenAI-shaped body Python sends there, on every route. Python's Anthropic envelope on Anthropic routes (`route_error_content`) is not ported
+- The doc comment on the entry point names the Python middleware it ports and every difference from it that was accepted
+- Test a file inline through a `Router` wearing only the layers that file depends on. A test of the whole stack goes in `mod.rs`

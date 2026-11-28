@@ -89,6 +89,25 @@ class TestMCPRegistryFile:
         assert linear["url"] == "https://mcp.linear.app/mcp"
         assert "/sse" not in linear["url"]
 
+    def test_auth_type_defaults_are_supported_remote_auth_types(self, registry_path: str) -> None:
+        from litellm.types.mcp import MCPAuth
+
+        with open(registry_path, "r") as f:
+            data: Final = json.load(f)
+        with_auth: Final = tuple(server for server in data["servers"] if "auth_type" in server)
+        assert with_auth, "expected at least one catalog entry to carry a default auth_type"
+        for server in with_auth:
+            assert server["transport"] != "stdio", f"{server['name']} is stdio and takes no auth_type"
+            assert server["auth_type"] in {auth.value for auth in MCPAuth}, server["name"]
+
+    @pytest.mark.parametrize("name", ["notion", "linear", "granola", "attio", "pylon"])
+    def test_hosted_oauth_servers_prefill_streamable_http_and_oauth(self, registry_path: str, name: str) -> None:
+        with open(registry_path, "r") as f:
+            data: Final = json.load(f)
+        entry: Final = next(server for server in data["servers"] if server["name"] == name)
+        assert entry["transport"] == "http"
+        assert entry["auth_type"] == "oauth2"
+
     def test_parallel_search_uses_anonymous_streamable_http(self, registry_path: str) -> None:
         with open(registry_path, "r") as f:
             data: Final = json.load(f)

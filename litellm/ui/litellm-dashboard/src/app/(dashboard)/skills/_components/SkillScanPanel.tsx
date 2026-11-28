@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { getSkillScan, startSkillScan } from "@/components/networking";
@@ -13,7 +14,7 @@ interface SkillScanPanelProps {
 }
 
 export default function SkillScanPanel({ id, accessToken, queryScope, pending }: SkillScanPanelProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const queryClient = useQueryClient();
   const queryKey = [...queryScope, "submission", id, "scan"];
   const result = useQuery({
@@ -65,7 +66,7 @@ export default function SkillScanPanel({ id, accessToken, queryScope, pending }:
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <Badge variant="outline">{t(`skills.scanning.status.${scan.status}`)}</Badge>
             <span>{t("skills.scanning.requestedBy", { name: scan.requested_by })}</span>
-            <span>{new Date(scan.started_at).toLocaleString()}</span>
+            <span>{displayTimestamp(new Date(scan.started_at), locale.language)}</span>
           </div>
           <p className="break-all text-xs text-muted-foreground">
             {scan.archive_sha256

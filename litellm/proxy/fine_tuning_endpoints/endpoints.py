@@ -34,7 +34,7 @@ from litellm.types.llms.openai import LiteLLMFineTuningJobCreate
 fine_tuning_config = None
 
 
-def set_fine_tuning_config(config):
+def set_fine_tuning_config(config: object) -> None:
     if config is None:
         return
 

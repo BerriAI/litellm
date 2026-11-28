@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import type { TFunction } from "i18next";
 import i18n from "@/i18n/i18n";
 import { CostEstimateResponse } from "../types";
@@ -240,7 +241,7 @@ export const exportMultiToPDF = (multiResult: MultiModelResult, t: TFunction = i
       ${validEntries.map((e) => generateModelSection(e.result!, t)).join("")}
 
       <div class="footer">
-        <p>${t("costTracking.exportReport.pdf.footer", { date: new Date().toLocaleString() })}</p>
+        <p>${t("costTracking.exportReport.pdf.footer", { date: displayTimestamp(new Date()) })}</p>
       </div>
     </body>
     </html>
@@ -258,7 +259,7 @@ export const exportMultiToCSV = (multiResult: MultiModelResult, t: TFunction = i
 
   const rows: string[][] = [
     [t("costTracking.exportReport.csv.title")],
-    [t("costTracking.exportReport.csv.generated"), new Date().toLocaleString()],
+    [t("costTracking.exportReport.csv.generated"), displayTimestamp(new Date())],
     [""],
   ];
 

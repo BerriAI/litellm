@@ -1,7 +1,9 @@
 "use client";
 
 import type { ParseKeys } from "i18next";
+import { useTranslation } from "react-i18next";
 
+import { formatDateWithEnglishPattern } from "@/i18n/formats";
 import i18n from "@/i18n/i18n";
 
 import { CellTooltip } from "./cell_tooltip";
@@ -66,22 +68,43 @@ const clockTime = ({ hours, minutes, seconds }: DateParts): string => `${pad(hou
 
 const monthName = ({ month }: DateParts): string => i18n.t(MONTHS[month]);
 
-export const formatCellDate = (date: Date, precision: DatePrecision, timeZone: DateCellTimeZone = "local"): string => {
+const MONTH_DAY = { month: "short", day: "numeric" } as const;
+const DATE = { ...MONTH_DAY, year: "numeric" } as const;
+const CLOCK = { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" } as const;
+
+export const formatCellDate = (
+  date: Date,
+  precision: DatePrecision,
+  timeZone: DateCellTimeZone = "local",
+  language = i18n.language,
+): string => {
   const parts = dateParts(date, timeZone);
-  const formatted =
+  const english =
     precision === "date"
       ? `${monthName(parts)} ${parts.day}, ${parts.year}`
       : `${monthName(parts)} ${parts.day}, ${clockTime(parts)}`;
+  const options = {
+    ...(precision === "date" ? DATE : { ...MONTH_DAY, ...CLOCK }),
+    timeZone: timeZone === "UTC" ? timeZone : undefined,
+  };
+  const formatted = formatDateWithEnglishPattern(date, language, english, options);
   return timeZone === "UTC" ? `${formatted} UTC` : formatted;
 };
 
-export const formatFullTimestamp = (date: Date, timeZone: DateCellTimeZone = "local"): string => {
+export const formatFullTimestamp = (
+  date: Date,
+  timeZone: DateCellTimeZone = "local",
+  language = i18n.language,
+): string => {
   const parts = dateParts(date, timeZone);
   const zoneName = timeZone === "UTC" ? "UTC" : Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return `${monthName(parts)} ${parts.day}, ${parts.year}, ${clockTime(parts)} (${zoneName})`;
+  const english = `${monthName(parts)} ${parts.day}, ${parts.year}, ${clockTime(parts)}`;
+  const options = { ...DATE, ...CLOCK, timeZone: zoneName };
+  return `${formatDateWithEnglishPattern(date, language, english, options)} (${zoneName})`;
 };
 
 export function DateCell({ value, precision = "datetime", fallback = "-", timeZone = "local" }: DateCellProps) {
+  const { i18n: locale } = useTranslation();
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) {
     return <span className="text-muted-foreground">{fallback}</span>;
@@ -89,8 +112,8 @@ export function DateCell({ value, precision = "datetime", fallback = "-", timeZo
 
   return (
     <CellTooltip
-      content={formatFullTimestamp(date, timeZone)}
-      trigger={<span className="whitespace-nowrap">{formatCellDate(date, precision, timeZone)}</span>}
+      content={formatFullTimestamp(date, timeZone, locale.language)}
+      trigger={<span className="whitespace-nowrap">{formatCellDate(date, precision, timeZone, locale.language)}</span>}
     />
   );
 }

@@ -56,11 +56,11 @@ class SearXNGSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         SearXNG is open-source and doesn't require an API key by default.
@@ -82,9 +82,9 @@ class SearXNGSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         data: dict | list[dict] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint with query parameters.
@@ -116,8 +116,8 @@ class SearXNGSearchConfig(BaseSearchConfig):
         self,
         query: str | list[str],
         optional_params: dict,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, dict[str, object]]:
         """
         Transform Search request to SearXNG API format.
 
@@ -186,7 +186,7 @@ class SearXNGSearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform SearXNG API response to LiteLLM unified SearchResponse format.
@@ -210,7 +210,7 @@ class SearXNGSearchConfig(BaseSearchConfig):
         # Transform results to SearchResult objects
         # Note: SearXNG doesn't natively support limiting results via API params
         # It returns ~20 results per page by default
-        results: Final = []
+        results: Final[list[SearchResult]] = []
         for raw_result in _JSON_VALUES.validate_python(response_json.get("results", [])):
             result = _JSON_OBJECT.validate_python(raw_result)
             # Get date from either publishedDate or pubdate field

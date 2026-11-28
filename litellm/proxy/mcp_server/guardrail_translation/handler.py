@@ -231,7 +231,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: object | None = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> object:
         """Scan the text content of an MCP tool result and write masked text back.
 

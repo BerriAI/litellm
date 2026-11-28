@@ -28,6 +28,7 @@ impl SupportedEffortTiers {
 pub struct MessagesShapeOptions {
     pub reasoning_auto_summary: bool,
     pub presanitized: bool,
+    pub drops_unsupported_params: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +59,12 @@ pub struct MessagesModelCapabilities {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BedrockCapabilities {
+    /// Python's `is_adaptive_thinking_model(model, "bedrock")`, which the Invoke helpers read.
+    #[serde(default)]
+    pub supports_adaptive_thinking: bool,
+    /// Python's `model_supports_effort_param(model, "bedrock")`, which the Invoke helpers read.
+    #[serde(default)]
+    pub supports_effort_param: bool,
     #[serde(default)]
     pub output_config_effort_ceiling: Option<EffortLevel>,
     #[serde(default)]
@@ -68,6 +75,8 @@ pub struct BedrockCapabilities {
     pub supports_tool_search: bool,
     #[serde(default)]
     pub supports_per_turn_control: bool,
+    #[serde(default)]
+    pub supports_server_side_fallback: bool,
     #[serde(default)]
     pub native_output: NativeOutputSupport,
 }
@@ -171,6 +180,9 @@ pub struct ThinkingContext {
     /// The provider accepts `display: "updates"` on thinking translated from the legacy shape
     /// (Python's `LEGACY_THINKING_DISPLAY_UPDATES_PROVIDERS`).
     pub keeps_display_updates: bool,
+    /// Python's Mantle and Vertex AI routes log why they drop `thinking: {"type": "disabled"}` on
+    /// a model that always thinks.
+    pub warns_dropped_disabled_thinking: bool,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MessagesTransformContext {
@@ -179,6 +191,7 @@ pub struct MessagesTransformContext {
     pub drops_unsupported_params: bool,
     pub global_drop_params: bool,
     pub claude_base_model: bool,
+    pub keeps_unsigned_thinking: bool,
 }
 impl MessagesTransformContext {
     pub fn new(capabilities: MessagesModelCapabilities, drop_params: bool) -> Self {
@@ -196,11 +209,25 @@ impl MessagesTransformContext {
                 budgets: ThinkingBudgets::from_lookup(env),
                 drop_params,
                 keeps_display_updates: false,
+                warns_dropped_disabled_thinking: false,
             },
             drop_params,
             drops_unsupported_params: false,
             global_drop_params: false,
             claude_base_model: false,
+            keeps_unsigned_thinking: false,
+        }
+    }
+
+    /// The same context for a route that warns when it drops a disabled `thinking`.
+    #[must_use]
+    pub fn warning_dropped_disabled_thinking(&self) -> Self {
+        Self {
+            thinking: ThinkingContext {
+                warns_dropped_disabled_thinking: true,
+                ..self.thinking
+            },
+            ..*self
         }
     }
 

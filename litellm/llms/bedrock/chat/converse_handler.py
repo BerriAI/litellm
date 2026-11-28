@@ -1,8 +1,9 @@
 import json
 from collections.abc import Iterator, Mapping
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.anthropic_beta_headers_manager import (
@@ -18,21 +19,34 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     get_httpx_client,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token, pop_aws_auth_params, run_aws_signing
-from ..common_utils import BedrockError, error_response_text, get_all_bedrock_regions
+from ..common_utils import (
+    BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
+    BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
+    BedrockError,
+    error_response_text,
+    get_all_bedrock_regions,
+    strip_bedrock_runtime_route_suffix,
+)
 from .invoke_handler import AWSEventStreamDecoder, make_call
+
+if TYPE_CHECKING:
+    from botocore.awsrequest import HTTPHeaders
+
+_REQUEST_IDENTITY: Final = TypeAdapter(Mapping[str, object])
 
 
 def make_sync_call(
     client: HTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: "HTTPHeaders | Mapping[str, str]",
     data: str,
     model: str,
-    messages: list,
+    messages: list[AllMessageValues],
     logging_obj: LiteLLMLoggingObject,
     json_mode: bool | None = False,
     fake_stream: bool = False,
@@ -109,18 +123,18 @@ class BedrockConverseLLM(BaseAWSLLM):
     async def async_streaming(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         model_response: ModelResponse,
         timeout: float | httpx.Timeout | None,
-        encoding,
+        encoding: object,
         logging_obj: LiteLLMLoggingObject,
-        stream,
-        optional_params: dict,
+        stream: object,
+        optional_params: dict[str, object],
         litellm_params: dict,
         credentials: Credentials | None,
-        logger_fn=None,
-        headers={},
+        logger_fn: object = None,
+        headers: dict[str, object] = {},
         client: AsyncHTTPHandler | None = None,
         fake_stream: bool = False,
         json_mode: bool | None = False,
@@ -184,18 +198,18 @@ class BedrockConverseLLM(BaseAWSLLM):
     async def async_completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         model_response: ModelResponse,
         timeout: float | httpx.Timeout | None,
-        encoding,
+        encoding: object,
         logging_obj: LiteLLMLoggingObject,
-        stream,
-        optional_params: dict,
+        stream: object,
+        optional_params: dict[str, object],
         litellm_params: dict,
         credentials: Credentials | None,
-        logger_fn=None,
-        headers: dict = {},
+        logger_fn: object = None,
+        headers: dict[str, object] = {},
         client: AsyncHTTPHandler | None = None,
         api_key: str | None = None,
         skip_pre_call_logging: bool = False,
@@ -283,18 +297,18 @@ class BedrockConverseLLM(BaseAWSLLM):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str | None,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        encoding,
+        encoding: object,
         logging_obj: LiteLLMLoggingObject,
         optional_params: dict,
         acompletion: bool,
         timeout: float | httpx.Timeout | None,
-        litellm_params: dict,
-        logger_fn=None,
-        extra_headers: dict | None = None,
+        litellm_params: dict[str, object],
+        logger_fn: object = None,
+        extra_headers: dict[str, object] | None = None,
         client: AsyncHTTPHandler | HTTPHandler | None = None,
         api_key: str | None = None,
     ):
@@ -354,21 +368,29 @@ class BedrockConverseLLM(BaseAWSLLM):
         credentials: Final[Credentials | None] = (
             None
             if bedrock_bearer_token(api_key) is not None
-            else self.resolve_credentials(auth_params, aws_region_name)
+            else self.resolve_credentials(
+                auth_params, aws_region_name, _REQUEST_IDENTITY.validate_python(litellm_params)
+            )
         )
 
         ### SET RUNTIME ENDPOINT ###
-        endpoint_url, proxy_endpoint_url = self.get_runtime_endpoint(
+        _, runtime_url = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        if stream and not fake_stream:
-            endpoint_url = join_api_base(endpoint_url, f"model/{modelId}/converse-stream")
-            proxy_endpoint_url = join_api_base(proxy_endpoint_url, f"model/{modelId}/converse-stream")
-        else:
-            endpoint_url = join_api_base(endpoint_url, f"model/{modelId}/converse")
-            proxy_endpoint_url = join_api_base(proxy_endpoint_url, f"model/{modelId}/converse")
+        converse_route: Final = "converse-stream" if stream and not fake_stream else "converse"
+        proxy_endpoint_url: Final = join_api_base(
+            strip_bedrock_runtime_route_suffix(
+                runtime_url,
+                (
+                    *BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
+                    *BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
+                    "/openai/v1",
+                ),
+            ),
+            f"model/{modelId}/{converse_route}",
+        )
 
         ## COMPLETION CALL
         headers = {"Content-Type": "application/json"}

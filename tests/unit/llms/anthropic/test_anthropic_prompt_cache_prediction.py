@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Final
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -14,6 +15,7 @@ import litellm
 from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.llms.anthropic.cache_aware_routing import AnthropicCacheRouting
 from litellm.llms.anthropic.count_tokens import handler as count_handler
 from litellm.llms.anthropic.messages.native.transformation import DEFAULT_ANTHROPIC_API_VERSION, AnthropicMessagesConfig
 from litellm.llms.anthropic.prompt_cache_prediction import (
@@ -21,6 +23,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     NativePredictionTarget,
     PromptCachePlan,
     UnsupportedCachePlan,
+    aresolve_prediction_target,
     cache_scope,
     count_cache_plan,
     count_prompt_tokens,
@@ -46,6 +49,7 @@ _MODEL: Final = "claude-sonnet-5"
 _KEY: Final = "test-provider-key"
 _CALLER: Final = "test-caller-hash"
 _DEPLOYMENT: Final = "test-native-deployment"
+_GOOGLE_METADATA_IDENTITY: Final = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
 
 
 def _body() -> dict[str, JsonValue]:
@@ -62,16 +66,9 @@ def _body() -> dict[str, JsonValue]:
     }
 
 
-@pytest.mark.parametrize("version", [None, "2099-01-01", DEFAULT_ANTHROPIC_API_VERSION])
-@pytest.mark.asyncio
-async def test_observer_records_only_version_supported_by_token_counter(version: str | None) -> None:
-    cache: Final = DualCache()
+async def _observe(cache: DualCache, headers: Mapping[str, str]) -> None:
     observer: Final = PromptCacheObserver(InternalUsageCache(dual_cache=cache), clock=lambda: 1010.0)
-    body: Final = _body()
-    prefix: Final = parse_prompt(body)
-    assert prefix is not None
-    headers: Final = {"x-api-key": _KEY, **({"anthropic-version": version} if version is not None else {})}
-    wire: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages", headers=headers, json=body)
+    wire: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages", headers=headers, json=_body())
     response: Final = ModelResponse(
         model=_MODEL,
         usage=Usage(
@@ -103,6 +100,15 @@ async def test_observer_records_only_version_supported_by_token_counter(version:
         datetime.fromtimestamp(1010.0),
         datetime.fromtimestamp(1010.0),
     )
+
+
+@pytest.mark.parametrize("version", [None, "2099-01-01", DEFAULT_ANTHROPIC_API_VERSION])
+@pytest.mark.asyncio
+async def test_observer_records_only_version_supported_by_token_counter(version: str | None) -> None:
+    cache: Final = DualCache()
+    prefix: Final = parse_prompt(_body())
+    assert prefix is not None
+    await _observe(cache, {"x-api-key": _KEY, **({"anthropic-version": version} if version is not None else {})})
     default_scope: Final = cache_scope(_CALLER, _DEPLOYMENT, _KEY, _MODEL)
     found: Final = await lookup(cache, default_scope, prefix, now=1010.0)
     assert (found is not None) == (version == DEFAULT_ANTHROPIC_API_VERSION)
@@ -157,10 +163,12 @@ async def test_provider_count_uses_same_version_and_preserves_native_input(
     assert json.loads(requests[0].content) == body
 
 
+@pytest.mark.parametrize("api_key", ["os.environ/LIT7658_PROVIDER_KEY", "oidc/env/LIT7658_PROVIDER_KEY"])
 @pytest.mark.parametrize("source", ["static", "database"])
 @pytest.mark.asyncio
 async def test_environment_credential_matches_native_count_and_observed_scope(
     source: str,
+    api_key: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LIT7658_PROVIDER_KEY", _KEY)
@@ -169,7 +177,7 @@ async def test_environment_credential_matches_native_count_and_observed_scope(
     monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
     params: Final = {
         "model": f"anthropic/{_MODEL}",
-        "api_key": "os.environ/LIT7658_PROVIDER_KEY",
+        "api_key": api_key,
         "api_base": "https://api.anthropic.com",
     }
     router: Final = litellm.Router(
@@ -201,7 +209,7 @@ async def test_environment_credential_matches_native_count_and_observed_scope(
         )
     deployment: Final = router.get_deployment(_DEPLOYMENT)
     assert deployment is not None
-    target: Final = resolve_prediction_target(deployment.litellm_params)
+    target: Final = await aresolve_prediction_target(deployment.litellm_params)
     assert isinstance(target, NativePredictionTarget)
     body: Final = _body()
     with respx.mock() as upstream:
@@ -246,6 +254,108 @@ async def test_environment_credential_matches_native_count_and_observed_scope(
     )
     assert observed is not None
     assert observed.scope == cache_scope(_CALLER, _DEPLOYMENT, target.api_key, target.model)
+
+
+@pytest.mark.parametrize(
+    ("token", "reason"),
+    [
+        (_KEY, "no_compatible_observation"),
+        (None, "unsupported_provider_credentials"),
+        ("sk-ant-oat01-test", "unsupported_provider_credentials"),
+    ],
+    ids=["resolved", "unresolvable", "oauth-token"],
+)
+@pytest.mark.asyncio
+async def test_prediction_counts_with_the_secret_behind_an_admin_oidc_api_key(
+    token: str | None, reason: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if token is None:
+        monkeypatch.delenv("LIT7658_PROVIDER_KEY", raising=False)
+    else:
+        monkeypatch.setenv("LIT7658_PROVIDER_KEY", token)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-native",
+                "litellm_params": {"model": f"anthropic/{_MODEL}", "api_key": "oidc/env/LIT7658_PROVIDER_KEY"},
+                "model_info": {"id": _DEPLOYMENT},
+            }
+        ]
+    )
+    deployment: Final = router.get_deployment(_DEPLOYMENT)
+    assert deployment is not None
+    body: Final = _body()
+    prefix: Final = parse_prompt(body)
+    assert prefix is not None
+    counted_with: Final[list[str]] = []
+
+    async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
+        counted_with.append(api_key)
+        return 2048
+
+    arm: Final = await predict_arm(deployment, body, prefix, _CALLER, DualCache(), count)
+
+    assert arm.reason == reason
+    assert set(counted_with) == ({token} if token == _KEY else set())
+
+
+@pytest.mark.asyncio
+async def test_an_observation_under_the_wire_key_warms_a_deployment_with_an_admin_oidc_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIT7658_PROVIDER_KEY", _KEY)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-native",
+                "litellm_params": {"model": f"anthropic/{_MODEL}", "api_key": "oidc/env/LIT7658_PROVIDER_KEY"},
+                "model_info": {"id": _DEPLOYMENT},
+            }
+        ]
+    )
+    deployment: Final = router.get_deployment(_DEPLOYMENT)
+    assert deployment is not None
+    routing: Final = AnthropicCacheRouting.from_body({**_body(), "max_tokens": 16})
+    assert routing is not None
+    cache: Final = DualCache()
+    await _observe(cache, {"x-api-key": _KEY, "anthropic-version": DEFAULT_ANTHROPIC_API_VERSION})
+
+    assert await routing.is_warm(deployment, _CALLER, cache, now=1010.0) is True
+
+
+@pytest.mark.asyncio
+async def test_warmth_check_never_fetches_a_google_id_token_and_reads_one_a_request_fetched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GCE_METADATA_HOST", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-native",
+                "litellm_params": {
+                    "model": f"anthropic/{_MODEL}",
+                    "api_key": f"oidc/google/https://warmth.example.test/{uuid4().hex}",
+                },
+                "model_info": {"id": _DEPLOYMENT},
+            }
+        ]
+    )
+    deployment: Final = router.get_deployment(_DEPLOYMENT)
+    assert deployment is not None
+    routing: Final = AnthropicCacheRouting.from_body({**_body(), "max_tokens": 16})
+    assert routing is not None
+    cache: Final = DualCache()
+    await _observe(cache, {"x-api-key": _KEY, "anthropic-version": DEFAULT_ANTHROPIC_API_VERSION})
+
+    with respx.mock() as upstream:
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(return_value=httpx.Response(200, text=_KEY))
+        before_any_request: Final = await routing.is_warm(deployment, _CALLER, cache, now=1010.0)
+        fetches_before_any_request: Final = metadata.call_count
+        _ = await aresolve_prediction_target(deployment.litellm_params)
+        after_a_request: Final = await routing.is_warm(deployment, _CALLER, cache, now=1010.0)
+
+    assert (before_any_request, fetches_before_any_request) == (False, 0)
+    assert after_a_request is True and metadata.call_count == 1
 
 
 @pytest.mark.parametrize("inline_key", [None, _KEY])

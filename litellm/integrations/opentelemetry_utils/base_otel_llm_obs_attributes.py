@@ -12,7 +12,7 @@ class BaseLLMObsOTELAttributes(ABC):
         pass
 
     @staticmethod
-    def set_response_output_messages(span: "Span", response_obj):
+    def set_response_output_messages(span: "Span", response_obj: object):
         pass
 
 

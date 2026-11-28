@@ -50,6 +50,7 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   teamKeys: { all: ["teams"] },
   fetchTeamMembersByUserId: vi.fn(),
+  useTeam: vi.fn(() => ({ data: undefined, isPending: false, isError: false })),
   useAllTeams: vi.fn(() => ({
     data: [{ team_id: "team-1", team_alias: "Test Team" }],
     isLoading: false,
@@ -577,7 +578,8 @@ it("fetches the key by id when the URL has ?key= for a key not in the loaded pag
 it("shows a loading state while a deep-linked key is being fetched", () => {
   renderWithProviders(<VirtualKeysTable />, { searchParams: { key: "other-key-hash" } });
 
-  expect(screen.getByText("Loading key...")).toBeInTheDocument();
+  expect(screen.getByTestId("key-detail-skeleton")).toHaveAttribute("aria-busy", "true");
+  expect(screen.getByText("Back to Keys")).toBeInTheDocument();
   expect(screen.queryByTestId("pagination-range")).not.toBeInTheDocument();
 });
 

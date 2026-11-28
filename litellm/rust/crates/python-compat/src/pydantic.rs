@@ -1,10 +1,14 @@
-//! Pydantic's lax `bool` and `int` validation: `TypeAdapter(bool)` and `TypeAdapter(int)`.
+//! Pydantic's lax `bool`, `int`, `float` and `datetime` validation: `TypeAdapter(bool)` and the
+//! like.
 
 use num_bigint::BigInt;
 use serde::{Deserialize, Deserializer, de::Error};
 use serde_with::DeserializeAs;
 
-use crate::Value;
+use crate::{
+    Value,
+    datetime::{IsoDateTime, fromisoformat},
+};
 
 const TWO_POW_63: f64 = 9_223_372_036_854_775_808.0;
 /// pydantic refuses an integer longer than this once cleaned, a `-` included. Checking first also
@@ -28,6 +32,45 @@ pub fn lax_bool(value: &Value) -> Option<bool> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// `TypeAdapter(float).validate_python(value)`, or `None` where pydantic raises `ValidationError`.
+/// A text value is read as `float(text)` reads it, which pydantic matches for the forms LiteLLM
+/// stores.
+pub fn lax_float(value: &Value) -> Option<f64> {
+    use num_traits::ToPrimitive;
+    match value {
+        Value::Float(number) => Some(*number),
+        Value::Int(number) => number.to_f64().filter(|number| number.is_finite()),
+        Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
+        Value::Str(text) => crate::number::float(text),
+        Value::Bytes(bytes) => std::str::from_utf8(bytes)
+            .ok()
+            .and_then(crate::number::float),
+        _ => None,
+    }
+}
+
+/// pydantic reads a number above this as milliseconds since 1970-01-01, and seconds otherwise.
+const MILLISECONDS_ABOVE: f64 = 2e10;
+
+/// `TypeAdapter(datetime).validate_python(value)`, or `None` where pydantic raises
+/// `ValidationError`. A number, or text that is one, is a UTC time since 1970-01-01. Other text is
+/// read as `datetime.fromisoformat` reads it, which pydantic matches for the forms LiteLLM stores.
+pub fn lax_datetime(value: &Value) -> Option<IsoDateTime> {
+    let number = match value {
+        Value::Bool(_) => return None,
+        Value::Str(text) => match crate::number::float(text) {
+            Some(number) => number,
+            None => return fromisoformat(text),
+        },
+        value => lax_float(value)?,
+    };
+    if number.abs() > MILLISECONDS_ABOVE {
+        IsoDateTime::from_milliseconds(number)
+    } else {
+        IsoDateTime::from_timestamp(number)
     }
 }
 

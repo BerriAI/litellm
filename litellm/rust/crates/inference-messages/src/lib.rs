@@ -3,13 +3,17 @@ mod constants;
 mod encoding;
 mod handler;
 mod host_answer;
+mod host_services;
 mod pre_request;
+mod pricing;
 mod reads;
 mod relay;
+mod request;
 pub mod route;
 mod safeguards;
 mod transport;
 mod types;
+mod usage;
 mod workload_identity;
 
 use futures_util::FutureExt;
@@ -26,13 +30,20 @@ use crate::common_utils::messages_provider;
 pub use common_utils::merge_messages_header_sources;
 pub use encoding::DecodingError;
 pub use host_answer::HostAnswer;
+pub use host_services::{
+    CacheCall, MessagesHostCall, MessagesHostServices, SafeguardsCall, Sent, SentBody,
+    TransportCall,
+};
 pub use litellm_inference::Error;
 pub use pre_request::PreRequestHooks;
+pub use pricing::{PricedCall, Pricing, PricingIdentity, billable_tier, price_call};
 pub use safeguards::Safeguards;
-pub use transport::{Delivered, Transport, TransportRequest, TransportResponse, UnencodableHeader};
+pub use transport::{
+    Delivered, Transport, TransportRequest, TransportResponse, UnencodableHeader, UnsendableUrl,
+};
 pub use types::{
     MessagesBody, MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping,
-    litellm_params, messages_body,
+    VertexShaping, litellm_params, messages_body,
 };
 pub use workload_identity::WorkloadIdentity;
 
@@ -48,6 +59,8 @@ pub struct MessagesRoute {
     pre_request_hooks: Option<Arc<dyn PreRequestHooks>>,
     safeguards: Option<Arc<dyn Safeguards>>,
     host_answer: Option<Arc<dyn HostAnswer>>,
+    pricing: Option<Arc<dyn Pricing>>,
+    host_services: MessagesHostServices,
 }
 
 impl MessagesRoute {
@@ -67,6 +80,8 @@ impl MessagesRoute {
             pre_request_hooks: None,
             safeguards: None,
             host_answer: None,
+            pricing: None,
+            host_services: MessagesHostServices::default(),
         }
     }
 
@@ -117,6 +132,24 @@ impl MessagesRoute {
     pub fn with_host_answer(self, host_answer: Arc<dyn HostAnswer>) -> Self {
         Self {
             host_answer: Some(host_answer),
+            ..self
+        }
+    }
+
+    /// Prices each call that carries a pricing identity, see [`PricingIdentity`]
+    #[must_use]
+    pub fn with_pricing(self, pricing: Arc<dyn Pricing>) -> Self {
+        Self {
+            pricing: Some(pricing),
+            ..self
+        }
+    }
+
+    /// The services the host answers for each call the route's machine runs.
+    #[must_use]
+    pub fn with_host_services(self, host_services: MessagesHostServices) -> Self {
+        Self {
+            host_services,
             ..self
         }
     }
@@ -218,5 +251,41 @@ impl MessagesRoute {
             provider.model.to_owned(),
             <&'static str>::from(provider.provider),
         ))
+    }
+}
+
+/// Whether this route serves `model` of `custom_llm_provider` itself, as Python's
+/// `get_provider_anthropic_messages_config` decides: every Anthropic model, and elsewhere only the
+/// Claude models a provider serves through the Messages API. Python translates any other model.
+pub fn serves(model: &str, custom_llm_provider: Option<&str>) -> bool {
+    resolve_llm_provider(model, custom_llm_provider, "messages")
+        .ok()
+        .and_then(|provider| messages_provider(provider.provider, provider.model))
+        .is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::anthropic_any_model("anthropic/any-model", None, true)]
+    #[case::vertex_claude("vertex_ai/claude-opus-5-5", None, true)]
+    #[case::vertex_gemini("vertex_ai/gemini-3-pro", None, false)]
+    #[case::bedrock_invoke_claude("bedrock/us.anthropic.claude-opus-5-5-v1:0", None, true)]
+    #[case::bedrock_converse_claude("bedrock/converse/anthropic.claude-opus-5-5-v1:0", None, false)]
+    #[case::bedrock_nova("bedrock/amazon.nova-pro-v1:0", None, false)]
+    #[case::mantle_claude("bedrock_mantle/anthropic.claude-opus-5-5", None, true)]
+    #[case::mantle_gpt("bedrock_mantle/openai.gpt-oss-120b", None, false)]
+    #[case::azure_ai_claude("azure_ai/claude-haiku-5-5", None, true)]
+    #[case::azure_ai_gpt("azure_ai/gpt-5.5", None, false)]
+    #[case::provider_named_beside_a_bare_model("claude-opus-5-5", Some("vertex_ai"), true)]
+    #[case::unknown_provider("nowhere/claude-opus-5-5", None, false)]
+    fn serves_only_what_python_sends_to_the_native_route(
+        #[case] model: &str,
+        #[case] custom_llm_provider: Option<&str>,
+        #[case] served: bool,
+    ) {
+        assert_eq!(super::serves(model, custom_llm_provider), served);
     }
 }

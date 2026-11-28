@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import traceback
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import TypeAdapter
@@ -97,7 +98,7 @@ class GcsPubSubLogger(CustomBatchLogger):
         }
         return headers
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         """
         Async Log success events to GCS PubSub Topic
 

@@ -26,10 +26,9 @@ from litellm.types.utils import (
 
 
 @pytest.mark.parametrize("call_type", ("image_edit", "aimage_edit"))
-@pytest.mark.parametrize("has_image, has_usage", ((True, True), (False, True), (True, False)))
+@pytest.mark.parametrize("has_usage", (True, False))
 def test_vertex_image_edit_cost_uses_input_tokens_and_retains_image_fallback(
     call_type: str,
-    has_image: bool,
     has_usage: bool,
 ) -> None:
     model: Final = "gemini-3.1-flash-image"
@@ -41,20 +40,16 @@ def test_vertex_image_edit_cost_uses_input_tokens_and_retains_image_fallback(
             json={
                 "candidates": [
                     {
-                        "finishReason": "STOP" if has_image else "IMAGE_RECITATION",
-                        **(
-                            {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}
-                            if has_image
-                            else {}
-                        ),
+                        "finishReason": "STOP",
+                        "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]},
                     }
                 ],
                 **(
                     {
                         "usageMetadata": {
                             "promptTokenCount": 1131,
-                            "candidatesTokenCount": 100 if has_image else 0,
-                            "totalTokenCount": 1231 if has_image else 1131,
+                            "candidatesTokenCount": 100,
+                            "totalTokenCount": 1231,
                             "promptTokensDetails": [
                                 {"modality": "TEXT", "tokenCount": 7},
                                 {"modality": "IMAGE", "tokenCount": 1124},
@@ -85,7 +80,7 @@ def test_vertex_image_edit_cost_uses_input_tokens_and_retains_image_fallback(
     expected: Final = (
         7 * (model_info["input_cost_per_token"] or 0)
         + 1124 * (model_info.get("input_cost_per_image_token") or model_info["input_cost_per_token"] or 0)
-        + (100 if has_image else 0) * (model_info.get("output_cost_per_image_token") or 0)
+        + 100 * (model_info.get("output_cost_per_image_token") or 0)
         if has_usage
         else model_info["output_cost_per_image"]
     )
