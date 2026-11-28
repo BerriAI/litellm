@@ -113,6 +113,24 @@ def _resolve_timeout(
     return float_of(timeout)
 
 
+def _caller_timeout(
+    optional_params: GenericLiteLLMParams,
+    resolved_timeout: float | httpx.Timeout,
+) -> float | httpx.Timeout | None:
+    """
+    ``resolved_timeout`` when the caller asked for a timeout, else None.
+
+    The resolution above falls back to 600s when nothing was set. Sending that on every
+    request would replace the HTTP client's own default (a 5s connect timeout, and an
+    explicitly configured ``litellm.request_timeout``), so None keeps that default.
+    """
+    # ``request_timeout`` is the legacy spelling; GenericLiteLLMParams keeps it as an extra field
+    extra_params: Final[Mapping[str, object]] = optional_params.model_extra or {}
+    if optional_params.timeout or extra_params.get("request_timeout"):
+        return resolved_timeout
+    return None
+
+
 @client
 async def acreate_batch(
     completion_window: Literal["24h"],
@@ -548,7 +566,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
             batch_id=batch_id,
             api_base=api_base,
             api_key=api_key,
-            timeout=timeout,
+            timeout=_caller_timeout(optional_params, timeout),
             max_retries=optional_params.max_retries,
             litellm_params=batch_params,
         )
