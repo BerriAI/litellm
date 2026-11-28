@@ -976,8 +976,6 @@ async fn a_served_response_carries_the_custom_headers_python_sends_for_it(#[case
     );
 }
 
-/// A complete `/v1/messages` answer the cost map prices carries the cost its route settled, and a
-/// stream, whose head goes out before its usage is final, carries none.
 #[rstest]
 #[case::complete(
     false,

@@ -914,8 +914,6 @@ mod tests {
         );
     }
 
-    /// A receipt whose every amount differs, so each header shows which one it reads. The cache
-    /// write and the reasoning cost nothing.
     fn priced() -> Cost {
         let usd = |amount| Usd::new(amount).unwrap();
         Cost::Priced(Box::new(PricedCost {
@@ -944,9 +942,6 @@ mod tests {
         }))
     }
 
-    /// The cost headers a served Messages response carries for what its route settled, in the
-    /// order of Python's `cost_headers`. A stream's head goes out before its usage is final, so it
-    /// carries none, where Python sends a breakdown of zeros it priced from no usage at all.
     #[rstest]
     #[case::a_priced_answer_splits_the_cache_read_out_of_the_input_and_leaves_zero_amounts_out(
         Some(priced()),
