@@ -1235,3 +1235,29 @@ def test_tool_arguments_ship_as_an_object_only_when_they_decode_to_one(
     )
 
     assert payload["meta"]["output"]["messages"][0]["tool_calls"][0]["arguments"] == shipped
+
+
+@pytest.mark.asyncio
+async def test_datadog_llm_obs_logger_reused_in_build_custom_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that build_custom_logger_compatible_class reuses existing DataDogLLMObsLogger instance (#54272)."""
+    monkeypatch.setenv("DD_API_KEY", "test-key")
+    monkeypatch.setenv("DD_SITE", "datadoghq.com")
+
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    logging_module._in_memory_loggers.clear()
+    try:
+        loggers = [
+            logging_module.build_custom_logger_compatible_class(
+                logging_integration="datadog_llm_observability",
+                internal_usage_cache=None,
+                llm_router=None,
+                custom_logger_init_args={},
+            )
+            for _ in range(3)
+        ]
+        assert type(loggers[0]) is DataDogLLMObsLogger
+        assert all(logger is loggers[0] for logger in loggers)
+        assert sum(isinstance(cb, DataDogLLMObsLogger) for cb in logging_module._in_memory_loggers) == 1
+    finally:
+        logging_module._in_memory_loggers.clear()
