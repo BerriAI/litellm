@@ -171,8 +171,8 @@ class DecisionsRequestBody(DecisionsMediaBody):
         DecisionsAssets | None,
         Field(
             description=(
-                "TypeSafe only. Images keyed by a reference string. Write the reference in state, instructions "
-                "or criteria where the image belongs"
+                "TypeSafe and Azure AI decision models. Images keyed by a reference string. Write the reference "
+                "in state, instructions or criteria where the image belongs"
             )
         ),
     ] = None
