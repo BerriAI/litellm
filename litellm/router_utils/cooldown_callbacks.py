@@ -44,13 +44,21 @@ async def router_cooldown_event_callback(
     _api_base: Final = litellm.get_api_base(model=_model_name, optional_params=temp_litellm_params) or ""
     model_id: Final = _deployment.model_info.id
 
+    # litellm_model_name must match the label the request-success/failure
+    # metric paths emit: prometheus.py logs request_kwargs["model"], which
+    # is the provider-resolved upstream model, not the model group name.
+    # Writing _model_name here leaves litellm_deployment_state stuck at
+    # complete outage, since the success handler clears a differently
+    # labelled series.
     litellm_model_name: Final = temp_litellm_params.get("model") or ""
     llm_provider = ""
     try:
-        _, llm_provider, _, _ = litellm.get_llm_provider(
+        resolved_model, llm_provider, _, _ = litellm.get_llm_provider(
             model=litellm_model_name,
             custom_llm_provider=temp_litellm_params.get("custom_llm_provider"),
         )
+        if resolved_model:
+            litellm_model_name = resolved_model  # type: ignore[misc]
     except Exception:
         pass
 
@@ -59,14 +67,14 @@ async def router_cooldown_event_callback(
 
     if prometheusLogger is not None:
         prometheusLogger.set_deployment_complete_outage(
-            litellm_model_name=_model_name,
+            litellm_model_name=litellm_model_name,
             model_id=model_id,
             api_base=_api_base,
             api_provider=llm_provider,
         )
 
         prometheusLogger.increment_deployment_cooled_down(
-            litellm_model_name=_model_name,
+            litellm_model_name=litellm_model_name,
             model_id=str(model_id),
             api_base=_api_base,
             api_provider=llm_provider,
