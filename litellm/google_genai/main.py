@@ -6,10 +6,11 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import to_jsonable_python
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, request_timeout
 
 # Import the adapter for fallback to completion format
@@ -63,6 +64,7 @@ _STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _OBJECT_SEQUENCE: Final = TypeAdapter(Sequence[object])
 _JSON_VALUE: Final = TypeAdapter[JsonValue](JsonValue)
 _GENERATE_CONTENT_PAYLOAD: Final = TypeAdapter(object)
+_FORWARDED_HEADERS: Final = TypeAdapter[Mapping[str, str]](Mapping[str, str])
 #################################################
 
 
@@ -400,6 +402,30 @@ def _finish_custom_generate_content_response(
     return _log_custom_generate_content_response(response, logging_obj, contents, api_key)
 
 
+def _validated_client_headers(client_headers: object) -> Mapping[str, str] | None:
+    if client_headers is None:
+        return None
+    try:
+        return _FORWARDED_HEADERS.validate_python(client_headers)
+    except ValidationError as exc:
+        verbose_logger.debug("Ignoring invalid forwarded headers (%d validation errors)", exc.error_count())
+        return None
+
+
+def _merge_client_forwarded_headers(
+    extra_headers: Mapping[str, object] | None,
+    client_headers: object,
+) -> dict[str, object] | None:  # mutable-ok: downstream handlers expect dict | None
+    forwarded: Final = _validated_client_headers(client_headers)
+    if not forwarded:
+        return dict(extra_headers) if extra_headers is not None else None
+    explicit_names: Final = frozenset(name.lower() for name in (extra_headers or ()))
+    return {
+        **{name: value for name, value in forwarded.items() if name.lower() not in explicit_names},
+        **(extra_headers or {}),
+    }
+
+
 @client
 async def agenerate_content(
     model: str,
@@ -553,6 +579,7 @@ def generate_content(
 
         # Extract systemInstruction from kwargs to pass to handler
         system_instruction: Final = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        merged_extra_headers: Final = _merge_client_forwarded_headers(extra_headers, kwargs.get("headers"))
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
@@ -565,7 +592,7 @@ def generate_content(
                 tools=tools,
                 _is_async=bool(_is_async),
                 litellm_params=setup_result.litellm_params,
-                extra_headers=extra_headers,
+                extra_headers=merged_extra_headers,
                 custom_logging_obj=setup_result.litellm_logging_obj if custom_handler is not None else None,
                 **kwargs,
             )
@@ -589,7 +616,7 @@ def generate_content(
                 custom_llm_provider=setup_result.custom_llm_provider,
                 litellm_params=setup_result.litellm_params,
                 logging_obj=setup_result.litellm_logging_obj,
-                extra_headers=extra_headers,
+                extra_headers=merged_extra_headers,
                 extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
                 timeout=timeout or request_timeout,
                 _is_async=bool(_is_async),
@@ -657,6 +684,7 @@ async def agenerate_content_stream(
 
         # Extract systemInstruction from kwargs to pass to handler
         system_instruction: Final = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        merged_extra_headers: Final = _merge_client_forwarded_headers(extra_headers, kwargs.get("headers"))
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
@@ -673,7 +701,7 @@ async def agenerate_content_stream(
                 litellm_params=setup_result.litellm_params,
                 tools=tools,
                 stream=True,
-                extra_headers=extra_headers,
+                extra_headers=merged_extra_headers,
                 custom_logging_obj=_custom_adapter_logging_obj(setup_result),
                 **kwargs,
             )
@@ -690,7 +718,7 @@ async def agenerate_content_stream(
                 custom_llm_provider=setup_result.custom_llm_provider,
                 litellm_params=setup_result.litellm_params,
                 logging_obj=setup_result.litellm_logging_obj,
-                extra_headers=extra_headers,
+                extra_headers=merged_extra_headers,
                 extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
                 timeout=timeout or request_timeout,
                 _is_async=True,
@@ -753,6 +781,7 @@ def generate_content_stream(
 
         # Extract systemInstruction from kwargs to pass to handler
         system_instruction: Final = kwargs.get("systemInstruction") or kwargs.get("system_instruction")
+        merged_extra_headers: Final = _merge_client_forwarded_headers(extra_headers, kwargs.get("headers"))
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
@@ -769,7 +798,7 @@ def generate_content_stream(
                 _is_async=bool(_is_async),
                 litellm_params=setup_result.litellm_params,
                 stream=True,
-                extra_headers=extra_headers,
+                extra_headers=merged_extra_headers,
                 custom_logging_obj=_custom_adapter_logging_obj(setup_result),
                 **kwargs,
             )
@@ -785,7 +814,7 @@ def generate_content_stream(
                 custom_llm_provider=setup_result.custom_llm_provider,
                 litellm_params=setup_result.litellm_params,
                 logging_obj=setup_result.litellm_logging_obj,
-                extra_headers=extra_headers,
+                extra_headers=merged_extra_headers,
                 extra_body=_merge_native_request_fields(setup_result.native_request_fields, extra_body),
                 timeout=timeout or request_timeout,
                 _is_async=bool(_is_async),
