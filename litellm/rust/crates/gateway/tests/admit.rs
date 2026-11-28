@@ -227,7 +227,7 @@ impl Sent {
 #[case::setting_for_every_request("setting_for_every_request")]
 #[case::setting_for_messages_only("setting_for_messages_only")]
 #[case::fallback_shapes("fallback_shapes")]
-#[case::drop_params_set("drop_params_set")]
+#[case::coding_agents("coding_agents")]
 #[case::database("database")]
 #[case::store_model_in_db("store_model_in_db")]
 #[case::store_model_in_db_unread("store_model_in_db_unread")]

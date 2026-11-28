@@ -6,8 +6,10 @@
 
 use std::sync::LazyLock;
 
-use axum::http::{HeaderMap, header::USER_AGENT};
+use axum::http::HeaderMap;
 use regex::Regex;
+
+use crate::coding_agent::CodingAgent;
 
 const EXPLICIT: [&str; 2] = ["x-litellm-trace-id", "x-litellm-session-id"];
 /// Codex's own session headers, newest first, read only from Codex.
@@ -23,8 +25,6 @@ static SESSION_HEADER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^x-.+-session-id$").expect("session header pattern compiles"));
 static SESSION_VALUE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9_\-]{8,}$").expect("session value pattern compiles"));
-static CODEX_CLIENT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^codex[-_ /]").expect("codex pattern compiles"));
 static TRACE_CONTEXT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$")
         .expect("traceparent pattern compiles")
@@ -61,13 +61,13 @@ fn chain(headers: &HeaderMap) -> Option<&str> {
         })
     };
     let codex = || {
-        text(headers, USER_AGENT.as_str())
-            .filter(|agent| CODEX_CLIENT.is_match(agent))
-            .and_then(|_| {
+        (CodingAgent::sent(headers) == Some(CodingAgent::Codex))
+            .then(|| {
                 CODEX
                     .iter()
                     .find_map(|name| text(headers, name).filter(|value| session(value)))
             })
+            .flatten()
     };
     let bare = || text(headers, BARE).filter(|value| session(value));
     explicit.or_else(vendor).or_else(codex).or_else(bare)

@@ -60,8 +60,7 @@ requests:
   - name: coding agent while drop_params is unset
     headers: {authorization: Bearer gateway-key, user-agent: 'claude-cli/2.1.0 (external, cli)'}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: headers
+    expect: rust
 
   - name: compressed body
     headers: {authorization: Bearer gateway-key, content-encoding: gzip}

@@ -2,17 +2,15 @@
 
 use axum::http::{
     HeaderMap, Method,
-    header::{CONTENT_ENCODING, CONTENT_TYPE, USER_AGENT},
+    header::{CONTENT_ENCODING, CONTENT_TYPE},
     request::Parts,
 };
-use litellm_config::LiteLlmSettings;
 
 use super::{Admit, Reason, Refused, config::messages_only};
 
 const MESSAGES: &str = "/v1/messages";
 const CALL_ID: &str = "x-litellm-call-id";
 const FORWARDED_FOR: &str = "x-forwarded-for";
-const CLAUDE_CODE: [&str; 2] = ["claude-cli/", "claude-code/"];
 
 /// The native app serves `POST /v1/messages` and nothing else, and not even that when a setting
 /// Python reads only there is on.
@@ -33,7 +31,7 @@ pub(super) fn forwarded_for(admit: &Admit, request: &Parts) -> Option<Reason> {
     .then(|| Reason::new(Refused::Headers, "general_settings.allowed_ips"))
 }
 
-pub(super) fn headers(admit: &Admit, request: &Parts) -> Option<Reason> {
+pub(super) fn headers(_: &Admit, request: &Parts) -> Option<Reason> {
     let headers = &request.headers;
     let query = request.uri.query().unwrap_or_default();
     [
@@ -56,11 +54,6 @@ pub(super) fn headers(admit: &Admit, request: &Parts) -> Option<Reason> {
                 .filter(|pair| !pair.is_empty())
                 .any(|pair| pair.split('=').next() != Some("beta")),
         ),
-        (
-            "litellm_settings.drop_params unset",
-            text(headers, USER_AGENT).is_some_and(is_coding_agent)
-                && defaults_differ_for_a_coding_agent(&admit.config.litellm_settings),
-        ),
     ]
     .into_iter()
     .find(|(_, found)| *found)
@@ -76,23 +69,6 @@ fn is_json(content_type: &str) -> bool {
         .split(';')
         .next()
         .is_some_and(|essence| essence.trim().eq_ignore_ascii_case("application/json"))
-}
-
-/// Claude Code or Codex, for which the proxy turns `drop_params` on.
-fn is_coding_agent(user_agent: &str) -> bool {
-    let codex = user_agent.split_at_checked(5).is_some_and(|(name, rest)| {
-        name.eq_ignore_ascii_case("codex") && rest.starts_with(['-', '_', ' ', '/'])
-    });
-    codex
-        || CLAUDE_CODE
-            .iter()
-            .any(|prefix| user_agent.starts_with(prefix))
-}
-
-/// The proxy turns `drop_params` on for a coding agent unless the setting is set, and the native
-/// app only reads the setting.
-fn defaults_differ_for_a_coding_agent(settings: &LiteLlmSettings) -> bool {
-    settings.drop_params.is_none()
 }
 
 #[cfg(test)]
@@ -142,6 +118,7 @@ mod tests {
     #[case::json_with_a_charset(&[("content-type", "Application/JSON; charset=utf-8")])]
     #[case::the_call_id(&[("x-litellm-call-id", "abc")])]
     #[case::a_session_of_another_client(&[("x-claude-code-session-id", "0af404e1")])]
+    #[case::a_coding_agent(&[("user-agent", "claude-cli/2.1.0")])]
     fn a_header_only_the_client_reads_is_not_named(#[case] sent: &[(&str, &str)]) {
         assert_eq!(messages(DROP_PARAMS, "/v1/messages", sent), None);
     }
@@ -161,34 +138,5 @@ mod tests {
     #[case::beside_beta("/v1/messages?beta=true&api-version=2024-06-01", Some("query"))]
     fn only_the_beta_query_parameter_is_served(#[case] uri: &str, #[case] over: Option<&str>) {
         assert_eq!(messages(DROP_PARAMS, uri, &[]).as_deref(), over);
-    }
-
-    #[rstest]
-    #[case::claude_codes_own_fetch("claude-code/2.1.0", true)]
-    #[case::codex_in_any_case("Codex_cli_rs/0.40.0", true)]
-    #[case::a_name_that_only_starts_like_codex("codexa/1.0", false)]
-    #[case::codex_alone("codex", false)]
-    #[case::claude_code_later_in_the_value("agent claude-cli/2.1.0", false)]
-    fn a_coding_agent_is_matched_as_the_proxy_matches_it(
-        #[case] user_agent: &str,
-        #[case] matched: bool,
-    ) {
-        assert_eq!(
-            messages("", "/v1/messages", &[("user-agent", user_agent)]).is_some(),
-            matched
-        );
-    }
-
-    #[rstest]
-    #[case::a_word_that_is_no_flag("litellm_settings:\n  drop_params: maybe\n", true)]
-    #[case::text_that_reads_as_on("litellm_settings:\n  drop_params: \"yes\"\n", false)]
-    #[case::off("litellm_settings:\n  drop_params: false\n", false)]
-    fn drop_params_keeps_a_coding_agent_only_when_it_reads_as_a_flag(
-        #[case] yaml: &str,
-        #[case] named: bool,
-    ) {
-        let agent = [("user-agent", "claude-cli/2.1.0")];
-
-        assert_eq!(messages(yaml, "/v1/messages", &agent).is_some(), named);
     }
 }

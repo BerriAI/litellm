@@ -579,6 +579,10 @@ fn drop_incompatible_temperature_for_thinking(
     if !pinned || !droppable {
         return request;
     }
+    tracing::warn!(
+        model = %request.model,
+        "Dropping `temperature` other than 1 since thinking is on and the model only takes temperature=1 with it."
+    );
     MessagesRequest {
         params: MessagesOptionalParams {
             temperature: None,
