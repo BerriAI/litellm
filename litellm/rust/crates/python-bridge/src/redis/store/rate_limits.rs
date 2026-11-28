@@ -299,6 +299,7 @@ fn atomic(reply: AtomicReply) -> PyAtomicReply {
             index,
             current,
             limit,
+            ..
         } => PyAtomicReply::OverLimit(PyAtomicOverLimit {
             index,
             current,

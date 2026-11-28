@@ -30,6 +30,7 @@ pub enum AtomicReply {
         index: usize,
         current: i64,
         limit: i64,
+        window_start: i64,
     },
 }
 
