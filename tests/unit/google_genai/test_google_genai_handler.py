@@ -503,6 +503,55 @@ async def test_generate_content_adapter_stream_without_usage_still_ends_with_sto
     assert [payload["candidates"][0].get("finishReason") for payload in payloads][-1] == "STOP"
 
 
+def _usage_with_cached_tokens(cached_tokens: int) -> dict[str, object]:
+    return {
+        "prompt_tokens": 2048,
+        "completion_tokens": 1,
+        "total_tokens": 2049,
+        "prompt_tokens_details": {"cached_tokens": cached_tokens},
+    }
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize(("cached_tokens", "expected_cached_content_token_count"), [(1920, 1920), (0, None)])
+@pytest.mark.asyncio
+async def test_generate_content_adapter_reports_upstream_cached_tokens(
+    _httpx_transport: None, stream: bool, cached_tokens: int, expected_cached_content_token_count: int | None
+):
+    from litellm.types.router import GenericLiteLLMParams
+
+    usage: Final = _usage_with_cached_tokens(cached_tokens)
+    if stream:
+        usage_chunk: Final = {
+            "id": "c",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "m",
+            "choices": [],
+            "usage": usage,
+        }
+        sse: Final = _CHAT_SSE.replace("data: [DONE]", f"data: {json.dumps(usage_chunk)}\n\ndata: [DONE]")
+        payloads: Final = await _adapter_stream_payloads(
+            "hosted_vllm/grok", "http://upstream.test/v1", "http://upstream.test/v1/chat/completions", sse
+        )
+        usage_metadata = payloads[-1]["usageMetadata"]
+    else:
+        with respx.mock() as upstream:
+            upstream.post("http://upstream.test/v1/chat/completions").mock(
+                return_value=httpx.Response(200, json={**_CHAT_BODY, "usage": usage})
+            )
+            response = await GenerateContentToCompletionHandler.async_generate_content_handler(
+                model="hosted_vllm/grok",
+                contents=[{"role": "user", "parts": [{"text": "Hello"}]}],
+                litellm_params=GenericLiteLLMParams(api_base="http://upstream.test/v1", api_key="k"),
+                stream=False,
+            )
+        usage_metadata = response["usageMetadata"]
+
+    assert usage_metadata["promptTokenCount"] == usage["prompt_tokens"]
+    assert usage_metadata.get("cachedContentTokenCount") == expected_cached_content_token_count
+
+
 async def _adapter_stream_payloads(
     model: str, api_base: str, upstream_url: str, upstream_sse: str, **kwargs: object
 ):
