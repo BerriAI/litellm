@@ -151,21 +151,21 @@ requests:
     body: {model: vertex-gemini, max_tokens: 16, messages: []}
     expect: python
     reason: model
-    over: model_list.litellm_params.model vertex_ai/gemini-2.5-pro is translated
+    over: model_list.litellm_params.model vertex_ai/gemini-2.5-pro is bridged to chat completions
 
   - name: claude through bedrock converse
     headers: {authorization: Bearer gateway-key}
     body: {model: bedrock-converse-claude, max_tokens: 16, messages: []}
     expect: python
     reason: model
-    over: model_list.litellm_params.model bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0 is translated
+    over: model_list.litellm_params.model bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0 is bridged to chat completions
 
   - name: nova on bedrock
     headers: {authorization: Bearer gateway-key}
     body: {model: bedrock-nova, max_tokens: 16, messages: []}
     expect: python
     reason: model
-    over: model_list.litellm_params.model bedrock/amazon.nova-pro-v1:0 is translated
+    over: model_list.litellm_params.model bedrock/amazon.nova-pro-v1:0 is bridged to chat completions
 
   - name: gpt on mantle
     headers: {authorization: Bearer gateway-key}
@@ -179,14 +179,14 @@ requests:
     body: {model: cloud-mixed, max_tokens: 16, messages: []}
     expect: python
     reason: model
-    over: model_list.litellm_params.model vertex_ai/gemini-2.5-pro is translated
+    over: model_list.litellm_params.model vertex_ai/gemini-2.5-pro is bridged to chat completions
 
   - name: claude on vertex that falls back to nova on bedrock
     headers: {authorization: Bearer gateway-key}
     body: {model: vertex-claude-backed, max_tokens: 16, messages: []}
     expect: python
     reason: model
-    over: 'router_settings fallback to bedrock-nova: model_list.litellm_params.model bedrock/amazon.nova-pro-v1:0 is translated'
+    over: 'router_settings fallback to bedrock-nova: model_list.litellm_params.model bedrock/amazon.nova-pro-v1:0 is bridged to chat completions'
 
   - name: claude on bedrock invoked by an inference profile id
     headers: {authorization: Bearer gateway-key}
