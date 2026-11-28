@@ -1,5 +1,6 @@
-from typing import Optional
+from typing import Final, Optional
 
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import GenerateKeyRequest, LiteLLM_TeamTable
 
 
@@ -13,11 +14,12 @@ def add_team_member_key_duration(
     if data.user_id is None:  # only apply for team member keys, not service accounts
         return data
 
-    if (
-        team_table.metadata is not None
-        and team_table.metadata.get("team_member_key_duration") is not None
-    ):
-        data.duration = team_table.metadata["team_member_key_duration"]
+    team_duration: Final[object] = (team_table.metadata or {}).get("team_member_key_duration")
+    if not isinstance(team_duration, str) or not team_duration.strip():
+        return data
+
+    if data.duration is None or duration_in_seconds(data.duration) > duration_in_seconds(team_duration):
+        return data.model_copy(update={"duration": team_duration})
 
     return data
 

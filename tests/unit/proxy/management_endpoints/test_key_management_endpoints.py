@@ -13,6 +13,7 @@ import pytest
 import yaml
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from litellm_enterprise.proxy.management_endpoints.key_management_endpoints import add_team_member_key_duration
 from pydantic import JsonValue, ValidationError
 
 import litellm
@@ -25709,3 +25710,41 @@ async def test_key_team_changes_cannot_remove_inherited_header_policy(
         return
     result: Final = await call
     assert result["team_id"] == new_team
+
+
+@pytest.mark.parametrize(
+    "team_duration, requested_duration, expected_duration",
+    [
+        (None, None, None),
+        ("", None, None),
+        ("   ", None, None),
+        ("", "7d", "7d"),
+        ("   ", "7d", "7d"),
+        ("30d", None, "30d"),
+        ("30d", "7d", "7d"),
+        ("30d", "30d", "30d"),
+        ("30d", "60d", "30d"),
+        ("24h", "2d", "24h"),
+        ("2d", "24h", "24h"),
+        ("1d", "24h", "24h"),
+    ],
+)
+def test_team_member_key_duration_defaults_and_caps_without_extending_shorter_requests(
+    team_duration: str | None, requested_duration: str | None, expected_duration: str | None
+) -> None:
+    team: Final = LiteLLM_TeamTable(team_id="team-duration", metadata={"team_member_key_duration": team_duration})
+    request: Final = GenerateKeyRequest(team_id=team.team_id, user_id="member", duration=requested_duration)
+
+    result: Final = add_team_member_key_duration(team, request)
+
+    assert result.model_dump() == {**request.model_dump(), "duration": expected_duration}
+
+
+@pytest.mark.parametrize("team_exists, user_id", [(False, "member"), (True, None)])
+def test_team_member_key_duration_leaves_unrelated_keys_unchanged(team_exists: bool, user_id: str | None) -> None:
+    team: Final = (
+        LiteLLM_TeamTable(team_id="team-duration", metadata={"team_member_key_duration": "1d"}) if team_exists else None
+    )
+    request: Final = GenerateKeyRequest(user_id=user_id, duration="7d")
+
+    assert add_team_member_key_duration(team, request).model_dump() == request.model_dump()

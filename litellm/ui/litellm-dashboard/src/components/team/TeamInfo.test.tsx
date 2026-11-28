@@ -1858,6 +1858,48 @@ describe("TeamInfoView", () => {
   });
 
   describe("team member settings", () => {
+    it("saves member defaults again after the stored key duration has been cleared", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ metadata: { team_member_key_duration: null } }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+      await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
+      expect(await screen.findByLabelText(/^Default Key Duration/)).toHaveValue("");
+      await user.click(screen.getByRole("button", { name: /save/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalledWith(
+          defaultProps.accessToken,
+          expect.objectContaining({ team_id: "123", team_member_key_duration: null }),
+        );
+      });
+    });
+
+    it.each(["", "   "])("sends null when Default Key Duration is cleared to %j", async (duration) => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ metadata: { team_member_key_duration: "30d" } }),
+      );
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={true} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+      await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
+      fireEvent.change(await screen.findByLabelText(/^Default Key Duration/), { target: { value: duration } });
+      await user.click(screen.getByRole("button", { name: /save/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalledWith(
+          defaultProps.accessToken,
+          expect.objectContaining({ team_id: "123", team_member_key_duration: null }),
+        );
+      });
+    });
+
     it("should populate Default Key Duration from the team's stored metadata", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
