@@ -121,6 +121,9 @@ class BedrockConverseReasoningContentBlock(TypedDict, total=False):
     redactedContent: str
 
 
+BedrockConverseReasoningTarget: TypeAlias = Literal["claude", "openai_gpt", "other"]
+
+
 class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
     signature: str
     redactedContent: str

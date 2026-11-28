@@ -966,10 +966,38 @@ async def test_bedrock_converse_replays_reasoning_to_claude_only_as_base64_of_cl
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
+async def test_bedrock_converse_never_replays_responses_api_encrypted_reasoning_to_openai_gpt(use_async: bool):
+    """Only the redactedContent Converse itself returned goes back to GPT. Reasoning the Responses API encrypted
+    for OpenAI reached Bedrock through the bridge and was never minted by it."""
+    block: Final = {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_1")}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello", "thinking_blocks": [block]},
+        {"role": "user", "content": "again"},
+    ]
+    model: Final = "us.openai.gpt-6-luna"
+
+    result: Final = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages, model=model, llm_provider="bedrock"
+        )
+        if use_async
+        else _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    )
+
+    assert next(m["content"] for m in result if m["role"] == "assistant") == [{"text": "hello"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True])
 @pytest.mark.parametrize(
     "model, final_text",
-    [("us.anthropic.claude-sonnet-4-6", "Leaves fall"), ("us.amazon.nova-pro-v1:0", "Leaves fall \n")],
-    ids=["claude", "nova"],
+    [
+        ("us.anthropic.claude-sonnet-4-6", "Leaves fall"),
+        ("us.amazon.nova-pro-v1:0", "Leaves fall \n"),
+        ("us.openai.gpt-6-luna", "Leaves fall \n"),
+    ],
+    ids=["claude", "nova", "gpt"],
 )
 async def test_bedrock_converse_strips_trailing_whitespace_from_a_final_assistant_turn_for_claude_only(
     use_async: bool, model: str, final_text: str
@@ -1029,8 +1057,9 @@ def test_translate_thinking_blocks_keeps_dropping_redacted_data_when_called_the_
     ) == [{"reasoningContent": {"reasoningText": {"text": ""}}}]
 
 
+@pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-4-6", "us.openai.gpt-6-luna"])
 @pytest.mark.parametrize("data", ["", "  "])
-def test_bedrock_converse_drops_redacted_thinking_with_blank_data(data: str):
+def test_bedrock_converse_drops_redacted_thinking_with_blank_data(data: str, model: str):
     """Bedrock 400s on a blank redactedContent, so a redacted block with no payload is dropped, not sent."""
     messages: Final = [
         {"role": "user", "content": "hi"},
@@ -1042,9 +1071,7 @@ def test_bedrock_converse_drops_redacted_thinking_with_blank_data(data: str):
         {"role": "user", "content": "again"},
     ]
 
-    result: Final = _bedrock_converse_messages_pt(
-        messages=messages, model="us.anthropic.claude-sonnet-4-6", llm_provider="bedrock"
-    )
+    result: Final = _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
 
     assistant_content: Final = next(m["content"] for m in result if m["role"] == "assistant")
     assert assistant_content == [{"text": "hello"}]
