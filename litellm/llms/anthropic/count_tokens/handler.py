@@ -4,7 +4,7 @@ Anthropic CountTokens API handler.
 Uses httpx for HTTP requests instead of the Anthropic SDK.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -12,6 +12,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers, resolve_beta_provider
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.count_tokens.transformation import (
@@ -41,6 +42,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
         optional_params: Mapping[str, JsonValue] | None = None,
         context_management: JsonValue = None,
         drop_params: bool = False,
+        client_betas: Sequence[str] = (),
     ) -> dict[str, JsonValue]:
         """
         Handle a CountTokens request using httpx.
@@ -83,9 +85,18 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
 
             verbose_logger.debug("Making request to: %s", endpoint_url)
 
-            # Get required headers
+            beta_provider: Final = resolve_beta_provider("anthropic", endpoint_url)
+            allowed_client_betas: Final = (
+                await asyncify(filter_and_transform_beta_headers)(",".join(client_betas).split(","), beta_provider)
+                if client_betas and beta_provider != "anthropic"
+                else client_betas
+            )
             headers: Final = self.get_count_tokens_headers(
-                auth_header, messages, context_management, request_body.get("thinking")
+                auth_header,
+                messages,
+                context_management,
+                request_body.get("thinking"),
+                client_betas=allowed_client_betas,
             )
 
             # Use LiteLLM's async httpx client

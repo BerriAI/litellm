@@ -21,6 +21,7 @@ import respx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
+from starlette.datastructures import Headers
 from starlette.types import Message
 
 import litellm
@@ -566,7 +567,7 @@ class TestProxyExceptionAnthropicEnvelope:
         from litellm.proxy._types import UserAPIKeyAuth
 
         request = MagicMock()
-        request.headers = {}
+        request.headers = Headers()
 
         with (
             patch.object(
@@ -850,7 +851,7 @@ class TestErrorLogCarriesCallId:
 
         call_id = "count-tokens-call-7836"
         request = MagicMock()
-        request.headers = {"x-litellm-call-id": call_id}
+        request.headers = Headers({"x-litellm-call-id": call_id})
 
         with (
             patch.object(  # test-quality-ok: endpoint reads the body via a module function; no injection seam
@@ -901,7 +902,7 @@ class TestCountTokensCompactedHistory:
             "messages": [{"role": "assistant", "content": [{"type": "text", "text": summary}]}, follow_up],
         }
         request = MagicMock()
-        request.headers = {}
+        request.headers = Headers()
 
         async def count(body):
             with (
@@ -952,7 +953,7 @@ async def test_count_tokens_answers_400_for_malformed_tools_without_counting(mod
     from litellm.proxy._types import UserAPIKeyAuth
 
     request: Final = MagicMock()
-    request.headers = {}
+    request.headers = Headers()
     counter: Final = AsyncMock()
     body: Final = {"model": model, "messages": [{"role": "user", "content": "hi"}], "tools": tools}
 
@@ -977,7 +978,7 @@ async def test_count_tokens_counts_malformed_tool_entries_for_a_model_the_router
     from litellm.proxy._types import UserAPIKeyAuth
 
     request: Final = MagicMock()
-    request.headers = {}
+    request.headers = Headers()
     counter: Final = AsyncMock(return_value=_SEVEN_TOKENS)
     body: Final = {"model": "team-public-name", "messages": [{"role": "user", "content": "hi"}], "tools": _MALFORMED_TOOL_ENTRY}
 
@@ -1012,7 +1013,7 @@ async def test_count_tokens_drops_malformed_tools_when_drop_params_is_set(
     from litellm.proxy._types import UserAPIKeyAuth
 
     request: Final = MagicMock()
-    request.headers = headers
+    request.headers = Headers(headers)
     counter: Final = AsyncMock(return_value=_SEVEN_TOKENS)
     messages: Final = [{"role": "user", "content": "hi"}]
     body: Final = {"model": "claude-sonnet", "messages": messages, "tools": 5, **dropping}
@@ -1040,7 +1041,7 @@ async def test_count_tokens_keeps_claude_code_malformed_tools_when_operator_sets
     operator_config: Final = proxy_server.ProxyConfig()
     operator_config.update_config_state(config={"litellm_settings": {"drop_params": False}})
     request: Final = MagicMock()
-    request.headers = {"user-agent": "claude-cli/2.1.0 (external, cli)"}
+    request.headers = Headers({"user-agent": "claude-cli/2.1.0 (external, cli)"})
     counter: Final = AsyncMock(return_value=_SEVEN_TOKENS)
     body: Final = {"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
 
@@ -1081,7 +1082,7 @@ async def test_count_tokens_drops_malformed_tools_the_counted_deployment_drops_e
         fallbacks=[{"claude-sonnet": ["backup"]}],
     )
     request: Final = MagicMock()
-    request.headers = {}
+    request.headers = Headers()
     counter: Final = AsyncMock(return_value=_SEVEN_TOKENS)
     body: Final = {"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}], "tools": 5}
 

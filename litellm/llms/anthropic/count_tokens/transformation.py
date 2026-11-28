@@ -627,6 +627,7 @@ class AnthropicCountTokensConfig:
         messages: Sequence[Mapping[str, JsonValue]],
         context_management: JsonValue = None,
         thinking: JsonValue = None,
+        client_betas: Sequence[str] = (),
     ) -> dict[str, str]:
         """The count-tokens headers around a resolved Anthropic auth header
         (``AnthropicModelInfo.get_auth_header``): x-api-key for a static key, an Authorization
@@ -646,6 +647,7 @@ class AnthropicCountTokensConfig:
             else ()
         )
         request_betas: Final = (
+            *client_betas,
             ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
             *compaction_betas,
             *fallback_betas,

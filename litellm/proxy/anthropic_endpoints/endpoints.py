@@ -430,6 +430,7 @@ async def _count_tokens(
             messages_format="anthropic",
             litellm_call_id=litellm_call_id,
             client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
+            client_betas=tuple(request.headers.getlist("anthropic-beta")),
             caller=user_api_key_dict,
             request_routing=request_routing_metadata(
                 request, _COUNT_REQUEST_FIELDS.validate_python(data), user_api_key_dict
