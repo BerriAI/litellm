@@ -21,6 +21,7 @@ from litellm.llms.ollama.chat.transformation import (
     OllamaChatConfig,
     OllamaChatCompletionResponseIterator,
 )
+from litellm.llms.ollama.common_utils import OllamaError
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_llm_provider, get_optional_params
@@ -866,6 +867,53 @@ class TestOllamaReasoningContentStreaming:
         result = iterator.chunk_parser(done_chunk)
         assert result.choices[0].delta.reasoning_content == "Final thought"
         assert result.choices[0].finish_reason == "stop"
+
+
+class TestOllamaStreamingErrorHandling:
+    def test_chunk_parser_raises_ollama_error_when_chunk_contains_error_string(self) -> None:
+        iterator: Final = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+        error_chunk: Final = {
+            "error": "error parsing tool call: unexpected end of JSON input",
+        }
+
+        with pytest.raises(OllamaError) as exc_info:
+            iterator.chunk_parser(error_chunk)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.message == "error parsing tool call: unexpected end of JSON input"
+
+    def test_chunk_parser_raises_ollama_error_when_chunk_contains_error_dict(self) -> None:
+        iterator: Final = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+        error_chunk: Final = {
+            "error": {"message": "model 'nonexistent' not found"},
+        }
+
+        with pytest.raises(OllamaError) as exc_info:
+            iterator.chunk_parser(error_chunk)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.message == "model 'nonexistent' not found"
+
+    def test_chunk_parser_handles_chunk_without_message_key(self) -> None:
+        iterator: Final = OllamaChatCompletionResponseIterator(
+            streaming_response=iter([]),
+            sync_stream=True,
+        )
+        done_chunk_without_message: Final = {
+            "model": "llama3.2",
+            "done": True,
+            "done_reason": "stop",
+        }
+
+        result: Final = iterator.chunk_parser(done_chunk_without_message)
+        assert result.choices[0].finish_reason == "stop"
+        assert result.choices[0].delta.content is None
 
 
 class TestOllamaToolCallTransformation:

@@ -565,14 +565,30 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             """
             from litellm.types.utils import Delta, StreamingChoices
 
+            if "error" in chunk:
+                error_data: Final = chunk["error"]
+                error_msg: Final = (
+                    error_data.get("message")
+                    if isinstance(error_data, dict)
+                    else str(error_data)
+                )
+                raise OllamaError(
+                    status_code=400,
+                    message=error_msg,
+                    headers={"Content-Type": "application/json"},
+                )
+
+            message: Final[dict[str, object]] = chunk.get("message") or {}
+
             # process tool calls - if complete function arg - add id to tool call
-            tool_calls: Final = chunk["message"].get("tool_calls")
+            tool_calls: Final = message.get("tool_calls")
             if tool_calls is not None:
                 self.seen_tool_calls = True
                 for tool_call in tool_calls:
                     tool_call["index"] = self._next_tool_call_index
                     self._next_tool_call_index += 1
-                    function_args = tool_call.get("function").get("arguments")
+                    function_obj: Final = tool_call.get("function") or {}
+                    function_args = function_obj.get("arguments")
                     if function_args is not None and len(function_args) > 0:
                         is_function_call_complete = self._is_function_call_complete(function_args)
                         if is_function_call_complete:
@@ -581,14 +597,14 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             # PROCESS REASONING CONTENT
             reasoning_content: str | None = None
             content: str | None = None
-            if chunk["message"].get("thinking"):
-                reasoning_content = chunk["message"].get("thinking")
+            if message.get("thinking"):
+                reasoning_content = message.get("thinking")
                 self.started_reasoning_content = True
-            if chunk["message"].get("content"):
+            if message.get("content"):
                 if self.started_reasoning_content and not self.finished_reasoning_content:
                     self.finished_reasoning_content = True
 
-                message_content = chunk["message"].get("content")
+                message_content = message.get("content")
                 if "<think>" in message_content:
                     message_content = message_content.replace("<think>", "")
 
@@ -609,7 +625,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                 tool_calls=tool_calls,
             )
 
-            if chunk["done"] is True:
+            if chunk.get("done") is True:
                 finish_reason = chunk.get("done_reason") or "stop"
                 # Override finish_reason when tool_calls appeared in any chunk
                 # Fixes: https://github.com/BerriAI/litellm/issues/18922
@@ -634,7 +650,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                 object="chat.completion.chunk",
                 created=int(time.time()),  # ollama created_at is in UTC
                 usage=_done_chunk_usage(chunk),
-                model=chunk["model"],
+                model=chunk.get("model", ""),
                 choices=choices,
             )
         except KeyError as e:
