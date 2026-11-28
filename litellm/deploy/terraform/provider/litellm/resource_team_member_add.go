@@ -430,7 +430,7 @@ func resourceLiteLLMTeamMemberAddDelete(d *schema.ResourceData, m interface{}) e
 		}
 		defer resp.Body.Close()
 
-		if err := handleResponse(resp, "deleting team member"); err != nil {
+		if err := handleTeamMemberDeleteResponse(resp); err != nil {
 			return err
 		}
 	}
