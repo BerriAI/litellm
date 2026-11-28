@@ -99,7 +99,9 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
 from litellm.litellm_core_utils.audio_utils.transcription_streaming import litellm_exception_mapper
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
+    billed_agentic_follow_up,
     holds_a_call_the_choice_excludes,
+    leave_pricing_to_the_request,
     run_chat_completion_agentic_hooks,
     runs_its_own_chat_completion_loop,
     with_caller_tool_choice,
@@ -6413,6 +6415,7 @@ class BaseLLMHTTPHandler:
         fingerprints: Sequence[str],
         fingerprint: str,
         callback: Optional["CustomLogger"] = None,
+        first_response: object = None,
     ) -> object:
         patch: Final = plan.request_patch or AgenticLoopRequestPatch()
         if patch.messages is None:
@@ -6449,17 +6452,18 @@ class BaseLLMHTTPHandler:
 
         try:
             with internal_sub_call(logging_obj.litellm_call_id):
-                response: Final[ResponsesAPIResponse | BaseResponsesAPIStreamingIterator] = await litellm.aresponses(
+                follow_up: Final[ResponsesAPIResponse | BaseResponsesAPIStreamingIterator] = await litellm.aresponses(
                     model=patch.model or model,
                     input=patch.messages,
                     **optional_params,
                     **kwargs_for_followup,
                 )
 
+            response: object = follow_up
             if callback is not None:
                 try:
-                    return await callback.async_post_agentic_loop_response_hook(
-                        response=response, plan=plan, kwargs=kwargs
+                    response = await callback.async_post_agentic_loop_response_hook(
+                        response=follow_up, plan=plan, kwargs=kwargs
                     )
                 except Exception as e:
                     _call_id: Final = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -6471,7 +6475,8 @@ class BaseLLMHTTPHandler:
                         str(e),
                     )
 
-            return response
+            leave_pricing_to_the_request(response)
+            return billed_agentic_follow_up(first_response, response, logging_obj, request_kwargs=kwargs)
         finally:
             if callback is not None:
                 await self._run_agentic_loop_cleanup(
@@ -6739,6 +6744,7 @@ class BaseLLMHTTPHandler:
                         fingerprints=fingerprints,
                         fingerprint=fingerprint,
                         callback=callback,
+                        first_response=response,
                     ),
                     logging_obj=logging_obj,
                     response=response,

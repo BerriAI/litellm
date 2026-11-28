@@ -31,7 +31,7 @@ from litellm.litellm_core_utils.litellm_logging import UncachedPrice
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict, object_items
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.responses.mcp.parked_stream_dispatch import SERVED_FROM_CACHE
-from litellm.responses.mcp.round_billing import billed_for_every_round, summed_cost_breakdown
+from litellm.responses.mcp.round_billing import billed_for_every_round, has_billed_cost, summed_cost_breakdown
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
     NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES,
@@ -43,6 +43,7 @@ from litellm.types.integrations.custom_logger import (
     is_interception_internal_key,
     stashed_stream_options,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
@@ -51,6 +52,7 @@ from litellm.types.utils import (
 from litellm.utils import CustomStreamWrapper
 
 _DispatchResult = TypeVar("_DispatchResult")
+_Round = TypeVar("_Round", ResponsesAPIResponse, ModelResponse)
 
 _FOLLOWUP_INTERNAL_PARAMS: Final = frozenset(
     (
@@ -381,16 +383,30 @@ def _followup_billing_scope(logging_obj: object, request_kwargs: Mapping[str, ob
     return internal_sub_call(logging_obj.litellm_call_id if isinstance(logging_obj, LiteLLMLoggingObject) else None)
 
 
-def _billed_with_the_round_it_follows(round_served: object, follow_up: object, logging_obj: object) -> object:
-    if not (
-        isinstance(round_served, ModelResponse)
-        and isinstance(follow_up, ModelResponse)
-        and isinstance(logging_obj, LiteLLMLoggingObject)
-        and logging_obj.bridged_chat_request is not None
-    ):
-        return follow_up
-    if not (is_internal_call.get() or logging_obj.unpark_success_log()):
-        return follow_up
+def _nonzero_usage(usage: object) -> bool:
+    if usage is None:
+        return False
+    return any(
+        isinstance(value, (int, float)) and value > 0
+        for value in (
+            getattr(usage, "prompt_tokens", None),
+            getattr(usage, "completion_tokens", None),
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "output_tokens", None),
+            getattr(usage, "total_tokens", None),
+        )
+    )
+
+
+def _round_has_usage_or_cost(round_served: ResponsesAPIResponse | ModelResponse) -> bool:
+    return (
+        _nonzero_usage(getattr(round_served, "usage", None))
+        or (has_billed_cost(round_served) and (get_hidden_params(round_served) or {}).get("response_cost") != 0)
+        or _price_of_every_round(round_served) is not None
+    )
+
+
+def _merge_agentic_rounds(round_served: _Round, follow_up: _Round, logging_obj: LiteLLMLoggingObject) -> _Round:
     first_price: Final = _price_of_round(round_served, logging_obj)
     final_price: Final = _price_of_round(follow_up, logging_obj)
     first: Final = _priced(round_served, first_price)
@@ -398,8 +414,15 @@ def _billed_with_the_round_it_follows(round_served: object, follow_up: object, l
     breakdown: Final = summed_cost_breakdown(first, first_price.cost_breakdown, final, final_price.cost_breakdown)
     logging_obj.record_every_round_breakdown(breakdown)
     billed: Final = billed_for_every_round(first, first_price.cost_breakdown, final, final_price.cost_breakdown)
-    billed_hidden_params: Final = get_hidden_params(billed) or {}
+    billed_hidden_params: Final = dict(get_hidden_params(billed) or {})
     total_cost: Final = billed_hidden_params.get("response_cost")
+    if (
+        served_from_cache(follow_up)
+        and not served_from_cache(round_served)
+        and isinstance(total_cost, (int, float))
+        and total_cost > 0
+    ):
+        billed_hidden_params["cache_hit"] = False
     set_hidden_params(
         billed,
         {
@@ -412,25 +435,53 @@ def _billed_with_the_round_it_follows(round_served: object, follow_up: object, l
     return billed
 
 
-def _price_of_every_round(response: ModelResponse) -> UncachedPrice | None:
+def billed_agentic_follow_up(
+    round_served: object,
+    follow_up: object,
+    logging_obj: object,
+    *,
+    request_kwargs: Mapping[str, object] = MappingProxyType({}),
+) -> object:
+    """Merge an internal agentic follow-up with the round it follows so the outer call bills and logs both."""
+    if not isinstance(logging_obj, LiteLLMLoggingObject):
+        return follow_up
+    if _follow_ups_bill_themselves(logging_obj, request_kwargs):
+        return follow_up
+    if logging_obj.bridged_chat_request is not None:
+        if not (is_internal_call.get() or logging_obj.unpark_success_log()):
+            return follow_up
+    elif logging_obj.async_success_log_enqueued:
+        return follow_up
+    if isinstance(round_served, ModelResponse) and isinstance(follow_up, ModelResponse):
+        if not _round_has_usage_or_cost(round_served):
+            return follow_up
+        return _merge_agentic_rounds(round_served, follow_up, logging_obj)
+    if isinstance(round_served, ResponsesAPIResponse) and isinstance(follow_up, ResponsesAPIResponse):
+        if not _round_has_usage_or_cost(round_served):
+            return follow_up
+        return _merge_agentic_rounds(round_served, follow_up, logging_obj)
+    return follow_up
+
+
+def _price_of_every_round(response: ResponsesAPIResponse | ModelResponse) -> UncachedPrice | None:
     every_round: Final = (get_hidden_params(response) or {}).get(_PRICE_OF_EVERY_ROUND)
     return every_round if isinstance(every_round, UncachedPrice) else None
 
 
-def _price_of_round(round_response: ModelResponse, logging_obj: LiteLLMLoggingObject) -> UncachedPrice:
+def _price_of_round(round_response: _Round, logging_obj: LiteLLMLoggingObject) -> UncachedPrice:
     every_round: Final = _price_of_every_round(round_response)
     if every_round is not None:
         return every_round
     return SERVED_FROM_CACHE if served_from_cache(round_response) else logging_obj.uncached_price(round_response)
 
 
-def _priced(round_response: ModelResponse, price: UncachedPrice) -> ModelResponse:
+def _priced(round_response: _Round, price: UncachedPrice) -> _Round:
     priced: Final = round_response.model_copy()
     set_hidden_params(priced, {**(get_hidden_params(round_response) or {}), "response_cost": price.cost})
     return priced
 
 
-def _leave_pricing_to_the_request(response: object) -> None:
+def leave_pricing_to_the_request(response: object) -> None:
     hidden_params: Final = get_hidden_params(response)
     if hidden_params is not None and not served_from_cache(response):
         hidden_params.pop("response_cost", None)
@@ -501,8 +552,8 @@ async def _execute_chat_completion_agentic_plan(
                     model,
                     str(e),
                 )
-        _leave_pricing_to_the_request(response_followup)
-        billed: Final = _billed_with_the_round_it_follows(response, response_followup, logging_obj)
+        leave_pricing_to_the_request(response_followup)
+        billed: Final = billed_agentic_follow_up(response, response_followup, logging_obj, request_kwargs=kwargs)
         replay: Final = _converted_stream_replay(
             billed,
             kwargs=kwargs,
