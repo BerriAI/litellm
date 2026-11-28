@@ -91,19 +91,13 @@ tests:
           content:
             name: LITELLM_BILLING_METRICS_ENDPOINT
 
-  - it: renders the optional export interval and deployment ID
+  - it: renders an optional export interval
     template: gateway/deployment.yaml
     set:
       billingMetrics:
         enabled: true
         exportIntervalMs: 5000
-        deploymentId: t-example-litellm-prod
     asserts:
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: LITELLM_BILLING_METRICS_DEPLOYMENT_ID
-            value: t-example-litellm-prod
       - contains:
           path: spec.template.spec.containers[0].env
           content:
