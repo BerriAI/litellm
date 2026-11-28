@@ -159,6 +159,8 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException, with_att
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
+    bedrock_request_bridges_to_responses,
+    bedrock_responses_bridge_call_params,
     bedrock_route_for_request,
     bedrock_strict_tools_fallback,
     deployment_model_info,
@@ -5824,6 +5826,69 @@ def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDis
     )
 
 
+def _bridges_bedrock_to_responses(
+    custom_llm_provider: str, model: str, request_params: Mapping[str, object], additional_drop_params: object
+) -> bool:
+    if custom_llm_provider != "bedrock":
+        return False
+    return bedrock_request_bridges_to_responses(
+        custom_llm_provider,
+        model,
+        request_params,
+        _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(additional_drop_params or ()),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _ResponsesBridgeParams:
+    optional_params: Mapping[str, object]
+    litellm_params: Mapping[str, object]
+
+
+def _responses_bridge_request_params(
+    *,
+    serves_responses_api: bool,
+    may_bridge_to_responses_api: bool,
+    request_params: Mapping[str, object],
+    optional_params: Mapping[str, object],
+    litellm_params: Mapping[str, object],
+    resolved_reasoning_effort: RequestedReasoningEffort,
+    model: str,
+    base_model: str | None,
+    custom_llm_provider: str,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+    drop_params: bool,
+    additional_drop_params: object,
+) -> _ResponsesBridgeParams | None:
+    bridges_bedrock: Final = _bridges_bedrock_to_responses(
+        custom_llm_provider, model, request_params, additional_drop_params
+    )
+    if not may_bridge_to_responses_api or not (serves_responses_api or bridges_bedrock):
+        return None
+    bridge_optional_params, bridge_litellm_params = (
+        bedrock_responses_bridge_call_params(optional_params, litellm_params, api_base)
+        if bridges_bedrock
+        else (optional_params, litellm_params)
+    )
+    stripped_optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(bridge_optional_params)
+    return _ResponsesBridgeParams(
+        optional_params=_responses_bridge_optional_params(
+            stripped_optional_params,
+            rs_val,
+            resolved_reasoning_effort,
+            custom_llm_provider=custom_llm_provider,
+            model=model,
+            base_model=base_model,
+            api_base=api_base,
+            deployment_model_info=deployment_model_info,
+            drop_params=drop_params,
+            additional_drop_params=additional_drop_params,
+        ),
+        litellm_params=bridge_litellm_params,
+    )
+
+
 @tracer.wrap()
 @client
 def completion(
@@ -6429,6 +6494,7 @@ def completion(
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
+        bedrock_responses_bridge_allowed: Final = all((acompletion is True, not skip_responses_api_bridge))
         provider_reasoning_effort: Final = reasoning_effort_with_summary_alias(
             resolved_reasoning_effort,
             provider_params,
@@ -6448,6 +6514,7 @@ def completion(
                 model_info=deployment_info,
                 _litellm_reasoning_drop_logger=reasoning_drop_logger,
                 **mapping_special_params,
+                _litellm_responses_api_bridge_allowed=bedrock_responses_bridge_allowed,
             )
 
         validated_model_info: Final = (
@@ -6711,6 +6778,16 @@ def completion(
                     drop_params=drop_unsupported_reasoning,
                 )
 
+        request_params: Final = MappingProxyType(
+            _OPTIONAL_PARAMS_ADAPTER.validate_python(
+                {
+                    **optional_param_args,
+                    **provider_params,
+                    "_litellm_responses_api_bridge_allowed": bedrock_responses_bridge_allowed,
+                }
+            )
+        )
+
         # Use base_model (the true underlying model) for Azure model-type
         # detection when the deployment name differs from the model name.
         _azure_detection_model: Final = base_model or model
@@ -6718,23 +6795,25 @@ def completion(
         replay_as_stream: Final = (
             partial(_replayed_stream, logging_obj=logging, stream_options=stream_options) if replays_stream else None
         )
-        if responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api:
+        responses_bridge_params: Final = _responses_bridge_request_params(
+            serves_responses_api=responses_api_model_info.get("mode") == "responses",
+            may_bridge_to_responses_api=may_bridge_to_responses_api,
+            request_params=request_params,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            resolved_reasoning_effort=resolved_reasoning_effort,
+            model=model,
+            base_model=deployment_base_model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            deployment_model_info=typed_deployment_model_info,
+            drop_params=drop_unsupported_reasoning,
+            additional_drop_params=routing_kwargs.get("additional_drop_params"),
+        )
+        if responses_bridge_params is not None:
             from litellm.completion_extras import responses_api_bridge
 
-            optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
-            bridge_optional_params: Final = _responses_bridge_optional_params(
-                optional_params,
-                rs_val,
-                resolved_reasoning_effort,
-                custom_llm_provider=custom_llm_provider,
-                model=model,
-                base_model=deployment_base_model,
-                api_base=api_base,
-                deployment_model_info=typed_deployment_model_info,
-                drop_params=drop_unsupported_reasoning,
-                additional_drop_params=routing_kwargs.get("additional_drop_params"),
-            )
-            reasoning_drop_warnings.log_unless_dropped_effort_sent(bridge_optional_params)
+            reasoning_drop_warnings.log_unless_dropped_effort_sent(responses_bridge_params.optional_params)
             bridged: Final = responses_api_bridge.completion(
                 model=model,
                 messages=messages,
@@ -6744,8 +6823,8 @@ def completion(
                 api_base=api_base,
                 acompletion=acompletion,
                 logging_obj=logging,
-                optional_params=bridge_optional_params,
-                litellm_params=litellm_params,
+                optional_params=responses_bridge_params.optional_params,
+                litellm_params=responses_bridge_params.litellm_params,
                 timeout=timeout,
                 client=client,  # pass AsyncOpenAI, OpenAI client
                 custom_llm_provider=custom_llm_provider,
@@ -6802,9 +6881,7 @@ def completion(
             optional_params_for_model_info=optional_params_for_model_info,
             organization=organization,
             provider_config=provider_config,
-            request_params=MappingProxyType(
-                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **provider_params})
-            ),
+            request_params=request_params,
             shared_session=shared_session,
             stream=dispatch_stream,
             temperature=temperature,

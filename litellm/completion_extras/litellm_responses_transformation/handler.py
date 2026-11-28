@@ -11,6 +11,7 @@ from typing import (
     cast,  # noqa: TID251  # optional_params reaches the bridge as an untyped dict
 )
 
+import httpx
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.call_kwargs import optional_str
@@ -33,6 +34,17 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
     logging_obj: ReadOnly["LiteLLMLoggingObj"]
     custom_llm_provider: ReadOnly[str]
     encoding: ReadOnly[object]
+    client: ReadOnly[object]
+
+
+def _provider_response_headers(stream: object) -> httpx.Headers | None:
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    match stream:
+        case BaseResponsesAPIStreamingIterator(response=httpx.Response(headers=headers)):
+            return headers
+        case _:
+            return None
 
 
 def _restore_routing_prefix(model: str, custom_llm_provider: str) -> str:
@@ -162,6 +174,7 @@ class ResponsesToCompletionBridgeHandler:
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             encoding=typed_kwargs.get("encoding"),
+            client=typed_kwargs.get("client"),
         )
 
     def completion(
@@ -200,7 +213,7 @@ class ResponsesToCompletionBridgeHandler:
             litellm_params=litellm_params,
             headers=headers,
             litellm_logging_obj=logging_obj,
-            client=kwargs.get("client"),
+            client=validated_kwargs["client"],
         )
 
         # Set on request_data rather than passed as explicit kwargs: the spread of
@@ -267,7 +280,11 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request, replays_responses_history
+            from .transformation import (
+                is_structured_output_request,
+                reasoning_origin_for,
+                replays_responses_history,
+            )
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -276,6 +293,7 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
+                reasoning_origin=reasoning_origin_for(custom_llm_provider, model),
                 replays_openai_history=replays_responses_history(custom_llm_provider),
                 streams_reasoning_signatures=streams_reasoning_signatures,
             )
@@ -284,6 +302,7 @@ class ResponsesToCompletionBridgeHandler:
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
+                _response_headers=_provider_response_headers(result),
             )
             return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 
@@ -315,6 +334,7 @@ class ResponsesToCompletionBridgeHandler:
                 litellm_params=litellm_params,
                 headers=headers,
                 litellm_logging_obj=logging_obj,
+                client=validated_kwargs["client"],
             )
         except Exception as e:
             raise e
@@ -388,7 +408,11 @@ class ResponsesToCompletionBridgeHandler:
         else:
             if self._is_preformatted_cached_chat_stream(result):
                 return self._apply_post_stream_processing(result, model, custom_llm_provider)
-            from .transformation import is_structured_output_request, replays_responses_history
+            from .transformation import (
+                is_structured_output_request,
+                reasoning_origin_for,
+                replays_responses_history,
+            )
 
             completion_stream: Final = self.transformation_handler.get_model_response_iterator(
                 streaming_response=result,
@@ -397,6 +421,7 @@ class ResponsesToCompletionBridgeHandler:
                 structured_output=is_structured_output_request(
                     cast("Mapping[str, object]", optional_params)  # cast-ok: optional_params is an untyped dict
                 ),
+                reasoning_origin=reasoning_origin_for(custom_llm_provider, model),
                 replays_openai_history=replays_responses_history(custom_llm_provider),
                 streams_reasoning_signatures=streams_reasoning_signatures,
             )
@@ -405,6 +430,7 @@ class ResponsesToCompletionBridgeHandler:
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 logging_obj=logging_obj,
+                _response_headers=_provider_response_headers(result),
             )
             return self._apply_post_stream_processing(streamwrapper, model, custom_llm_provider)
 
