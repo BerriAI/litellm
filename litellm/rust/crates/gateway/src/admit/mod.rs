@@ -8,6 +8,7 @@
 
 mod body;
 mod checks;
+mod claude_code;
 
 use std::sync::Arc;
 
@@ -230,7 +231,8 @@ impl Admit {
     }
 
     /// The body is read only for a request that passes every other check, and parsed once: an
-    /// admitted request carries it parsed, as the [`JsonObject`] the route takes. A refused request
+    /// admitted request carries it parsed, as the [`JsonObject`] the route takes, naming the group a
+    /// Claude Code model id stands for, which every check after it reads. A refused request
     /// keeps the bytes the client sent and carries nothing more. A request the proxy's allowlists
     /// leave out is admitted as sent, before its caller or body is read, as Python refuses it before
     /// it reads either, and `middleware::request_allowlist` refuses it in the native app.
@@ -269,6 +271,13 @@ impl Admit {
                 Reason::new(Refused::Body, "unreadable"),
             ));
         };
+        if let Some(named) = fields
+            .get("model")
+            .and_then(Value::as_str)
+            .and_then(|model| claude_code::named(&self.router.registry(), model))
+        {
+            fields.insert("model".to_owned(), Value::String(named));
+        }
         if let Some(reason) = checks::BODY.iter().find_map(|check| check(&self, &fields)) {
             return Err(refused(parts, body, reason));
         }
@@ -454,6 +463,25 @@ mod tests {
             caller.map(|caller| caller.0.end_user.end_user_id.as_deref()),
             Some(end_user_id)
         );
+    }
+
+    #[rstest]
+    #[case::one_marked_for_a_million_tokens("claude[1m]")]
+    #[case::one_spelled_in_hex("claude-router-636c61756465")]
+    #[tokio::test]
+    async fn an_admitted_request_carries_the_group_a_claude_code_model_id_stands_for(
+        #[case] listed: &str,
+    ) {
+        let admitted = admit()
+            .admit(messages(&[MASTER_KEY], listed))
+            .await
+            .unwrap();
+
+        let model = admitted
+            .extensions()
+            .get::<JsonObject>()
+            .and_then(|body| body.0.get("model"));
+        assert_eq!(model, Some(&json!("claude")));
     }
 
     #[rstest]
