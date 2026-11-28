@@ -212,7 +212,7 @@ lint-basedpyright: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python litellm/scripts/type_check_gate.py --base "$(BASE_REF)"
 
 lint-e2e-basedpyright: $(LINT_E2E_DEP_INSTALL)
-	$(UV_RUN) basedpyright tests/e2e tests/e2e_harness
+	$(UV_RUN) basedpyright --project pyproject.toml tests/e2e tests/e2e_harness
 
 # Type-discipline gate (mutable collections / casts / type guards / kwargs /
 # unexplained suppressions), the test-linting.yml step `make lint` used to omit.

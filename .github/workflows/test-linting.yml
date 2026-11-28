@@ -254,7 +254,7 @@ jobs:
         run: |
           if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' ':(glob)litellm/**/*.py' pyproject.toml uv.lock | grep -q .; then
             uv sync --frozen --no-install-project --group proxy-dev --group e2e-dev --extra proxy
-            uv run --no-sync basedpyright tests/e2e tests/e2e_harness
+            uv run --no-sync basedpyright --project pyproject.toml tests/e2e tests/e2e_harness
           else
             echo "No changed tests/e2e or litellm Python, or dependency files; skipping."
           fi
