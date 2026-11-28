@@ -282,6 +282,23 @@ async def test_wait_for_turn_during_cooldown_survives_the_queue_key_expiring():
     assert await scheduler.get_queue("sched-model") == []
 
 
+@pytest.mark.asyncio
+async def test_wait_for_turn_never_queues_a_request_a_healthy_deployment_can_take():
+    scheduler: Final = Scheduler()
+
+    async def one_healthy_deployment_seen_with_an_empty_queue() -> Sequence[object]:
+        queue: Final = await scheduler.get_queue("sched-model")
+        assert queue == [], f"the admitted request was queued while a deployment was healthy: {queue}"
+        return ({"model_info": {"id": "a"}},)
+
+    await scheduler.wait_for_turn(
+        request=FlowItem(priority=1, request_id="admitted", model_name="sched-model"),
+        timeout=5,
+        get_healthy_deployments=one_healthy_deployment_seen_with_an_empty_queue,
+    )
+
+    assert await scheduler.get_queue("sched-model") == []
+
 
 class _JsonRoundTripRedisCache:
     def __init__(self) -> None:
