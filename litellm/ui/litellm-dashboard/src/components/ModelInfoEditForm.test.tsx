@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { CredentialItem } from "@/components/networking";
 
-import ModelInfoEditForm, { perMillionToPerToken } from "./ModelInfoEditForm";
+import ModelInfoEditForm from "./ModelInfoEditForm";
+import { perMillionToPerToken } from "./model-edit/schema";
 
 vi.mock("@/components/networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/networking")>();

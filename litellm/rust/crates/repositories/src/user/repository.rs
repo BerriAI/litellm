@@ -40,7 +40,7 @@ const CREATE_USER: Call = Call {
 
 /// Who is signing in: the requested id plus the sign-in's SSO id and email. `links_any_user` is
 /// `LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER`, which lets an email match any row and skips the SSO link guards.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SignIn {
     pub user_id: String,
     pub sso_user_id: Option<String>,
@@ -154,6 +154,20 @@ impl UserRepository {
             self.set_sso_user_id_later(user_id, sso_user_id);
         }
         Ok(resolved.user.map(|user| Resolution { user, sso_link }))
+    }
+
+    /// The user `sign_in` resolves to, read without linking its SSO id: the id or SSO id match, else the email
+    /// match [`Self::resolve`] would link. For a caller that decides on the user before it lets anything be written.
+    pub async fn find(
+        &self,
+        sign_in: &SignIn,
+        side: Side,
+    ) -> Result<Option<User>, litellm_db::Error> {
+        self.database
+            .run(GET_USER_OBJECT, || async {
+                find_once(&mut &self.database, sign_in, side).await
+            })
+            .await
     }
 
     /// Whether a user other than `user_id` holds `user_email`, ignoring case.
@@ -368,19 +382,46 @@ pub(super) async fn resolve_once(
     }
 }
 
+/// The id or SSO id match, else the email match, with nothing linked.
+pub(super) async fn find_once(
+    connections: &mut impl Connections,
+    sign_in: &SignIn,
+    side: Side,
+) -> Result<Option<User>, litellm_db::Error> {
+    let found = connections
+        .with(side, async |db| {
+            queries::find_user(db, Some(&sign_in.user_id), sign_in.sso_user_id.as_deref()).await
+        })
+        .await?;
+    let (None, Some((user_email, unlinked_only))) = (&found, email_match(sign_in)) else {
+        return Ok(found);
+    };
+    connections
+        .with(Side::Read, async |db| {
+            queries::find_user_by_email(db, user_email, unlinked_only).await
+        })
+        .await
+}
+
+/// The email a sign-in may be matched by, and whether only a row with no SSO id matches it, which holds for a
+/// sign-in that carries an SSO id. `None` without an email or with an unverified one.
+fn email_match(sign_in: &SignIn) -> Option<(&str, bool)> {
+    let user_email = sign_in.user_email.as_deref()?;
+    (sign_in.links_any_user || sign_in.email_verified != Some(false)).then_some((
+        user_email,
+        !sign_in.links_any_user && sign_in.sso_user_id.is_some(),
+    ))
+}
+
 /// A user with no row for the requested id or SSO id, found by email unless the email is unverified. With an SSO
 /// id, only an unlinked row matches, and it is linked only if no other sign-in linked that SSO id first.
 async fn resolve_by_email(
     connections: &mut impl Connections,
     sign_in: &SignIn,
 ) -> Result<Resolved, litellm_db::Error> {
-    let Some(user_email) = &sign_in.user_email else {
+    let Some((user_email, unlinked_only)) = email_match(sign_in) else {
         return Ok(None.into());
     };
-    if !(sign_in.links_any_user || sign_in.email_verified != Some(false)) {
-        return Ok(None.into());
-    }
-    let unlinked_only = !sign_in.links_any_user && sign_in.sso_user_id.is_some();
     let by_email = connections
         .with(Side::Read, async |db| {
             queries::find_user_by_email(db, user_email, unlinked_only).await

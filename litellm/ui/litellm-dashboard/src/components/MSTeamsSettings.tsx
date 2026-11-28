@@ -1,10 +1,14 @@
 import React, { useState } from "react";
+import { Controller } from "react-hook-form";
 import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Eye, EyeOff } from "lucide-react";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
+import { toChangedVariables, toDestinationFieldValue } from "./alerting/destination/mapper";
+import { destinationVariablesSchema } from "./alerting/destination/schema";
 import { getCallbacksCall, serviceHealthCheck, setCallbacksCall } from "./networking";
 
 interface AlertingDestination {
@@ -35,6 +39,7 @@ const SENSITIVE_FIELD_PATTERN = /(PASSWORD|SECRET|KEY|TOKEN|URL)/i;
 const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, userID, userRole, alerts }) => {
   const { t } = useTranslation();
   const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
+  const { control, getValues } = useZodForm(destinationVariablesSchema, { defaultValues: {} });
 
   const toggleFieldVisibility = (key: string) => {
     setVisibleFields((prev) => ({
@@ -48,25 +53,11 @@ const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, userID, 
       return;
     }
 
-    // Only send fields the admin actually edited. Values rendered from the
-    // server are masked or sourced from the process environment, so
-    // re-submitting an untouched field would persist a mask or copy
-    // env-managed config into the database.
+    const fields = getValues();
     const updatedVariables: Record<string, string> = Object.fromEntries(
       alerts
         .filter((alert) => alert.name === "ms_teams")
-        .flatMap((alert) =>
-          Object.entries(alert.variables ?? {}).flatMap(([key, value]) => {
-            const inputElement = document.querySelector(`input[name="${key}"]`) as HTMLInputElement;
-            if (!inputElement || !inputElement.value) {
-              return [];
-            }
-            if (inputElement.value === (value == null ? "" : String(value))) {
-              return [];
-            }
-            return [[key, inputElement.value] as const];
-          }),
-        ),
+        .flatMap((alert) => Object.entries(toChangedVariables(alert.variables ?? {}, fields))),
     );
 
     try {
@@ -120,10 +111,18 @@ const MSTeamsSettings: React.FC<MSTeamsSettingsProps> = ({ accessToken, userID, 
                   <div key={key} className="space-y-1">
                     <p className="text-sm">{key}</p>
                     <InputGroup className="max-w-100">
-                      <InputGroupInput
+                      <Controller
+                        control={control}
                         name={key}
-                        defaultValue={value as string}
-                        type={isSensitive && !isVisible ? "password" : "text"}
+                        defaultValue={toDestinationFieldValue(value)}
+                        render={({ field }) => (
+                          <InputGroupInput
+                            name={key}
+                            defaultValue={value as string}
+                            onChange={field.onChange}
+                            type={isSensitive && !isVisible ? "password" : "text"}
+                          />
+                        )}
                       />
                       {isSensitive && (
                         <InputGroupAddon align="inline-end">

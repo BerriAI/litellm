@@ -919,6 +919,19 @@ impl AuthOutcome {
         self.public_denial().map(DenialView::from)
     }
 
+    /// Whether the denial came before the credential authenticated, which keeps it out of the spend logs.
+    #[getter]
+    fn failed_authentication(&self) -> bool {
+        match &self.0 {
+            Ended::Outcome(Outcome::Denied(error, _))
+            | Ended::Verified(Err(error))
+            | Ended::Authorized(Err(error))
+            | Ended::Resolved(Err(error))
+            | Ended::Mapped(Err(error)) => error.failed_authentication(),
+            _ => false,
+        }
+    }
+
     /// The key the request had resolved before it was denied, which labels the failure.
     #[getter]
     fn denied_key(&self, py: Python<'_>) -> Option<Py<PyAny>> {

@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from base64 import b64encode
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from time import monotonic, sleep
 from types import MappingProxyType, SimpleNamespace
@@ -33,14 +34,17 @@ from litellm.integrations.langfuse.langfuse import (
     installed_langfuse_version,
     raise_if_unsupported_langfuse_version,
 )
+from litellm.integrations.langfuse.langfuse_media import MediaUpload, extract_media
 from litellm.integrations.langfuse.langfuse_sdk import (
     DiscardingSpanExporter,
     LangfuseApiClient,
     LangfusePromptError,
     LangfuseSpanExporter,
     LangfuseTracing,
+    _build_media_uploader,
     _build_span_exporter,
     _encode,
+    _MediaExtractingExporter,
     acquire_langfuse_tracing,
     build_langfuse_client,
     build_langfuse_tracing,
@@ -877,9 +881,7 @@ def test_release_of_a_channel_the_registry_never_handed_out_is_a_no_op():
 def test_flush_langfuse_tracing_exports_the_queued_spans_of_every_channel(monkeypatch: pytest.MonkeyPatch):
     """The proxy shutdown hook flushes through this, so a span finished just before a
     graceful restart must reach the exporter without waiting for the batch interval."""
-    exporters: Final[
-        list[InMemorySpanExporter]
-    ] = []
+    exporters: Final[list[InMemorySpanExporter]] = []
 
     def build_in_memory(*, public_key: str, secret_key: str, base_url: str) -> InMemorySpanExporter:
         exporters.append(InMemorySpanExporter())
@@ -1780,3 +1782,261 @@ def test_prompt_cache_keeps_a_missing_label_apart_from_the_label_named_none():
     assert named_none.prompt == "label='None'"
     assert cached_unlabelled is unlabelled
     assert api.requests == [("greeting", None, None), ("greeting", None, "None")]
+
+
+IMAGE_URI = "data:image/png;base64," + b64encode(b"hello").decode()
+IMAGE_REFERENCE = "@@@langfuseMedia:type=image/png|id=LPJNul-wow4m6Dsqxbninh|source=base64_data_uri@@@"
+
+
+class _RecordingUploader:
+    def __init__(self, *, drains: bool = True, accepts: bool = True, fails_on_drain: int = 0) -> None:
+        self.uploads: list[MediaUpload] = []
+        self.drains = drains
+        self.accepts = accepts
+        self.fails_on_drain = fails_on_drain
+        self.failed_uploads = 0
+        self.calls: list[str] = []
+
+    def submit(self, uploads: Sequence[MediaUpload]) -> None:
+        self.uploads.extend(uploads if self.accepts else ())
+
+    def drain(self, timeout_millis: int) -> bool:
+        self.calls.append("drain")
+        self.failed_uploads += self.fails_on_drain
+        return self.drains
+
+    def shutdown(self) -> None:
+        self.calls.append("shutdown")
+
+
+def _media_channel(uploader: _RecordingUploader) -> tuple[LangfuseTracing, InMemorySpanExporter]:
+    exporter = InMemorySpanExporter()
+    return (
+        build_langfuse_tracing(
+            exporter=exporter,
+            uploader=uploader,  # pyright: ignore[reportArgumentType]  # duck-typed uploader
+            environment=None,
+            release=None,
+            sample_rate=1.0,
+            flush_interval_millis=600_000,
+        ),
+        exporter,
+    )
+
+
+def _image_messages(text: str = "what is this") -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": text}, {"type": "image_url", "image_url": {"url": IMAGE_URI}}],
+        }
+    ]
+
+
+def test_base64_images_leave_the_span_as_media_references_and_are_queued_for_upload():
+    """The v2 SDK replaced base64 payloads before ingestion; exported inline they multiply the stored trace size."""
+    uploader = _RecordingUploader()
+    tracing, exporter = _media_channel(uploader)
+
+    generation = start_generation(
+        tracing=tracing,
+        trace_id=TRACE_A,
+        parent_observation_id=None,
+        existing_trace=False,
+        observation_id=None,
+        name="generation",
+        start_time=CALL_START,
+        public=None,
+        attributes={
+            **observation_attributes(
+                observation_type="generation",
+                input=_image_messages(),
+                output={"role": "assistant", "content": IMAGE_URI},
+                metadata={"attachment": IMAGE_URI, "note": "kept"},
+            ),
+            **trace_attributes(input=_image_messages("trace level"), metadata={"thumbnail": {"url": IMAGE_URI}}),
+        },
+    )
+    generation.end(CALL_END)
+    assert tracing.flush() is True
+
+    attributes = _only_span(exporter, "generation").attributes
+    assert json.loads(attributes[A.OBSERVATION_INPUT])[0]["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": IMAGE_REFERENCE},
+    }
+    assert json.loads(attributes[A.TRACE_INPUT])[0]["content"][1]["image_url"]["url"] == IMAGE_REFERENCE
+    assert json.loads(attributes[A.OBSERVATION_OUTPUT])["content"] == IMAGE_REFERENCE
+    assert attributes[A.OBSERVATION_METADATA + ".attachment"] == IMAGE_REFERENCE
+    assert attributes[A.OBSERVATION_METADATA + ".note"] == "kept"
+    assert json.loads(attributes[A.TRACE_METADATA + ".thumbnail"]) == {"url": IMAGE_REFERENCE}
+    assert not any("base64," in value for value in attributes.values() if isinstance(value, str))
+    assert sorted((upload.field, upload.trace_id, upload.observation_id or "trace") for upload in uploader.uploads) == [
+        ("input", TRACE_A, generation.id),
+        ("input", TRACE_A, "trace"),
+        ("metadata", TRACE_A, generation.id),
+        ("metadata", TRACE_A, "trace"),
+        ("output", TRACE_A, generation.id),
+    ]
+    assert {upload.media.content for upload in uploader.uploads} == {b"hello"}
+
+
+def test_a_span_without_media_reaches_the_exporter_as_the_same_object():
+    received: list = []
+
+    class _Keeps(SpanExporter):
+        def export(self, spans):
+            received.extend(spans)
+            return SpanExportResult.SUCCESS
+
+    uploader = _RecordingUploader()
+    span = _finished_span()
+
+    assert _MediaExtractingExporter(_Keeps(), uploader).export((span,)) is SpanExportResult.SUCCESS  # pyright: ignore[reportArgumentType]  # duck-typed uploader
+
+    assert received == [span] and received[0] is span
+    assert uploader.uploads == []
+
+
+def test_a_span_whose_media_cannot_be_extracted_is_exported_unchanged(monkeypatch, caplog):
+    def explode(_: str):
+        raise RuntimeError("extraction bug")
+
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.extract_media", explode)
+    uploader = _RecordingUploader()
+    tracing, exporter = _media_channel(uploader)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        tracing.tracer.start_span("generation", attributes={A.OBSERVATION_INPUT: IMAGE_URI}).end()
+        assert tracing.flush() is True
+
+    assert _only_span(exporter, "generation").attributes[A.OBSERVATION_INPUT] == IMAGE_URI
+    assert uploader.uploads == []
+    assert "exporting it unchanged: extraction bug" in caplog.text
+
+
+def test_media_the_uploader_has_no_room_for_still_leaves_the_span_with_a_reference():
+    """Keeping the payload inline while uploads are stuck would bring back the trace size the references remove."""
+    tracing, exporter = _media_channel(_RecordingUploader(accepts=False))
+
+    tracing.tracer.start_span("generation", attributes={A.OBSERVATION_INPUT: json.dumps(_image_messages())}).end()
+    tracing.flush()
+
+    exported = _only_span(exporter, "generation").attributes[A.OBSERVATION_INPUT]
+    assert "@@@langfuseMedia:type=image/png|id=" in exported
+    assert ";base64," not in exported
+
+
+def test_flush_is_false_while_media_is_still_uploading():
+    tracing, _ = _media_channel(_RecordingUploader(drains=False))
+
+    assert tracing.flush() is False
+
+
+def test_flush_is_false_when_an_upload_failed_during_it():
+    tracing, _ = _media_channel(_RecordingUploader(fails_on_drain=1))
+
+    assert tracing.flush() is False
+    assert _media_channel(_RecordingUploader())[0].flush() is True
+
+
+def test_retiring_the_channel_lets_queued_uploads_finish_before_the_uploader_stops(monkeypatch: pytest.MonkeyPatch):
+    exporter, uploader = _RecordsShutdown(), _RecordingUploader()
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._build_span_exporter", lambda **_: exporter)
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._build_media_uploader", lambda **_: uploader)
+    tracing = _acquire(public_key="pk-media-retire-test", mock_mode=False, flush_interval=600.0)
+
+    release_langfuse_tracing(tracing, grace_seconds=0.0)
+
+    assert exporter.shutdowns == 1
+    assert uploader.calls == ["drain", "shutdown"]
+
+
+def test_mock_mode_builds_no_media_uploader(monkeypatch: pytest.MonkeyPatch):
+    built: list[object] = []
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._build_media_uploader", built.append)
+
+    tracing = _acquire(public_key="pk-media-mock-test", mock_mode=True)
+    tracing.tracer.start_span("generation", attributes={A.OBSERVATION_INPUT: IMAGE_URI}).end()
+
+    assert tracing.flush() is True
+    assert built == []
+
+
+def test_media_uploads_continue_after_litellm_closes_the_pooled_http_client(monkeypatch: pytest.MonkeyPatch):
+    """litellm closes a cached handler's client once its cache entry expires; the handler then opens another."""
+    requests: list[httpx.Request] = []
+
+    def langfuse(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/public/media":
+            return httpx.Response(
+                201, json={"mediaId": "LPJNul-wow4m6Dsqxbninh", "uploadUrl": "https://storage.example/hello"}
+            )
+        return httpx.Response(200, json={}, request=request)
+
+    class _Handler(HTTPHandler):
+        def create_client(self) -> httpx.Client:
+            return httpx.Client(transport=httpx.MockTransport(langfuse))
+
+    handler = _Handler()
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.get_httpx_client", lambda: handler)
+    uploader = _build_media_uploader(
+        public_key="pk-media-evict-test", secret_key="sk", base_url="https://lf.internal.example"
+    )
+    upload = MediaUpload(media=extract_media(IMAGE_URI)[1][0], trace_id="0" * 32, observation_id=None, field="input")
+
+    uploader.submit((upload,))
+    assert uploader.drain(5_000) is True
+    handler.close()
+    uploader.submit((upload,))
+    assert uploader.drain(5_000) is True
+    uploader.shutdown()
+
+    assert [request.method for request in requests] == ["POST", "PUT", "PATCH"] * 2
+    assert uploader.failed_uploads == 0
+
+
+def test_live_channel_uploads_the_image_and_exports_only_its_reference(monkeypatch: pytest.MonkeyPatch):
+    """End to end over one credential set: the OTLP body carries the reference, the bytes go through the media
+    API with the project's Basic auth, and a flush waits for both."""
+    requests: list[httpx.Request] = []
+
+    def langfuse(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/api/public/media":
+            return httpx.Response(
+                201, json={"mediaId": "LPJNul-wow4m6Dsqxbninh", "uploadUrl": "https://storage.example/hello"}
+            )
+        return httpx.Response(200, json={}, request=request)
+
+    handler = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(langfuse)))
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.get_httpx_client", lambda: handler)
+    tracing = _acquire(
+        public_key="pk-media-live-test",
+        secret_key="sk-media-live",
+        base_url="https://lf.internal.example",
+        mock_mode=False,
+        flush_interval=600.0,
+    )
+
+    tracing.tracer.start_span(
+        "generation", attributes=observation_attributes(observation_type="generation", input=_image_messages())
+    ).end()
+    assert tracing.flush() is True
+    release_langfuse_tracing(tracing, grace_seconds=0.0)
+
+    by_route = {(request.method, request.url.host, request.url.path): request for request in requests}
+    assert set(by_route) == {
+        ("POST", "lf.internal.example", "/api/public/otel/v1/traces"),
+        ("POST", "lf.internal.example", "/api/public/media"),
+        ("PUT", "storage.example", "/hello"),
+        ("PATCH", "lf.internal.example", "/api/public/media/LPJNul-wow4m6Dsqxbninh"),
+    }
+    exported = by_route[("POST", "lf.internal.example", "/api/public/otel/v1/traces")].content
+    assert IMAGE_REFERENCE.encode() in exported
+    assert b64encode(b"hello") not in exported
+    registered = by_route[("POST", "lf.internal.example", "/api/public/media")]
+    assert registered.headers["authorization"] == "Basic " + b64encode(b"pk-media-live-test:sk-media-live").decode()
+    assert json.loads(registered.content)["field"] == "input"
+    assert by_route[("PUT", "storage.example", "/hello")].content == b"hello"

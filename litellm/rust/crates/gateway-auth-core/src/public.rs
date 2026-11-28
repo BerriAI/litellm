@@ -106,7 +106,9 @@ impl Error {
             Self::PremiumRequired(premium) => premium.public(),
             Self::Key(denial) => denial.public(),
             Self::Jwt(denial) => denial.public(),
-            Self::BudgetExceeded(exceeded) => PublicDenial::BudgetExceeded(exceeded.clone()),
+            Self::BudgetExceeded(exceeded) | Self::EndUserBudgetExceeded(exceeded) => {
+                PublicDenial::BudgetExceeded(exceeded.clone())
+            }
             Self::HostFailed | Self::HostDeclined => return None,
         })
     }
@@ -297,6 +299,10 @@ mod tests {
     )]
     #[case::budget(
         Error::BudgetExceeded(over_budget()),
+        PublicDenial::BudgetExceeded(over_budget())
+    )]
+    #[case::end_user_budget(
+        Error::EndUserBudgetExceeded(over_budget()),
         PublicDenial::BudgetExceeded(over_budget())
     )]
     #[case::expired_key(

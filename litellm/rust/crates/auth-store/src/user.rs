@@ -55,6 +55,17 @@ impl UserDatabase {
         }))
     }
 
+    /// The user `sign_in` would resolve to, read without linking anything, or `None` when no row
+    /// matches. A host that must know the user before it lets a sign-in write reads this first,
+    /// and makes the sign-in with [`Self::sign_in`] once it will.
+    pub async fn found(&self, sign_in: &SignIn, side: Side) -> Result<Option<UserEntry>, Error> {
+        self.users
+            .find(sign_in, side)
+            .await?
+            .map(user_entry)
+            .transpose()
+    }
+
     /// Creates the user `sign_in` names with `defaults`, as `get_user_object` does under
     /// `user_id_upsert`, and returns the entry for the row as stored. A sign-in that loses to a
     /// concurrent one gets the entry for the row that won, or `Conflict(None)` when that row is
