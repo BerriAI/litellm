@@ -21,6 +21,7 @@ Pydantic ValidationError (previously typed as Optional[str]).
 
 import asyncio
 import json
+import logging
 from datetime import datetime
 from importlib import import_module
 from collections.abc import Mapping
@@ -30,8 +31,10 @@ from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+from pydantic import BaseModel
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1025,14 +1028,19 @@ _BEDROCK_SERVICE_UNAVAILABLE_CHUNK: Final = {
 }
 
 
-def _real_config_iterator(provider: str, model: str, events: tuple[Mapping[str, object], ...]):
+def _real_config_iterator(
+    provider: str,
+    model: str,
+    events: tuple[Mapping[str, object], ...],
+    headers: Mapping[str, str] | None = None,
+):
     payload: Final = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events)
 
     async def aiter_bytes():
         yield payload
 
     response: Final = Mock()
-    response.headers = {}
+    response.headers = dict(headers or {})
     response.aiter_bytes = aiter_bytes
     logging_obj: Final = Mock(spec=LiteLLMLoggingObj)
     logging_obj.model_call_details = {"litellm_params": {}}
@@ -1084,3 +1092,133 @@ async def test_untyped_mid_stream_error_chunk_raises_the_upstream_error(provider
     assert "The server had an error while processing your request" in str(exc_info.value.original_exception)
     assert exc_info.value.status_code >= 500
     assert exc_info.value.generated_content == "partial "
+
+
+async def _logged_event_shapes(caplog: pytest.LogCaptureFixture, event: Mapping[str, object]) -> tuple[object, ...]:
+    verbose_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name), pytest.raises(MidStreamFallbackError):
+            _ = [chunk async for chunk in _real_config_iterator("azure", "gpt-5", (event,))]
+    finally:
+        verbose_logger.removeHandler(caplog.handler)
+    return tuple(
+        getattr(record, "stream_error_event_shape")
+        for record in {id(record): record for record in caplog.records}.values()
+        if hasattr(record, "stream_error_event_shape")
+    )
+
+
+@pytest.mark.asyncio
+async def test_error_event_without_a_message_logs_the_shape_upstream_sent(caplog: pytest.LogCaptureFixture):
+    shapes: Final = await _logged_event_shapes(caplog, {"type": "error", "sequence_number": 3, "error": None})
+
+    assert shapes == ({"error": "NoneType", "sequence_number": "int", "type": "error"},)
+    assert (
+        "Responses stream error event from azure/gpt-5 carried no error message; event shape: "
+        "{'error': 'NoneType', 'sequence_number': 'int', 'type': 'error'}"
+    ) in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_failed_event_without_a_message_logs_the_shape_but_never_the_output_text(
+    caplog: pytest.LogCaptureFixture,
+):
+    user_text: Final = "private text the model already generated"
+    shapes: Final = await _logged_event_shapes(
+        caplog,
+        {
+            "type": "response.failed",
+            "sequence_number": 3,
+            "response": {
+                "id": "resp_upstream",
+                "status": "failed",
+                "error": None,
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": user_text}]}],
+            },
+        },
+    )
+
+    assert len(shapes) == 1
+    assert shapes[0]["type"] == "response.failed"
+    assert {key: shapes[0]["response"][key] for key in ("error", "output", "status")} == {
+        "error": "NoneType",
+        "output": "list",
+        "status": "failed",
+    }
+    assert user_text not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_error_event_with_a_message_logs_no_shape(caplog: pytest.LogCaptureFixture):
+    shapes: Final = await _logged_event_shapes(
+        caplog,
+        {
+            "type": "error",
+            "sequence_number": 3,
+            "error": {"type": "server_error", "code": "server_error", "message": "upstream said why"},
+        },
+    )
+
+    assert shapes == ()
+
+
+class _EventWhoseFieldReadRaises(BaseModel):
+    type: str = "error"
+
+    @property
+    def detail(self) -> object:
+        raise RuntimeError("reading this field fails")
+
+
+@pytest.mark.asyncio
+async def test_the_missing_message_warning_records_the_upstream_response_headers(
+    caplog: pytest.LogCaptureFixture,
+):
+    """The warning must carry the provider's response header values, so a request can be looked up upstream."""
+    verbose_logger.addHandler(caplog.handler)
+    try:
+        iterator: Final = _real_config_iterator(
+            "azure",
+            "gpt-5",
+            ({"type": "error", "sequence_number": 3, "error": None},),
+            headers={
+                "X-Request-Id": "upstream-request-id",
+                "X-MS-Request-ID": "upstream-ms-id",
+                "Apim-Request-Id": "upstream-apim-id",
+                "x-ms-served-model": "gpt-5-2026-01-01",
+                "Set-Cookie": "session=top-secret",
+                "Authorization": "Bearer top-secret-token",
+            },
+        )
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name), pytest.raises(MidStreamFallbackError):
+            _ = [chunk async for chunk in aiter(iterator)]
+    finally:
+        verbose_logger.removeHandler(caplog.handler)
+
+    logged: Final = tuple(
+        getattr(record, "stream_error_upstream_headers")
+        for record in {id(record): record for record in caplog.records}.values()
+        if hasattr(record, "stream_error_upstream_headers")
+    )
+    assert logged == (
+        {
+            "apim-request-id": "upstream-apim-id",
+            "authorization": "<redacted>",
+            "set-cookie": "<redacted>",
+            "x-ms-request-id": "upstream-ms-id",
+            "x-ms-served-model": "gpt-5-2026-01-01",
+            "x-request-id": "upstream-request-id",
+        },
+    )
+    assert "upstream-apim-id" in caplog.text
+    assert "top-secret" not in caplog.text
+
+
+def test_a_failing_shape_diagnostic_leaves_the_stream_failure_unchanged():
+    event: Final = _EventWhoseFieldReadRaises.model_construct(_fields_set={"type", "detail"})
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        _make_iterator()._maybe_raise_for_error_event(event)
+
+    assert exc_info.value.status_code == 500
+    assert "Response API in-stream error" in str(exc_info.value)
