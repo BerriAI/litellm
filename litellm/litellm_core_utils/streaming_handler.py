@@ -1054,6 +1054,7 @@ class CustomStreamWrapper:
                     logprobs = None
 
             usage = getattr(str_line, "usage", None)
+            choice_index: Final = _upstream_choice_index(cast(object, str_line))  # cast-ok: widens the untyped chunk
 
             return {
                 "text": text,
@@ -1063,6 +1064,8 @@ class CustomStreamWrapper:
                 "original_chunk": str_line,
                 "usage": usage,
                 "chunk_choice_fields": _non_null_upstream_choice_fields(str_line, STREAM_CHUNK_CHOICE_FIELDS),
+                "choice_index": choice_index,
+                "sibling_finish_reason": finish_reason if choice_index != _CLOSING_CHOICE_INDEX else None,
             }
         except Exception as e:
             raise e
@@ -1980,7 +1983,8 @@ class CustomStreamWrapper:
                     raise Exception(
                         f"{self.custom_llm_provider} raised a streaming error - finish_reason: error, no content string given. Received Chunk={response_obj}"
                     )
-                self.received_finish_reason = response_obj["finish_reason"]
+                if response_obj["sibling_finish_reason"] is None:
+                    self.received_finish_reason = response_obj["finish_reason"]
             self._record_finishes(chunk)
             if response_obj.get("original_chunk", None) is not None:
                 if hasattr(response_obj["original_chunk"], "id"):
