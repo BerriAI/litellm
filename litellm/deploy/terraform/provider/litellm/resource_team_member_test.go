@@ -72,6 +72,8 @@ var teamMemberDeleteCases = []struct {
 	{"already removed from team", http.StatusBadRequest, `{"detail":{"error":"User not found in team"}}`, false},
 	{"not found", http.StatusNotFound, `{"detail":"Not Found"}`, false},
 	{"team missing", http.StatusBadRequest, `{"detail":{"error":"Team id=team-1 does not exist in db"}}`, true},
+	{"team missing with the phrase in its id", http.StatusBadRequest, `{"detail":{"error":"Team id=User not found in team does not exist in db"}}`, true},
+	{"non-JSON bad request", http.StatusBadRequest, `<html>Bad Request</html>`, true},
 	{"forbidden", http.StatusForbidden, `{"detail":{"error":"Call not allowed"}}`, true},
 	{"server error", http.StatusInternalServerError, `{"detail":{"error":"boom"}}`, true},
 }

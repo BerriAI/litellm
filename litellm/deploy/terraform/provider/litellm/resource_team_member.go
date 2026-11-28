@@ -1,11 +1,11 @@
 package litellm
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
@@ -157,7 +157,12 @@ func handleTeamMemberDeleteResponse(resp *http.Response) error {
 		return handleResponse(resp, "deleting team member")
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if strings.Contains(string(body), "User not found in team") {
+	var parsed struct {
+		Detail struct {
+			Error string `json:"error"`
+		} `json:"detail"`
+	}
+	if json.Unmarshal(body, &parsed) == nil && parsed.Detail.Error == "User not found in team" {
 		log.Printf("[WARN] Team member already removed: %s", resp.Status)
 		return nil
 	}
