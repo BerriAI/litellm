@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -270,7 +271,7 @@ _CHAT_PROMPT: Final[Mapping[str, object]] = {"messages": [{"role": "user", "cont
         ("/v1/completions", {"prompt": "PROMPT-CANARY"}, {"prompt": "PROMPT-CANARY"}),
         ("/v1/completions", {"prompt": ["first", "PROMPT-CANARY"]}, {"prompt": ["first", "PROMPT-CANARY"]}),
         ("/v1/embeddings", {"input": ["first", "PROMPT-CANARY"]}, {"input": ["first", "PROMPT-CANARY"]}),
-        ("/v1/responses", {"input": "PROMPT-CANARY"}, {"input": ""}),
+        ("/v1/responses", {"input": "PROMPT-CANARY"}, {"input": "PROMPT-CANARY"}),
         ("/v1/chat/completions", {**_CHAT_PROMPT, "prompt": "second"}, {**_CHAT_PROMPT, "prompt": "second"}),
     ],
     ids=["messages", "malformed_messages", "prompt", "prompt_list", "input_list", "input_text", "messages_and_prompt"],
@@ -348,12 +349,12 @@ async def test_proxy_only_error_log_keeps_the_prompt_out_of_optional_params(
         (
             "/v1/responses",
             {"input": "PROMPT-CANARY", "turn_off_message_logging": True},
-            [{"role": "user", "content": "default-message-value"}],
+            [{"role": "user", "content": REDACTED_BY_LITELLM}],
         ),
         (
             "/v1/completions",
             {"prompt": "PROMPT-CANARY", "metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}},
-            [{"role": "user", "content": "default-message-value"}],
+            [{"role": "user", "content": REDACTED_BY_LITELLM}],
         ),
         (
             "/v1/embeddings",
@@ -361,7 +362,7 @@ async def test_proxy_only_error_log_keeps_the_prompt_out_of_optional_params(
                 "input": "PROMPT-CANARY",
                 "proxy_server_request": {"headers": {"litellm-enable-message-redaction": "true"}},
             },
-            [{"role": "user", "content": "default-message-value"}],
+            [{"role": "user", "content": REDACTED_BY_LITELLM}],
         ),
         (
             "/v1/responses",
@@ -376,7 +377,7 @@ async def test_proxy_only_error_log_keeps_the_prompt_out_of_optional_params(
         (
             "/v1/completions",
             {"prompt": "PROMPT-CANARY", "turn_off_message_logging": "True"},
-            [{"role": "user", "content": "default-message-value"}],
+            [{"role": "user", "content": REDACTED_BY_LITELLM}],
         ),
     ],
     ids=[
@@ -5251,3 +5252,288 @@ async def test_post_mcp_call_hook_runs_a_native_hook_guardrail_only_when_it_supp
     )
 
     assert (guardrail.call_count, [item.text for item in returned.content]) == (expected_calls, [expected_text])
+
+
+DECISIONS_QUESTIONS: Final = [
+    {
+        "type": "predicate",
+        "name": "chargeback_risk",
+        "instructions": "Determine if the request indicates chargeback risk.",
+    },
+]
+
+
+def _expected_normal_decisions_messages(request_body: Mapping[str, object]) -> list[object]:
+    logging_obj, _ = litellm.utils.function_setup(
+        "adecisions",
+        litellm.utils.Rules(),
+        real_datetime.datetime.now(),
+        model=request_body.get("model", ""),
+        litellm_call_id="normal-decisions",
+    )
+    from litellm.decisions.call import log_caller_request
+
+    log_caller_request(
+        {"litellm_logging_obj": logging_obj},
+        {
+            "input": request_body.get("input"),
+            "questions": request_body.get("questions"),
+            "audio": request_body.get("audio"),
+            "videos": request_body.get("videos"),
+            **{
+                k: request_body[k]
+                for k in ("state", "images", "assets")
+                if k in request_body
+            },
+        },
+    )
+    logging_obj.update_environment_variables(
+        model=request_body.get("model", ""),
+        user="",
+        optional_params={},
+        litellm_params={},
+    )
+    payload = litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload(
+        kwargs=logging_obj.model_call_details,
+        init_response_obj={},
+        start_time=logging_obj.start_time,
+        end_time=real_datetime.datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    return payload["messages"]
+
+
+def _expected_normal_systemone_messages(request_body: Mapping[str, object]) -> list[object]:
+    logging_obj, _ = litellm.utils.function_setup(
+        "asystemone",
+        litellm.utils.Rules(),
+        real_datetime.datetime.now(),
+        model=request_body.get("model", ""),
+        litellm_call_id="normal-systemone",
+    )
+    from litellm.decisions.call import SystemOneRequestFields, log_caller_request
+
+    log_caller_request(
+        {"litellm_logging_obj": logging_obj},
+        SystemOneRequestFields(
+            state=request_body.get("state"),
+            questions=request_body.get("questions"),
+            images=request_body.get("images"),
+            assets=request_body.get("assets"),
+            audio=request_body.get("audio"),
+            videos=request_body.get("videos"),
+        ),
+    )
+    logging_obj.update_environment_variables(
+        model=request_body.get("model", ""),
+        user="",
+        optional_params={},
+        litellm_params={},
+    )
+    payload = litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload(
+        kwargs=logging_obj.model_call_details,
+        init_response_obj={},
+        start_time=logging_obj.start_time,
+        end_time=real_datetime.datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+    assert payload is not None
+    return payload["messages"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route_arg", [None, "/v1/decisions"])
+@pytest.mark.parametrize("set_up_by_request", [False, True])
+async def test_decisions_proxy_only_error_logs_caller_payload(
+    route_arg: str | None, set_up_by_request: bool
+) -> None:
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    body: Final[dict[str, object]] = {
+        "model": "decisions-model",
+        "input": "My card was charged twice.",
+        "questions": DECISIONS_QUESTIONS,
+        "litellm_call_id": "test-call-id",
+    }
+    data = dict(body)
+    if set_up_by_request:
+        logging_obj, data = litellm.utils.function_setup(
+            original_function="adecisions",
+            rules_obj=litellm.utils.Rules(),
+            start_time=real_datetime.datetime.now(),
+            **data,
+        )
+        data["litellm_logging_obj"] = logging_obj
+
+    await proxy_logging._handle_logging_proxy_only_error(
+        request_data=data,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            team_id="team-test",
+            request_route="/v1/decisions",
+        ),
+        route=route_arg,
+        original_exception=HTTPException(status_code=401, detail="Invalid API key"),
+    )
+
+    logging_obj = data["litellm_logging_obj"]
+    assert isinstance(logging_obj, Logging)
+    assert logging_obj.call_type == "adecisions"
+    assert logging_obj.model_call_details["input"] == "My card was charged twice."
+    expected_messages = _expected_normal_decisions_messages(body)
+    assert logging_obj.model_call_details["standard_logging_object"]["messages"] == expected_messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route_arg", [None, "/v1/systemone"])
+async def test_systemone_proxy_only_error_logs_caller_payload(route_arg: str | None) -> None:
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    body: Final[dict[str, object]] = {
+        "model": "systemone-model",
+        "state": "account_balance: 100",
+        "questions": DECISIONS_QUESTIONS,
+    }
+    data = dict(body)
+
+    await proxy_logging._handle_logging_proxy_only_error(
+        request_data=data,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            team_id="team-test",
+            request_route="/v1/systemone",
+        ),
+        route=route_arg,
+        original_exception=HTTPException(status_code=429, detail="Rate limit exceeded"),
+    )
+
+    logging_obj = data["litellm_logging_obj"]
+    assert isinstance(logging_obj, Logging)
+    assert logging_obj.call_type == "asystemone"
+    expected_messages = _expected_normal_systemone_messages(body)
+    assert logging_obj.model_call_details["standard_logging_object"]["messages"] == expected_messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route_arg", [None, "/v1/responses"])
+async def test_responses_str_input_proxy_only_error_logs_caller_payload(route_arg: str | None) -> None:
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    body: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "input": "Hello from caller",
+    }
+    data = dict(body)
+
+    await proxy_logging._handle_logging_proxy_only_error(
+        request_data=data,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            team_id="team-test",
+            request_route="/v1/responses",
+        ),
+        route=route_arg,
+        original_exception=HTTPException(status_code=401, detail="Invalid API key"),
+    )
+
+    logging_obj = data["litellm_logging_obj"]
+    assert isinstance(logging_obj, Logging)
+    assert logging_obj.call_type == "aresponses"
+    assert logging_obj.model_call_details["input"] == "Hello from caller"
+    assert logging_obj.model_call_details["messages"] == [{"role": "user", "content": "Hello from caller"}]
+    assert logging_obj.model_call_details["standard_logging_object"]["messages"] == [
+        {"role": "user", "content": "Hello from caller"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_responses_list_input_proxy_only_error_logs_caller_payload() -> None:
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    body: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "input": ["First prompt", "Second prompt"],
+    }
+    data = dict(body)
+
+    await proxy_logging._handle_logging_proxy_only_error(
+        request_data=data,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            team_id="team-test",
+            request_route="/v1/responses",
+        ),
+        route=None,
+        original_exception=HTTPException(status_code=429, detail="Rate limit exceeded"),
+    )
+
+    logging_obj = data["litellm_logging_obj"]
+    assert isinstance(logging_obj, Logging)
+    assert logging_obj.call_type == "aresponses"
+    assert logging_obj.model_call_details["input"] == ["First prompt", "Second prompt"]
+    assert logging_obj.model_call_details["messages"] == [
+        {"role": "user", "content": "First prompt"},
+        {"role": "user", "content": "Second prompt"},
+    ]
+    assert logging_obj.model_call_details["standard_logging_object"]["messages"] == [
+        {"role": "user", "content": "First prompt"},
+        {"role": "user", "content": "Second prompt"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_decisions_proxy_only_error_redaction_and_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.constants import REDACTED_BY_LITELLM
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    body: Final[dict[str, object]] = {
+        "model": "decisions-model",
+        "input": "Super secret customer card info",
+        "questions": DECISIONS_QUESTIONS,
+    }
+    data = dict(body)
+
+    await proxy_logging._handle_logging_proxy_only_error(
+        request_data=data,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            team_id="team-test",
+            request_route="/v1/decisions",
+        ),
+        route=None,
+        original_exception=HTTPException(status_code=401, detail="Invalid API key"),
+    )
+
+    logging_obj = data["litellm_logging_obj"]
+    assert isinstance(logging_obj, Logging)
+    assert logging_obj.model_call_details["input"] == ""
+    assert logging_obj.model_call_details["messages"] == [{"role": "user", "content": REDACTED_BY_LITELLM}]
+    assert logging_obj.model_call_details["standard_logging_object"]["messages"] == [
+        {"role": "user", "content": REDACTED_BY_LITELLM}
+    ]
+    assert "questions" not in logging_obj.model_call_details.get("optional_params", {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/decisions", "/v1/responses"])
+@pytest.mark.parametrize(
+    "redaction_fields",
+    [
+        {"turn_off_message_logging": True},
+        {"proxy_server_request": {"headers": {"litellm-enable-message-redaction": "true"}}},
+    ],
+)
+async def test_proxy_only_error_redacts_caller_input(route: str, redaction_fields: Mapping[str, object]) -> None:
+    data: Final[dict[str, object]] = {"model": "test-model", "input": "private prompt", **redaction_fields}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", request_route=route),
+        route=route,
+        original_exception=HTTPException(status_code=401, detail="rejected"),
+    )
+
+    logging_obj = data["litellm_logging_obj"]
+    assert isinstance(logging_obj, Logging)
+    assert logging_obj.model_call_details["input"] == ""
+    assert logging_obj.standard_callback_dynamic_params["turn_off_message_logging"] is True
