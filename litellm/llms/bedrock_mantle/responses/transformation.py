@@ -96,6 +96,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK_MANTLE
 
+    def starts_background_runs(self, model: str, api_base: str | None) -> bool:
+        return True
+
     def auto_reasoning_summary(self) -> ReasoningSummaryLevel:
         return "auto" if self.use_openai_path else super().auto_reasoning_summary()
 

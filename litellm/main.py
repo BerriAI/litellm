@@ -5752,19 +5752,65 @@ def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     )
 
 
-def _responses_bridge_optional_params(
+def _bridge_params_without_unretrievable_background_run(
     optional_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    *,
+    streams_upstream: bool | None,
+    routing_kwargs: Mapping[str, object],
+    model: str,
+    custom_llm_provider: str,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
+) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        requests_background_run,
+        unretrievable_background_run,
+        without_background,
+    )
+    from litellm.litellm_core_utils.tool_fields import drop_policy
+    from litellm.responses.main import native_responses_dispatch
+
+    if not requests_background_run(optional_params):
+        return optional_params
+    dispatch: Final = native_responses_dispatch(
+        f"{custom_llm_provider}/{model}", custom_llm_provider, deployment_model_info, api_base
+    )
+    if dispatch is None:
+        return optional_params
+    extra_body: Final = as_str_mapping(optional_params.get("extra_body")) or {}
+    if extra_body.get("stream", streams_upstream) is True and not dispatch.fakes_stream():
+        return optional_params
+    if drop_policy(routing_kwargs).drops("background"):
+        return without_background(optional_params)
+    if dispatch.starts_background_runs():
+        raise unretrievable_background_run(model, custom_llm_provider)
+    return optional_params
+
+
+def _responses_bridge_optional_params(
+    mapped_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
     summary_alias: object,
     requested: RequestedReasoningEffort,
     *,
+    streams_upstream: bool | None,
+    routing_kwargs: Mapping[str, object],
     custom_llm_provider: str,
     model: str,
     base_model: str | None,
     api_base: str | None,
+    reached_api_base: str | None,
     deployment_model_info: Mapping[str, object] | None,
     drop_params: bool,
-    additional_drop_params: object,
 ) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    optional_params: Final = _bridge_params_without_unretrievable_background_run(
+        mapped_params,
+        streams_upstream=streams_upstream,
+        routing_kwargs=routing_kwargs,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=reached_api_base,
+        deployment_model_info=deployment_model_info,
+    )
     if isinstance(requested, dict):
         from litellm.responses.utils import (
             RefusedReasoningFields,
@@ -5782,7 +5828,7 @@ def _responses_bridge_optional_params(
             api_base=api_base,
             deployment_model_info=deployment_model_info,
             drop_params=drop_params,
-            additional_drop_params=additional_drop_params,
+            additional_drop_params=routing_kwargs.get("additional_drop_params"),
         )
         if isinstance(bridged_reasoning, RefusedReasoningFields):
             raise_refused_reasoning_fields(bridged_reasoning, model, custom_llm_provider)
@@ -6726,13 +6772,15 @@ def completion(
                 optional_params,
                 rs_val,
                 resolved_reasoning_effort,
+                streams_upstream=dispatch_stream,
+                routing_kwargs=routing_kwargs,
                 custom_llm_provider=custom_llm_provider,
                 model=model,
                 base_model=deployment_base_model,
                 api_base=api_base,
+                reached_api_base=reached_api_base,
                 deployment_model_info=typed_deployment_model_info,
                 drop_params=drop_unsupported_reasoning,
-                additional_drop_params=routing_kwargs.get("additional_drop_params"),
             )
             reasoning_drop_warnings.log_unless_dropped_effort_sent(bridge_optional_params)
             bridged: Final = responses_api_bridge.completion(

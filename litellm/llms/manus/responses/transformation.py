@@ -50,6 +50,9 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.MANUS
 
+    def starts_background_runs(self, model: str, api_base: str | None) -> bool:
+        return True
+
     def should_fake_stream(
         self,
         model: str | None,
