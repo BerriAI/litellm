@@ -178,7 +178,7 @@ def test_minimax_validate_environment_never_attaches_anthropic_wif_credential(
     token_file = write_token_file(tmp_path, "jwt-assertion-value")
     litellm_params = {"anthropic_identity_token_file": str(token_file)}
 
-    with pytest.raises(litellm.AuthenticationError, match="Missing Anthropic API Key"):
+    with pytest.raises(litellm.AuthenticationError, match="Missing MiniMax API key"):
         MinimaxMessagesConfig().validate_anthropic_messages_environment(
             headers={},
             model="MiniMax-M2.1",
@@ -202,7 +202,7 @@ def test_tencent_validate_environment_never_attaches_anthropic_wif_credential(
     litellm_params = {"anthropic_identity_token_file": str(token_file)}
 
     monkeypatch.setattr(litellm, "api_key", None)
-    with pytest.raises(litellm.AuthenticationError, match="Missing Anthropic API Key"):
+    with pytest.raises(litellm.AuthenticationError, match="Missing Tencent API key"):
         TencentAnthropicMessagesConfig().validate_anthropic_messages_environment(
             headers={},
             model="deepseek-v4-pro",
