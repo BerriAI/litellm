@@ -50,15 +50,15 @@ _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
 _LOGGING_METADATA: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 EnvReferenceSource: TypeAlias = Literal["key metadata", "team metadata", "user metadata"]
 _KEY_SECRET_HINT: Final = (
-    "\nTo keep a separate secret per key, save it as a credential and name it with "
+    "\nTo keep a separate secret per key, a proxy admin can save it as a credential and name it with "
     "litellm_credential_name in the key's logging entry."
 )
 _ENV_REFERENCE_HINTS: Final[Mapping[EnvReferenceSource, str]] = MappingProxyType(
     {
         "key metadata": _KEY_SECRET_HINT,
         "user metadata": _KEY_SECRET_HINT,
-        "team metadata": "\nTo keep a separate secret per team, configure the callback for that team under "
-        "litellm_settings.default_team_settings in the proxy config.yaml.",
+        "team metadata": "\nTo keep a separate secret per team, a proxy admin can configure the callback for that "
+        "team under litellm_settings.default_team_settings in the proxy config.yaml.",
     }
 )
 

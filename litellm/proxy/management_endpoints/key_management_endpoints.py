@@ -110,6 +110,7 @@ from litellm.proxy.common_utils.callback_utils import (
     decrypted_logging_entries,
     encrypt_callback_vars,
     env_reference_check_metadata,
+    raise_on_non_admin_ciphertext,
 )
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
@@ -1673,7 +1674,7 @@ async def _common_key_generation_helper(
     if semantic_cache_metadata_changed(requested_metadata, None):
         _enforce_key_semantic_cache_admin(user_api_key_dict, team_table)
         validate_semantic_cache_metadata(requested_metadata)
-    caller_env_reference_check_metadata(
+    raise_on_non_admin_ciphertext(
         data.metadata, None, caller_is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
     )
     raise_on_invalid_key_metadata(data.metadata)
@@ -2976,9 +2977,9 @@ def prepare_metadata_fields(
     non_default_values: dict,
     existing_metadata: dict,
     *,
+    metadata_owner: tuple[str, EnvReferenceSource],
+    caller_is_proxy_admin: bool,
     logging_references_approved: bool = False,
-    metadata_owner: tuple[str, EnvReferenceSource] = ("This key", "key metadata"),
-    caller_is_proxy_admin: bool = False,
 ) -> dict:
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
@@ -3395,6 +3396,11 @@ async def prepare_key_update_data(
 ):
     if user_api_key_dict is not None:
         await _check_key_semantic_cache_update(data, existing_key_row, user_api_key_dict, prisma_client)
+        raise_on_non_admin_ciphertext(
+            data.metadata,
+            _StoredKeyMetadata.model_validate(existing_key_row, from_attributes=True).metadata,
+            caller_is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+        )
         raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         await _check_customer_header_team_change(data, existing_key_row, user_api_key_dict, prisma_client)
     if data.router_settings is not None or (
@@ -3510,6 +3516,7 @@ async def prepare_key_update_data(
         logging_references_approved=(
             user_api_key_dict is not None and data.metadata is not None and "logging" in data.metadata
         ),
+        metadata_owner=("This key", "key metadata"),
         caller_is_proxy_admin=user_api_key_dict is not None
         and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
     )

@@ -683,7 +683,9 @@ async def new_user(
 
         raise_on_logging_metadata_env_reference(
             caller_env_reference_check_metadata(
-                data.metadata, None, caller_is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+                data.metadata,
+                None,
+                caller_is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
             ),
             source="user metadata",
         )

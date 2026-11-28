@@ -828,11 +828,6 @@ NON_ADMIN_CIPHERTEXT_ERROR: Final = (
 
 
 def env_reference_check_metadata(metadata: object, *, resendable: frozenset[str] | None = None) -> object:
-    """Callback metadata with its encrypted values decrypted for the env-reference check.
-
-    With ``resendable`` given, only ciphertexts in that set are decrypted, so a caller cannot learn what an
-    arbitrary copied ciphertext holds.
-    """
     transform: Final = _decrypt_or_passthrough if resendable is None else _resendable_decrypter(resendable)
     return _transform_callback_vars(_listed_logging_metadata(metadata), transform)
 
@@ -840,10 +835,16 @@ def env_reference_check_metadata(metadata: object, *, resendable: frozenset[str]
 def caller_env_reference_check_metadata(requested: object, stored: object, *, caller_is_proxy_admin: bool) -> object:
     if caller_is_proxy_admin:
         return env_reference_check_metadata(requested)
+    raise_on_non_admin_ciphertext(requested, stored, caller_is_proxy_admin=False)
+    return env_reference_check_metadata(requested, resendable=frozenset(_callback_ciphertexts(stored)))
+
+
+def raise_on_non_admin_ciphertext(requested: object, stored: object, *, caller_is_proxy_admin: bool) -> None:
+    if caller_is_proxy_admin:
+        return
     resendable: Final = frozenset(_callback_ciphertexts(stored))
     if any(ciphertext not in resendable for ciphertext in _callback_ciphertexts(requested)):
         raise HTTPException(status_code=400, detail={"error": NON_ADMIN_CIPHERTEXT_ERROR})
-    return env_reference_check_metadata(requested, resendable=resendable)
 
 
 def _listed_logging_metadata(metadata: object) -> object:
