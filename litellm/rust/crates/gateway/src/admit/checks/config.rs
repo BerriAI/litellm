@@ -547,6 +547,18 @@ mod tests {
         "router_settings:\n  optional_pre_call_checks: [enforce_model_rate_limits, prompt_caching]\n",
         "router_settings.optional_pre_call_checks"
     )]
+    #[case::a_default_end_user_budget(
+        "litellm_settings:\n  max_end_user_budget_id: b-1\n",
+        "litellm_settings.max_end_user_budget_id"
+    )]
+    #[case::end_users_checked_against_the_database(
+        "litellm_settings:\n  validate_end_user_id_in_db: true\n",
+        "litellm_settings.validate_end_user_id_in_db"
+    )]
+    #[case::end_user_cost_tracking_turned_off(
+        "litellm_settings:\n  disable_end_user_cost_tracking: true\n",
+        "litellm_settings.disable_end_user_cost_tracking"
+    )]
     #[case::a_section_the_config_types_do_not_name("future_section: {}\n", "future_section")]
     #[case::a_callback_beside_the_dynamic_rate_limiter(
         "litellm_settings:\n  callbacks: [dynamic_rate_limiter_v3, prometheus]\n",

@@ -167,7 +167,8 @@ pub(crate) async fn load(path: &Path, secrets: Arc<Secrets>) -> Result<Loaded, E
     let file = document.clone().resolve(secrets()).await?;
     let resources = Resources::build(&file)?;
     let environment = resources.environment.clone();
-    let Some((pools, database)) = crate::db::connect(&file, &resources.secrets).await? else {
+    let connected = crate::db::connect(&file, &resources.secrets).await?;
+    let Some((pools, database)) = connected.pools() else {
         let on = store_model_in_db(
             file.general_settings.store_model_in_db,
             &*environment,

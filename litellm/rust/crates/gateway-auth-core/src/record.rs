@@ -1,24 +1,55 @@
 //! The rows a caller belongs to, as the core reads them: one record per entity, holding its id and
 //! what its stored row says, and nothing a request or another row adds. A host builds a record
 //! from the row it read and decides nothing while it does. A record grows a field with the first
-//! rule that reads it.
+//! rule that reads it, except a team's, a user's, a project's and an end user's, which copy each
+//! column of their row that a plain value holds, read or not. The host refuses a caller whose
+//! team, user, project or end user holds one nothing reads yet.
 
-use serde_json::{Map, Value};
+use std::collections::BTreeMap;
+
+use crate::authz::ModelList;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UserRecord {
     pub user_id: String,
     pub user_alias: Option<String>,
+    pub user_email: Option<String>,
+    pub user_role: Option<String>,
+    pub teams: Vec<String>,
+    pub team_id: Option<String>,
+    pub organization_id: Option<String>,
+    pub models: Vec<String>,
     pub limits: MinuteLimits,
+    pub max_parallel_requests: Option<i64>,
     pub budget: Budget,
+    pub rollover_max_budget: Option<f64>,
+    pub rollover_credit: Option<f64>,
+    pub budget_duration: Option<String>,
+    pub allowed_cache_controls: Vec<String>,
+    pub policies: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TeamRecord {
     pub team_id: String,
     pub team_alias: Option<String>,
+    /// The models the team may call, which the model rule reads as the team's layer.
+    pub models: Vec<String>,
+    pub organization_id: Option<String>,
     pub limits: MinuteLimits,
+    pub tpd_limit: Option<i64>,
+    pub max_parallel_requests: Option<i64>,
     pub budget: Budget,
+    pub soft_budget: Option<f64>,
+    pub budget_duration: Option<String>,
+    pub blocked: bool,
+    pub access_group_ids: Vec<String>,
+    pub default_team_member_models: Vec<String>,
+    pub policies: Vec<String>,
+    pub allow_team_guardrail_config: bool,
+    pub model_rpm_limit: BTreeMap<String, i64>,
+    pub model_tpm_limit: BTreeMap<String, i64>,
+    pub priority: Option<String>,
     /// The `max_budget` of the budget `metadata.team_member_budget_id` names, which a member with
     /// no budget of its own is held to.
     pub member_max_budget: Option<f64>,
@@ -46,7 +77,9 @@ pub struct OrgRecord {
 pub struct ProjectRecord {
     pub project_id: String,
     pub project_alias: Option<String>,
-    pub metadata: Option<Map<String, Value>>,
+    pub team_id: Option<String>,
+    pub models: Vec<String>,
+    pub blocked: bool,
     pub budget: Budget,
 }
 
@@ -56,6 +89,9 @@ pub struct ProjectRecord {
 pub struct EndUserRecord {
     pub end_user_id: Option<String>,
     pub found: bool,
+    pub blocked: bool,
+    pub default_model: Option<String>,
+    pub models: Vec<String>,
     pub limits: MinuteLimits,
     pub budget: Budget,
 }
@@ -107,6 +143,12 @@ impl Record for UserRecord {
 
     fn alias(&self) -> Option<&str> {
         self.user_alias.as_deref()
+    }
+}
+
+impl TeamRecord {
+    pub fn model_list(&self) -> ModelList<'_> {
+        ModelList::read(&self.models)
     }
 }
 

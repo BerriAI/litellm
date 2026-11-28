@@ -1,0 +1,65 @@
+# A virtual key in a project has its project read natively. Its key still goes to Python: over
+# the first column the project holds that nothing native reads yet, and otherwise over `project`,
+# since the native spend log charges no project yet. A project that holds metadata or a budget is
+# not native.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+
+teams:
+  owner: {}
+
+projects:
+  plain: {}
+  owned: {team_id: owner}
+  listed: {models: [claude]}
+  blocked: {blocked: true}
+  tagged: {metadata: {tags: [a]}}
+
+keys:
+  sk-plain: {project_id: plain}
+  sk-owned: {project_id: owned}
+  sk-listed: {project_id: listed}
+  sk-blocked: {project_id: blocked}
+  sk-tagged: {project_id: tagged}
+
+requests:
+  - name: a key in a project that holds nothing else
+    headers: {authorization: Bearer sk-plain}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: project
+
+  - name: a key in a project a team owns
+    headers: {authorization: Bearer sk-owned}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team_id
+
+  - name: a key in a project with a model list
+    headers: {authorization: Bearer sk-listed}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: models
+
+  - name: a key in a blocked project
+    headers: {authorization: Bearer sk-blocked}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: blocked
+
+  - name: a key in a project with metadata
+    headers: {authorization: Bearer sk-tagged}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native

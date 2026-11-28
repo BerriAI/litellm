@@ -22,6 +22,8 @@ use serde_json::{Map, Value};
 use super::{Admit, Refused};
 use crate::host::NativeRows;
 
+pub(super) use body::end_user_id;
+
 /// Why one request goes to Python: the reason the client is told, and the setting or trait behind
 /// it, which only the log names.
 #[derive(Debug, PartialEq, Eq)]

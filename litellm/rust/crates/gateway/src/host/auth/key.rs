@@ -2,7 +2,7 @@
 //! apart by name, so a field added to the cached key does not compile here until it is honored,
 //! left to a host step or named as one no step is asked about.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 use litellm_gateway_auth_core::{
@@ -11,11 +11,12 @@ use litellm_gateway_auth_core::{
     authz::ModelList,
     record::Budget,
 };
-use litellm_python_compat::{Value, json};
-use litellm_redis_store::auth_cache::{Bag, KeyEntry};
-use serde::Deserialize;
+use litellm_redis_store::auth_cache::KeyEntry;
 
-use super::carried::{Carried, carried, newer};
+use super::{
+    carried::{Carried, carried, newer},
+    metadata::Metadata,
+};
 use crate::callbacks::parallel_request_limiter::{KeyLimits, ModelLimits};
 
 /// The key type the proxy gives a key generated without one, which reaches every route.
@@ -116,30 +117,6 @@ impl Key {
             name: Some(Arc::from(name)),
             ..self
         }
-    }
-}
-
-/// The `metadata` the native app honors: the key's own limit for each model it names one for,
-/// which `/key/generate` stores from `model_rpm_limit` and `model_tpm_limit`, and the priority
-/// class `dynamic_rate_limiter_v3` counts the key under, when it is written as text.
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Metadata {
-    #[serde(default)]
-    model_rpm_limit: BTreeMap<String, i64>,
-    #[serde(default)]
-    model_tpm_limit: BTreeMap<String, i64>,
-    priority: Option<String>,
-}
-
-impl Metadata {
-    /// `None` when `metadata` holds anything else, or a limit that is not a whole number.
-    fn read(metadata: &Bag) -> Option<Self> {
-        if metadata.is_empty() {
-            return Some(Self::default());
-        }
-        let text = json::dumps(&Value::Dict(metadata.entries().to_vec())).ok()?;
-        serde_json::from_str(&text).ok()
     }
 }
 
