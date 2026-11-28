@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass
 from functools import partial
-from itertools import chain
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, NoReturn, Protocol, cast, runtime_checkable
 
@@ -361,6 +361,46 @@ def _thinking_blocks_faults(index: int, thinking_blocks: object) -> tuple[tuple[
         for position, block in enumerate(parts_of(thinking_blocks))
     )
     return tuple(fault for fault in faults if fault is not None)
+
+
+def _thinking_text_segment(block: Mapping[str, object], thinking_index_before: int) -> dict[str, object] | None:
+    block_type = block.get("type")
+    if block_type in ("thinking", "redacted_thinking"):
+        return {"type": "thinking", "index": thinking_index_before}
+    if block_type == "text":
+        text = block.get("text")
+        return {"type": "text", "text": text} if isinstance(text, str) and text else None
+    return None
+
+
+def _thinking_text_segments(
+    content_blocks: object,
+    thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
+) -> tuple[dict[str, object], ...] | None:
+    """Ordered thinking/text segments of an Anthropic answer.
+
+    A chat-completion ``Message`` keeps joined text in ``content`` and signed
+    thinking blocks in ``thinking_blocks``, so the order Anthropic produced them
+    in is lost by the time the Responses output is built. This records that
+    order (thinking blocks by index, text blocks by value) so the Responses
+    output can emit one ``reasoning`` item and one ``message`` item per segment.
+    Returns ``None`` when there is nothing to interleave, or when the walk does
+    not cover exactly the parsed thinking blocks.
+    """
+    if not isinstance(content_blocks, list) or not thinking_blocks:
+        return None
+    typed_blocks: Final = tuple(block for block in content_blocks if isinstance(block, Mapping))
+    is_thinking: Final = tuple(block.get("type") in ("thinking", "redacted_thinking") for block in typed_blocks)
+    if sum(is_thinking) != len(thinking_blocks):
+        return None
+    thinking_index_before: Final = tuple(accumulate((1 if flag else 0 for flag in is_thinking), initial=0))[:-1]
+    raw_segments: Final = tuple(
+        _thinking_text_segment(block, before) for block, before in zip(typed_blocks, thinking_index_before, strict=True)
+    )
+    segments: Final = tuple(segment for segment in raw_segments if segment is not None)
+    if not any(segment.get("type") == "text" for segment in segments):
+        return None
+    return segments
 
 
 def malformed_thinking_blocks_error(messages: Sequence[object]) -> AnthropicError | None:
@@ -3505,11 +3545,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         compaction_blocks: Sequence[object] | None,
         tool_calls: list[ChatCompletionToolCallChunk],
         server_tool_use_ids: frozenset[str],
+        thinking_text_segments: tuple[dict[str, object], ...] | None = None,
     ) -> dict[str, object]:
         provider_specific_fields: Final[dict[str, object]] = {
             "citations": citations,
             "thinking_blocks": thinking_blocks,
         }
+        if thinking_text_segments is not None:
+            provider_specific_fields["thinking_text_segments"] = thinking_text_segments
 
         context_management: Final = completion_response.get("context_management")
         if context_management is not None:
@@ -3609,6 +3652,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         server_tool_use_ids: Final = _server_tool_use_ids(_RESPONSE_BODY_ADAPTER.validate_python(completion_response))
         client_tool_calls: Final = [tc for tc in tool_calls if tc["id"] not in server_tool_use_ids]
+        thinking_text_segments: Final = _thinking_text_segments(completion_response.get("content"), thinking_blocks)
         provider_specific_fields: Final = self._build_provider_specific_fields(
             completion_response,
             citations,
@@ -3618,6 +3662,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             compaction_blocks,
             tool_calls,
             server_tool_use_ids,
+            thinking_text_segments,
         )
 
         json_mode_message, tool_calls_for_message, json_extra_content = self._resolve_json_mode_non_streaming(

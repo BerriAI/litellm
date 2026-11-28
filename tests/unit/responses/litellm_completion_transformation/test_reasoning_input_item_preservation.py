@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messag
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
-from litellm.types.utils import Message
+from litellm.types.utils import Choices, Message, ModelResponse
 
 
 def _transform_item(item):
@@ -183,16 +183,12 @@ class TestEncryptedReasoningRoundTrip:
         item = {
             "type": "reasoning",
             "id": "rs_1",
-            "encrypted_content": json.dumps(
-                [{"type": "thinking", "thinking": "hidden", "signature": "sig-one"}]
-            ),
+            "encrypted_content": json.dumps([{"type": "thinking", "thinking": "hidden", "signature": "sig-one"}]),
         }
         messages = _transform_item(item)
         assert len(messages) == 1
         assert messages[0]["content"] is None
-        assert messages[0]["thinking_blocks"] == [
-            {"type": "thinking", "thinking": "hidden", "signature": "sig-one"}
-        ]
+        assert messages[0]["thinking_blocks"] == [{"type": "thinking", "thinking": "hidden", "signature": "sig-one"}]
 
     def test_unsigned_blocks_dropped(self):
         """Blocks without a signature or redacted payload are not replayed."""
@@ -234,9 +230,7 @@ class TestEncryptedReasoningRoundTrip:
         )
         assert len(messages) == 1
         assert messages[0]["reasoning_content"] == "look it up"
-        assert messages[0]["thinking_blocks"] == [
-            {"type": "thinking", "thinking": "hidden", "signature": "sig-one"}
-        ]
+        assert messages[0]["thinking_blocks"] == [{"type": "thinking", "thinking": "hidden", "signature": "sig-one"}]
         assert len(messages[0]["tool_calls"]) == 1
 
     def test_replayed_blocks_precede_existing_blocks(self):
@@ -279,45 +273,116 @@ class TestEncryptedReasoningRoundTrip:
         assert messages[1]["role"] == "user"
 
 
-class TestInterleavedThinkingReplay:
-    """A joined answer is split back around the thinking blocks that preceded it."""
+def _responses_output_for_answer(thinking_blocks, text, segments=None):
+    """Build a Responses API output from a chat-completion answer."""
+    message = Message(
+        role="assistant",
+        content=text,
+        thinking_blocks=thinking_blocks,
+        reasoning_content="".join(
+            block["thinking"] for block in thinking_blocks if isinstance(block.get("thinking"), str)
+        ),
+        provider_specific_fields={"thinking_text_segments": segments} if segments is not None else {},
+    )
+    response = ModelResponse(
+        id="resp_test",
+        created=0,
+        model="claude-sonnet-5-5",
+        object="chat.completion",
+        choices=[Choices(finish_reason="stop", index=0, message=message)],
+    )
+    return LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test question",
+        responses_api_request={},
+        chat_completion_response=response,
+    ).output
 
-    def test_multi_thinking_block_replay_restores_the_original_block_order(self):
+
+class TestInterleavedThinkingReplay:
+    """The Responses output keeps the thinking/text segment order."""
+
+    def test_output_emits_one_reasoning_and_message_item_per_segment(self):
         blocks = [
-            {"type": "thinking", "thinking": "Erster Teil.", "signature": "sig1"},
-            {"type": "thinking", "thinking": "Zweiter Teil.", "signature": "sig2"},
+            {"type": "thinking", "thinking": "Analyse eins.", "signature": "sig1"},
+            {"type": "thinking", "thinking": "Analyse zwei.", "signature": "sig2"},
         ]
+        segments = [
+            {"type": "thinking", "index": 0},
+            {"type": "text", "text": "Erster Teil."},
+            {"type": "thinking", "index": 1},
+            {"type": "text", "text": "Zweiter Teil."},
+        ]
+        output = _responses_output_for_answer(blocks, "Erster Teil.Zweiter Teil.", segments)
+
+        assert [item.type for item in output] == ["reasoning", "message", "reasoning", "message"]
+        assert [item.content[0].text for item in output] == [
+            "Analyse eins.",
+            "Erster Teil.",
+            "Analyse zwei.",
+            "Zweiter Teil.",
+        ]
+        assert [json.loads(item.encrypted_content)[0]["signature"] for item in output if item.type == "reasoning"] == [
+            "sig1",
+            "sig2",
+        ]
+
+    def test_replaying_interleaved_output_restores_the_original_block_order(self):
+        blocks = [
+            {"type": "thinking", "thinking": "Analyse eins.", "signature": "sig1"},
+            {"type": "thinking", "thinking": "Analyse zwei.", "signature": "sig2"},
+        ]
+        segments = [
+            {"type": "thinking", "index": 0},
+            {"type": "text", "text": "Erster Teil."},
+            {"type": "thinking", "index": 1},
+            {"type": "text", "text": "Zweiter Teil."},
+        ]
+        output = _responses_output_for_answer(blocks, "Erster Teil.Zweiter Teil.", segments)
         messages = _transform_input(
-            [
-                {"role": "user", "content": "first question"},
-                {
-                    "type": "reasoning",
-                    "id": "rs_1",
-                    "summary": [],
-                    "encrypted_content": json.dumps(blocks),
-                },
-                {
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [{"type": "output_text", "text": "Erster Teil.Zweiter Teil."}],
-                },
-                {"role": "user", "content": "second question"},
-            ]
+            [{"role": "user", "content": "first question"}]
+            + [item.model_dump() for item in output]
+            + [{"role": "user", "content": "second question"}]
         )
 
-        expected_order = [
-            ("thinking", "sig1"),
-            ("text", "Erster Teil."),
-            ("thinking", "sig2"),
-            ("text", "Zweiter Teil."),
-        ]
-        assert _block_order(messages[1]["content"]) == expected_order
+        assistant_messages = [m for m in messages if m["role"] == "assistant"]
+        assert [m["thinking_blocks"][0]["signature"] for m in assistant_messages] == ["sig1", "sig2"]
+        assert [m["content"][0]["text"] for m in assistant_messages] == ["Erster Teil.", "Zweiter Teil."]
 
         anthropic_turns = anthropic_messages_pt(
             messages=list(messages), model="claude-sonnet-5-5", llm_provider="anthropic"
         )
         assistant_turn = next(turn for turn in anthropic_turns if turn["role"] == "assistant")
-        assert _block_order(assistant_turn["content"]) == expected_order
+        assert _block_order(assistant_turn["content"]) == [
+            ("thinking", "sig1"),
+            ("text", "Erster Teil."),
+            ("thinking", "sig2"),
+            ("text", "Zweiter Teil."),
+        ]
+
+    def test_single_thinking_block_output_is_unchanged(self):
+        block = {"type": "thinking", "thinking": "hidden analysis", "signature": "sig-one"}
+        output = _responses_output_for_answer(
+            [block],
+            "The answer.",
+            [{"type": "thinking", "index": 0}, {"type": "text", "text": "The answer."}],
+        )
+
+        assert [item.type for item in output] == ["reasoning", "message"]
+        assert output[0].content[0].text == "hidden analysis"
+        assert json.loads(output[0].encrypted_content) == [block]
+        assert output[1].content[0].text == "The answer."
+
+    def test_output_without_segment_layout_keeps_the_single_pair_shape(self):
+        blocks = [
+            {"type": "thinking", "thinking": "Analyse eins.", "signature": "sig1"},
+            {"type": "thinking", "thinking": "Analyse zwei.", "signature": "sig2"},
+        ]
+        output = _responses_output_for_answer(blocks, "Erster Teil.Zweiter Teil.")
+
+        assert [item.type for item in output] == ["reasoning", "message"]
+        assert output[0].content[0].text == "Analyse eins.Analyse zwei."
+        assert json.loads(output[0].encrypted_content) == blocks
+        assert output[1].content[0].text == "Erster Teil.Zweiter Teil."
 
     def test_single_thinking_block_replay_keeps_the_joined_answer(self):
         block = {"type": "thinking", "thinking": "hidden analysis", "signature": "sig-one"}

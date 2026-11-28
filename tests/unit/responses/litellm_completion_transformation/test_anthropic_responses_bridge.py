@@ -1739,7 +1739,6 @@ def test_responses_over_anthropic_return_the_tool_search_output_and_send_the_sea
     assert _sent_assistant_content(route) == [_SEARCH_USE, search_result, weather_use]
 
 
-
 @pytest.mark.parametrize(
     ("search_tools", "search_use"),
     [
@@ -1768,6 +1767,7 @@ def test_responses_over_anthropic_send_a_search_back_under_the_anthropic_search_
     )
 
     assert _sent_assistant_content(route) == [search_use, _SEARCH_RESULT, _WEATHER_USE]
+
 
 def _tool_search_stream(*events: Mapping[str, object]) -> httpx.Response:
     return httpx.Response(
@@ -2370,6 +2370,40 @@ def test_responses_over_anthropic_report_a_paused_turn_as_completed_with_its_pen
     assert _last_item(response.output) == ("web_search_call", "in_progress")
 
 
+def test_non_streamed_responses_over_anthropic_keep_interleaved_thinking_and_text_order(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_ANTHROPIC_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                **ANTHROPIC_DOCS_REFUSAL_MESSAGE,
+                "content": [
+                    {"type": "thinking", "thinking": "Analyse eins.", "signature": "sig1"},
+                    {"type": "text", "text": "Erster Teil."},
+                    {"type": "thinking", "thinking": "Analyse zwei.", "signature": "sig2"},
+                    {"type": "text", "text": "Zweiter Teil."},
+                ],
+                "stop_reason": "end_turn",
+                "stop_details": None,
+            },
+        )
+    )
+
+    response: Final = litellm.responses(model=_MODEL, input="Tell me in two parts.", api_key="<redacted>")
+
+    assert [item.type for item in response.output] == ["reasoning", "message", "reasoning", "message"]
+    assert [item.content[0].text for item in response.output] == [
+        "Analyse eins.",
+        "Erster Teil.",
+        "Analyse zwei.",
+        "Zweiter Teil.",
+    ]
+    assert [
+        json.loads(item.encrypted_content)[0]["signature"] for item in response.output if item.type == "reasoning"
+    ] == ["sig1", "sig2"]
+
+
 def _server_tool_use_events(index: int, block: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     return (
         {"type": "content_block_start", "index": index, "content_block": {**block, "input": {}}},
@@ -2594,9 +2628,7 @@ def test_responses_report_auto_when_an_old_azure_api_version_dropped_the_choice(
                 "object": "chat.completion",
                 "created": 1,
                 "model": "gpt-4o",
-                "choices": [
-                    {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}
-                ],
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             },
         )
