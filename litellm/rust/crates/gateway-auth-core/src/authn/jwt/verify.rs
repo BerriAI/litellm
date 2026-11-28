@@ -589,6 +589,8 @@ fn decode(
     jwk: &Map<String, Value>,
     checks: &Checks<'_>,
 ) -> Result<Map<String, Value>, TokenError> {
+    #[cfg(feature = "fips")]
+    let _ = jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER.install_default();
     let (key, validation) = verifier(jwk)?;
     let payload = jsonwebtoken::decode::<Map<String, Value>>(token, &key, &validation)?.claims;
     validate_claims(&payload, checks)?;
@@ -708,10 +710,13 @@ fn verifier(key: &Map<String, Value>) -> Result<(DecodingKey, Validation), KeyEr
             let (Some(n), Some(e)) = (field(JwkField::N), field(JwkField::E)) else {
                 return Err(malformed("Not a public or private key"));
             };
-            verifying(
-                DecodingKey::from_rsa_components(n, e),
-                Validation::new_for_family(AlgorithmFamily::Rsa),
-            )
+            let key = DecodingKey::from_rsa_components(n, e);
+            #[cfg(feature = "fips")]
+            let key = match key {
+                Ok(key) => Ok(fips_rsa_key(key)?),
+                error => error,
+            };
+            verifying(key, Validation::new_for_family(AlgorithmFamily::Rsa))
         }
         Some("EC") => {
             let algorithm = match crv.map(Value::as_str) {
@@ -755,12 +760,34 @@ fn verifier(key: &Map<String, Value>) -> Result<(DecodingKey, Validation), KeyEr
     }
 }
 
+/// The key AWS-LC's FIPS module verifies with: `n` and `e` without leading zero bytes, which it refuses, and `n` of an
+/// even number of bits, the modulus length FIPS 186-5 specifies and the module's service indicator approves.
+#[cfg(feature = "fips")]
+fn fips_rsa_key(key: DecodingKey) -> Result<DecodingKey, KeyError> {
+    let jsonwebtoken::DecodingKeyKind::RsaModulusExponent { n, e } = key.kind() else {
+        return Ok(key);
+    };
+    let (n, e) = (without_leading_zeros(n), without_leading_zeros(e));
+    let bits = n
+        .first()
+        .map_or(0, |top| n.len() * 8 - top.leading_zeros() as usize);
+    if bits % 2 == 1 {
+        return Err(KeyError::OddRsaKeySize { bits });
+    }
+    Ok(DecodingKey::from_rsa_raw_components(n, e))
+}
+
+#[cfg(feature = "fips")]
+fn without_leading_zeros(bytes: &[u8]) -> &[u8] {
+    &bytes[bytes.iter().take_while(|byte| **byte == 0).count()..]
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, sync::Mutex};
 
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-    use jsonwebtoken::{EncodingKey, Header, crypto::sign, errors::ErrorKind};
+    use jsonwebtoken::{EncodingKey, Header, crypto::rust_crypto, errors::ErrorKind};
     use litellm_config::{JwtAuthSettings, JwtIssuerConfig, OneOrMany};
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
@@ -874,6 +901,54 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
 -----END PRIVATE KEY-----
 ";
     const ED_X: &str = "iO5qGwVLMzVNKsLll1PGbMPQzI_aTO9tZuoe8AEWCo4";
+    const RSA_1024_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIICdwIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBAKUUlgE+jbAD4zf2
+yFbrICNI9gigXm0k6pxvka5auiXsrKAidVKtMTFfjxzSl3ZvdqgvVXI+EFz+P9WE
+KwWR2aL7u1rLGMwMhKcGG75pAeXqw557Lei7R044OpZ12kqefeJm8Q3PdUwgic1t
+e2WpdVsD0h5XpIi2t8N2adYgCFsVAgMBAAECgYEAhZL7sbQQ57ytjWoVPydv0L1H
+v0EsRrpZUA2C3oaxGuC/6a8YKbbUGDRPU64fOokEhSAPzqnjiat8sWMJgK88XrUM
+564kImd3z0zlfg8j04PgRMAhzfkCC/E5Q3ZOELyBoZOHE8j7FI64kU2Hnphkx67H
+uKHyUsNBedN5gOncmT0CQQDOHDMCtju3vuMHJRHJs0+9N34grS/x3IB5ZlZGWotX
+xW0FfEz2OpWpdNqrMymLbSIGcJUmK6U5CTK4dYM7c82jAkEAzQnxKeXE4YOIZELQ
+iUPT48/9MA+pAGmbUMi/ic9qffrNl/whdkPpVYA05Bl5f+ACP1yptVi25WaNb3T2
+KeHP5wJAPr93CCxSoe4LT/GJKM7eR8zNKUWQgyGOO2dcfK60HVSNjE37YDsVtTFO
+ITDCRSBEa5F61tQSyPpz5pRgD4mB4QJACw9BOeBR6VQd9EKCWxUUhdI/NutxUztf
+DFF3u2g7t0Xi9xK7f1SUbm826yLQoewkUuSdptF9NAx/DocBjCrI+wJBAJwJdgTL
+izsIPrdkTtuZGLmvP1RUR8C6erFeVR2cA48t3bikUTrT6/vXgff8XWdmTw8rUBZd
+PpJJnVD0Rp6PJwk=
+-----END PRIVATE KEY-----
+";
+    const RSA_1024_N: &str = "pRSWAT6NsAPjN_bIVusgI0j2CKBebSTqnG-Rrlq6JeysoCJ1Uq0xMV-PHNKXdm92qC9Vcj4QXP4_1YQrBZHZovu7WssYzAyEpwYbvmkB5erDnnst6LtHTjg6lnXaSp594mbxDc91TCCJzW17Zal1WwPSHlekiLa3w3Zp1iAIWxU";
+    const RSA_2049_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQFzhqNObs0D94st
+a15jbsL+3VMrLBw9GsxhjjkeaR//ItZJgDA09kxkoe+6hW9G/CHpbx1+p/mK4gxQ
+EZGGudPUlq0sPaZyd5hAtvGpyPicw3Cr19TBWnTk5iauylWXYzaZxhbm01iZUydJ
+qCr3c8dyHB8fTrX+GPNYCpiQP0ILdNFfTn+yHjnj6iGOm3VxfCVzvAI22NRuiSU6
+pR2kiqIwZR9Q0NMd5ZKLAEDZ+YtPoC+UY0Z2SOjFHGCOCZFX/eHO2p0QtquZND6m
+f8Hdh5iIMKorrrT0df0IEXBpu4jEGMfIPSkDI0eoLEpC1FmZUjCdeJN6i8xMbmWq
+FHH59MPdAgMBAAECggEBALqcR+6fbM6vSfL4WSKsgbkuRhYLQ+vVSA9ANqR1vSKT
+xvqILq6Lf/eT9yvC1g/bmNT9gN0bVhZSUEjvah83u5SuUjFEjhQ0yf7HZT8YuPdU
+m4VVFYJBAzHuAEQPUUqHBOfcPaiXQ4tP3w36MAq21tkUEvXQvUzyD1iLifH6NBw3
+zHISqinmuYKsTO4mk8QS8OjR6gs4OSUUzjBCAp5BO6z2A88mmpVXVqFTwfQnUOct
++k12y4vVm1CUgeRz413xWr/PqFg0LvyQvCFUohja//FcVKnl/wIyuHwaGQJijPsl
+O/O1HlCKd4KafA9onwjMWqqYKjn6DE7fz/E/2CxBZmkCgYEBSS0//fuZhG3b4ta2
+/ltwH0LW6HRavob0jBkjEGRLuLwLZEg/7Cn5pmEZhFWqGEDeqlPKJi9NjPpqtMJP
+T2meX9k6Go+zCxYi/vV3jgTXaUPUhh9Pvz2DoR2B2B8oDep+hpPXQQGx3KuP+JcO
+u3xUvFxQD+JgCSkCOB+WCpgy5IsCgYEBIO9SfZI9ciYkRbLPZ+6A8zOgQLaThA/h
+eIGdB+IBpWO51N/zq71r8jGBDR4Iw8crpetuu+9PyoyG4P92EjKmDedMfKgkt1rM
+/kmL8porQXJVt4cV1Zgy7uCx/cKzln3RYmebwNv/vBtoPV/FUZPXZewOlFhCHGD/
+xvCbKtSEPjcCgYEAlNbqBWx7OL732rSdX5t2shvl0oux8E5TSvmeui2vc2NLf1eP
+17gPEuT6xbR6SacjRz7Fu8hNt34PO5ZUiCLIoqw1ModhPJUQ09mn6kZUJFuwP8ju
+pRkqaHJQIKnN0aUC+tTkUpdylcXZPl0HI00Pf2/6H4SLSfkJ8NiPXlD9SgsCgYBk
+Qkc4hYdG1c9eVBa+NLeQLIjeC7ySZcRSQX+Q3a6+iiVQpcly/Y64gs8KEzLtZG5T
+66cIFZl1al/fMSXyWJrgVjNnSh07domNb03dh/ucgSUXQwuji2WZGGUK7gXNIamH
+YPZd7LkHt+bq7RGWJhvnJQtGFH4UROBcUt809HtS7wKBgEPV0dts84NAvojvNUV9
+3XYrbpb2HgpKXjcESXRM9qEv1U5wj8QlNLQSj1kteQdxa726s5aIg57VfZyt7Ufw
+z3POqharHd7mXhrNdEhmcRexhPXJqAeTnpACXtV2PeBXXVfQqzK+ApDygw81M7yf
+8GGik3BWoBe+jxFEryvGXRGI
+-----END PRIVATE KEY-----
+";
+    const RSA_2049_N: &str = "AXOGo05uzQP3iy1rXmNuwv7dUyssHD0azGGOOR5pH_8i1kmAMDT2TGSh77qFb0b8IelvHX6n-YriDFARkYa509SWrSw9pnJ3mEC28anI-JzDcKvX1MFadOTmJq7KVZdjNpnGFubTWJlTJ0moKvdzx3IcHx9Otf4Y81gKmJA_Qgt00V9Of7IeOePqIY6bdXF8JXO8AjbY1G6JJTqlHaSKojBlH1DQ0x3lkosAQNn5i0-gL5RjRnZI6MUcYI4JkVf94c7anRC2q5k0PqZ_wd2HmIgwqiuutPR1_QgRcGm7iMQYx8g9KQMjR6gsSkLUWZlSMJ14k3qLzExuZaoUcfn0w90";
 
     #[derive(Clone, Copy)]
     enum Signer {
@@ -882,6 +957,8 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
         Ec,
         Ed,
         Secret,
+        Rsa1024,
+        Rsa2049,
     }
 
     fn b64(value: &Value) -> String {
@@ -895,11 +972,16 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
             Signer::Ec => EncodingKey::from_ec_pem(EC_PEM.as_bytes()),
             Signer::Ed => EncodingKey::from_ed_pem(ED_PEM.as_bytes()),
             Signer::Secret => Ok(EncodingKey::from_secret(b"shared-secret")),
+            Signer::Rsa1024 => EncodingKey::from_rsa_pem(RSA_1024_PEM.as_bytes()),
+            Signer::Rsa2049 => EncodingKey::from_rsa_pem(RSA_2049_PEM.as_bytes()),
         }
         .unwrap();
         let input = format!("{}.{}", b64(&header), b64(&claims));
-        let signature = sign(input.as_bytes(), &key, algorithm).unwrap();
-        format!("{input}.{signature}")
+        let signature = (rust_crypto::DEFAULT_PROVIDER.signer_factory)(&algorithm, &key)
+            .unwrap()
+            .try_sign(input.as_bytes())
+            .unwrap();
+        format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature))
     }
 
     fn token(algorithm: Algorithm, signer: Signer, kid: Option<&str>, claims: Value) -> String {
@@ -1039,6 +1121,67 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
             Some(error) => Err(VerifyDenial::Invalid(error).into()),
         };
         assert_eq!(verified, expected);
+    }
+
+    #[rstest]
+    #[case::rsa_1024(
+        Signer::Rsa1024,
+        RSA_1024_N,
+        TokenError::Jwt(ErrorKind::InvalidSignature.into())
+    )]
+    #[case::rsa_2049(
+        Signer::Rsa2049,
+        RSA_2049_N,
+        KeyError::OddRsaKeySize { bits: 2049 }.into()
+    )]
+    #[tokio::test]
+    async fn the_fips_build_refuses_rsa_keys_under_2048_bits_or_of_odd_size(
+        settings: JwtSettings,
+        #[case] signer: Signer,
+        #[case] n: &str,
+        #[case] refusal_in_fips_build: TokenError,
+    ) {
+        let claims = json!({"sub": "user"});
+        let host = host(&[(JWKS, jwks(&[rsa_jwk("k", n)]))]);
+
+        let verified = verify(
+            &host,
+            &token(Algorithm::RS256, signer, Some("k"), claims.clone()),
+            &settings,
+            AT,
+        )
+        .await;
+
+        let expected = if cfg!(feature = "fips") {
+            Err(VerifyDenial::Invalid(refusal_in_fips_build).into())
+        } else {
+            Ok(Claims(object(claims)))
+        };
+        assert_eq!(verified, expected);
+    }
+
+    fn zero_prefixed(component: &str) -> String {
+        let bytes = URL_SAFE_NO_PAD.decode(component).unwrap();
+        URL_SAFE_NO_PAD.encode(iter::once(0).chain(bytes).collect::<Vec<u8>>())
+    }
+
+    #[rstest]
+    #[case::n(zero_prefixed(RSA_A_N), "AQAB")]
+    #[case::e(RSA_A_N.to_owned(), "AAEAAQ")]
+    #[case::n_and_e(zero_prefixed(RSA_A_N), "AAEAAQ")]
+    #[tokio::test]
+    async fn rsa_components_with_leading_zero_bytes_verify(
+        settings: JwtSettings,
+        #[case] n: String,
+        #[case] e: &str,
+    ) {
+        let claims = json!({"sub": "user"});
+        let jwk = json!({"kty": "RSA", "kid": "k", "n": n, "e": e});
+        let host = host(&[(JWKS, jwks(&[jwk]))]);
+
+        let verified = verify(&host, &rs256(Some("k"), claims.clone()), &settings, AT).await;
+
+        assert_eq!(verified, Ok(Claims(object(claims))));
     }
 
     #[rstest]
