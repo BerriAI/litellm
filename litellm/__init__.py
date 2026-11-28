@@ -722,6 +722,7 @@ streamlake_models: Final[Set[str]] = set()
 resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 wally_models: Final[Set[str]] = set()
 huawei_maas_models: Final[Set[str]] = set()
+openlux_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set[str] = set()
 vispark_models: Final[Set[str]] = set()
@@ -905,6 +906,7 @@ def _provider_model_sets() -> Mapping[str, set[str]]:  # mutable-ok: live provid
             "resetdata": resetdata_models,
             "wally": wally_models,
             "huawei_maas": huawei_maas_models,
+            "openlux": openlux_models,
             "zerogpu": zerogpu_models,
             "v0": v0_models,
             "vispark": vispark_models,
@@ -1214,6 +1216,7 @@ def _known_models() -> frozenset[str]:
         | resetdata_models
         | wally_models
         | huawei_maas_models
+        | openlux_models
         | zerogpu_models
         | v0_models
         | vispark_models
@@ -1355,6 +1358,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "resetdata": resetdata_models,
         "wally": wally_models,
         "huawei_maas": huawei_maas_models,
+        "openlux": openlux_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "vispark": vispark_models,
