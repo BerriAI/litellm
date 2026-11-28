@@ -2961,7 +2961,7 @@ async def ui_view_spend_logs(
 
         # Build raw SQL to fetch paginated data WITHOUT heavy columns
         # (messages, response, proxy_server_request can be hundreds of KB per row).
-        # These are only needed in the detail endpoint /spend/logs/ui/{request_id}.
+        # These are only needed in the detail endpoint /spend/logs/ui/{request_id:path}.
         sql_conditions: Final[list[str]] = ["organization_id = ANY($1::text[])"] if organization_ids is not None else []
         sql_params: Final[list[object]] = [organization_ids] if organization_ids is not None else []
         p = len(sql_params) + 1
@@ -3451,7 +3451,7 @@ def _parse_spend_log_ui_date(value: str | None) -> datetime | None:
 
 
 @router.get(
-    "/spend/logs/ui/{request_id}",
+    "/spend/logs/ui/{request_id:path}",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
