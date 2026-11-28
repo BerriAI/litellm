@@ -5502,6 +5502,34 @@ class TestUpdateDBModelClearCacheControlInjectionPoints:
         assert params["tpm"] == 10
 
 
+@pytest.mark.parametrize("clear", [True, False])
+def test_prompt_cache_key_null_clear_preserves_other_settings(clear: bool) -> None:
+    from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+    stored: Final = Deployment(
+        model_name="cached-route",
+        litellm_params=LiteLLM_Params(
+            model="openai/test-model", prompt_cache_key="old-pin", api_key="stored-credential", tpm=100
+        ),
+        model_info=ModelInfo(id="cache-deployment", team_id="team-keep", access_groups=["group-keep"]),
+    )
+    patch_params: Final = (
+        updateLiteLLMParams(prompt_cache_key=None) if clear else updateLiteLLMParams()
+    )
+    result: Final = update_db_model(stored, updateDeployment(litellm_params=patch_params))
+    expected: Final = {
+        "model": "openai/test-model",
+        "api_key": "stored-credential",
+        "tpm": 100,
+        **({} if clear else {"prompt_cache_key": "old-pin"}),
+    }
+    assert json.loads(result["litellm_params"]) == expected
+    info: Final = json.loads(result["model_info"])
+    assert info["id"] == "cache-deployment"
+    assert info["team_id"] == "team-keep"
+    assert info["access_groups"] == ["group-keep"]
+
+
 class TestUpdateDBModelClearCredentialName:
     def test_explicit_null_removes_stored_credential_name(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
