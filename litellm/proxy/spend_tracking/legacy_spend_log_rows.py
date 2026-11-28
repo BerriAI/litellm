@@ -49,6 +49,7 @@ from litellm.litellm_core_utils.core_helpers import (
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
 )
+from litellm.litellm_core_utils.db_truncation import TRUNCATION_MARKER
 from litellm.litellm_core_utils.hidden_params import served_from_cache
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
@@ -70,7 +71,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _SCRUBBED_ERROR_TEXT_FIELDS,
     _SPEND_LOGS_PRIVACY_METADATA_ADAPTER,
     _TOOL_OUTPUT_BLOCK_TYPES,
-    _TRUNCATION_MARKER,
     _adapter_route_call_type,
     _block_type,
     _compaction_summary_for_db,
@@ -158,7 +158,7 @@ def _overlap_at_start(text: str, spelling: str) -> int:
 
 
 def _scrub_raw_model_split_by_truncation(text: str, spellings: tuple[str, ...]) -> str:
-    marker: Final = _TRUNCATION_MARKER.search(text)
+    marker: Final = TRUNCATION_MARKER.search(text)
     if marker is None:
         return text
     head: Final = text[: marker.start()]
@@ -660,25 +660,26 @@ def _get_response_for_spend_logs_payload(
                 response_obj["tool_calls"] = realtime_tool_calls
 
         # Apply message redaction if turn_off_message_logging is enabled
-        if kwargs is not None:
-            from litellm.litellm_core_utils.redact_messages import (
-                perform_redaction,
-                should_redact_message_logging,
-            )
+        from litellm.litellm_core_utils.redact_messages import (
+            perform_redaction,
+            should_redact_message_logging,
+        )
 
-            litellm_params: Final = kwargs.get("litellm_params", {})
-            model_call_details: Final = {
-                "litellm_params": litellm_params,
+        redacted: Final = kwargs is not None and should_redact_message_logging(
+            model_call_details={
+                "litellm_params": kwargs.get("litellm_params", {}),
                 "standard_callback_dynamic_params": kwargs.get("standard_callback_dynamic_params"),
             }
-
-            # If redaction is enabled, convert to serializable dict before redacting
-            if should_redact_message_logging(model_call_details=model_call_details):
-                response_obj = _convert_to_json_serializable_dict(response_obj)
-                response_obj = perform_redaction(model_call_details={}, result=response_obj)
+        )
+        # If redaction is enabled, convert to serializable dict before redacting
+        if redacted:
+            response_obj = _convert_to_json_serializable_dict(response_obj)
+            response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
         sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload(
-            {"response": response_obj}, keep_compaction_blocks=True
+            {"response": response_obj},
+            keep_compaction_blocks=True,
+            keep_provider_signed_fields=not redacted and _replayed_by_responses_bridge(payload),
         )
 
         sanitized_response: Final = sanitized_wrapper.get("response", response_obj)

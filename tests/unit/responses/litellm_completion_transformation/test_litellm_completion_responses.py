@@ -1,7 +1,8 @@
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, cast
 
@@ -21,9 +22,11 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, PREVIOUS_RESPONSE_IDS_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
+from litellm.litellm_core_utils.db_truncation import truncated_for_db
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.tool_fields import DeferredTopLevelTool, NamespaceMember, chat_member_name
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
 )
@@ -1410,6 +1413,35 @@ class TestLiteLLMCompletionResponsesConfig:
         assert getattr(tool_call, "namespace", None) is None
 
 
+_MessageBuilder = Callable[..., Mapping[str, object] | Message]
+_SIGNED_ID: Final = f"call_paired{THOUGHT_SIGNATURE_SEPARATOR}{'A' * 3000}"
+_OTHER_SIGNED_ID: Final = f"call_paired{THOUGHT_SIGNATURE_SEPARATOR}{'B' * 3000}"
+
+
+def _paired_tool_ids(
+    assistant_message: _MessageBuilder,
+    result_message: _MessageBuilder,
+    call_ids: Sequence[str],
+    result_ids: Sequence[str],
+) -> tuple[list[object], list[object]]:
+    calls: Final = [
+        {"id": call_id, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+        for call_id in call_ids
+    ]
+    _, answered, *results = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
+        messages=[
+            {"role": "user", "content": "What is the weather?"},
+            assistant_message(role="assistant", content=None, tool_calls=calls),
+            *(result_message(role="tool", content="sunny", tool_call_id=result_id) for result_id in result_ids),
+        ],
+        tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
+    )
+    return (
+        [message_field(call, "id") for call in message_field(answered, "tool_calls")],
+        [message_field(result, "tool_call_id") for result in results],
+    )
+
+
 class TestFunctionCallTransformation:
     """Test cases for function_call input transformation"""
 
@@ -1835,6 +1867,90 @@ class TestFunctionCallTransformation:
         function = tool_call.get("function", {})
         assert function.get("name") == "search_web"
         assert function.get("arguments") == '{"query": "attribute objects"}'
+
+    @pytest.mark.parametrize("result_message", [dict, Message])
+    @pytest.mark.parametrize("assistant_message", [dict, Message])
+    @pytest.mark.parametrize(
+        "call_ids, result_ids, paired_call_ids, paired_result_ids",
+        [
+            pytest.param([_SIGNED_ID], ["call_paired"], [_SIGNED_ID], [_SIGNED_ID], id="unsigned-result"),
+            pytest.param(["call_paired"], [_SIGNED_ID], ["call_paired"], ["call_paired"], id="unsigned-call"),
+            pytest.param(
+                [_SIGNED_ID, _SIGNED_ID],
+                ["call_paired"],
+                [_SIGNED_ID, _SIGNED_ID],
+                [_SIGNED_ID],
+                id="unsigned-result-of-a-repeated-call",
+            ),
+            pytest.param(
+                ["call_other", _SIGNED_ID, "call_last"],
+                ["call_paired"],
+                ["call_other", _SIGNED_ID, "call_last"],
+                [_SIGNED_ID],
+                id="unsigned-result-of-a-call-among-others",
+            ),
+            pytest.param(
+                ["call_paired", "call_paired", _SIGNED_ID],
+                ["call_paired"],
+                ["call_paired", "call_paired", _SIGNED_ID],
+                ["call_paired"],
+                id="result-of-an-id-made-twice",
+            ),
+            pytest.param(
+                [_SIGNED_ID, _OTHER_SIGNED_ID],
+                [_SIGNED_ID, _OTHER_SIGNED_ID],
+                [_SIGNED_ID, _OTHER_SIGNED_ID],
+                [_SIGNED_ID, _OTHER_SIGNED_ID],
+                id="both-results-signed",
+            ),
+            pytest.param(
+                [_SIGNED_ID, "call_paired"],
+                [_SIGNED_ID, "call_paired"],
+                [_SIGNED_ID, "call_paired"],
+                [_SIGNED_ID, "call_paired"],
+                id="one-result-of-each-call",
+            ),
+            pytest.param(
+                [_SIGNED_ID, _OTHER_SIGNED_ID],
+                ["call_paired"],
+                [_SIGNED_ID, _OTHER_SIGNED_ID, "call_paired"],
+                ["call_paired"],
+                id="unsigned-result-two-calls-fit",
+            ),
+            pytest.param(
+                [_SIGNED_ID],
+                [_OTHER_SIGNED_ID],
+                [_SIGNED_ID, _OTHER_SIGNED_ID],
+                [_OTHER_SIGNED_ID],
+                id="result-with-another-signature",
+            ),
+            pytest.param(
+                [f"call_paired0{THOUGHT_SIGNATURE_SEPARATOR}AAA"],
+                ["call_paired"],
+                [f"call_paired0{THOUGHT_SIGNATURE_SEPARATOR}AAA", "call_paired"],
+                ["call_paired"],
+                id="result-id-that-starts-the-call-id",
+            ),
+        ],
+    )
+    def test_ensure_tool_results_pair_with_the_one_call_whose_id_they_carry_signed_or_not(
+        self,
+        result_message: _MessageBuilder,
+        assistant_message: _MessageBuilder,
+        call_ids: list[str],
+        result_ids: list[str],
+        paired_call_ids: list[str],
+        paired_result_ids: list[str],
+    ):
+        assert _paired_tool_ids(assistant_message, result_message, call_ids, result_ids) == (
+            paired_call_ids,
+            paired_result_ids,
+        )
+
+    def test_ensure_tool_results_never_pair_with_a_call_that_has_no_id(self):
+        result_id: Final = f"{THOUGHT_SIGNATURE_SEPARATOR}AAA"
+
+        assert _paired_tool_ids(dict, dict, [""], [result_id]) == (["", result_id], [result_id])
 
 
 class TestToolChoiceTransformation:
@@ -7164,6 +7280,313 @@ def test_callers_that_only_read_the_input_see_no_turn_for_a_user_item_without_co
         ("user", "What is 2+2?"),
         ("assistant", "Four."),
     ]
+
+
+_LONG_ARGUMENTS: Final = f'{{"city": "{"Paris " * 600}"}}'
+_SIGNED_THINKING: Final = {"type": "thinking", "thinking": "Look the weather up.", "signature": "EqQBCkgIBxABGAIiQ"}
+_UNSIGNED_THINKING: Final = {"type": "thinking", "thinking": "Look the weather up."}
+_REDACTED_THINKING: Final = {"type": "redacted_thinking", "data": "EmwKAhgB"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "model", "target_checks_whole_conversation"),
+    [
+        ("anthropic", "claude-sonnet-5-5", True),
+        ("anthropic", "house-model", True),
+        ("vertex_ai", "claude-sonnet-5-5", True),
+        ("bedrock", "converse/house-model", True),
+        ("bedrock", "invoke/mistral.house-model", False),
+        ("snowflake", "Claude-Sonnet-5-5", False),
+        ("openai", "claude-behind-an-alias", False),
+        ("gemini", "gemini-3.8-flash", False),
+        (None, "house-model", False),
+    ],
+)
+@pytest.mark.parametrize(
+    ("stored_fields", "made_with_signed_thinking"),
+    [
+        pytest.param({"thinking_blocks": [_SIGNED_THINKING]}, True, id="signed-thinking"),
+        pytest.param({"thinking_blocks": [_UNSIGNED_THINKING, _REDACTED_THINKING]}, True, id="redacted-thinking"),
+        pytest.param({"thinking_blocks": [_UNSIGNED_THINKING]}, False, id="unsigned-thinking"),
+        pytest.param({}, False, id="no-thinking"),
+    ],
+)
+@pytest.mark.parametrize(
+    "stored_arguments",
+    [_LONG_ARGUMENTS, truncated_for_db(_LONG_ARGUMENTS, 2048), "{}"],
+    ids=["arguments-stored-whole", "arguments-stored-cut", "arguments-redacted-in-storage"],
+)
+@pytest.mark.parametrize("call_ids", [("toolu_1",), ("toolu_1", "toolu_2", "toolu_3")], ids=["one-call", "parallel"])
+async def test_tool_outputs_follow_the_stored_turn_that_made_the_calls_when_this_process_remembers_them(
+    call_ids: tuple[str, ...],
+    stored_arguments: str,
+    stored_fields: Mapping[str, object],
+    made_with_signed_thinking: bool,
+    provider: str | None,
+    model: str,
+    target_checks_whole_conversation: bool,
+):
+    def calls(arguments: str) -> list[dict[str, object]]:
+        return [
+            {"id": call_id, "type": "function", "function": {"name": "get_weather", "arguments": arguments}}
+            for call_id in call_ids
+        ]
+
+    question: Final = {"role": "user", "content": "What is the weather?"}
+    remembered_calls: Final = calls(_LONG_ARGUMENTS)
+
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[
+                question,
+                {"role": "assistant", "content": None, "tool_calls": calls(stored_arguments), **stored_fields},
+            ],
+            litellm_session_id=None,
+        )
+
+    outputs: Final = cast(
+        ResponseInputParam,
+        [{"type": "function_call_output", "call_id": call_id, "output": "14"} for call_id in call_ids],
+    )
+    for call_id, call in zip(call_ids, remembered_calls):
+        TOOL_CALLS_CACHE.set_cache(key=call_id, value=call)
+    try:
+        request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_parallel",
+            litellm_completion_request=LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                model=model,
+                input=outputs,
+                responses_api_request={"previous_response_id": "resp_parallel"},
+                custom_llm_provider=provider,
+            ),
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    finally:
+        for call_id in call_ids:
+            TOOL_CALLS_CACHE.delete_cache(key=call_id)
+
+    keeps_stored_arguments: Final = target_checks_whole_conversation or made_with_signed_thinking
+    gets_whole_arguments: Final = not keeps_stored_arguments and stored_arguments != "{}"
+    replayed_calls: Final = remembered_calls if gets_whole_arguments else calls(stored_arguments)
+    assert request["messages"][:2] == [
+        question,
+        {"role": "assistant", "content": None, "tool_calls": replayed_calls, **stored_fields},
+    ]
+    assert [(message["role"], message["tool_call_id"]) for message in request["messages"][2:]] == [
+        ("tool", call_id) for call_id in call_ids
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "model"), [("anthropic", "claude-sonnet-5-5"), ("gemini", "gemini-3.8-flash"), (None, "house-model")]
+)
+@pytest.mark.parametrize(
+    "stored_arguments",
+    ['{"city": "Oslo"}', truncated_for_db(_LONG_ARGUMENTS, 2048), "{}"],
+    ids=["arguments-stored-whole", "arguments-stored-cut", "arguments-redacted-in-storage"],
+)
+@pytest.mark.parametrize("output_is_stored", [True, False], ids=["stored-output", "new-output"])
+@pytest.mark.parametrize("marks", [{}, {"cache_control": {"type": "ephemeral"}}], ids=["bare", "marked"])
+async def test_a_call_another_conversation_made_under_the_same_id_is_not_replayed(
+    marks: Mapping[str, object], output_is_stored: bool, stored_arguments: str, provider: str | None, model: str
+) -> None:
+    call_id: Final = "functions.get_weather:0"
+    stored_turn: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": stored_arguments},
+            }
+        ],
+    }
+    output: Final = {"type": "function_call_output", "call_id": call_id, "output": "14", **marks}
+    thanks: Final = {"type": "message", "role": "user", "content": "Thanks"}
+
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        stored_output: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=cast(ResponseInputParam, [output]), responses_api_request={}
+        )
+        return ChatCompletionSession(
+            messages=[
+                {"role": "user", "content": "What is the weather?"},
+                stored_turn,
+                *(stored_output if output_is_stored else ()),
+            ],
+            litellm_session_id=None,
+        )
+
+    TOOL_CALLS_CACHE.set_cache(
+        key=call_id,
+        value={
+            "id": call_id,
+            "type": "function",
+            "function": {"name": "get_account", "arguments": '{"account": "of another conversation"}'},
+        },
+    )
+    try:
+        request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_weather",
+            litellm_completion_request=LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                model=model,
+                input=cast(ResponseInputParam, [thanks if output_is_stored else output]),
+                responses_api_request={"previous_response_id": "resp_weather"},
+                custom_llm_provider=provider,
+            ),
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    finally:
+        TOOL_CALLS_CACHE.delete_cache(key=call_id)
+
+    assert [message["role"] for message in request["messages"]] == [
+        "user",
+        "assistant",
+        "tool",
+        *(["user"] if output_is_stored else []),
+    ]
+    assert request["messages"][1] == stored_turn
+
+
+_ORDER_TOOLS: Final = [
+    {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+    for name in ("cancel_order", "get_order", "get_invoice")
+]
+_LONG_ARGUMENTS_AS_STORED: Final = truncated_for_db(_LONG_ARGUMENTS, 2048)
+_ORDER_CALLS: Final = (("toolu_1", "get_order"), ("toolu_2", "get_invoice"))
+
+
+def _order_call(call_id: str, name: str) -> dict[str, object]:
+    return {"type": "function_call", "call_id": call_id, "name": name, "arguments": _LONG_ARGUMENTS}
+
+
+def _order_output(call_id: str) -> dict[str, object]:
+    return {"type": "function_call_output", "call_id": call_id, "output": "ok"}
+
+
+async def _replayed_order_calls(
+    input_items: Sequence[Mapping[str, object]],
+    *,
+    model: str,
+    provider: str,
+    stored_fields: Mapping[str, object] = MappingProxyType({}),
+) -> tuple[list[tuple[str, str, str]], ...]:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        stored: Final = [
+            {"id": call_id, "type": "function", "function": {"name": name, "arguments": _LONG_ARGUMENTS_AS_STORED}}
+            for call_id, name in _ORDER_CALLS
+        ]
+        return ChatCompletionSession(
+            messages=[
+                {"role": "user", "content": "Where is my order?"},
+                {"role": "assistant", "content": None, "tool_calls": stored, **stored_fields},
+            ],
+            litellm_session_id=None,
+        )
+
+    request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+        previous_response_id="resp_order",
+        litellm_completion_request=LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input=cast(ResponseInputParam, list(input_items)),
+            responses_api_request={"previous_response_id": "resp_order", "tools": _ORDER_TOOLS},
+            custom_llm_provider=provider,
+        ),
+        instructions=None,
+        session_lookup=session_lookup,
+    )
+    return tuple(
+        [(call["id"], call["function"]["name"], call["function"]["arguments"]) for call in message["tool_calls"]]
+        for message in request["messages"]
+        if message.get("tool_calls")
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "said_before_the_first_call",
+    [
+        {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "Both, then."}]},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Both, then."}]},
+    ],
+    ids=["reasoning", "text"],
+)
+async def test_calls_resent_after_the_assistants_words_stay_the_calls_the_client_sent(
+    said_before_the_first_call: Mapping[str, object],
+) -> None:
+    resent: Final = chain.from_iterable((_order_call(*call), _order_output(call[0])) for call in _ORDER_CALLS)
+
+    replayed: Final = await _replayed_order_calls(
+        [said_before_the_first_call, *resent], model="house-model", provider="hosted_vllm"
+    )
+
+    stored_turn: Final = [(*call, _LONG_ARGUMENTS_AS_STORED) for call in _ORDER_CALLS]
+    assert replayed == (stored_turn, *([(*call, _LONG_ARGUMENTS)] for call in _ORDER_CALLS))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "provider", "target_checks_whole_conversation"),
+    [
+        ("claude-sonnet-5-5", "anthropic", True),
+        ("claude-sonnet-5-5", "vertex_ai", True),
+        ("gemini-3.8-flash", "gemini", False),
+        ("house-model", "hosted_vllm", False),
+    ],
+    ids=["claude", "vertex-claude", "gemini", "house-model"],
+)
+@pytest.mark.parametrize(
+    ("stored_fields", "made_with_signed_thinking"),
+    [
+        pytest.param({"thinking_blocks": [_SIGNED_THINKING]}, True, id="signed-thinking"),
+        pytest.param({}, False, id="no-thinking"),
+    ],
+)
+@pytest.mark.parametrize("together", [True, False], ids=["together", "one-by-one"])
+async def test_calls_the_client_resends_with_their_outputs_are_made_once(
+    together: bool,
+    stored_fields: Mapping[str, object],
+    made_with_signed_thinking: bool,
+    model: str,
+    provider: str,
+    target_checks_whole_conversation: bool,
+) -> None:
+    calls: Final = [_order_call(*call) for call in _ORDER_CALLS]
+    outputs: Final = [_order_output(call_id) for call_id, _ in _ORDER_CALLS]
+    one_by_one: Final = [*chain.from_iterable(zip(calls, outputs))]
+
+    replayed: Final = await _replayed_order_calls(
+        [*calls, *outputs] if together else one_by_one, model=model, provider=provider, stored_fields=stored_fields
+    )
+
+    keeps_stored_arguments: Final = target_checks_whole_conversation or made_with_signed_thinking
+    replayed_arguments: Final = _LONG_ARGUMENTS_AS_STORED if keeps_stored_arguments else _LONG_ARGUMENTS
+    assert replayed == ([(*call, replayed_arguments) for call in _ORDER_CALLS],)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [("claude-sonnet-5-5", "anthropic"), ("gemini-3.8-flash", "gemini"), ("house-model", "hosted_vllm")],
+)
+@pytest.mark.parametrize(
+    "edit", [{"arguments": '{"city": "Rome"}'}, {"name": "cancel_order"}], ids=["other-arguments", "another-tool"]
+)
+async def test_a_call_the_client_edited_is_sent_as_edited(edit: Mapping[str, str], model: str, provider: str) -> None:
+    call_id, name = _ORDER_CALLS[0]
+    edited: Final = {**_order_call(call_id, name), **edit}
+
+    replayed: Final = await _replayed_order_calls([edited, _order_output(call_id)], model=model, provider=provider)
+
+    assert replayed == (
+        [(*call, _LONG_ARGUMENTS_AS_STORED) for call in _ORDER_CALLS],
+        [(call_id, edited["name"], edited["arguments"])],
+    )
 
 
 def test_cache_control_on_function_call_output():

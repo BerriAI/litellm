@@ -35,6 +35,7 @@ mod py;
 mod redaction;
 mod request;
 mod row;
+mod signed_state;
 mod stamps;
 #[cfg(test)]
 mod test_support;
@@ -53,6 +54,7 @@ pub use row::{SpendLogRow, SpendLogStatus, hash_token, is_sha256_hex, strip_bear
 
 /// The default of `MAX_STRING_LENGTH_PROMPT_IN_DB`.
 pub const DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB: i64 = 2048;
+pub const DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB: i64 = 1024 * 1024;
 
 /// Why an input could not become a row: its JSON did not parse, or a field the glue always sends
 /// (a timestamp, `now`, the fallback session) is missing or of the wrong type.
@@ -79,6 +81,7 @@ pub struct RowConfig {
     pub omit_missing_session_id: bool,
     /// `_get_max_string_length_prompt_in_db()`.
     pub max_string_length_prompt_in_db: i64,
+    pub max_string_length_provider_signed_in_db: i64,
     /// `litellm.disable_end_user_cost_tracking`.
     pub disable_end_user_cost_tracking: bool,
     /// `litellm.request_correlation_in_logs`.
@@ -95,6 +98,8 @@ impl Default for RowConfig {
             drop_requester_ip_address: false,
             omit_missing_session_id: false,
             max_string_length_prompt_in_db: DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
+            max_string_length_provider_signed_in_db:
+                DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB,
             disable_end_user_cost_tracking: false,
             request_correlation_in_logs: false,
             turn_off_message_logging: false,

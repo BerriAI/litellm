@@ -23,8 +23,6 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
-    LITELLM_TRUNCATED_PAYLOAD_FIELD,
-    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB,
@@ -33,6 +31,9 @@ from litellm.constants import (
 )
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
+)
+from litellm.constants import (
+    MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB,
 )
 from litellm.integrations.otel.model.metadata import caller_session_id
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
@@ -44,9 +45,11 @@ from litellm.litellm_core_utils.batch_utils import (
     pays_only_its_guardrail,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     get_litellm_metadata_from_kwargs,
 )
+from litellm.litellm_core_utils.db_truncation import TRUNCATION_MARKER, truncated_for_db
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.internal_call_metadata import (
     BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX,
@@ -76,6 +79,7 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     compaction_summary,
     with_compaction_summary,
 )
+from litellm.responses.litellm_completion_transformation.provider_signed_state import is_provider_signed
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, SilentExperimentFlag
 from litellm.types.utils import (
@@ -107,18 +111,27 @@ _SPEND_LOGS_PRIVACY_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object] | N
 )
 
 
-def _get_max_string_length_prompt_in_db() -> int:
+def _max_string_length_in_db(configured: str | None, default: int) -> int:
     """
-    Resolve prompt truncation threshold at runtime so values loaded later via
+    Resolve a truncation threshold at runtime so values loaded later via
     proxy config environment_variables are honored.
     """
-    max_length_str: Final = os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB")
-    if max_length_str is None:
-        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+    if configured is None:
+        return default
     try:
-        return int(max_length_str)
-    except (TypeError, ValueError):
-        return DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB
+        return int(configured)
+    except ValueError:
+        return default
+
+
+def _get_max_string_length_prompt_in_db() -> int:
+    return _max_string_length_in_db(os.getenv("MAX_STRING_LENGTH_PROMPT_IN_DB"), DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB)
+
+
+def _get_max_string_length_provider_signed_in_db() -> int:
+    return _max_string_length_in_db(
+        os.getenv("MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB"), DEFAULT_MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB
+    )
 
 
 def is_master_key(api_key: str | None, _master_key: str | None) -> bool:
@@ -584,10 +597,6 @@ def _is_configured_model_group(  # pyright: ignore[reportUnusedFunction]  # shar
     return registry.resolve(model_group, kind="recognized") or model_group in registry.names(kind="team_public")
 
 
-_TRUNCATION_MARKER: Final = re.compile(
-    rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipped \d+ chars\. "
-    rf"{re.escape(LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE)}\) \.\.\."
-)
 _SCRUBBED_ERROR_TEXT_FIELDS: Final = frozenset(("error_message", "traceback"))
 
 
@@ -952,22 +961,15 @@ def _without_tokens(value: str) -> str:
     return redact_tokens(strip_null_bytes(value), REDACTED_BY_LITELM_STRING)
 
 
-def _truncated_for_db(value: str, max_length: int) -> str:
-    if len(value) <= max_length:
-        return value
-    start_chars: Final = int(max_length * 0.35)
-    end_chars: Final = int(max_length * 0.65)
-    return (
-        f"{value[:start_chars]}"
-        f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped {len(value) - start_chars - end_chars} chars. "
-        f"{LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ..."
-        f"{value[-min(end_chars, max_length - start_chars) :]}"
+def _compaction_summary_for_db(summary: str) -> str:
+    return truncated_for_db(
+        _without_tokens(summary), max(_get_max_string_length_prompt_in_db(), MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB)
     )
 
 
-def _compaction_summary_for_db(summary: str) -> str:
-    return _truncated_for_db(
-        _without_tokens(summary), max(_get_max_string_length_prompt_in_db(), MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB)
+def _provider_signed_for_db(value: str, max_string_length_prompt_in_db: int) -> str:
+    return truncated_for_db(
+        _without_tokens(value), max(max_string_length_prompt_in_db, _get_max_string_length_provider_signed_in_db())
     )
 
 
@@ -988,6 +990,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     max_string_length_prompt_in_db: int | None = None,
     mask_credentials: bool = True,
     keep_compaction_blocks: bool = False,
+    keep_provider_signed_fields: bool = False,
 ) -> dict[str, object]:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -1012,17 +1015,37 @@ def _sanitize_request_body_for_spend_logs_payload(
     def _sanitize_value(value: object, mask_credentials: bool) -> object:
         if isinstance(value, Mapping):
             return _sanitize_request_body_for_spend_logs_payload(
-                value, visited, max_string_length_prompt_in_db, mask_credentials, keep_compaction_blocks
+                value,
+                visited,
+                max_string_length_prompt_in_db,
+                mask_credentials,
+                keep_compaction_blocks,
+                keep_provider_signed_fields,
             )
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
         elif isinstance(value, str):
-            return _truncated_for_db(_without_tokens(value), max_string_length_prompt_in_db)
+            return truncated_for_db(_without_tokens(value), max_string_length_prompt_in_db)
         return value
+
+    def _stored_whole(value: object) -> object:
+        if isinstance(value, str):
+            return _provider_signed_for_db(value, max_string_length_prompt_in_db)
+        items: Final = as_object_list(value)
+        if items is None:
+            return _sanitize_value(value, mask_credentials)
+        return [
+            _provider_signed_for_db(item, max_string_length_prompt_in_db)
+            if isinstance(item, str)
+            else _sanitize_value(item, mask_credentials)
+            for item in items
+        ]
 
     def _stored_value(key: str, value: object) -> object:
         if mask_credentials and _is_request_body_credential(key, value):
             return REDACTED_BY_LITELM_STRING
+        if keep_provider_signed_fields and is_provider_signed(request_body, key, value):
+            return _stored_whole(value)
         bounded_summary: Final = _bounded_compaction_summary(request_body, key, value, keep_compaction_blocks)
         if bounded_summary is not None:
             return bounded_summary
@@ -1316,7 +1339,7 @@ _OBJECT_LIST: Final = TypeAdapter(list[object])
 _IP_ADDRESS_CHARACTERS: Final = "0123456789abcdefABCDEF.:"
 _MAX_IP_ADDRESS_LENGTH: Final = len("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255")
 _LONG_HEX_GROUP: Final = re.compile(r"[0-9A-Fa-f]{5,}")
-_TRUNCATION_MARKER_GROUP: Final = re.compile(f"({_TRUNCATION_MARKER.pattern})")
+_TRUNCATION_MARKER_GROUP: Final = re.compile(f"({TRUNCATION_MARKER.pattern})")
 _IPV4_ADDRESS: Final = re.compile(r"(?<![0-9A-Za-z])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z])")
 _IPV6_ADDRESS_CANDIDATE: Final = re.compile(
     r"(?:(?<![0-9A-Za-z:])|(?<=\w:))(?:[0-9A-Fa-f]{0,4}:){2,9}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])"

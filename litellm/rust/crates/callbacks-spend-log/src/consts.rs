@@ -167,6 +167,22 @@ pub(crate) const TOOL_INPUT_BLOCK_TYPES: [&str; 3] =
 pub(crate) const TOOL_OUTPUT_BLOCK_TYPES: [&str; 3] =
     ["tool_result", "mcp_tool_result", "function_call_output"];
 
+pub(crate) const THOUGHT_SIGNATURE_KEYS: [&str; 3] = [
+    "thought_signature",
+    "thought_signatures",
+    "response_thought_signature",
+];
+
+pub(crate) const SIGNED_TOOL_CALL_ID_KEYS: [&str; 2] = ["id", "call_id"];
+
+pub(crate) const THOUGHT_SIGNATURE_SEPARATOR: &str = "__thought__";
+
+pub(crate) const THINKING_FIELDS: [&str; 2] = ["thinking", "signature"];
+
+pub(crate) const REDACTED_THINKING_FIELDS: [&str; 1] = ["data"];
+
+pub(crate) const REASONING_FIELDS: [&str; 1] = ["encrypted_content"];
+
 /// `PROMPT_CARRYING_GUARDRAIL_FIELDS` from `types/utils.py`.
 pub(crate) const PROMPT_CARRYING_GUARDRAIL_FIELDS: [&str; 4] = [
     "guardrail_request",
@@ -368,6 +384,18 @@ mod tests {
     #[case::sensitive_patterns("_REQUEST_BODY_CREDENTIAL_MASKER", &SENSITIVE_PATTERNS)]
     #[case::tool_input_block_types("_TOOL_INPUT_BLOCK_TYPES", &TOOL_INPUT_BLOCK_TYPES)]
     #[case::tool_output_block_types("_TOOL_OUTPUT_BLOCK_TYPES", &TOOL_OUTPUT_BLOCK_TYPES)]
+    #[case::thought_signature_keys("THOUGHT_SIGNATURE_KEYS", &THOUGHT_SIGNATURE_KEYS)]
+    #[case::signed_tool_call_id_keys("SIGNED_TOOL_CALL_ID_KEYS", &SIGNED_TOOL_CALL_ID_KEYS)]
+    #[case::thought_signature_separator(
+        "THOUGHT_SIGNATURE_SEPARATOR",
+        &[THOUGHT_SIGNATURE_SEPARATOR]
+    )]
+    #[case::thinking_fields("SIGNED_FIELDS_BY_BLOCK_TYPE.thinking", &THINKING_FIELDS)]
+    #[case::redacted_thinking_fields(
+        "SIGNED_FIELDS_BY_BLOCK_TYPE.redacted_thinking",
+        &REDACTED_THINKING_FIELDS
+    )]
+    #[case::reasoning_fields("SIGNED_FIELDS_BY_BLOCK_TYPE.reasoning", &REASONING_FIELDS)]
     #[case::prompt_carrying_guardrail_fields(
         "PROMPT_CARRYING_GUARDRAIL_FIELDS",
         &PROMPT_CARRYING_GUARDRAIL_FIELDS

@@ -8,7 +8,7 @@ use litellm_python_compat::{Value, truthy::truthy};
 use crate::compaction::{compaction_summary, summary_only_compaction_content};
 use crate::consts::{CLASSIFIER_AUDIT_FIELDS, CLIENT_IP_HEADERS, TOOL_OUTPUT_BLOCK_TYPES};
 use crate::input::{LoggingPayload, RowInput};
-use crate::privacy::error_information_without_ip_addresses;
+use crate::privacy::{Keep, error_information_without_ip_addresses};
 use crate::py::{Dict, as_str, entries, get, get_or_none, has, safe_dumps, text};
 use crate::redaction::{redacted_request_body, redacted_response, should_redact};
 use crate::stamps::classifier_audit;
@@ -261,12 +261,17 @@ impl SpendLogRowBuilder {
             }
             other => other.clone(),
         };
-        let response = if should_redact(&self.config, input) {
+        let redacted = should_redact(&self.config, input);
+        let response = if redacted {
             redacted_response(&response)
         } else {
             response
         };
-        let wrapper = self.sanitize_body(&[(text("response"), response)], true, true);
+        let keep = Keep {
+            compaction_blocks: true,
+            provider_signed_fields: !redacted && replayed_by_responses_bridge(Some(payload)),
+        };
+        let wrapper = self.sanitize_body(&[(text("response"), response)], true, keep);
         match get_or_none(&wrapper, "response") {
             Value::None => Ok("{}".to_owned()),
             Value::Str(content) => Ok(content.replace('\0', "")),
@@ -328,7 +333,7 @@ impl SpendLogRowBuilder {
     /// `_sanitize_proxy_server_request_body(body)`: the sanitized body, with each Responses API
     /// `compaction` input item reduced to its bounded summary.
     fn sanitized_request_body(&self, body: &Value) -> Value {
-        let sanitized = self.sanitize_body(entries(body).unwrap_or_default(), true, false);
+        let sanitized = self.sanitize_body(entries(body).unwrap_or_default(), true, Keep::NOTHING);
         let (Value::List(items), Some(Value::List(stored_items))) =
             (get_or_none(body, "input"), get(&sanitized, "input"))
         else {
@@ -356,5 +361,92 @@ impl SpendLogRowBuilder {
         let mut with_input = Dict::from_entries(entries(&sanitized).unwrap_or_default());
         with_input.set("input", Value::List(input));
         with_input.into_value()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::{Value as Json, json};
+
+    use crate::privacy::truncated;
+    use crate::test_support::token_redactor;
+    use crate::{DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB, RowConfig, RowInput, SpendLogRowBuilder};
+
+    fn responses_reasoning(signed: &str) -> Json {
+        json!({"object": "response", "output": [{"type": "reasoning", "encrypted_content": signed}]})
+    }
+
+    fn chat_thinking(signed: &str) -> Json {
+        json!({"choices": [{"message": {
+            "role": "assistant",
+            "content": "954",
+            "thinking_blocks": [{"type": "thinking", "thinking": "Count", "signature": signed}],
+        }}]})
+    }
+
+    fn stored_response(call_type: &str, response: Json) -> Json {
+        let time = json!({"raw": "2026-01-01T00:00:00+00:00", "utc": "2026-01-01T00:00:00+00:00"});
+        let input = RowInput::from_json(
+            &json!({
+                "now": 0.0,
+                "fallback_session_id": "session",
+                "stores_prompts": true,
+                "call_type": call_type,
+                "start_time": time.clone(),
+                "end_time": time,
+                "kwargs": {},
+                "standard_logging_object": {"call_type": call_type, "response": response},
+            })
+            .to_string(),
+        )
+        .expect("the row input parses");
+        let builder = SpendLogRowBuilder::new(RowConfig::default(), token_redactor());
+        serde_json::from_str(&builder.response_json(&input).expect("the response dumps"))
+            .expect("the stored response is JSON")
+    }
+
+    #[rstest]
+    #[case::native_responses_row(
+        "aresponses",
+        responses_reasoning,
+        "/output/0/encrypted_content",
+        false
+    )]
+    #[case::bridged_responses_row(
+        "aresponses",
+        chat_thinking,
+        "/choices/0/message/thinking_blocks/0/signature",
+        true
+    )]
+    #[case::bridged_sync_responses_row(
+        "responses",
+        chat_thinking,
+        "/choices/0/message/thinking_blocks/0/signature",
+        true
+    )]
+    #[case::chat_completion_row(
+        "acompletion",
+        chat_thinking,
+        "/choices/0/message/thinking_blocks/0/signature",
+        false
+    )]
+    fn response_keeps_a_signed_field_whole_only_on_a_row_the_chat_bridge_replays(
+        #[case] call_type: &str,
+        #[case] response: fn(&str) -> Json,
+        #[case] pointer: &str,
+        #[case] kept_whole: bool,
+    ) {
+        let signed = "Eq0BCkYICxgCKkB".repeat(300);
+        let expected = if kept_whole {
+            signed.clone()
+        } else {
+            truncated(&signed, DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB)
+        };
+
+        assert_eq!(
+            stored_response(call_type, response(&signed)).pointer(pointer),
+            Some(&Json::String(expected))
+        );
     }
 }

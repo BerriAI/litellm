@@ -22,6 +22,7 @@ FIXED_NOW = 1763337600.123456
 FIXED_SESSION = "7d1c9f9e-1d61-4cf4-9a43-c1b5e5d6c0f1"
 GOLDEN_DELIVERY_ID = "golden-delivery-id"
 MINIMUM_CUSTOM_KEY_LENGTH = 16
+MAXIMUM_RECORD_LENGTH = 1024 * 1024
 
 HELPERS = (
     "_redact_prompt_leaks_in_error_string",
@@ -65,6 +66,8 @@ def _row_text(row: Mapping[str, object]) -> str:
 
 
 def _add(kind: str, record: dict) -> None:
+    if len(json.dumps(record)) > MAXIMUM_RECORD_LENGTH:
+        return
     digest = hashlib.sha256(json.dumps({**record, "case": None}, sort_keys=True).encode()).hexdigest()
     if (kind, digest) in _seen:
         return
@@ -216,6 +219,9 @@ def _install() -> None:
                         **(
                             {
                                 "max_string_length_prompt_in_db": spend_tracking_utils._get_max_string_length_prompt_in_db(),
+                                "max_string_length_provider_signed_in_db": (
+                                    spend_tracking_utils._get_max_string_length_provider_signed_in_db()
+                                ),
                                 "redact_tokens": _general_settings().get("redact_tokens_in_spend_logs") is True,
                             }
                             if name == "_sanitize_request_body_for_spend_logs_payload"
@@ -257,8 +263,10 @@ def spend_tracking_utils_uuid():
 def _constants() -> dict[str, list[str]]:
     from litellm.accounting import snapshot
     from litellm.litellm_core_utils import batch_utils, redact_messages
+    from litellm.litellm_core_utils.prompt_templates import factory
     from litellm.proxy import _types
     from litellm.proxy.spend_tracking import legacy_spend_log_rows, spend_tracking_utils
+    from litellm.responses.litellm_completion_transformation import provider_signed_state
     from litellm.types import utils as types_utils
     from litellm.types.llms import vertex_ai
     from litellm.types.videos import utils as video_utils
@@ -284,6 +292,13 @@ def _constants() -> dict[str, list[str]]:
         "_REQUEST_BODY_CREDENTIAL_MASKER": spend_tracking_utils._REQUEST_BODY_CREDENTIAL_MASKER.sensitive_patterns,
         "_TOOL_INPUT_BLOCK_TYPES": spend_tracking_utils._TOOL_INPUT_BLOCK_TYPES,
         "_TOOL_OUTPUT_BLOCK_TYPES": spend_tracking_utils._TOOL_OUTPUT_BLOCK_TYPES,
+        "THOUGHT_SIGNATURE_KEYS": provider_signed_state.THOUGHT_SIGNATURE_KEYS,
+        "SIGNED_TOOL_CALL_ID_KEYS": provider_signed_state.SIGNED_TOOL_CALL_ID_KEYS,
+        "THOUGHT_SIGNATURE_SEPARATOR": {factory.THOUGHT_SIGNATURE_SEPARATOR},
+        **{
+            f"SIGNED_FIELDS_BY_BLOCK_TYPE.{block_type}": fields
+            for block_type, fields in provider_signed_state.SIGNED_FIELDS_BY_BLOCK_TYPE.items()
+        },
         "PROMPT_CARRYING_GUARDRAIL_FIELDS": types_utils.PROMPT_CARRYING_GUARDRAIL_FIELDS,
         "_NUMERIC_COMPRESSION_STAT_KEYS": redact_messages._NUMERIC_COMPRESSION_STAT_KEYS,
         "_SCRUBBED_ERROR_TEXT_FIELDS": spend_tracking_utils._SCRUBBED_ERROR_TEXT_FIELDS,

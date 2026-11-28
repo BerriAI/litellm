@@ -2491,6 +2491,7 @@ class RustSpendLogRowBuilder:
         drop_requester_ip_address: bool,
         omit_missing_session_id: bool,
         max_string_length_prompt_in_db: int,
+        max_string_length_provider_signed_in_db: int,
         disable_end_user_cost_tracking: bool,
         request_correlation_in_logs: bool,
         turn_off_message_logging: bool,

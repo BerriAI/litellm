@@ -16,12 +16,13 @@ from fastapi.testclient import TestClient
 import litellm
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, PREVIOUS_RESPONSE_IDS_METADATA_KEY
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
+from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER, THOUGHT_SIGNATURE_SEPARATOR
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.litellm_core_utils.tool_fields import chat_member_name, truncate_tool_name
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.spend_tracking.legacy_spend_log_rows import (
     _get_proxy_server_request_for_spend_logs_payload,
+    _sanitize_request_body_for_spend_logs_payload,
 )
 from litellm.responses.litellm_completion_transformation import session_handler
 from litellm.responses.litellm_completion_transformation.session_handler import (
@@ -1282,38 +1283,42 @@ def _tool_call_ids(message: object) -> tuple[str, ...]:
     return tuple(call["id"] if isinstance(call, dict) else call.id for call in tool_calls or ())
 
 
-_WEATHER_CALL_TURN: Final = {
-    "request_id": "resp_weather",
-    "session_id": "session-compacted",
-    "proxy_server_request": json.dumps({"input": [{"role": "user", "content": "Weather in Paris?"}]}),
-    "response": {
-        "id": "chatcmpl-weather",
-        "object": "chat.completion",
-        "choices": [
-            {
-                "index": 0,
-                "finish_reason": "tool_calls",
-                "message": {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "type": "function",
-                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
-                        }
-                    ],
-                },
-            }
-        ],
-    },
-}
+def _weather_call_turn(call_id: str) -> dict[str, object]:
+    return {
+        "request_id": "resp_weather",
+        "session_id": "session-compacted",
+        "proxy_server_request": json.dumps({"input": [{"role": "user", "content": "Weather in Paris?"}]}),
+        "response": {
+            "id": "chatcmpl-weather",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": call_id,
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    }
 
 
-def _compacted_weather_answer(request_id: str) -> dict[str, object]:
+_WEATHER_CALL_TURN: Final = _weather_call_turn("call_1")
+
+
+def _compacted_weather_answer(request_id: str, call_id: str = "call_1") -> dict[str, object]:
     return {
         **_turn_spend_log(
-            [_COMPACTION_ITEM_SENT, {"type": "function_call_output", "call_id": "call_1", "output": "sunny"}],
+            [_COMPACTION_ITEM_SENT, {"type": "function_call_output", "call_id": call_id, "output": "sunny"}],
             "It is sunny.",
         ),
         "request_id": request_id,
@@ -1340,6 +1345,220 @@ async def test_a_turn_after_a_compaction_item_keeps_the_stored_call_its_tool_out
     assert roles == ["user", "assistant", "tool", "assistant"]
     assert _tool_call_ids(session["messages"][1]) == ("call_1",)
     assert ("user", "Weather in Paris?") not in map(_role_and_content, session["messages"])
+
+
+_SIGNED_CALL_ID: Final = f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{'S' * 3000}"
+_CUT_SIGNED_CALL_ID: Final = _sanitize_request_body_for_spend_logs_payload({"call_id": _SIGNED_CALL_ID})["call_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_call_id, replayed_call_id",
+    [
+        pytest.param(_SIGNED_CALL_ID, _SIGNED_CALL_ID, id="call-stored-whole"),
+        pytest.param(_CUT_SIGNED_CALL_ID, "call_1", id="call-stored-cut"),
+    ],
+)
+async def test_a_turn_after_a_compaction_item_keeps_the_signed_call_its_cut_tool_output_answers(
+    stored_call_id: str, replayed_call_id: str
+):
+    session: Final = await _history_from_stored_turns(
+        (_weather_call_turn(stored_call_id), _compacted_weather_answer("resp_compacted", _CUT_SIGNED_CALL_ID)),
+        "resp_compacted",
+    )
+
+    roles: Final = [_role_and_content(message)[0] for message in session["messages"]]
+    assert roles == ["user", "assistant", "tool", "assistant"]
+    assert _tool_call_ids(session["messages"][1]) == (replayed_call_id,)
+
+
+_WHOLE_THINKING_BLOCK: Final = {"type": "thinking", "thinking": "Count.", "signature": "Eq0BCkYI=="}
+_LONG_SIGNATURE: Final = "Eq0BCkYICxgCKkB" * 2000
+
+
+def _stored_cut(stored: dict[str, object]) -> dict[str, object]:
+    return _sanitize_request_body_for_spend_logs_payload(stored)
+
+
+def _answered_turn(message: dict[str, object], turn_input: object = "Count the triples.") -> dict[str, object]:
+    return {
+        "request_id": "resp_signed",
+        "session_id": "session-signed",
+        "proxy_server_request": json.dumps({"input": turn_input}),
+        "response": {
+            "id": "chatcmpl-signed",
+            "object": "chat.completion",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", **message}}],
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_turn_stored_with_a_cut_thinking_block_replays_without_it_and_says_so(
+    caplog: pytest.LogCaptureFixture,
+):
+    cut_block: Final = _stored_cut({**_WHOLE_THINKING_BLOCK, "signature": _LONG_SIGNATURE})
+    turn: Final = _answered_turn({"content": "954", "thinking_blocks": [_WHOLE_THINKING_BLOCK, cut_block]})
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        session: Final = await _history_from_stored_turns((turn,), "resp_signed")
+
+    answer: Final = session["messages"][-1]
+    assert _role_and_content(answer) == ("assistant", "954")
+    assert message_field(answer, "thinking_blocks") == [_WHOLE_THINKING_BLOCK]
+    assert [record.levelname for record in caplog.records if "resp_signed" in record.getMessage()] == ["WARNING"]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_stored_whole_replays_its_signed_thinking_block_silently(caplog: pytest.LogCaptureFixture):
+    signed_block: Final = {**_WHOLE_THINKING_BLOCK, "signature": _LONG_SIGNATURE}
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        session: Final = await _history_from_stored_turns(
+            (_answered_turn({"content": "954", "thinking_blocks": [signed_block]}),), "resp_signed"
+        )
+
+    assert message_field(session["messages"][-1], "thinking_blocks") == [signed_block]
+    assert not [record for record in caplog.records if "resp_signed" in record.getMessage()]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_whose_stored_input_only_cut_the_id_its_tool_output_answers_replays_silently(
+    caplog: pytest.LogCaptureFixture,
+):
+    signed_id: Final = f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_LONG_SIGNATURE}"
+    stored: Final = _stored_cut({"input": [{"type": "function_call_output", "call_id": signed_id, "output": "14"}]})
+    turn: Final = _answered_turn({"content": "954"}, turn_input=stored["input"])
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        session: Final = await _history_from_stored_turns((turn,), "resp_signed")
+
+    assert message_field(session["messages"][0], "tool_call_id") == "call_1"
+    assert not [record for record in caplog.records if "resp_signed" in record.getMessage()]
+
+
+@pytest.mark.parametrize("place", ["response", "input"])
+@pytest.mark.asyncio
+async def test_a_turn_whose_stored_tool_call_lost_its_signature_to_the_cut_says_so(
+    place: str, caplog: pytest.LogCaptureFixture
+):
+    signed_id: Final = f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_LONG_SIGNATURE}"
+    function: Final = {"name": "get_weather", "arguments": "{}"}
+    asked: Final = _stored_cut({"tool_calls": [{"id": signed_id, "type": "function", "function": function}]})
+    resent: Final = _stored_cut({"input": [{"type": "function_call", "call_id": signed_id, **function}]})
+    turn: Final = (
+        _answered_turn({"content": None, **asked})
+        if place == "response"
+        else _answered_turn({"content": "954"}, turn_input=resent["input"])
+    )
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        session: Final = await _history_from_stored_turns((turn,), "resp_signed")
+
+    calls: Final = [call for message in session["messages"] for call in message_field(message, "tool_calls") or ()]
+    assert [message_field(call, "id") for call in calls] == ["call_1"]
+    assert [record.levelname for record in caplog.records if "resp_signed" in record.getMessage()] == ["WARNING"]
+
+
+@pytest.mark.asyncio
+async def test_a_tool_call_stored_with_a_cut_thought_signature_replays_unsigned():
+    call: Final = _stored_cut(
+        {
+            "id": f"call_1{THOUGHT_SIGNATURE_SEPARATOR}{_LONG_SIGNATURE}",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": "{}"},
+            "provider_specific_fields": {"thought_signature": _LONG_SIGNATURE},
+        }
+    )
+
+    session: Final = await _history_from_stored_turns(
+        (_answered_turn({"content": None, "tool_calls": [call]}),), "resp_signed"
+    )
+
+    answer: Final = session["messages"][-1]
+    assert _tool_call_ids(answer) == ("call_1",)
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD not in json.dumps(answer, default=lambda value: value.model_dump())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [("claude-sonnet-5-5", "anthropic"), ("gemini-3.8-flash", "gemini"), ("house-model", "hosted_vllm")],
+)
+async def test_a_custom_tool_call_resent_in_a_stored_turn_is_made_once_on_the_turn_after(
+    model: str, provider: str
+) -> None:
+    patch_text: Final = "*** Begin Patch " * 250
+    asked: Final = _stored_cut(
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "apply_patch", "arguments": json.dumps({"content": patch_text})},
+        }
+    )
+    resent: Final = _stored_cut(
+        {
+            "input": [
+                {"type": "custom_tool_call", "call_id": "call_1", "name": "apply_patch", "input": patch_text},
+                {"type": "custom_tool_call_output", "call_id": "call_1", "output": "Patched."},
+            ]
+        }
+    )
+    stored_turns: Final = (
+        {**_answered_turn({"content": None, "tool_calls": [asked]}), "request_id": "resp_asked"},
+        _answered_turn({"content": "Done."}, turn_input=resent["input"]),
+    )
+
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return await _history_from_stored_turns(stored_turns, previous_response_id)
+
+    request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+        previous_response_id="resp_signed",
+        litellm_completion_request={
+            "model": model,
+            "custom_llm_provider": provider,
+            "messages": [{"role": "user", "content": "Thanks."}],
+        },
+        instructions=None,
+        session_lookup=session_lookup,
+    )
+
+    roles: Final = [message_field(message, "role") for message in request["messages"]]
+    assert roles == ["user", "assistant", "tool", "assistant", "user"]
+    assert [
+        (message_field(call, "id"), message_field(message_field(call, "function"), "arguments"))
+        for call in message_field(request["messages"][1], "tool_calls")
+    ] == [("call_1", asked["function"]["arguments"])]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "signature, replayed",
+    [
+        pytest.param("Eq0BCkYI==", True, id="whole-reasoning-item"),
+        pytest.param(_LONG_SIGNATURE, False, id="cut-reasoning-item"),
+    ],
+)
+async def test_reasoning_a_client_sent_back_in_a_stored_request_replays_only_when_stored_whole(
+    signature: str, replayed: bool
+):
+    sent_block: Final = {**_WHOLE_THINKING_BLOCK, "signature": signature}
+    sent_input: Final = _stored_cut(
+        {
+            "input": [
+                {"role": "user", "content": "Count the triples."},
+                {"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": json.dumps([sent_block])},
+                {"role": "assistant", "content": "954"},
+                {"role": "user", "content": "And now?"},
+            ]
+        }
+    )["input"]
+
+    session: Final = await _history_from_stored_turns((_answered_turn({"content": "955"}, sent_input),), "resp_signed")
+
+    blocks: Final = [message_field(message, "thinking_blocks") for message in session["messages"]]
+    assert [block for block in blocks if block] == ([[sent_block]] if replayed else [])
+    assert [content for _, content in map(_role_and_content, session["messages"])][-1] == "955"
 
 
 @pytest.mark.asyncio

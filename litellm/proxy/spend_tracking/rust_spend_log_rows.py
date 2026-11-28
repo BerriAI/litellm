@@ -281,6 +281,7 @@ class SpendLogRowConfig(NamedTuple):
     drop_requester_ip_address: bool
     omit_missing_session_id: bool
     max_string_length_prompt_in_db: int
+    max_string_length_provider_signed_in_db: int
     disable_end_user_cost_tracking: bool
     request_correlation_in_logs: bool
     turn_off_message_logging: bool
@@ -290,6 +291,7 @@ def spend_log_row_config() -> SpendLogRowConfig:
     from litellm.proxy.proxy_server import general_settings_view
     from litellm.proxy.spend_tracking.spend_tracking_utils import (
         _get_max_string_length_prompt_in_db,  # pyright: ignore[reportPrivateUsage]  # the row reads the limit the Python row reads
+        _get_max_string_length_provider_signed_in_db,  # pyright: ignore[reportPrivateUsage]  # the row reads the limit the Python row reads
         requester_ip_address_logging_disabled,
         stores_latest_turn_only,
     )
@@ -301,6 +303,7 @@ def spend_log_row_config() -> SpendLogRowConfig:
         drop_requester_ip_address=requester_ip_address_logging_disabled(),
         omit_missing_session_id=settings.get("missing_session_id") == "omit",
         max_string_length_prompt_in_db=_get_max_string_length_prompt_in_db(),
+        max_string_length_provider_signed_in_db=_get_max_string_length_provider_signed_in_db(),
         disable_end_user_cost_tracking=bool(litellm.disable_end_user_cost_tracking),
         request_correlation_in_logs=bool(litellm.request_correlation_in_logs),
         turn_off_message_logging=litellm.turn_off_message_logging is True,
@@ -527,6 +530,7 @@ def _row_builder(config: SpendLogRowConfig) -> _native.RustSpendLogRowBuilder:
         drop_requester_ip_address=config.drop_requester_ip_address,
         omit_missing_session_id=config.omit_missing_session_id,
         max_string_length_prompt_in_db=config.max_string_length_prompt_in_db,
+        max_string_length_provider_signed_in_db=config.max_string_length_provider_signed_in_db,
         disable_end_user_cost_tracking=config.disable_end_user_cost_tracking,
         request_correlation_in_logs=config.request_correlation_in_logs,
         turn_off_message_logging=config.turn_off_message_logging,

@@ -47,6 +47,10 @@ from litellm.responses.litellm_completion_transformation.compaction_items import
     instruction_items,
     response_holds_compaction_block,
 )
+from litellm.responses.litellm_completion_transformation.provider_signed_state import (
+    holds_altered_provider_state,
+    without_altered_provider_state,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     ALL_RESPONSES_API_TOOL_PARAMS,
@@ -127,6 +131,15 @@ def _is_a_response_read(spend_log: Mapping[str, object]) -> bool:
 
 def _stored_response(spend_log: Mapping[str, object]) -> object:
     return spend_log.get("response")
+
+
+def _replayable(stored: object, spend_log: Mapping[str, object]) -> object:
+    if holds_altered_provider_state(stored):
+        verbose_proxy_logger.warning(
+            "previous_response_id replay leaves out reasoning the stored turn %s holds cut or redacted",
+            spend_log.get("request_id"),
+        )
+    return without_altered_provider_state(stored)
 
 
 def _stored_model_map_key(metadata: object) -> str | None:
@@ -782,7 +795,10 @@ class ResponsesSessionHandler:
         if proxy_server_request_dict:
             stored_request_input: Final = proxy_server_request_dict.get("input")
             _response_input_param: Final = _input_named_as_declared(
-                proxy_server_request_dict.get("messages") if stored_request_input is None else stored_request_input,
+                _replayable(
+                    proxy_server_request_dict.get("messages") if stored_request_input is None else stored_request_input,
+                    spend_log,
+                ),
                 declared_tool_names,
             )
             if isinstance(_response_input_param, (str, list)):
@@ -794,7 +810,7 @@ class ResponsesSessionHandler:
                 )
 
         output_messages: Final = ResponsesSessionHandler._stored_output_messages(
-            _stored_response(spend_log),
+            _replayable(_stored_response(spend_log), spend_log),
             tool_names,
             declared_tool_names,
             item_cache_control,

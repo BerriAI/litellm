@@ -11,6 +11,8 @@ IGNORE_FUNCTIONS = [
     "_with_original_numbers",  # DEFAULT_MAX_RECURSE_DEPTH bound, deeper values keep the guardrail's decoded JSON.
     "with_sanitized_schema_at",  # depth is len(path), a literal tuple of at most two keys at every call site.
     "check_opaque_inference_controls",  # DEFAULT_MAX_RECURSE_DEPTH bound, rejects unchecked nesting with HTTP 403.
+    "without_altered_provider_state",  # DEFAULT_MAX_RECURSE_DEPTH bound, walks one stored JSON document.
+    "holds_altered_provider_state",  # DEFAULT_MAX_RECURSE_DEPTH bound, walks one stored JSON document.
     "_json_cost",  # bounded at depth 32 and consumed under byte/node limits.
     "_ids_to_walk",  # cache key walker, bounded at _REPR_WALK_MAX_DEPTH (32) with a cycle guard.
     "_level_holds_large_str",  # cache key walker, bounded at _REPR_WALK_MAX_DEPTH (32) with a cycle guard.
