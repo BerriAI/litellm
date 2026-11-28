@@ -473,6 +473,14 @@ class ToolSearchReplay:
         }
 
 
+def _output_part_mapping(part: object) -> Mapping[str, object] | None:
+    if isinstance(part, BaseModel):
+        return part.model_dump()
+    if isinstance(part, str):
+        return {"type": "output_text", "text": part}
+    return as_str_mapping(part)
+
+
 class LiteLLMAnthropicToResponsesAPIAdapter:
     """
     Converts Anthropic /v1/messages requests to OpenAI Responses API format and
@@ -1307,9 +1315,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         for item in map(_output_item_mapping, response.output):
             item_type = item.get("type")
             if item_type == "message":
-                for part in filter(None, map(as_str_mapping, iter_items(item.get("content") or ()))):
+                for part in filter(None, map(_output_part_mapping, iter_items(item.get("content") or ()))):
                     part_type = part.get("type")
-                    if part_type == "output_text":
+                    if part_type in ("output_text", "text") or (part_type is None and "text" in part):
                         content.append(
                             AnthropicResponseContentBlockText(
                                 type="text", text=str(part.get("text") or "")

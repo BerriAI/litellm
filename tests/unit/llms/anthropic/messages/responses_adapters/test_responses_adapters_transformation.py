@@ -1877,6 +1877,49 @@ class TestTranslateResponse:
         assert result["content"][0]["text"] == "Part 1"
         assert result["content"][1]["text"] == "Part 2"
 
+    def test_generic_response_output_item_with_output_text_models(self):
+        """GenericResponseOutputItem with OutputText BaseModel content parts (#54113)."""
+        from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_test_openai",
+            status="completed",
+            role="assistant",
+            content=[OutputText(type="output_text", text="Hello from openai provider", annotations=[])],
+        )
+        response = _make_mock_response(output=[item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "Hello from openai provider"
+
+    def test_dict_output_item_with_output_text_models(self):
+        """Dict output item containing OutputText BaseModel objects in content list."""
+        from litellm.types.responses.main import OutputText
+
+        item = {
+            "type": "message",
+            "content": [OutputText(type="output_text", text="Dict with OutputText", annotations=[])],
+        }
+        response = _make_mock_response(output=[item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "Dict with OutputText"
+
+    def test_output_item_with_raw_string_parts(self):
+        """Message item containing raw string content parts."""
+        item = {
+            "type": "message",
+            "content": ["Raw string content"],
+        }
+        response = _make_mock_response(output=[item])
+        result: Any = _ADAPTER.translate_response(response)
+        assert len(result["content"]) == 1
+        assert result["content"][0]["type"] == "text"
+        assert result["content"][0]["text"] == "Raw string content"
+
     def test_function_call_becomes_tool_use(self):
         """ResponseFunctionToolCall -> Anthropic tool_use content block."""
         fc = _make_function_call_item("call_99", "get_weather", '{"city": "NYC"}')
