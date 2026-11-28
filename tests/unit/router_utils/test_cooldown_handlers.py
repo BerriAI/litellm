@@ -1509,6 +1509,48 @@ async def test_a_provider_error_reads_as_a_partial_outage_once_the_router_cooldo
     assert deployment_state_values("dep-1") == [1.0]
 
 
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown", "isolated_prometheus_registry")
+@pytest.mark.asyncio
+async def test_a_late_cooldown_event_ends_the_deployment_state_cooldown_when_the_router_cooldown_ends(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_state_samples: Callable[[str], list[Sample]],
+    deployment_state_values: Callable[[str], list[float]],
+) -> None:
+    clock: Final = ManualClock()
+    monkeypatch.setattr(deployment_state_series, "monotonic_seconds", clock)
+    prometheus_logger: Final = PrometheusLogger()
+    monkeypatch.setattr(litellm, "callbacks", [prometheus_logger])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "prod-chat",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake"},
+                "model_info": {"id": "dep-1"},
+            }
+        ]
+    )
+    started_two_seconds_ago: Final = CooldownCacheValue(
+        exception_received="401", status_code="401", timestamp=time.time() - 2.0, cooldown_time=5.0
+    )
+    RoutingContext(router).health().cooldowns.cooldown_store.put("dep-1", started_two_seconds_ago, 5.0)
+    await router_cooldown_event_callback(
+        ctx=RoutingContext(router), deployment_id="dep-1", exception_status=401, cooldown_time=5.0
+    )
+    (marked,) = deployment_state_samples("dep-1")
+    success: Final = {
+        label: marked.labels[label] for label in ("litellm_model_name", "model_id", "api_base", "api_provider")
+    }
+
+    clock.now = 2.9
+    prometheus_logger.set_deployment_healthy(**success)
+    before_the_router_cooldown_ended: Final = deployment_state_values("dep-1")
+    clock.now = 3.0
+    prometheus_logger.set_deployment_healthy(**success)
+
+    assert before_the_router_cooldown_ended == [2.0]
+    assert deployment_state_values("dep-1") == [0.0]
+
+
 @pytest.fixture
 def testing_litellm_router():
     return Router(

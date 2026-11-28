@@ -559,7 +559,9 @@ async def test_the_event_reaches_prometheus_with_the_deployments_labels(
 
     assert [(labels["model_id"], labels["exception_status"]) for labels in prometheus.cooled] == [("a", "404")]
     assert [labels["model_id"] for labels in prometheus.outages] == ["a"]
-    assert [cooldown["model_id"] for cooldown in prometheus.cooldown_times] == ["a"]
+    event_length, stored_length_left = (cooldown["cooldown_time"] for cooldown in prometheus.cooldown_times)
+    assert {cooldown["model_id"] for cooldown in prometheus.cooldown_times} == {"a"}
+    assert 0 < stored_length_left < event_length
 
 
 # --- service events -------------------------------------------------------------------------------
