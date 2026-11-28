@@ -307,7 +307,8 @@ Options:
 
 - `--models`: Comma-separated list of allowed models
 - `--aliases`: JSON string of model alias mappings
-- `--spend`: Maximum spend limit for this key
+- `--spend`: Spend already recorded on the key when it is created, not a limit
+- `--max-budget`: Maximum spend limit for this key
 - `--duration`: Duration for which the key is valid (e.g. '24h', '7d')
 - `--key-alias`: Alias/name for the key
 - `--team-id`: Team ID to associate the key with
@@ -318,7 +319,7 @@ Options:
 Example:
 
 ```bash
-lite keys generate --models gpt-4,gpt-3.5-turbo --spend 100 --duration 24h --key-alias my-key --team-id team123
+lite keys generate --models gpt-4,gpt-3.5-turbo --max-budget 100 --duration 24h --key-alias my-key --team-id team123
 ```
 
 #### Delete Keys

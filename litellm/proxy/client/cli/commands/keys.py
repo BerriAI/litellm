@@ -136,7 +136,8 @@ def list(
 @keys.command()
 @click.option("--models", type=str, help="Comma-separated list of allowed models")
 @click.option("--aliases", type=str, help="JSON string of model alias mappings")
-@click.option("--spend", type=float, help="Maximum spend limit for this key")
+@click.option("--spend", type=float, help="Spend already recorded on the key when it is created, not a limit")
+@click.option("--max-budget", type=float, help="Maximum spend limit for this key")
 @click.option(
     "--duration",
     type=str,
@@ -153,6 +154,7 @@ def generate(
     models: str | None,
     aliases: str | None,
     spend: float | None,
+    max_budget: float | None,
     duration: str | None,
     key_alias: str | None,
     team_id: str | None,
@@ -174,6 +176,7 @@ def generate(
             models=models_list,
             aliases=aliases_dict,
             spend=spend,
+            max_budget=max_budget,
             duration=duration,
             key_alias=key_alias,
             team_id=team_id,

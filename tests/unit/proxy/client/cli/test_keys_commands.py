@@ -95,6 +95,15 @@ def test_async_keys_generate_success(mock_keys_client, cli_runner):
     mock_keys_client.return_value.generate.assert_called_once()
 
 
+def test_keys_generate_max_budget_is_sent_as_the_limit(mock_keys_client, cli_runner):
+    mock_keys_client.return_value.generate.return_value = {"key": "new-key"}
+    result = cli_runner.invoke(cli, ["keys", "generate", "--max-budget", "25"])
+    assert result.exit_code == 0
+    call = mock_keys_client.return_value.generate.call_args
+    assert call.kwargs["max_budget"] == 25.0
+    assert call.kwargs["spend"] is None
+
+
 def test_async_keys_delete_success(mock_keys_client, cli_runner):
     mock_keys_client.return_value.delete.return_value = {
         "status": "success",
