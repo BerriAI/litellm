@@ -8,7 +8,7 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterable, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
@@ -1593,60 +1593,66 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def __init__(
         self,
-        response: httpx.Response,
+        response: httpx.Response | ResponsesAPIResponse,
         model: str,
-        responses_api_provider_config: BaseResponsesAPIConfig,
-        logging_obj: LiteLLMLoggingObj,
+        responses_api_provider_config: BaseResponsesAPIConfig | None = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
         litellm_metadata: dict[str, object] | None = None,
         custom_llm_provider: str | None = None,
         request_data: dict[str, object] | None = None,
         call_type: str | None = None,
     ):
-        transformed: Final = responses_api_provider_config.transform_response_api_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
-        )
+        effective_logging_obj: Final = logging_obj or LiteLLMLoggingObj()
+        if isinstance(response, ResponsesAPIResponse):
+            transformed: Final = response
+            self._persist_completed_response_before_logging = False
+        elif responses_api_provider_config is not None:
+            transformed = responses_api_provider_config.transform_response_api_response(
+                model=model,
+                raw_response=response,
+                logging_obj=effective_logging_obj,
+            )
+        else:
+            raise ValueError("Either responses_api_provider_config or a ResponsesAPIResponse must be provided")
+
         super().__init__(
-            response=httpx.Response(200),
+            response=httpx.Response(200) if isinstance(response, ResponsesAPIResponse) else response,
             model=model,
             responses_api_provider_config=None,
-            logging_obj=logging_obj,
+            logging_obj=effective_logging_obj,
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
             request_data=request_data,
             call_type=call_type,
         )
-        self._set_events_from_response(
-            transformed=ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
-                responses_api_response=transformed,
-                custom_llm_provider=custom_llm_provider,
-                litellm_metadata=litellm_metadata,
-            ),
-            logging_obj=logging_obj,
+        encoded_response: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+            responses_api_response=transformed,
+            custom_llm_provider=custom_llm_provider,
+            litellm_metadata=litellm_metadata,
         )
-
-    def _set_events_from_response(
-        self,
-        transformed: ResponsesAPIResponse,
-        logging_obj: LiteLLMLoggingObj,
-    ) -> None:
-        self._events: Sequence[ResponsesAPIStreamingResponse] = build_synthetic_response_events(
-            transformed=transformed,
-            logging_obj=logging_obj,
-            chunk_size=self.CHUNK_SIZE,
-        )
-        self._idx = 0
-        self.completed_response = self._events[-1]
+        if isinstance(response, ResponsesAPIResponse):
+            self._events = _iter_synthetic_response_events(
+                transformed=encoded_response,
+                logging_obj=effective_logging_obj,
+                chunk_size=self.CHUNK_SIZE,
+            )
+        else:
+            events: Final = build_synthetic_response_events(
+                transformed=encoded_response,
+                logging_obj=effective_logging_obj,
+                chunk_size=self.CHUNK_SIZE,
+            )
+            self._events = iter(events)
+            self.completed_response = events[-1]
 
     def __aiter__(self):
         return self
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
-        if self._idx >= len(self._events):
-            raise StopAsyncIteration
-        evt: Final = self._events[self._idx]
-        self._idx += 1
+        try:
+            evt: Final = next(self._events)
+        except StopIteration:
+            raise StopAsyncIteration from None
         openai_types: Final = get_openai_response_types()
         if getattr(evt, "type", None) in (
             openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
@@ -1660,10 +1666,7 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return self
 
     def __next__(self) -> ResponsesAPIStreamingResponse:
-        if self._idx >= len(self._events):
-            raise StopIteration
-        evt: Final = self._events[self._idx]
-        self._idx += 1
+        evt: Final = next(self._events)
         openai_types: Final = get_openai_response_types()
         if getattr(evt, "type", None) in (
             openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
@@ -1824,73 +1827,62 @@ def _build_content_part_done_event(
     )
 
 
-def _add_text_like_part_events(
+def _iter_text_like_part_events(
     *,
-    events: list[ResponsesAPIStreamingResponse],
     item_id: str,
     output_index: int,
     content_index: int,
     part_payload: Mapping[str, object],
     chunk_size: int,
-) -> None:
+) -> Iterator[ResponsesAPIStreamingResponse]:
     openai_types: Final = get_openai_response_types()
     part_type: Final = part_payload.get("type")
     if part_type == "output_text":
         text: Final = str(part_payload.get("text") or "")
         for i in range(0, len(text), chunk_size):
-            events.append(
-                openai_types.OutputTextDeltaEvent(
-                    type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
-                    item_id=item_id,
-                    output_index=output_index,
-                    content_index=content_index,
-                    delta=text[i : i + chunk_size],
-                )
+            yield openai_types.OutputTextDeltaEvent(
+                type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id=item_id,
+                output_index=output_index,
+                content_index=content_index,
+                delta=text[i : i + chunk_size],
             )
         raw_annotation_items: Final = part_payload.get("annotations")
         annotation_items: Final[Sequence[object]] = raw_annotation_items if _is_json_array(raw_annotation_items) else []
         for annotation_index, annotation in enumerate(annotation_items):
-            events.append(
-                openai_types.OutputTextAnnotationAddedEvent.model_validate(
-                    {
-                        "type": openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
-                        "item_id": item_id,
-                        "output_index": output_index,
-                        "content_index": content_index,
-                        "annotation_index": annotation_index,
-                        "annotation": annotation,
-                    }
-                )
+            yield openai_types.OutputTextAnnotationAddedEvent.model_validate(
+                {
+                    "type": openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
+                    "item_id": item_id,
+                    "output_index": output_index,
+                    "content_index": content_index,
+                    "annotation_index": annotation_index,
+                    "annotation": annotation,
+                }
             )
-        events.append(
-            openai_types.OutputTextDoneEvent(
-                type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
-                item_id=item_id,
-                output_index=output_index,
-                content_index=content_index,
-                text=text,
-            )
+        yield openai_types.OutputTextDoneEvent(
+            type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            item_id=item_id,
+            output_index=output_index,
+            content_index=content_index,
+            text=text,
         )
     elif part_type == "refusal":
         refusal: Final = str(part_payload.get("refusal") or "")
         for i in range(0, len(refusal), chunk_size):
-            events.append(
-                openai_types.RefusalDeltaEvent(
-                    type=openai_types.ResponsesAPIStreamEvents.REFUSAL_DELTA,
-                    item_id=item_id,
-                    output_index=output_index,
-                    content_index=content_index,
-                    delta=refusal[i : i + chunk_size],
-                )
-            )
-        events.append(
-            openai_types.RefusalDoneEvent(
-                type=openai_types.ResponsesAPIStreamEvents.REFUSAL_DONE,
+            yield openai_types.RefusalDeltaEvent(
+                type=openai_types.ResponsesAPIStreamEvents.REFUSAL_DELTA,
                 item_id=item_id,
                 output_index=output_index,
                 content_index=content_index,
-                refusal=refusal,
+                delta=refusal[i : i + chunk_size],
             )
+        yield openai_types.RefusalDoneEvent(
+            type=openai_types.ResponsesAPIStreamEvents.REFUSAL_DONE,
+            item_id=item_id,
+            output_index=output_index,
+            content_index=content_index,
+            refusal=refusal,
         )
 
 
@@ -2199,13 +2191,28 @@ def build_synthetic_response_events(
     logging_obj: LiteLLMLoggingObj | None,
     chunk_size: int,
 ) -> list[ResponsesAPIStreamingResponse]:
-    openai_types: Final = get_openai_response_types()
-    stamp_responses_usage_cost(transformed, logging_obj)
+    return list(
+        _iter_synthetic_response_events(transformed=transformed, logging_obj=logging_obj, chunk_size=chunk_size)
+    )
 
-    events: Final[list[ResponsesAPIStreamingResponse]] = [
-        _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed),
-        _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed),
-    ]
+
+def _iter_synthetic_response_events(
+    *,
+    transformed: ResponsesAPIResponse,
+    logging_obj: LiteLLMLoggingObj | None,
+    chunk_size: int,
+) -> Iterator[ResponsesAPIStreamingResponse]:
+    stamp_responses_usage_cost(transformed, logging_obj)
+    for number, event in enumerate(_iter_synthetic_event_payloads(transformed, chunk_size)):
+        yield event.model_copy(update={"sequence_number": number})
+
+
+def _iter_synthetic_event_payloads(
+    transformed: ResponsesAPIResponse, chunk_size: int
+) -> Iterator[ResponsesAPIStreamingResponse]:
+    openai_types: Final = get_openai_response_types()
+    yield _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed)
+    yield _build_response_status_event(openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed)
 
     output_items: Final[Sequence[object]] = getattr(transformed, "output", []) or []
     for output_index, output_item in enumerate(output_items):
@@ -2213,29 +2220,24 @@ def build_synthetic_response_events(
         item_id = str(output_item_payload.get("id") or transformed.id)
         item_type = output_item_payload.get("type")
 
-        events.append(
-            openai_types.OutputItemAddedEvent(
-                type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-                output_index=output_index,
-                item=openai_types.BaseLiteLLMOpenAIResponseObject(**opening_item_payload(output_item_payload)),
-            )
+        yield openai_types.OutputItemAddedEvent(
+            type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            output_index=output_index,
+            item=openai_types.BaseLiteLLMOpenAIResponseObject(**opening_item_payload(output_item_payload)),
         )
 
         if item_type == "message":
             content_parts: Sequence[object] = _json_array_or_empty(output_item_payload.get("content"))
             for content_index, part in enumerate(content_parts):
                 part_payload = _dump_response_object(part)
-                events.append(
-                    openai_types.ContentPartAddedEvent(
-                        type=openai_types.ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
-                        item_id=item_id,
-                        output_index=output_index,
-                        content_index=content_index,
-                        part=openai_types.BaseLiteLLMOpenAIResponseObject(**opening_part_payload(part_payload)),
-                    )
+                yield openai_types.ContentPartAddedEvent(
+                    type=openai_types.ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+                    item_id=item_id,
+                    output_index=output_index,
+                    content_index=content_index,
+                    part=openai_types.BaseLiteLLMOpenAIResponseObject(**opening_part_payload(part_payload)),
                 )
-                _add_text_like_part_events(
-                    events=events,
+                yield from _iter_text_like_part_events(
                     item_id=item_id,
                     output_index=output_index,
                     content_index=content_index,
@@ -2249,103 +2251,85 @@ def build_synthetic_response_events(
                     part_payload=part_payload,
                 )
                 if done_event is not None:
-                    events.append(done_event)
+                    yield done_event
         elif item_type == "function_call":
             arguments = str(output_item_payload.get("arguments") or "")
             for i in range(0, len(arguments), chunk_size):
-                events.append(
-                    openai_types.FunctionCallArgumentsDeltaEvent(
-                        type=openai_types.ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
-                        item_id=item_id,
-                        output_index=output_index,
-                        delta=arguments[i : i + chunk_size],
-                    )
-                )
-            events.append(
-                openai_types.FunctionCallArgumentsDoneEvent(
-                    type=openai_types.ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+                yield openai_types.FunctionCallArgumentsDeltaEvent(
+                    type=openai_types.ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
                     item_id=item_id,
                     output_index=output_index,
-                    arguments=arguments,
+                    delta=arguments[i : i + chunk_size],
                 )
+            yield openai_types.FunctionCallArgumentsDoneEvent(
+                type=openai_types.ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+                item_id=item_id,
+                output_index=output_index,
+                arguments=arguments,
             )
         elif item_type == "custom_tool_call":
             tool_input = str(output_item_payload.get("input") or "")
             for i in range(0, len(tool_input), chunk_size):
-                events.append(
-                    openai_types.GenericEvent.model_validate(
-                        {
-                            "type": openai_types.ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value,
-                            "item_id": item_id,
-                            "output_index": output_index,
-                            "delta": tool_input[i : i + chunk_size],
-                        }
-                    )
-                )
-            events.append(
-                openai_types.GenericEvent.model_validate(
+                yield openai_types.GenericEvent.model_validate(
                     {
-                        "type": openai_types.ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value,
+                        "type": openai_types.ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value,
                         "item_id": item_id,
                         "output_index": output_index,
-                        "input": tool_input,
+                        "delta": tool_input[i : i + chunk_size],
                     }
                 )
+            yield openai_types.GenericEvent.model_validate(
+                {
+                    "type": openai_types.ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value,
+                    "item_id": item_id,
+                    "output_index": output_index,
+                    "input": tool_input,
+                }
             )
         elif item_type == "reasoning":
             summaries: Sequence[object] = _json_array_or_empty(output_item_payload.get("summary"))
             for summary_index, summary in enumerate(summaries):
                 summary_payload = _dump_response_object(summary)
                 summary_text = str(summary_payload.get("text") or "")
-                events.append(
-                    openai_types.ResponsePartAddedEvent(
-                        type=openai_types.ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
-                        item_id=item_id,
-                        output_index=output_index,
-                        summary_index=summary_index,
-                        part={**summary_payload, "text": ""},
-                    )
+                yield openai_types.ResponsePartAddedEvent(
+                    type=openai_types.ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
+                    item_id=item_id,
+                    output_index=output_index,
+                    summary_index=summary_index,
+                    part={**summary_payload, "text": ""},
                 )
                 for i in range(0, len(summary_text), chunk_size):
-                    events.append(
-                        openai_types.ReasoningSummaryTextDeltaEvent(
-                            type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
-                            item_id=item_id,
-                            output_index=output_index,
-                            summary_index=summary_index,
-                            delta=summary_text[i : i + chunk_size],
-                        )
-                    )
-                events.append(
-                    openai_types.ReasoningSummaryTextDoneEvent(
-                        type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+                    yield openai_types.ReasoningSummaryTextDeltaEvent(
+                        type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
                         item_id=item_id,
                         output_index=output_index,
-                        sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
                         summary_index=summary_index,
-                        text=summary_text,
+                        delta=summary_text[i : i + chunk_size],
                     )
+                yield openai_types.ReasoningSummaryTextDoneEvent(
+                    type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+                    item_id=item_id,
+                    output_index=output_index,
+                    sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
+                    summary_index=summary_index,
+                    text=summary_text,
                 )
-                events.append(
-                    openai_types.ReasoningSummaryPartDoneEvent(
-                        type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
-                        item_id=item_id,
-                        output_index=output_index,
-                        sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
-                        summary_index=summary_index,
-                        part=openai_types.BaseLiteLLMOpenAIResponseObject(**summary_payload),
-                    )
+                yield openai_types.ReasoningSummaryPartDoneEvent(
+                    type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+                    item_id=item_id,
+                    output_index=output_index,
+                    sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
+                    summary_index=summary_index,
+                    part=openai_types.BaseLiteLLMOpenAIResponseObject(**summary_payload),
                 )
 
-        events.append(
-            openai_types.OutputItemDoneEvent(
-                type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-                output_index=output_index,
-                item=openai_types.BaseLiteLLMOpenAIResponseObject(**output_item_payload),
-            )
+        yield openai_types.OutputItemDoneEvent(
+            type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=output_index,
+            item=openai_types.BaseLiteLLMOpenAIResponseObject(**output_item_payload),
         )
 
-    events.append(
+    yield (
         openai_types.ResponseIncompleteEvent(
             type=openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
             response=transformed,
@@ -2356,7 +2340,6 @@ def build_synthetic_response_events(
             response=transformed,
         )
     )
-    return [event.model_copy(update={"sequence_number": number}) for number, event in enumerate(events)]
 
 
 # ---------------------------------------------------------------------------
