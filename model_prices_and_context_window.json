@@ -44989,6 +44989,9 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-small-latest": {
+        "successor_model": "mistral/mistral-medium-3-5",
+        "deprecation_date": "2026-03-31",
+        "deprecation_source": "https://docs.mistral.ai/models",
         "cache_read_input_token_cost": 1e-08,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
@@ -45008,6 +45011,9 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-latest": {
+        "successor_model": "mistral/mistral-medium-3-5",
+        "deprecation_date": "2026-07-31",
+        "deprecation_source": "https://docs.mistral.ai/models",
         "cache_read_input_token_cost": 4e-08,
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
@@ -45027,6 +45033,9 @@
         "supports_tool_choice": true
     },
     "mistral/devstral-medium-latest": {
+        "successor_model": "mistral/mistral-medium-3-5",
+        "deprecation_date": "2026-07-31",
+        "deprecation_source": "https://docs.mistral.ai/models",
         "cache_read_input_token_cost": 4e-08,
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
@@ -45484,6 +45493,9 @@
         "supports_tool_choice": true
     },
     "mistral/glm-5-2": {
+        "successor_model": "mistral/zai-glm-5-3",
+        "deprecation_date": "2026-10-31",
+        "deprecation_source": "https://docs.mistral.ai/models",
         "cache_read_input_token_cost": 1.4e-07,
         "input_cost_per_token": 1.4e-06,
         "litellm_provider": "mistral",
@@ -45767,6 +45779,9 @@
         "supports_vision": true
     },
     "mistral/mistral-medium-latest": {
+        "successor_model": "mistral/mistral-large-4",
+        "deprecation_date": "2027-04-30",
+        "deprecation_source": "https://docs.mistral.ai/models",
         "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 1.5e-06,
         "litellm_provider": "mistral",
@@ -45935,6 +45950,9 @@
         "supports_tool_choice": true
     },
     "mistral/open-mistral-nemo": {
+        "successor_model": "mistral/ministral-8b-2512",
+        "deprecation_date": "2026-07-31",
+        "deprecation_source": "https://docs.mistral.ai/models",
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "mistral",
@@ -45948,6 +45966,9 @@
         "supports_tool_choice": true
     },
     "mistral/pixtral-large-latest": {
+        "successor_model": "mistral/mistral-medium-3-5",
+        "deprecation_date": "2026-05-31",
+        "deprecation_source": "https://docs.mistral.ai/models",
         "cache_read_input_token_cost": 2e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "mistral",
@@ -72739,6 +72760,9 @@
         ]
     },
     "mistral/voxtral-mini-latest": {
+        "successor_model": "mistral/voxtral-mini-transcribe-3-0",
+        "deprecation_date": "2027-04-30",
+        "deprecation_source": "https://docs.mistral.ai/models",
         "input_cost_per_second": 5e-05,
         "litellm_provider": "mistral",
         "mode": "audio_transcription",
@@ -72771,6 +72795,9 @@
         "supports_audio_input": true
     },
     "mistral/voxtral-mini-realtime-latest": {
+        "successor_model": "mistral/voxtral-mini-transcribe-realtime-3-0",
+        "deprecation_date": "2027-04-30",
+        "deprecation_source": "https://docs.mistral.ai/models",
         "input_cost_per_second": 0.0001,
         "litellm_provider": "mistral",
         "mode": "audio_transcription",
