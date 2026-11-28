@@ -244,14 +244,18 @@ async fn as_the_master_key(
 }
 
 pub async fn post(app: Router, path: &str, body: Value) -> Response {
-    app.oneshot(
-        Request::post(path)
-            .header("content-type", "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap(),
-    )
-    .await
-    .unwrap()
+    post_from(app, path, None, body).await
+}
+
+pub async fn post_from(app: Router, path: &str, user_agent: Option<&str>, body: Value) -> Response {
+    let request = Request::post(path).header("content-type", "application/json");
+    let request = match user_agent {
+        Some(user_agent) => request.header("user-agent", user_agent),
+        None => request,
+    };
+    app.oneshot(request.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap()
 }
 
 pub async fn json(response: Response) -> Value {

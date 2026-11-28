@@ -1,12 +1,11 @@
-# With drop_params written as a flag, a coding agent gets what any other client gets.
+# A coding agent is answered natively, since the native app turns dropping on for it as the proxy
+# does.
 config:
   model_list:
     - model_name: claude
       litellm_params:
         model: anthropic/claude-haiku-5-5
         api_key: provider-key
-  litellm_settings:
-    drop_params: true
   general_settings:
     master_key: gateway-key
 
@@ -19,4 +18,14 @@ requests:
   - name: codex
     headers: {authorization: Bearer gateway-key, user-agent: codex_cli_rs/0.40.0}
     body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: copilot chat
+    headers: {authorization: Bearer gateway-key, user-agent: GitHubCopilotChat/0.26.7}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: claude code turning drop_params off for its call
+    headers: {authorization: Bearer gateway-key, user-agent: claude-cli/2.1.0}
+    body: {model: claude, max_tokens: 16, messages: [], drop_params: false}
     expect: rust

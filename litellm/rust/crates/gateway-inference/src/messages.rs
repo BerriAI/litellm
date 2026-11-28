@@ -27,6 +27,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     Checked, Error, Gateway, JsonObject,
+    coding_agent::CodingAgent,
     drop_params::{Sources, drops, written},
     error::ErrorFormat,
     hooks::CallType,
@@ -108,6 +109,7 @@ struct MessagesAttempt<'a, H> {
     route: MessagesRoute,
     body: Map<String, Value>,
     headers: &'a HeaderMap,
+    client: Option<CodingAgent>,
     policy: CachePolicy,
 }
 
@@ -128,6 +130,7 @@ impl<'a, H: Host> MessagesAttempt<'a, H> {
             route,
             body,
             headers: &call.headers,
+            client: CodingAgent::sent(&call.headers),
             policy: cache_options.policy,
         })
     }
@@ -191,6 +194,7 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
             cost_map.catalog(),
             &self.gateway.configured,
             &body,
+            self.client,
         );
         shaping.settings.pricing = pricing::priced_as(
             deployment,
@@ -233,18 +237,19 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
     }
 }
 
-/// How the messages route shapes a call to `deployment` with `body`: the `configured` settings,
-/// the capabilities `catalog` and its `model_info` declare, whether the call [`drops`] what the
-/// provider rejects, the deployment's `additional_drop_params` with the request's own in their
-/// place, as Python lays a call's kwargs over the deployment's (`{**deployment, **request}`),
-/// except that a request's `null` is not written and leaves the deployment's, and for Claude on
-/// Vertex AI the model's `supported_regions`, which route the call as they
-/// route it in Python.
+/// How the messages route shapes a call from `client` to `deployment` with `body`: the
+/// `configured` settings, the capabilities `catalog` and its `model_info` declare, whether the
+/// call [`drops`] what the provider rejects, the deployment's `additional_drop_params` with the
+/// request's own in their place, as Python lays a call's kwargs over the deployment's
+/// (`{**deployment, **request}`), except that a request's `null` is not written and leaves the
+/// deployment's, and for Claude on Vertex AI the model's `supported_regions`, which route the call
+/// as they route it in Python.
 fn shaping(
     deployment: &Deployment,
     catalog: &Catalog,
     configured: &Configured,
     body: &Map<String, Value>,
+    client: Option<CodingAgent>,
 ) -> MessagesShaping {
     let params = &deployment.params;
     let base_model = params.extra.get("base_model").and_then(Value::as_str);
@@ -254,6 +259,7 @@ fn shaping(
                 request: body.get("drop_params").and_then(written),
                 deployment: params.drop_params,
                 global: configured.drop_params,
+                client,
             }),
             reasoning_auto_summary: configured.reasoning_auto_summary,
             request_timeout: configured.request_timeout,
@@ -453,6 +459,7 @@ mod tests {
         configured: Option<bool>,
         deployment: Option<Value>,
         request: Option<Value>,
+        client: Option<CodingAgent>,
     }
 
     fn shaped(sources: Written) -> MessagesSettings {
@@ -481,6 +488,7 @@ mod tests {
             &catalog(),
             &configured,
             &body,
+            sources.client,
         )
         .settings
     }
@@ -521,6 +529,15 @@ mod tests {
         Written {
             configured: Some(true),
             deployment: Some(json!(false)),
+            ..Written::default()
+        },
+        false
+    )]
+    #[case::a_coding_agent(Written { client: Some(CodingAgent::ClaudeCode), ..Written::default() }, true)]
+    #[case::a_coding_agent_to_a_deployment_that_turns_it_off(
+        Written {
+            deployment: Some(json!(false)),
+            client: Some(CodingAgent::ClaudeCode),
             ..Written::default()
         },
         false
@@ -584,8 +601,14 @@ mod tests {
     fn model_info_flags_reach_the_deployment(#[case] model_info: Value, #[case] expected: bool) {
         let deployment = deployment(json!({"model": "anthropic/claude-unlisted-9"}), model_info);
 
-        let capabilities =
-            shaping(&deployment, &catalog(), &Configured::default(), &Map::new()).capabilities;
+        let capabilities = shaping(
+            &deployment,
+            &catalog(),
+            &Configured::default(),
+            &Map::new(),
+            None,
+        )
+        .capabilities;
 
         assert_eq!(capabilities.supports_reasoning, expected);
     }
@@ -599,7 +622,7 @@ mod tests {
             ..Configured::default()
         };
 
-        let settings = shaping(&deployment, &catalog(), &configured, &Map::new()).settings;
+        let settings = shaping(&deployment, &catalog(), &configured, &Map::new(), None).settings;
 
         assert_eq!(
             (settings.reasoning_auto_summary, settings.request_timeout),
@@ -620,8 +643,14 @@ mod tests {
             json!({}),
         );
 
-        let settings =
-            shaping(&deployment, &catalog(), &Configured::default(), &Map::new()).settings;
+        let settings = shaping(
+            &deployment,
+            &catalog(),
+            &Configured::default(),
+            &Map::new(),
+            None,
+        )
+        .settings;
 
         assert_eq!(settings.additional_drop_params, expected);
     }

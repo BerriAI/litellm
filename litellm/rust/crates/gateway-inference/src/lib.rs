@@ -7,6 +7,7 @@
 mod asked;
 mod caching;
 mod checked;
+mod coding_agent;
 mod drop_params;
 mod error;
 mod group_usage;

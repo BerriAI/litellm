@@ -512,6 +512,16 @@ async fn sent_under(
     rows: Option<Value>,
     client: Value,
 ) -> Result<Value, u16> {
+    sent_from(None, litellm_params, settings, rows, client).await
+}
+
+async fn sent_from(
+    user_agent: Option<&str>,
+    litellm_params: Value,
+    settings: Value,
+    rows: Option<Value>,
+    client: Value,
+) -> Result<Value, u16> {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
@@ -528,9 +538,10 @@ async fn sent_under(
         gateway.install(support::cost_map(rows));
     }
 
-    let response = support::post(
+    let response = support::post_from(
         app,
         "/v1/messages",
+        user_agent,
         messages_request("public/model", client),
     )
     .await;
@@ -540,6 +551,66 @@ async fn sent_under(
         Some(sent) if response.status() == 200 => Ok(sent.body_json().unwrap()),
         _ => Err(response.status().as_u16()),
     }
+}
+
+/// A coding agent's call drops what the provider rejects while nothing says otherwise, as the
+/// proxy turns `drop_params` on for Claude Code, Codex and Copilot Chat. A deployment's own
+/// `drop_params: false` turns that default off, where the proxy lets the default win.
+#[rstest]
+#[case::claude_code("claude-cli/2.1.0 (external, cli)", json!({}), json!({}), json!({}), Ok(()))]
+#[case::codex("codex_cli_rs/0.40.0", json!({}), json!({}), json!({}), Ok(()))]
+#[case::copilot_chat("GitHubCopilotChat/0.26.7", json!({}), json!({}), json!({}), Ok(()))]
+#[case::another_client("curl/8.7.1", json!({}), json!({}), json!({}), Err(400))]
+#[case::the_setting_turning_it_off(
+    "claude-cli/2.1.0",
+    json!({}),
+    json!({"drop_params": false}),
+    json!({}),
+    Err(400)
+)]
+#[case::the_deployment_turning_it_off(
+    "claude-cli/2.1.0",
+    json!({"drop_params": false}),
+    json!({}),
+    json!({}),
+    Err(400)
+)]
+#[case::the_request_turning_it_off(
+    "claude-cli/2.1.0",
+    json!({}),
+    json!({}),
+    json!({"drop_params": false}),
+    Err(400)
+)]
+#[tokio::test]
+async fn a_coding_agents_unsupported_params_are_dropped_by_default(
+    #[case] user_agent: &str,
+    #[case] litellm_params: Value,
+    #[case] settings: Value,
+    #[case] requested: Value,
+    #[case] expected: Result<(), u16>,
+) {
+    let client = json!({"max_tokens": 16, "speed": "fast"})
+        .as_object()
+        .cloned()
+        .into_iter()
+        .flatten()
+        .chain(requested.as_object().cloned().unwrap())
+        .collect();
+
+    let sent = sent_from(
+        Some(user_agent),
+        litellm_params,
+        settings,
+        None,
+        Value::Object(client),
+    )
+    .await;
+
+    assert_eq!(
+        sent,
+        expected.map(|()| messages_request("test-model", json!({"max_tokens": 16})))
+    );
 }
 
 /// The narrowest `drop_params` written decides for a call: the request's own, then the
