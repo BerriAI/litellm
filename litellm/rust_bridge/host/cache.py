@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import weakref
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # bounded cast of the served response
 
 from pydantic import TypeAdapter
@@ -48,7 +48,7 @@ def store_response(
 ) -> None:
     from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
 
-    if is_response_without_output(response):
+    if isinstance(response, (Iterator, AsyncIterator)) or is_response_without_output(response):
         return
     create_cache_write_task(
         lambda: cache.async_add_cache(  # pyright: ignore[reportUnknownMemberType]  # Cache.async_add_cache leaves its result untyped
@@ -66,7 +66,7 @@ def store_verbatim(
 ) -> None:
     from litellm.caching.caching_handler import create_cache_write_task, is_response_without_output
 
-    if is_response_without_output(response):
+    if isinstance(response, (Iterator, AsyncIterator)) or is_response_without_output(response):
         return
     create_cache_write_task(
         lambda: cache.async_add_cache(  # pyright: ignore[reportUnknownMemberType]  # Cache.async_add_cache leaves its result untyped
