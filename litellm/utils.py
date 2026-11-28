@@ -876,7 +876,7 @@ def _stored_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, obje
         {
             key: value
             for key, value in credential_api_key_secret_reference(credential.credential_values).items()
-            if key not in kwargs and key != "github_copilot_app_private_key"
+            if credential_accessor.is_unset(kwargs.get(key)) and key != "github_copilot_app_private_key"
         }
     )
 
@@ -1060,7 +1060,7 @@ async def acredential_updates(kwargs: Mapping[str, object], call_type: str | Non
 
 
 def _api_key_after_credentials(kwargs: Mapping[str, object], credential_values: Mapping[str, object]) -> object:
-    return kwargs.get("api_key", credential_values.get("api_key"))
+    return credential_values.get("api_key", kwargs.get("api_key"))
 
 
 def _credential_updates(
@@ -1091,7 +1091,7 @@ def _secret_for_api_key(
         upstream=MappingProxyType(
             {
                 "model": kwargs.get("model"),
-                **{key: kwargs.get(key, credential_values.get(key)) for key in API_KEY_UPSTREAM_PARAMS},
+                **{key: credential_values.get(key, kwargs.get(key)) for key in API_KEY_UPSTREAM_PARAMS},
             }
         ),
     )
