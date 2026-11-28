@@ -46,12 +46,15 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     ProxyException,
     UserAPIKeyAuth,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
+    _model_access_groups_serving_model,
     _team_soft_budget_check,
+    can_object_call_model,
     can_team_access_model,
     check_opaque_inference_controls,
     common_checks,
@@ -60,10 +63,13 @@ from litellm.proxy.auth.auth_checks import (
     get_org_object,
     get_user_object,
     is_model_cost_zero,
+    public_model_names_of_deployments_routed_by_litellm_model,
     virtual_key_soft_budget_check,
 )
 from litellm.proxy.utils import CallInfo, InternalUsageCache, ProxyLogging
+from litellm.router_api import ChangeSet, RoutingContext
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
+from litellm.types.router import RouterGeneralSettings
 
 
 @pytest.mark.parametrize("container", ["mapping", "list"])
@@ -2905,3 +2911,306 @@ async def test_common_checks_enforces_key_max_budget_for_custom_auth_keys(
         assert (exc_info.value.current_cost, exc_info.value.max_budget) == (spend, max_budget)
     else:
         assert await run() is True
+
+
+def _namesake_deployment(
+    model_name: str, litellm_model: str, *access_groups: str, team_info: Mapping[str, str] | None = None
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": litellm_model, "api_key": "fake"},
+        "model_info": {**({"access_groups": list(access_groups)} if access_groups else {}), **(team_info or {})},
+    }
+
+
+_NAMESAKE_DEPLOYMENTS: Final = (
+    _namesake_deployment("granted-public", "openai/granted-raw", "group-a"),
+    _namesake_deployment("shared-a", "openai/shared-raw", "group-a"),
+    _namesake_deployment("shared-b", "openai/shared-raw", "group-b"),
+    _namesake_deployment("split", "openai/split-a", "group-a"),
+    _namesake_deployment("split", "openai/split-b", "group-b"),
+    _namesake_deployment("collision-public", "openai/routed-elsewhere", "group-a"),
+    _namesake_deployment("openai/routed-elsewhere", "openai/elsewhere"),
+    _namesake_deployment(
+        "model_name_team-1_own",
+        "openai/team-raw",
+        team_info={"team_id": "team-1", "team_public_model_name": "team-public"},
+    ),
+    _namesake_deployment(
+        "model_name_team-2_grouped", "openai/team-2-grouped-raw", "group-a", team_info={"team_id": "team-2"}
+    ),
+    _namesake_deployment("cross-team-granted", "openai/cross-team-raw", "group-a"),
+    _namesake_deployment("model_name_team-2_ungranted", "openai/cross-team-raw", team_info={"team_id": "team-2"}),
+)
+
+
+def _namesake_router(*extra: Mapping[str, object], pass_through: bool = False) -> litellm.Router:
+    return litellm.Router(
+        model_list=[dict(deployment) for deployment in (*_NAMESAKE_DEPLOYMENTS, *extra)],
+        router_general_settings=RouterGeneralSettings(pass_through_all_models=pass_through),
+    )
+
+
+def _can_call(
+    router: litellm.Router | RoutingContext,
+    models: list[str],
+    requested: str,
+    team_id: str | None = None,
+    key_model_aliases: Mapping[str, str] | None = None,
+) -> bool:
+    try:
+        return can_object_call_model(
+            model=requested,
+            llm_router=router,
+            models=models,
+            team_id=team_id,
+            key_model_aliases=key_model_aliases,
+            object_type="key",
+        )
+    except ProxyException as denied:
+        if denied.type != "key_model_access_denied":
+            raise
+        return False
+
+
+@pytest.mark.parametrize(
+    "models,requested,team_id,allowed",
+    [
+        (["group-a"], "openai/granted-raw", None, True),
+        (["granted-public"], "openai/granted-raw", None, True),
+        (["all-team-models"], "openai/granted-raw", "team-1", True),
+        (["team-public"], "openai/team-raw", "team-1", True),
+        (["team-public"], "openai/team-raw", "team-2", False),
+        (["group-a"], "openai/shared-raw", None, False),
+        (["shared-a"], "openai/shared-raw", None, False),
+        (["group-a"], "openai/split-a", None, True),
+        (["group-a"], "openai/split-b", None, False),
+        (["group-a"], "openai/routed-elsewhere", None, False),
+        (["group-a"], "openai/unknown", None, False),
+        (["group-a"], "openai/team-2-grouped-raw", "team-2", True),
+        (["group-a"], "openai/team-2-grouped-raw", "team-1", False),
+        (["group-a"], "openai/team-2-grouped-raw", None, False),
+        (["group-a"], "openai/cross-team-raw", None, True),
+        (["group-a"], "openai/cross-team-raw", "team-1", True),
+        (["group-a"], "openai/cross-team-raw", "team-2", False),
+    ],
+)
+def test_a_restricted_caller_reaches_a_litellm_model_name_only_when_every_deployment_behind_it_is_granted(
+    models: list[str], requested: str, team_id: str | None, allowed: bool
+) -> None:
+    assert _can_call(_namesake_router(), models, requested, team_id=team_id) is allowed
+
+
+@pytest.mark.parametrize("requested,allowed", [("openai/granted-raw", True), ("openai/shared-raw", False)])
+def test_a_routing_context_reaches_the_same_litellm_model_verdict_as_its_router(requested: str, allowed: bool) -> None:
+    assert _can_call(RoutingContext(_namesake_router()), ["group-a"], requested) is allowed
+
+
+_TEAM_PUBLIC_NAMESAKE: Final = _namesake_deployment(
+    "model_name_team-1_public",
+    "openai/team-public-raw",
+    team_info={"team_id": "team-1", "team_public_model_name": "openai/granted-raw"},
+)
+
+
+@pytest.mark.parametrize(
+    "routing,allowed",
+    [("specific_deployment", True), ("wildcard", False), ("default_deployment", False), ("pass_through", False)]
+    + [("team_public_name", False), ("key_alias", False), ("unrelated_wildcard", True)],
+)
+def test_a_litellm_model_name_grants_nothing_when_routing_would_not_pick_its_deployments(
+    routing: str, allowed: bool
+) -> None:
+    router: Final = (
+        _namesake_router({"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "fake"}})
+        if routing == "wildcard"
+        else _namesake_router({"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*", "api_key": "fake"}})
+        if routing == "unrelated_wildcard"
+        else _namesake_router(_TEAM_PUBLIC_NAMESAKE)
+        if routing == "team_public_name"
+        else _namesake_router(pass_through=routing == "pass_through")
+    )
+    if routing == "default_deployment":
+        router.apply(
+            ChangeSet(
+                assign={
+                    "default_deployment": {"model_name": "fallback", "litellm_params": {"model": "openai/fallback"}}
+                }
+            )
+        )
+    key_model_aliases: Final = {"openai/granted-raw": "openai/routed-elsewhere"} if routing == "key_alias" else None
+
+    assert _can_call(router, ["group-a"], "openai/granted-raw", "team-1", key_model_aliases) is allowed
+
+
+def test_a_litellm_model_name_grants_nothing_when_a_global_alias_rewrites_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    router: Final = _namesake_router()
+    assert _can_call(router, ["group-a"], "openai/granted-raw") is True
+    monkeypatch.setattr(litellm, "model_alias_map", {"openai/granted-raw": "shared-b"})
+
+    assert _can_call(router, ["group-a"], "openai/granted-raw") is False
+
+
+@pytest.mark.parametrize(
+    "requested,served_by",
+    [
+        ("openai/split-a", {"group-a"}),
+        ("openai/shared-raw", {"group-a", "group-b"}),
+        (("openai/split-a", "openai/split-b"), {"group-a", "group-b"}),
+        ("split", {"group-a", "group-b"}),
+        ("openai/routed-elsewhere", set()),
+    ],
+)
+def test_a_litellm_model_name_is_served_by_the_access_groups_of_its_own_deployments(
+    requested: str | tuple[str, ...], served_by: set[str]
+) -> None:
+    assert _model_access_groups_serving_model(requested, _namesake_router(), team_id=None) == served_by
+
+
+@pytest.mark.parametrize(
+    "requested,team_id,public_names",
+    [
+        ("openai/shared-raw", None, ("shared-a", "shared-b")),
+        ("openai/team-raw", "team-1", ("team-public",)),
+        ("openai/team-2-grouped-raw", "team-2", ("model_name_team-2_grouped",)),
+        ("openai/routed-elsewhere", None, ()),
+        ("granted-public", None, ()),
+        ("openai/unknown", None, ()),
+    ],
+)
+def test_a_litellm_model_name_resolves_to_the_public_names_of_the_deployments_routing_serves_it_from(
+    requested: str, team_id: str | None, public_names: tuple[str, ...]
+) -> None:
+    assert (
+        public_model_names_of_deployments_routed_by_litellm_model(requested, _namesake_router(), team_id)
+        == public_names
+    )
+
+
+@pytest.mark.parametrize("team_id,allowed", [("team-1", True), ("team-2", False)])
+@pytest.mark.asyncio
+async def test_a_customer_reaches_a_litellm_model_name_only_when_every_deployment_its_key_team_routes_to_is_granted(
+    team_id: str, allowed: bool
+) -> None:
+    async def run() -> bool:
+        return await common_checks(
+            request_body={"model": "openai/cross-team-raw"},
+            team_object=LiteLLM_TeamTable(team_id=team_id, models=[]),
+            user_object=None,
+            end_user_object=LiteLLM_EndUserTable(user_id="customer", blocked=False, models=["group-a"]),
+            global_proxy_spend=None,
+            general_settings={},
+            route="/v1/chat/completions",
+            llm_router=_namesake_router(),
+            proxy_logging_obj=AsyncMock(),
+            valid_token=UserAPIKeyAuth(token="test-token", team_id=team_id, models=[]),
+            request=MagicMock(),
+        )
+
+    if allowed:
+        assert await run() is True
+        return
+    with pytest.raises(ProxyException) as denied:
+        await run()
+    assert denied.value.type == "customer_model_access_denied"
+
+
+def _aliased_namesake_router(model_group_alias: Mapping[str, str]) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            _namesake_deployment("g1", "openai/aliased-raw", "group-a"),
+            _namesake_deployment("g2", "openai/aliased-raw"),
+        ],
+        model_group_alias=dict(model_group_alias),
+    )
+
+
+@pytest.mark.parametrize("model_group_alias", [{}, {"alias-of-g2": "g2"}])
+def test_a_model_group_alias_neither_blocks_nor_renames_the_deployments_behind_a_litellm_model_name(
+    model_group_alias: Mapping[str, str],
+) -> None:
+    router: Final = _aliased_namesake_router(model_group_alias)
+
+    assert _can_call(router, ["group-a", "g2"], "openai/aliased-raw") is True
+    assert _can_call(router, ["group-a"], "openai/aliased-raw") is False
+    assert public_model_names_of_deployments_routed_by_litellm_model("openai/aliased-raw", router, None) == ("g1", "g2")
+
+
+@pytest.mark.parametrize("requested", ["openai/cross-team-raw", ["openai/cross-team-raw"]])
+def test_a_litellm_model_name_is_judged_by_the_deployments_of_the_team_the_request_routes_under(
+    requested: str | list[str],
+) -> None:
+    with pytest.raises(ProxyException):
+        can_object_call_model(
+            model=requested,
+            llm_router=_namesake_router(),
+            models=["group-a"],
+            object_type="customer",
+            routing_team_id="team-2",
+        )
+
+
+_TEAMLESS_PROJECT: Final = LiteLLM_ProjectTableCachedObj(project_id="teamless", team_id=None, models=["group-a"])
+
+
+async def _teamless_project_gate(gate: str, team_id: str, monkeypatch: pytest.MonkeyPatch) -> bool:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+    from litellm.proxy.auth.user_api_key_auth import _is_fallback_model_authorized
+
+    token: Final = UserAPIKeyAuth(token="test-token", team_id=team_id, models=[], project_id="teamless")
+    match gate:
+        case "common_checks":
+            return await common_checks(
+                request_body={"model": "openai/cross-team-raw"},
+                team_object=LiteLLM_TeamTable(team_id=team_id, models=[]),
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=_namesake_router(),
+                proxy_logging_obj=AsyncMock(),
+                valid_token=token,
+                request=MagicMock(),
+                skip_budget_checks=True,
+                project_object=_TEAMLESS_PROJECT,
+            )
+        case "key_check":
+            cache: Final = UserApiKeyCache()
+            await cache.async_set_cache(key=AuthObject.project("teamless"), value=_TEAMLESS_PROJECT)
+            await cache.async_set_cache(key=AuthObject.team(team_id), value=LiteLLM_TeamTable(team_id=team_id))
+            monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+            monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+            await can_key_call_resolved_model("openai/cross-team-raw", None, token, _namesake_router())
+            return True
+        case _:
+            if not await _is_fallback_model_authorized(
+                model="openai/cross-team-raw",
+                valid_token=token,
+                llm_model_list=None,
+                llm_router=_namesake_router(),
+                project_object=_TEAMLESS_PROJECT,
+            ):
+                raise ModelAccessDeniedProxyException(
+                    message="fallback refused",
+                    internal_message="project not allowed to access model (fallback refused)",
+                    type="project_model_access_denied",
+                    param="model",
+                    code=403,
+                )
+            return True
+
+
+@pytest.mark.parametrize("gate", ["common_checks", "key_check", "fallback"])
+@pytest.mark.parametrize("team_id,allowed", [("team-1", True), ("team-2", False)])
+@pytest.mark.asyncio
+async def test_a_teamless_project_reaches_a_litellm_model_name_only_when_every_deployment_its_key_team_routes_to_is_granted(
+    gate: str, team_id: str, allowed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if allowed:
+        assert await _teamless_project_gate(gate, team_id, monkeypatch) is True
+        return
+    with pytest.raises(ModelAccessDeniedProxyException) as denied:
+        await _teamless_project_gate(gate, team_id, monkeypatch)
+    assert denied.value.internal_message.startswith("project not allowed to access model")

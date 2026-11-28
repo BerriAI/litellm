@@ -22,7 +22,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Generic, Literal, NoReturn, Optional, Protocol, TypeAlias
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, Unpack
 
 import litellm
@@ -183,7 +183,7 @@ from litellm.repositories.user_repository import NewUserDefaults, UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
-from litellm.router_api import RegistryReader
+from litellm.router_api import RegistryReader, RoutingContext
 from litellm.rust_bridge._native import NativeDatabaseFailure, NativeRateCard
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -864,6 +864,7 @@ async def _run_project_checks(
             project_object=project_object,
             llm_router=llm_router,
             key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+            routing_team_id=valid_token.team_id if valid_token is not None else None,
         )
 
     if not skip_budget_checks:
@@ -5109,6 +5110,122 @@ def _owning_team_names_for_team_deployment(
     return (*((public_name,) if public_name else ()), *legacy_aliases)
 
 
+def _routes_to_deployments_by_litellm_model(
+    model: str, llm_router: Router | RoutingContext, team_id: str | None
+) -> bool:
+    from litellm.proxy.route_llm_request import RouterModelRoute, model_route
+
+    if model in litellm.model_alias_map:
+        return False
+    match model_route(model, llm_router, team_id):
+        case RouterModelRoute(kind="specific_deployment"):
+            return True
+        case RouterModelRoute(kind="default_or_wildcard"):
+            return llm_router.settings().default_deployment is None and not llm_router.registry().deployments(
+                model, source="wildcard", team_id=team_id
+            )
+        case _:
+            return False
+
+
+class _ModelInfoAccessGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    access_groups: tuple[object, ...]
+
+
+class _DeploymentAccessGroups(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    model_info: _ModelInfoAccessGroups
+
+
+def deployment_access_groups(deployment: object) -> frozenset[str]:
+    match deployment:
+        case {"model_info": {"access_groups": list()}}:
+            access_groups: Final = _DeploymentAccessGroups.model_validate(deployment).model_info.access_groups
+            return frozenset(access_group for access_group in access_groups if isinstance(access_group, str))
+        case _:
+            return frozenset()
+
+
+def _deployment_granted(
+    deployment: DeploymentTypedDict,
+    llm_router: Router | RoutingContext,
+    models: Sequence[str],
+    team_model_aliases: Mapping[str, str] | None,
+    team_id: str | None,
+) -> bool:
+    if not deployment_access_groups(deployment).isdisjoint(models):
+        return True
+    owning_team_names: Final = _owning_team_names_for_team_deployment(
+        model=deployment["model_name"], llm_router=llm_router, team_id=team_id, team_model_aliases=team_model_aliases
+    )
+    granted_models: Final = _resolve_all_team_model_sentinel_for_auth_check(
+        models=list(models), llm_router=llm_router, team_id=team_id
+    )
+    return any(
+        check_model_access_helper(model=name, llm_router=None, models=granted_models, team_id=team_id)
+        for name in (deployment["model_name"], *owning_team_names)
+    )
+
+
+def deployments_routed_by_litellm_model(
+    model: str, llm_router: Router | RoutingContext, team_id: str | None
+) -> tuple[DeploymentTypedDict, ...]:
+    if not _routes_to_deployments_by_litellm_model(model, llm_router, team_id):
+        return ()
+    registry: Final = llm_router.registry()
+    stored_deployments: Final[Sequence[DeploymentTypedDict]] = registry.all()
+    return tuple(
+        deployment
+        for deployment in stored_deployments
+        if deployment["litellm_params"].get("model") == model and registry.includes(deployment, team_id=team_id)
+    )
+
+
+def access_groups_of_deployments_routed_by_litellm_model(
+    model: str, llm_router: Router | RoutingContext, team_id: str | None
+) -> frozenset[str]:
+    return frozenset[str]().union(
+        *(
+            deployment_access_groups(deployment)
+            for deployment in deployments_routed_by_litellm_model(model, llm_router, team_id)
+        )
+    )
+
+
+def public_model_names_of_deployments_routed_by_litellm_model(
+    model: str, llm_router: Router | RoutingContext, team_id: str | None
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(map(_public_model_name, deployments_routed_by_litellm_model(model, llm_router, team_id)))
+    )
+
+
+def _public_model_name(deployment: DeploymentTypedDict) -> str:
+    match deployment:
+        case {"model_info": {"team_public_model_name": str() as public_name}} if public_name:
+            return public_name
+        case _:
+            return deployment["model_name"]
+
+
+def _every_deployment_with_litellm_model_granted(
+    model: str,
+    llm_router: RegistryReader | None,
+    models: Sequence[str],
+    team_model_aliases: Mapping[str, str] | None,
+    team_id: str | None,
+) -> bool:
+    if not isinstance(llm_router, Router | RoutingContext):
+        return False
+    namesakes: Final = deployments_routed_by_litellm_model(model, llm_router, team_id)
+    return bool(namesakes) and all(
+        _deployment_granted(deployment, llm_router, models, team_model_aliases, team_id) for deployment in namesakes
+    )
+
+
 def _can_object_call_model(
     model: str | list[str],
     llm_router: RegistryReader | None,
@@ -5118,6 +5235,7 @@ def _can_object_call_model(
     key_model_aliases: Mapping[str, str] | None = None,
     object_type: Literal["user", "customer", "team", "key", "org", "project", "agent"] = "user",
     fallback_depth: int = 0,
+    routing_team_id: str | None = None,
 ) -> Literal[True]:
     """
     Checks if token can call a given model
@@ -5148,6 +5266,7 @@ def _can_object_call_model(
                 key_model_aliases=key_model_aliases,
                 object_type=object_type,
                 fallback_depth=fallback_depth + 1,
+                routing_team_id=routing_team_id,
             )
         return True
 
@@ -5201,6 +5320,14 @@ def _can_object_call_model(
     if any(
         check_model_access_helper(model=name, llm_router=llm_router, models=models, team_id=team_id)
         for name in owning_team_names
+    ):
+        return True
+    if not key_alias_applied and _every_deployment_with_litellm_model_granted(
+        model=model,
+        llm_router=llm_router,
+        models=models,
+        team_model_aliases=team_model_aliases,
+        team_id=team_id if routing_team_id is None else routing_team_id,
     ):
         return True
 
@@ -5457,7 +5584,10 @@ def _model_access_groups_serving_model(
     return frozenset(
         group
         for requested_model in requested
-        for group in llm_router.registry().access_groups(model_name=requested_model, team_id=team_id)
+        for group in (
+            *llm_router.registry().access_groups(model_name=requested_model, team_id=team_id),
+            *access_groups_of_deployments_routed_by_litellm_model(requested_model, llm_router, team_id),
+        )
     )
 
 
@@ -5870,6 +6000,7 @@ async def _can_key_call_resolved_model(
                 project_object=project_object,
                 llm_router=llm_router,
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                routing_team_id=valid_token.team_id,
             )
 
     if valid_token.end_user_id is not None and prisma_client is not None:
@@ -6060,6 +6191,7 @@ def can_project_access_model(
     project_object: LiteLLM_ProjectTable,
     llm_router: RegistryReader | None,
     key_model_aliases: Mapping[str, str] | None = None,
+    routing_team_id: str | None = None,
 ) -> Literal[True]:
     """
     Returns True if the project can access a specific model.
@@ -6073,6 +6205,7 @@ def can_project_access_model(
         team_id=project_object.team_id if project_object else None,
         key_model_aliases=key_model_aliases,
         object_type="project",
+        routing_team_id=routing_team_id,
     )
 
 
@@ -6098,6 +6231,7 @@ def _can_customer_scope_call_model(
             models=list(models),
             key_model_aliases=key_model_aliases,
             object_type="customer",
+            routing_team_id=team_id,
         )
 
     for name in (model,) if isinstance(model, str) else model:

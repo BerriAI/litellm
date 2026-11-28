@@ -712,6 +712,220 @@ async def test_an_entry_named_after_a_global_alias_still_governs_that_alias(monk
         await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-4-8")
 
 
+NAMESAKE_MODEL: Final = "openai/namesake-raw"
+
+
+def _router_with_namesakes() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "chat-a",
+                "litellm_params": {"model": NAMESAKE_MODEL, "api_key": "sk-test"},
+                "model_info": {"access_groups": ["namesake-group"]},
+            },
+            {"model_name": "chat-b", "litellm_params": {"model": NAMESAKE_MODEL, "api_key": "sk-test"}},
+            {"model_name": "chat-c", "litellm_params": {"model": "openai/other-raw", "api_key": "sk-test"}},
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("budget_entry", "governed_name", "other_name"),
+    [("chat-a", "chat-a", "chat-b"), ("chat-b", "chat-b", "chat-a"), ("namesake-group", "chat-a", "chat-b")],
+)
+async def test_an_entry_on_a_public_name_or_access_group_gates_and_charges_requests_by_its_litellm_model(
+    monkeypatch: pytest.MonkeyPatch, budget_entry: str, governed_name: str, other_name: str
+):
+    router: Final = _router_with_namesakes()
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(
+        dual_cache=DualCache(),
+        model_access_groups=lambda model, team_id: model_access_groups_of(router=router, model=model, team_id=team_id),
+        shared_windows=_WindowSpendDatabase().replica(),
+    )
+    budget: Final = {budget_entry: FAMILY_CAP}
+    assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=NAMESAKE_MODEL)
+
+    await _spend_on(limiter, model=NAMESAKE_MODEL, model_max_budget=budget)
+
+    for requested in (NAMESAKE_MODEL, governed_name):
+        with pytest.raises(litellm.BudgetExceededError):
+            await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+    for requested in (other_name, "openai/other-raw"):
+        assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("budget", "blocked", "served"),
+    [
+        ({"chat-a": ROOMY_CAP, "chat-b": FAMILY_CAP}, (NAMESAKE_MODEL, "chat-b"), ("chat-a",)),
+        ({"chat-a": FAMILY_CAP, "chat-b": ROOMY_CAP}, (NAMESAKE_MODEL, "chat-a"), ("chat-b",)),
+        ({"chat-a": FAMILY_CAP, "chat-b": FAMILY_CAP}, (NAMESAKE_MODEL, "chat-a", "chat-b"), ()),
+    ],
+)
+async def test_every_public_name_entry_of_a_litellm_model_gates_and_charges_its_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    budget: Mapping[str, object],
+    blocked: tuple[str, ...],
+    served: tuple[str, ...],
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _router_with_namesakes())
+    limiter: Final = _family_limiter(groups_by_model={})
+
+    await _spend_on(limiter, model=NAMESAKE_MODEL, model_max_budget=budget)
+
+    for requested in blocked:
+        with pytest.raises(litellm.BudgetExceededError):
+            await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+    for requested in served:
+        assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+
+
+@pytest.mark.asyncio
+async def test_a_litellm_model_request_served_by_a_team_deployment_charges_every_public_name_budget(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "model_name_team-1_a",
+                    "litellm_params": {"model": NAMESAKE_MODEL, "api_key": "sk-test"},
+                    "model_info": {"team_id": "team-1", "team_public_model_name": "chat-a"},
+                },
+                {"model_name": "chat-b", "litellm_params": {"model": NAMESAKE_MODEL, "api_key": "sk-test"}},
+            ]
+        ),
+    )
+    budget: Final = {"chat-a": ROOMY_CAP, "chat-b": FAMILY_CAP}
+    limiter: Final = _family_limiter(groups_by_model={})
+    key: Final = UserAPIKeyAuth(token=KEY_HASH, team_id="team-1", model_max_budget=budget)
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "acompletion",
+            "standard_logging_object": {
+                "call_type": "acompletion",
+                "response_cost": CHAT_COST,
+                "model": NAMESAKE_MODEL,
+                "model_group": NAMESAKE_MODEL,
+                "metadata": {"user_api_key_hash": KEY_HASH, "user_api_key_team_id": "team-1"},
+            },
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_model_max_budget": dict(budget),
+                    "user_api_key_team_id": "team-1",
+                    "model_info": {"team_id": "team-1", "team_public_model_name": "chat-a"},
+                }
+            },
+        },
+    )
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_key_within_model_budget(user_api_key_dict=key, model="chat-b")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("team_id", "governed"), [(None, True), ("team-1", False)])
+async def test_a_team_public_name_that_matches_another_deployments_litellm_model_keeps_its_own_budgets(
+    monkeypatch: pytest.MonkeyPatch, team_id: str | None, governed: bool
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {"model_name": "my-gpt", "litellm_params": {"model": "gpt-4o", "api_key": "sk-test"}},
+                {
+                    "model_name": "model_name_team-1_own",
+                    "litellm_params": {"model": "openai/team-raw", "api_key": "sk-test"},
+                    "model_info": {"team_id": "team-1", "team_public_model_name": "gpt-4o"},
+                },
+            ]
+        ),
+    )
+    budget: Final = {"my-gpt": FAMILY_CAP}
+    limiter: Final = _family_limiter(groups_by_model={})
+    key: Final = UserAPIKeyAuth(token=KEY_HASH, team_id=team_id, model_max_budget=budget)
+
+    await _spend_on(limiter, model="my-gpt", model_max_budget=budget)
+
+    if governed:
+        with pytest.raises(litellm.BudgetExceededError):
+            await limiter.is_key_within_model_budget(user_api_key_dict=key, model="gpt-4o")
+    else:
+        assert await limiter.is_key_within_model_budget(user_api_key_dict=key, model="gpt-4o")
+
+
+RAW_MODEL: Final = "openai/raw-x"
+PUBLIC_NAME: Final = "chat-public"
+
+
+def _router_with_public_name() -> Router:
+    return Router(
+        model_list=[{"model_name": PUBLIC_NAME, "litellm_params": {"model": RAW_MODEL, "api_key": "sk-test"}}]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("strict_name", "requested", "blocked"),
+    [
+        (RAW_MODEL, RAW_MODEL, True),
+        (PUBLIC_NAME, RAW_MODEL, True),
+        (RAW_MODEL, PUBLIC_NAME, False),
+        (PUBLIC_NAME, PUBLIC_NAME, True),
+    ],
+)
+async def test_budgets_on_a_litellm_model_and_its_public_name_gate_litellm_model_requests_by_the_stricter_one(
+    monkeypatch: pytest.MonkeyPatch, strict_name: str, requested: str, blocked: bool
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _router_with_public_name())
+    limiter: Final = _family_limiter(groups_by_model={})
+    budget: Final = {name: FAMILY_CAP if name == strict_name else ROOMY_CAP for name in (RAW_MODEL, PUBLIC_NAME)}
+    assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+
+    await _spend_on(limiter, model=RAW_MODEL, model_max_budget=budget)
+
+    if blocked:
+        with pytest.raises(litellm.BudgetExceededError, match="exceeded budget"):
+            await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+    else:
+        assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("requested", "raw_charged"), [(RAW_MODEL, True), (PUBLIC_NAME, False)])
+async def test_budgets_on_a_litellm_model_and_its_public_name_each_charge_a_request_once(
+    monkeypatch: pytest.MonkeyPatch, requested: str, raw_charged: bool
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _router_with_public_name())
+    cache: Final = DualCache()
+    limiter: Final = _family_limiter(groups_by_model={}, dual_cache=cache)
+    budget: Final = {RAW_MODEL: ROOMY_CAP, PUBLIC_NAME: ROOMY_CAP}
+    requests: Final = 3
+
+    for _ in range(requests):
+        await _spend_on(limiter, model=requested, model_max_budget=budget)
+
+    charged: Final = {
+        name: await cache.async_get_cache(
+            model_budget_spend_cache_key(
+                entity_type=Litellm_EntityType.KEY, entity_id=KEY_HASH, budget_model=name, budget_duration="1d"
+            ),
+            local_only=True,
+        )
+        for name in (RAW_MODEL, PUBLIC_NAME)
+    }
+    assert charged == {
+        RAW_MODEL: pytest.approx(CHAT_COST * requests) if raw_charged else None,
+        PUBLIC_NAME: pytest.approx(CHAT_COST * requests),
+    }
+
+
 @pytest.mark.asyncio
 async def test_a_model_added_to_the_access_group_later_is_covered_with_no_key_change():
     budget: Final = {OPUS_GROUP: FAMILY_CAP}
@@ -1368,3 +1582,51 @@ async def test_a_delegated_response_is_charged_at_the_regional_price_of_its_sess
     )
 
     assert await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{model}:1d") == pytest.approx(regional_cost), model
+
+
+def _router_with_team_public_name() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": f"model_name_{TEAM_ID}_public",
+                "litellm_params": {"model": RAW_MODEL, "api_key": "sk-test"},
+                "model_info": {"team_id": TEAM_ID, "team_public_model_name": PUBLIC_NAME},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("router", [_router_with_public_name, _router_with_team_public_name])
+@pytest.mark.parametrize("requested", [PUBLIC_NAME, RAW_MODEL])
+async def test_a_key_entry_on_a_public_name_replaces_the_team_entry_for_requests_by_its_litellm_model(
+    monkeypatch: pytest.MonkeyPatch, router: Callable[[], Router], requested: str
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router())
+    cache: Final = DualCache()
+    limiter: Final = _family_limiter(groups_by_model={}, dual_cache=cache)
+    team_model_max_budget: Final = {PUBLIC_NAME: FAMILY_CAP}
+    key_model_max_budget: Final = {PUBLIC_NAME: ROOMY_CAP}
+    team_spend_key: Final = model_budget_spend_cache_key(
+        entity_type=Litellm_EntityType.TEAM, entity_id=TEAM_ID, budget_model=PUBLIC_NAME, budget_duration="1d"
+    )
+
+    for _ in range(2):
+        await _spend_on_team_key(
+            limiter,
+            model=requested,
+            key_model_max_budget=key_model_max_budget,
+            team_model_max_budget=team_model_max_budget,
+        )
+    assert await cache.async_get_cache(team_spend_key, local_only=True) is None
+
+    await _spend_on_team_key(
+        limiter, model=PUBLIC_NAME, key_model_max_budget={}, team_model_max_budget=team_model_max_budget
+    )
+    assert await cache.async_get_cache(team_spend_key, local_only=True) == pytest.approx(CHAT_COST)
+    assert await limiter.is_team_within_model_budget(
+        team_id=TEAM_ID,
+        team_model_max_budget=team_model_max_budget,
+        key_model_max_budget=key_model_max_budget,
+        model=requested,
+    )

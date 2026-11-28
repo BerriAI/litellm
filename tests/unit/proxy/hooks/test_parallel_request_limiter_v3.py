@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_ali
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import public_model_names_of_deployments_routed_by_litellm_model
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks import parallel_request_limiter_v3 as parallel_request_limiter_v3_module
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -2040,6 +2041,301 @@ async def test_success_tpm_accounting_keeps_the_admission_target_after_an_alias_
 
     assert _tokens(handler, "model_per_key", f"{auth.api_key}:target-a") - admitted == 150 - stash.reserved_tokens
     assert _tokens(handler, "model_per_key", f"{auth.api_key}:target-b") == 0
+
+
+_NAMESAKE_MODEL: Final = "openai/namesake-raw"
+
+
+@pytest.mark.parametrize(
+    "limits, first, second",
+    [
+        ({"chat-a": 1}, _NAMESAKE_MODEL, "chat-a"),
+        ({"chat-a": 1}, "chat-a", _NAMESAKE_MODEL),
+        ({"chat-a": 5, "chat-b": 1}, _NAMESAKE_MODEL, _NAMESAKE_MODEL),
+        ({"chat-a": 5, "chat-b": 1}, "chat-b", _NAMESAKE_MODEL),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_per_model_rpm_limit_on_a_public_name_counts_requests_by_its_litellm_model(
+    limits: dict[str, int], first: str, second: str
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": _NAMESAKE_MODEL, "api_key": "sk-test"}}
+            for name in ("chat-a", "chat-b")
+        ]
+    )
+    cache: Final = DualCache()
+    handler: Final = NativeLimiter(
+        internal_usage_cache=InternalUsageCache(cache),
+        namesake_models_resolver=lambda model, team: public_model_names_of_deployments_routed_by_litellm_model(
+            model, router, team
+        ),
+    )
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-namesake"), metadata={"model_rpm_limit": limits})
+
+    async def call(model: str) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": model, "messages": [{"role": "user", "content": "hello"}]},
+            call_type="acompletion",
+        )
+
+    await call(first)
+    with pytest.raises(ProxyRateLimitError, match="model_per_key"):
+        await call(second)
+    await call("chat-a" if limits.get("chat-b") == 1 else "chat-b")
+
+
+@pytest.mark.parametrize("team_id, refused", [(None, True), ("team-1", False)])
+@pytest.mark.asyncio
+async def test_a_team_public_name_that_matches_another_deployments_litellm_model_keeps_its_own_limits(
+    team_id: str | None, refused: bool
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "my-gpt", "litellm_params": {"model": "gpt-4o", "api_key": "sk-test"}},
+            {
+                "model_name": "model_name_team-1_own",
+                "litellm_params": {"model": "openai/team-raw", "api_key": "sk-test"},
+                "model_info": {"team_id": "team-1", "team_public_model_name": "gpt-4o"},
+            },
+        ]
+    )
+    cache: Final = DualCache()
+    handler: Final = NativeLimiter(
+        internal_usage_cache=InternalUsageCache(cache),
+        namesake_models_resolver=lambda model, team: public_model_names_of_deployments_routed_by_litellm_model(
+            model, router, team
+        ),
+    )
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-team-public"), team_id=team_id, metadata={"model_rpm_limit": {"my-gpt": 1}}
+    )
+
+    async def call() -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
+            call_type="acompletion",
+        )
+
+    await call()
+    if refused:
+        with pytest.raises(ProxyRateLimitError, match="model_per_key"):
+            await call()
+    else:
+        await call()
+    await _log_success(
+        handler,
+        {
+            "standard_logging_object": {
+                "metadata": {"user_api_key_hash": auth.api_key, "user_api_key_team_id": team_id}
+            },
+            "litellm_params": {"metadata": {"model_group": "gpt-4o", "user_api_key_metadata": auth.metadata}},
+            "model": "gpt-4o",
+        },
+        ModelResponse(
+            id="team-public-settle",
+            object="chat.completion",
+            created=int(datetime.now().timestamp()),
+            model="gpt-4o",
+            usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+            choices=[],
+        ),
+    )
+    assert (_tokens(handler, "model_per_key", f"{auth.api_key}:my-gpt") > 0) is refused
+
+
+@pytest.mark.parametrize("served_group", [_NAMESAKE_MODEL, "chat-a"])
+@pytest.mark.asyncio
+async def test_a_request_by_a_litellm_model_settles_each_public_name_counter_once(
+    monkeypatch: pytest.MonkeyPatch, served_group: str
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": _NAMESAKE_MODEL, "api_key": "sk-test"}}
+            for name in ("chat-a", "chat-b")
+        ]
+    )
+    cache: Final = DualCache()
+    handler: Final = NativeLimiter(
+        internal_usage_cache=InternalUsageCache(cache),
+        namesake_models_resolver=lambda model, team: public_model_names_of_deployments_routed_by_litellm_model(
+            model, router, team
+        ),
+    )
+    _set_token_rate_limit_type(monkeypatch, "total")
+    key_metadata: Final = {"model_tpm_limit": {"chat-a": 100_000, "chat-b": 100_000}}
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-namesake-settle"), metadata=key_metadata)
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": _NAMESAKE_MODEL, "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10},
+        call_type="acompletion",
+    )
+    response: Final = ModelResponse(
+        id="namesake-settle",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model=_NAMESAKE_MODEL,
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs: Final = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+        "litellm_params": {"metadata": {"model_group": served_group, "user_api_key_metadata": key_metadata}},
+        "model": _NAMESAKE_MODEL,
+    }
+
+    await _log_success(handler, kwargs, response)
+
+    assert [_tokens(handler, "model_per_key", f"{auth.api_key}:{name}") for name in ("chat-a", "chat-b")] == [
+        150,
+        150,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_success_tpm_accounting_charges_the_public_names_of_a_litellm_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()),
+        namesake_models_resolver=lambda model, _team: ("chat-a", "chat-b") if model == _NAMESAKE_MODEL else (),
+    )
+    _set_token_rate_limit_type(monkeypatch, "output")
+    key: Final = hash_token("sk-namesake-tpm")
+    kwargs: Final = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": key}},
+        "litellm_params": {"metadata": {"model_group": _NAMESAKE_MODEL, "user_api_key_metadata": {}}},
+        "model": _NAMESAKE_MODEL,
+    }
+    response: Final = ModelResponse(
+        id="namesake-tpm",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model=_NAMESAKE_MODEL,
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+
+    await _log_success(handler, kwargs, response)
+
+    assert [_tokens(handler, "model_per_key", f"{key}:{name}") for name in ("chat-a", "chat-b", "chat-c")] == [
+        50,
+        50,
+        0,
+    ]
+
+
+_RAW_MODEL: Final = "openai/raw-x"
+_PUBLIC_NAME: Final = "chat-public"
+
+
+def _public_name_limiter() -> NativeLimiter:
+    router: Final = Router(
+        model_list=[{"model_name": _PUBLIC_NAME, "litellm_params": {"model": _RAW_MODEL, "api_key": "sk-test"}}]
+    )
+    return NativeLimiter(
+        internal_usage_cache=InternalUsageCache(DualCache()),
+        namesake_models_resolver=lambda model, team: public_model_names_of_deployments_routed_by_litellm_model(
+            model, router, team
+        ),
+    )
+
+
+async def _served_request(handler: NativeLimiter, auth: UserAPIKeyAuth, model: str, request_id: str) -> None:
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=DualCache(),
+        data={"model": model, "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10},
+        call_type="acompletion",
+    )
+    await _log_success(
+        handler,
+        {
+            "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+            "litellm_params": {"metadata": {"model_group": model, "user_api_key_metadata": auth.metadata}},
+            "model": model,
+        },
+        ModelResponse(
+            id=request_id,
+            object="chat.completion",
+            created=1_760_000_000,
+            model=model,
+            usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+            choices=[],
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "limit_field, strict, roomy",
+    [("model_rpm_limit", 1, 100), ("model_tpm_limit", 100, 100_000)],
+)
+@pytest.mark.parametrize(
+    "strict_name, requested, refused",
+    [
+        (_RAW_MODEL, _RAW_MODEL, True),
+        (_PUBLIC_NAME, _RAW_MODEL, True),
+        (_RAW_MODEL, _PUBLIC_NAME, False),
+        (_PUBLIC_NAME, _PUBLIC_NAME, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_limits_on_a_litellm_model_and_its_public_name_gate_litellm_model_requests_by_the_stricter_one(
+    monkeypatch: pytest.MonkeyPatch,
+    limit_field: str,
+    strict: int,
+    roomy: int,
+    strict_name: str,
+    requested: str,
+    refused: bool,
+) -> None:
+    _set_token_rate_limit_type(monkeypatch, "total")
+    handler: Final = _public_name_limiter()
+    limits: Final = {name: strict if name == strict_name else roomy for name in (_RAW_MODEL, _PUBLIC_NAME)}
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-both-names"), metadata={limit_field: limits})
+
+    await _served_request(handler, auth, _RAW_MODEL, "both-names-first")
+
+    if refused:
+        with pytest.raises(ProxyRateLimitError, match="model_per_key"):
+            await _served_request(handler, auth, requested, "both-names-second")
+    else:
+        await _served_request(handler, auth, requested, "both-names-second")
+
+
+@pytest.mark.parametrize("requested, raw_counted", [(_RAW_MODEL, True), (_PUBLIC_NAME, False)])
+@pytest.mark.asyncio
+async def test_limits_on_a_litellm_model_and_its_public_name_each_count_a_request_once(
+    monkeypatch: pytest.MonkeyPatch, requested: str, raw_counted: bool
+) -> None:
+    _set_token_rate_limit_type(monkeypatch, "total")
+    handler: Final = _public_name_limiter()
+    roomy: Final = {_RAW_MODEL: 100_000, _PUBLIC_NAME: 100_000}
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-both-names-count"), metadata={"model_rpm_limit": roomy, "model_tpm_limit": roomy}
+    )
+    requests: Final = 3
+
+    for index in range(requests):
+        await _served_request(handler, auth, requested, f"both-names-count-{index}")
+
+    counted: Final = {
+        name: (
+            _local(handler, _counter("model_per_key", f"{auth.api_key}:{name}", "requests")),
+            _tokens(handler, "model_per_key", f"{auth.api_key}:{name}"),
+        )
+        for name in (_RAW_MODEL, _PUBLIC_NAME)
+    }
+    assert counted == {
+        _RAW_MODEL: (requests, 150 * requests) if raw_counted else (None, 0),
+        _PUBLIC_NAME: (requests, 150 * requests),
+    }
 
 
 # --- a team's PTU share on a shared Azure provisioned deployment ---------------------------

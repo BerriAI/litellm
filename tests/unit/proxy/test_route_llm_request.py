@@ -29,8 +29,11 @@ from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
     ProxyCommaSeparatedModelsStreamError,
     ProxyModelNotFoundError,
+    RouterModelRoute,
+    TeamModelRoute,
     UserConfigRouters,
     endpoint_unsupported_by_model,
+    model_route,
     route_request,
     user_config_routers,
 )
@@ -3685,3 +3688,57 @@ async def test_a_request_a_hook_turned_streaming_runs_unbounded_under_a_header_t
 
     assert chunks
     assert deadline is not None and deadline.allows_wait(10**9)
+
+
+def _routing_deployment(model_name: str, litellm_model: str, **model_info: str) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": litellm_model, "api_key": "fake"},
+        "model_info": model_info,
+    }
+
+
+_ROUTING_DEPLOYMENTS: Final = (
+    _routing_deployment("chat-public", "openai/chat-raw"),
+    _routing_deployment(
+        "model_name_team-1_own", "openai/team-raw", team_id="team-1", team_public_model_name="team-chat"
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    "extra,general_settings,model,team_id,expected",
+    [
+        ((), RouterGeneralSettings(), "chat-public", None, RouterModelRoute("recognized")),
+        ((), RouterGeneralSettings(), "team-chat", "team-1", TeamModelRoute("team-chat")),
+        ((), RouterGeneralSettings(), "openai/chat-raw", None, RouterModelRoute("specific_deployment")),
+        ((), RouterGeneralSettings(), "openai/unknown", None, RouterModelRoute("unmatched")),
+        (
+            (),
+            RouterGeneralSettings(pass_through_all_models=True),
+            "openai/chat-raw",
+            None,
+            RouterModelRoute("pass_through"),
+        ),
+        (
+            (_routing_deployment("openai/*", "openai/*"),),
+            RouterGeneralSettings(),
+            "openai/chat-raw",
+            None,
+            RouterModelRoute("default_or_wildcard"),
+        ),
+    ],
+)
+def test_model_route_names_the_path_route_request_takes(
+    extra: tuple[dict[str, object], ...],
+    general_settings: RouterGeneralSettings,
+    model: str,
+    team_id: str | None,
+    expected: TeamModelRoute | RouterModelRoute,
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[dict(deployment) for deployment in (*_ROUTING_DEPLOYMENTS, *extra)],
+        router_general_settings=general_settings,
+    )
+
+    assert model_route(model, router, team_id) == expected

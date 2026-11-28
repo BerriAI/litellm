@@ -16,7 +16,7 @@ from typing import Final, Literal
 import httpx
 import pytest
 import yaml
-from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
+from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -200,11 +200,13 @@ def _group_key(scenario: Scenario, name: str, grant: Grant) -> str:
             return scenario.key(team_id=project_team, project_id=project_id, models=[])
 
 
-def _budgeted_group(scenario: Scenario, wire: Wire, grant: Grant = "key") -> _Group:
+def _budgeted_group(
+    scenario: Scenario, wire: Wire, grant: Grant = "key", litellm_model: str = f"openai/{_PROVIDER_MODEL}"
+) -> _Group:
     """A database model in a fresh access group with one grant and a 0.0001 group budget."""
     name: Final = f"integration-group-{uuid.uuid4().hex}"
     model: Final = scenario.model(
-        model=f"openai/{_PROVIDER_MODEL}",
+        model=litellm_model,
         api_base=f"{wire.url}/v1",
         input_cost_per_token=_INPUT_RATE,
         output_cost_per_token=_OUTPUT_RATE,
@@ -429,3 +431,183 @@ def test_reservation_refuses_a_concurrent_call_while_an_in_flight_call_holds_the
             wire,
             f"Budget has been exceeded! Model access group={group.name} Current cost: {_MAX_BUDGET}, Max budget: {_MAX_BUDGET}",
         )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("first_call_by", ("model_name", "litellm_model"))
+def test_access_group_budget_charges_and_refuses_a_request_by_the_deployment_litellm_model(
+    gateway: Gateway, first_call_by: Literal["model_name", "litellm_model"]
+) -> None:
+    litellm_model: Final = f"openai/raw-{uuid.uuid4().hex}"
+
+    def chat(model: str, key: str) -> httpx.Response:
+        return gateway.request(
+            "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": model}]}, key=key
+        )
+
+    with wire_server(_billed) as wire, gateway.scenario() as scenario:
+        group: Final = _budgeted_group(scenario, wire, litellm_model=litellm_model)
+        first_model: Final = group.model if first_call_by == "model_name" else litellm_model
+        served: Final = chat(first_model, group.key)
+        assert served.status_code == 200, served.text
+        assert [json.loads(entry.body)["messages"] for entry in _provider_calls(wire)] == [
+            [{"role": "user", "content": first_model}]
+        ], served.text
+        charged: Final = eventually(
+            lambda: _GroupBudget.model_validate_json(
+                gateway.request("GET", f"/access_group/{group.name}/budget").content
+            ),
+            lambda value: value.spend > 0,
+            seconds=60,
+            return_last_on_timeout=True,
+        )
+        assert charged.spend == pytest.approx(_CALL_COST), f"{first_model} was not charged to {group.name}: {charged}"
+        refused: Final = chat(litellm_model, group.key)
+        assert refused.status_code == 422, refused.text
+        error: Final = _Error.model_validate_json(refused.content).error
+        assert (error.type, error.message.partition(" Current cost: ")[0]) == (
+            "budget_exceeded",
+            f"Budget has been exceeded! Model access group={group.name}",
+        ), refused.text
+        assert _provider_calls(wire) == (), f"A refused request reached the provider: {refused.text}"
+        assert _budget_rows(group.name)[0]["spend"] == pytest.approx(_CALL_COST)
+
+
+def _model_budget_spend(gateway: Gateway, key: str, entry: str) -> float:
+    usage: Final = object_value(object_value(gateway.get("/key/info", {"key": key})["info"])["model_max_budget_usage"])
+    return float(str(object_value(usage[entry])["current_spend"])) if entry in usage else 0.0
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("budget_entry", ("model_name", "access_group"))
+@pytest.mark.parametrize("first_call_by", ("model_name", "litellm_model"))
+def test_key_model_max_budget_on_the_public_name_or_access_group_governs_requests_by_the_litellm_model(
+    gateway: Gateway,
+    budget_entry: Literal["model_name", "access_group"],
+    first_call_by: Literal["model_name", "litellm_model"],
+) -> None:
+    litellm_model: Final = f"openai/raw-{uuid.uuid4().hex}"
+    access_group: Final = f"integration-group-{uuid.uuid4().hex}"
+
+    def chat(model: str, key: str) -> httpx.Response:
+        return gateway.request(
+            "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": model}]}, key=key
+        )
+
+    with wire_server(_billed) as wire, gateway.scenario() as scenario:
+        public_name: Final = scenario.model(
+            model=litellm_model,
+            api_base=f"{wire.url}/v1",
+            input_cost_per_token=_INPUT_RATE,
+            output_cost_per_token=_OUTPUT_RATE,
+            model_info={"access_groups": [access_group]},
+        )
+        entry: Final = public_name if budget_entry == "model_name" else access_group
+        key: Final = scenario.key(
+            models=[public_name], model_max_budget={entry: {"max_budget": _MAX_BUDGET, "budget_duration": "30d"}}
+        )
+        first_model, second_model = (
+            (public_name, litellm_model) if first_call_by == "model_name" else (litellm_model, public_name)
+        )
+        served: Final = chat(first_model, key)
+        assert served.status_code == 200, served.text
+        assert len(_provider_calls(wire)) == 1, served.text
+        spent: Final = eventually(
+            lambda: _model_budget_spend(gateway, key, entry),
+            lambda value: value >= _MAX_BUDGET,
+            seconds=60,
+            return_last_on_timeout=True,
+        )
+        assert spent >= _MAX_BUDGET, f"{first_model} was not charged to the {entry} entry: {spent}"
+        refused: Final = chat(second_model, key)
+        assert refused.status_code == 422, refused.text
+        assert _Error.model_validate_json(refused.content).error.type == "budget_exceeded", refused.text
+        assert _provider_calls(wire) == (), f"A refused request reached the provider: {refused.text}"
+
+
+@pytest.mark.timeout(120)
+def test_a_litellm_model_request_served_by_a_team_deployment_charges_another_namesakes_public_name_budget(
+    gateway: Gateway,
+) -> None:
+    litellm_model: Final = f"openai/raw-{uuid.uuid4().hex}"
+
+    with wire_server(_billed) as wire, gateway.scenario() as scenario:
+        team_id: Final = scenario.team()
+
+        def deployment(api_key: str, order: int, model_info: dict[str, str]) -> str:
+            return scenario.model(
+                model=litellm_model,
+                api_base=f"{wire.url}/v1",
+                api_key=api_key,
+                order=order,
+                input_cost_per_token=_INPUT_RATE,
+                output_cost_per_token=_OUTPUT_RATE,
+                model_info=model_info,
+            )
+
+        deployment("team-deployment", 1, {"team_id": team_id, "team_public_model_name": f"team-{uuid.uuid4().hex}"})
+        global_name: Final = deployment("global-deployment", 2, {})
+        key: Final = scenario.key(
+            team_id=team_id,
+            models=[],
+            model_max_budget={global_name: {"max_budget": _MAX_BUDGET, "budget_duration": "30d"}},
+        )
+        body: Final = {"model": litellm_model, "messages": [{"role": "user", "content": "namesake budget"}]}
+        served: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
+        assert served.status_code == 200, served.text
+        assert [entry.headers.get("authorization") for entry in _provider_calls(wire)] == ["Bearer team-deployment"], (
+            served.text
+        )
+        spent: Final = eventually(
+            lambda: _model_budget_spend(gateway, key, global_name),
+            lambda value: value >= _MAX_BUDGET,
+            seconds=60,
+            return_last_on_timeout=True,
+        )
+        assert spent >= _MAX_BUDGET, f"{global_name} was not charged for {litellm_model}: {spent}"
+        refused: Final = gateway.request("POST", "/v1/chat/completions", body, key=key)
+        assert refused.status_code == 422, refused.text
+        assert _Error.model_validate_json(refused.content).error.type == "budget_exceeded", refused.text
+        assert _provider_calls(wire) == (), f"A refused request reached the provider: {refused.text}"
+
+
+@pytest.mark.timeout(120)
+def test_a_key_entry_on_the_public_name_replaces_the_team_entry_for_requests_by_the_litellm_model(
+    gateway: Gateway,
+) -> None:
+    litellm_model: Final = f"openai/raw-{uuid.uuid4().hex}"
+
+    def chat(key: str) -> httpx.Response:
+        return gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": litellm_model, "messages": [{"role": "user", "content": uuid.uuid4().hex}]},
+            key=key,
+        )
+
+    with wire_server(_billed) as wire, gateway.scenario() as scenario:
+        public_name: Final = scenario.model(
+            model=litellm_model,
+            api_base=f"{wire.url}/v1",
+            input_cost_per_token=_INPUT_RATE,
+            output_cost_per_token=_OUTPUT_RATE,
+        )
+        team_id: Final = scenario.team(
+            model_max_budget={public_name: {"max_budget": _MAX_BUDGET, "budget_duration": "30d"}}
+        )
+        key: Final = scenario.key(
+            team_id=team_id,
+            model_max_budget={public_name: {"max_budget": 100 * _MAX_BUDGET, "budget_duration": "30d"}},
+        )
+        served: Final = chat(key)
+        assert served.status_code == 200, served.text
+        spent: Final = eventually(
+            lambda: _model_budget_spend(gateway, key, public_name),
+            lambda value: value > 0,
+            seconds=60,
+            return_last_on_timeout=True,
+        )
+        assert spent > 0, f"the key's {public_name} entry was not charged"
+        again: Final = chat(key)
+        assert again.status_code == 200, again.text
+        assert len(_provider_calls(wire)) == 2

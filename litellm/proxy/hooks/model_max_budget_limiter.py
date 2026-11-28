@@ -185,9 +185,14 @@ def model_access_groups_of(router: "Router", model: str, team_id: str | None = N
 
     An entry with that name already budgets that model, so reading it as the group too would quietly widen it.
     """
+    from litellm.proxy.auth.auth_checks import access_groups_of_deployments_routed_by_litellm_model
+
     return frozenset(
         group
-        for group in router.registry().access_groups(model_name=model, team_id=team_id)
+        for group in (
+            *router.registry().access_groups(model_name=model, team_id=team_id),
+            *access_groups_of_deployments_routed_by_litellm_model(model, router, team_id),
+        )
         if group not in router.registry().names(kind="group_set")
     )
 
@@ -532,9 +537,12 @@ def _usable_entry(entry: str, raw_budget_config: object) -> ResolvedModelBudget 
 
 
 def team_model_budget_entries(
-    model: str, team_model_max_budget: Mapping[str, object], key_model_max_budget: Mapping[str, object] | None
+    model: str,
+    team_model_max_budget: Mapping[str, object],
+    key_model_max_budget: Mapping[str, object] | None,
+    team_id: str | None,
 ) -> Mapping[str, object]:
-    models: Final = expand_model_latest_alias(model)
+    models: Final = _budgeted_models(model, team_id)
     if len(models) == 1:
         return _single_team_model_budget_entries(model, team_model_max_budget, key_model_max_budget)
     entries: Final = tuple(
@@ -621,6 +629,17 @@ def _aliased_model_group(model: str) -> tuple[str, ...]:
         return ()
     target: Final = resolve_model_group_alias(router.registry().aliases(), model)
     return () if target is None else (target,)
+
+
+def _budgeted_models(model: str, team_id: str | None) -> tuple[str, ...]:
+    return (*expand_model_latest_alias(model), *_namesake_public_names(model, team_id))
+
+
+def _namesake_public_names(model: str, team_id: str | None) -> tuple[str, ...]:
+    from litellm.proxy.auth.auth_checks import public_model_names_of_deployments_routed_by_litellm_model
+
+    router: Final = _proxy_router()
+    return () if router is None else public_model_names_of_deployments_routed_by_litellm_model(model, router, team_id)
 
 
 def _bedrock_candidates(model: str) -> tuple[str, ...]:
@@ -839,7 +858,7 @@ def _entity_model_budget_entries(
         return ()
     return tuple(
         (entity_type, entity_id, resolved)
-        for candidate in expand_model_latest_alias(model)
+        for candidate in _budgeted_models(model, team_id)
         if (
             resolved := resolve_model_budget(
                 model=candidate,
@@ -881,6 +900,7 @@ def _entity_budgets_for(
     request_budgets: _EntityBudgets,
     team_model_max_budget: object,
     key_model_max_budget: object,
+    team_id: str | None,
 ) -> _EntityBudgets:
     """The request's entity budgets as they apply to `budget_model`, whose team entries differ per model."""
     team_budgets: Final = as_str_mapping(team_model_max_budget)
@@ -890,6 +910,7 @@ def _entity_budgets_for(
         model=budget_model,
         team_model_max_budget=team_budgets,
         key_model_max_budget=as_str_mapping(key_model_max_budget),
+        team_id=team_id,
     )
     return tuple(
         (entity_type, entity_id, team_budget if entity_type is Litellm_EntityType.TEAM else budget)
@@ -954,6 +975,9 @@ def _requested_model_name(
 ) -> str | None:
     """The model name the request was gated on: a team-scoped deployment's public name, since the router renames
     its model group to a unique internal one, else the model group, else the deployment's model."""
+    model_group: Final = standard_logging_payload.get("model_group")
+    if model_group and _namesake_public_names(model_group, _metadata_string_value(metadata, "user_api_key_team_id")):
+        return model_group
     team_public_model_name: Final = _metadata_value(metadata.get("model_info"), "team_public_model_name")
     if (
         isinstance(team_public_model_name, str)
@@ -961,7 +985,7 @@ def _requested_model_name(
         and _GLOB_WILDCARD not in team_public_model_name
     ):
         return team_public_model_name
-    return standard_logging_payload.get("model_group") or standard_logging_payload.get("model")
+    return model_group or standard_logging_payload.get("model")
 
 
 def _metadata_value(metadata: object, key: str) -> object | None:
@@ -1109,7 +1133,10 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             entity_id=team_id,
             team_id=team_id,
             model_max_budget=team_model_budget_entries(
-                model=model, team_model_max_budget=team_model_max_budget, key_model_max_budget=key_model_max_budget
+                model=model,
+                team_model_max_budget=team_model_max_budget,
+                key_model_max_budget=key_model_max_budget,
+                team_id=team_id,
             ),
             model=model,
             exceeded_message=f"LiteLLM Team: {team_id}, exceeded budget for model={model}",
@@ -1143,7 +1170,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         model: str,
         exceeded_message: str,
     ) -> bool:
-        for candidate in expand_model_latest_alias(model):
+        for candidate in _budgeted_models(model, team_id):
             await self._is_single_entity_within_model_budget(
                 entity_type=entity_type,
                 entity_id=entity_id,
@@ -1341,6 +1368,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                         key_model_max_budget=(
                             key_model_max_budget if isinstance(key_model_max_budget, Mapping) else None
                         ),
+                        team_id=team_member_team_id,
                     )
                     if isinstance(team_model_max_budget, Mapping)
                     else team_model_max_budget
@@ -1373,6 +1401,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 entity_budgets,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
                 team_model_max_budget,
                 key_model_max_budget,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+                team_member_team_id,
             )
 
         delegated_costs: Final = _live_delegated_costs(
