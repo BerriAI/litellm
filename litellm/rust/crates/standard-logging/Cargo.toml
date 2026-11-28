@@ -11,6 +11,7 @@ litellm-python-compat.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
+thiserror.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

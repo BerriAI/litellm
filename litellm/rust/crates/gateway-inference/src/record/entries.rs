@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use litellm_gateway_auth_core::record::Label;
 use serde_json::{Map, Value};
 
-use super::{AttemptRecord, RequestFacts, ServedDeployment};
+use super::{AttemptRecord, RequestFacts, ServedDeployment, ServedMessage};
 use crate::{CallType, ServedCall, headers::Routing};
 
 const MODEL: &str = "model";
@@ -147,6 +147,8 @@ pub struct CallState {
     pub request_facts: RequestFacts,
     /// What the standard logging payload logs of the request.
     pub logged_request: super::LoggedRequest,
+    /// The answer that served a `/v1/messages` call, for its logging payload's `response`.
+    pub served_message: Option<ServedMessage>,
 }
 
 /// `at` in seconds since the Unix epoch.
@@ -185,6 +187,7 @@ impl CallState {
             callback_time: Duration::ZERO,
             request_facts: RequestFacts::default(),
             logged_request: super::LoggedRequest::default(),
+            served_message: None,
         }
     }
 
