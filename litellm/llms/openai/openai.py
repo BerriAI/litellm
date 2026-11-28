@@ -482,6 +482,27 @@ def _request_without_sdk_transform(
     return body, options
 
 
+def _status_code_for_openai_sdk_error(e: Exception) -> int:
+    """
+    Status code to attribute to an exception raised by the OpenAI SDK.
+
+    A bare ``openai.OpenAIError`` is raised at client construction, before any HTTP
+    exchange, so it carries no status code; missing credentials is the common case.
+    Defaulting it to 500 asserts that a server responded with a server error, which
+    makes a permanently unfixable configuration error retryable. Subclasses such as
+    ``APIConnectionError`` and ``APIStatusError`` keep their existing treatment, so
+    genuinely transient failures are still retried.
+
+    See https://github.com/BerriAI/litellm/issues/35860
+    """
+    status_code: Final[object] = getattr(e, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+    if type(e) is openai.OpenAIError:
+        return 400
+    return 500
+
+
 class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
     def __init__(self) -> None:
         super().__init__()
@@ -1121,7 +1142,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     raise e
             except Exception as e:
                 exception_response: object = getattr(e, "response", None)
-                status_code = getattr(e, "status_code", 500)
+                status_code = _status_code_for_openai_sdk_error(e)
                 exception_body = getattr(e, "body", None)
                 error_headers = getattr(e, "headers", None)
                 if error_headers is None and exception_response:
@@ -1303,7 +1324,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     raise e
 
                 error_headers = getattr(e, "headers", None)
-                status_code = getattr(e, "status_code", 500)
+                status_code = _status_code_for_openai_sdk_error(e)
                 error_response: object = getattr(e, "response", None)
                 exception_body = getattr(e, "body", None)
                 if error_headers is None and error_response:
@@ -1332,8 +1353,14 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             body=exception_body,
                         )
                     else:
+                        # status_code was computed above by
+                        # _status_code_for_openai_sdk_error; hard-coding 500
+                        # here made the no-response branch discard it, so an
+                        # async streaming call with no configured API key
+                        # surfaced as a retryable 500 instead of the 400 the
+                        # non-streaming path reports.
                         raise OpenAIError(
-                            status_code=500,
+                            status_code=status_code,
                             message=f"{e}",
                             headers=error_headers,
                             body=exception_body,
