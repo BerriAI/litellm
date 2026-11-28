@@ -69,4 +69,8 @@ impl NativeDeploymentHealth {
             store.set(states.0, ttl).await
         })
     }
+
+    fn flush_local(&self) -> PyResult<()> {
+        self.0.flush_local().map_err(kind_error)
+    }
 }

@@ -424,6 +424,39 @@ async fn a_miss_is_read_from_redis_again_only_after_the_one_second_refresh(
 
 #[rstest]
 #[tokio::test]
+async fn flushing_memory_forgets_the_refresh_throttle_so_the_next_read_goes_to_redis(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let time = StepClock::at(1_730_000_000.75);
+    let store = std::sync::Arc::new(RouterCooldowns::with_clock(
+        Some(remote(connect(&deployment))),
+        POLICY,
+        time.clock(),
+    ));
+    let [case, _] = cooldowns();
+
+    let before = read_active(&store, &[case.model_id.to_owned()]).await;
+    raw.send(commands::set(
+        case.key,
+        case.str_dict,
+        Duration::from_secs(60),
+    ))
+    .await
+    .unwrap();
+    store.flush_local().unwrap();
+    let after_flush = read_active(&store, &[case.model_id.to_owned()]).await;
+
+    assert_eq!(before, vec![]);
+    assert_eq!(
+        after_flush,
+        vec![(case.model_id.to_owned(), case.cooldown.clone())]
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_breaker_refusal_does_not_hold_back_the_next_read() {
     let deployment = RedisDeployment::start(Topology::Standalone).await.unwrap();
     let raw = connect(&deployment);

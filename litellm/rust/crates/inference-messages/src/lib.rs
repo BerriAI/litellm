@@ -253,3 +253,39 @@ impl MessagesRoute {
         ))
     }
 }
+
+/// Whether this route serves `model` of `custom_llm_provider` itself, as Python's
+/// `get_provider_anthropic_messages_config` decides: every Anthropic model, and elsewhere only the
+/// Claude models a provider serves through the Messages API. Python translates any other model.
+pub fn serves(model: &str, custom_llm_provider: Option<&str>) -> bool {
+    resolve_llm_provider(model, custom_llm_provider, "messages")
+        .ok()
+        .and_then(|provider| messages_provider(provider.provider, provider.model))
+        .is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::anthropic_any_model("anthropic/any-model", None, true)]
+    #[case::vertex_claude("vertex_ai/claude-opus-5-5", None, true)]
+    #[case::vertex_gemini("vertex_ai/gemini-3-pro", None, false)]
+    #[case::bedrock_invoke_claude("bedrock/us.anthropic.claude-opus-5-5-v1:0", None, true)]
+    #[case::bedrock_converse_claude("bedrock/converse/anthropic.claude-opus-5-5-v1:0", None, false)]
+    #[case::bedrock_nova("bedrock/amazon.nova-pro-v1:0", None, false)]
+    #[case::mantle_claude("bedrock_mantle/anthropic.claude-opus-5-5", None, true)]
+    #[case::mantle_gpt("bedrock_mantle/openai.gpt-oss-120b", None, false)]
+    #[case::azure_ai_claude("azure_ai/claude-haiku-5-5", None, true)]
+    #[case::azure_ai_gpt("azure_ai/gpt-5.5", None, false)]
+    #[case::provider_named_beside_a_bare_model("claude-opus-5-5", Some("vertex_ai"), true)]
+    #[case::unknown_provider("nowhere/claude-opus-5-5", None, false)]
+    fn serves_only_what_python_sends_to_the_native_route(
+        #[case] model: &str,
+        #[case] custom_llm_provider: Option<&str>,
+        #[case] served: bool,
+    ) {
+        assert_eq!(super::serves(model, custom_llm_provider), served);
+    }
+}

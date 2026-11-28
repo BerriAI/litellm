@@ -87,17 +87,11 @@ fn decode_ssl_verify(field: &Field<'_>) -> Result<Option<SslVerify>, ProjectionE
 static RESOURCES: LazyLock<litellm_inference::resources::CoreResources> = LazyLock::new(|| {
     // Bedrock and Claude on Vertex's explicit AWS keys resolve an `oidc/` web identity token
     // through the same host secrets.
-    let aws = litellm_auth_aws::AwsAuthService::with_web_identity_tokens(Arc::new(
-        crate::secrets::HostWebIdentityTokens,
-    ));
     litellm_inference::resources::CoreResources {
         pool: Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver))),
-        auth: Arc::new(litellm_auth::AuthServices {
-            vertex_login: litellm_auth_gcp::vertex::VertexLoginService::default()
-                .with_aws(aws.clone()),
-            aws,
-            ..litellm_auth::AuthServices::default()
-        }),
+        auth: Arc::new(litellm_auth::AuthServices::with_web_identity_tokens(
+            Arc::new(crate::secrets::HostWebIdentityTokens),
+        )),
     }
 });
 
