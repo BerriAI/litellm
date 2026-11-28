@@ -906,6 +906,16 @@ def _has_non_empty_value(value: object) -> bool:
     return True
 
 
+_METADATA_FIELDS_CLEARED_BY_NULL: Final = frozenset({"team_member_key_duration"})
+
+
+def _clear_metadata_field(updated_kv: dict[str, object], field_name: str) -> None:
+    del updated_kv[field_name]
+    metadata: Final = updated_kv.get("metadata")
+    if isinstance(metadata, dict):
+        metadata.pop(field_name, None)  # pyright: ignore[reportUnknownMemberType]  # metadata is the request's raw JSON dict
+
+
 def update_metadata_fields(updated_kv: dict) -> None:
     """
     Helper function to update all metadata fields (both premium and standard).
@@ -913,6 +923,10 @@ def update_metadata_fields(updated_kv: dict) -> None:
     Args:
         updated_kv: The key-value dict being used for the update
     """
+    for field in _METADATA_FIELDS_CLEARED_BY_NULL:
+        if field in updated_kv and updated_kv[field] is None:
+            _clear_metadata_field(updated_kv=updated_kv, field_name=field)
+
     for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
         if field in updated_kv and updated_kv[field] is not None:
             _update_metadata_field(updated_kv=updated_kv, field_name=field)

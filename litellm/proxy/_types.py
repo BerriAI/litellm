@@ -37,6 +37,7 @@ from typing_extensions import (
 
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, KEY_EXPIRY_ALERT_MAX_DAYS, MCP_STDIO_ALLOWED_COMMANDS
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     OTEL_DESTINATION_VALIDATORS,
     validate_arize_otlp_protocol_value,
@@ -2038,6 +2039,25 @@ RouterSettingsDict = Annotated[
 ]
 
 
+def _blank_key_duration_as_unset(value: object) -> object:
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
+def _parseable_key_duration(value: str | None) -> str | None:
+    if value is not None and value != "-1":
+        duration_in_seconds(value)
+    return value
+
+
+TeamMemberKeyDuration: TypeAlias = Annotated[
+    str | None,
+    BeforeValidator(_blank_key_duration_as_unset),
+    AfterValidator(_parseable_key_duration),
+]
+
+
 class NewTeamRequest(TeamBase):
     budget_limits: BudgetLimitList | None = None
     tpm_limit: int | None = Field(default=None, ge=0)
@@ -2077,7 +2097,7 @@ class NewTeamRequest(TeamBase):
     team_member_budget: float | None = None  # allow user to set a budget for all team members
     team_member_rpm_limit: int | None = None  # allow user to set RPM limit for all team members
     team_member_tpm_limit: int | None = None  # allow user to set TPM limit for all team members
-    team_member_key_duration: str | None = None  # e.g. "1d", "1w", "1m"
+    team_member_key_duration: TeamMemberKeyDuration = None  # e.g. "1d", "1w", "1mo"
     team_member_budget_duration: str | None = None  # e.g. "30d", "1mo"
     team_member_rollover_max_budget: BudgetRolloverCap | None = None
     team_member_model_max_budget: GenericBudgetConfigType | None = None
@@ -2144,7 +2164,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     team_member_model_max_budget: GenericBudgetConfigType | None = None
     team_member_rpm_limit: int | None = None
     team_member_tpm_limit: int | None = None
-    team_member_key_duration: str | None = None
+    team_member_key_duration: TeamMemberKeyDuration = None
     allowed_passthrough_routes: list | None = None
     denied_passthrough_routes: list[str] | None = None
     secret_manager_settings: dict | None = None

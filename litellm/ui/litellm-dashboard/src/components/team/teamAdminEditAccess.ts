@@ -1,6 +1,7 @@
 import type { ParseKeys, TFunction } from "i18next";
 import { z } from "zod";
 import i18n from "@/i18n/i18n";
+import { durationOrNull } from "@/lib/forms/durationOrNull";
 import { numberOrNull } from "@/lib/forms/numberOrNull";
 
 import {
@@ -111,9 +112,6 @@ export type TeamAdminSettingsValues = { readonly [F in TeamAdminNumericSettingsF
 export type TeamAdminSettingsChanges = { readonly [F in TeamAdminNumericSettingsField]?: number | null } & {
   readonly [F in TeamAdminDurationSettingsField]?: string | null;
 } & { readonly metadata?: Record<string, unknown> };
-
-const durationOrNull = (value: string | number | null | undefined): string | null =>
-  typeof value === "string" && value !== "" ? value : null;
 
 const changedValue = (
   field: TeamAdminSettingsField,

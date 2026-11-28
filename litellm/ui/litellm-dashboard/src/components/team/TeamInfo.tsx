@@ -28,6 +28,7 @@ import {
 import { useGuardrails, GuardrailListItem } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { numberOrNull } from "@/lib/forms/numberOrNull";
+import { durationOrNull } from "@/lib/forms/durationOrNull";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import { isProxyAdminRole } from "@/utils/roles";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
@@ -1100,7 +1101,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       ...(memberDefaultsForm.getFieldState("team_member_rollover_max_budget").isDirty
         ? { team_member_rollover_max_budget: numberOrNull(values.team_member_rollover_max_budget) }
         : {}),
-      team_member_key_duration: values.team_member_key_duration,
+      ...(memberDefaultsForm.getFieldState("team_member_key_duration").isDirty
+        ? { team_member_key_duration: durationOrNull(values.team_member_key_duration) }
+        : {}),
       ...(values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined
         ? {
             team_member_tpm_limit: numberOrNull(values.team_member_tpm_limit),

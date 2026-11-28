@@ -1877,6 +1877,28 @@ describe("TeamInfoView", () => {
         expect(screen.getByLabelText(/^Default Key Duration/)).toHaveValue("30d");
       });
     });
+
+    it("sends null when Default Key Duration is cleared, so the stored default is removed", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({ metadata: { team_member_key_duration: "30d" } }),
+      );
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Member Defaults" }));
+      await user.click(await screen.findByRole("button", { name: "Edit Defaults" }));
+      const input = await screen.findByLabelText(/^Default Key Duration/);
+      fireEvent.change(input, { target: { value: "" } });
+      await user.click(screen.getByRole("button", { name: /save/i }));
+
+      await waitFor(() => {
+        expect(networking.teamUpdateCall).toHaveBeenCalled();
+      });
+      const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1] as Record<string, unknown>;
+      expect(payload.team_member_key_duration).toBeNull();
+    });
   });
 
   describe("guardrails dropdown grouping", () => {

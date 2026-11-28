@@ -14446,6 +14446,52 @@ async def test_team_member_key_duration_only_update_preserves_stored_metadata(ki
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["post", "patch"])
+@pytest.mark.parametrize("cleared", [None, "", "  "], ids=["null", "empty", "blank"])
+async def test_clearing_team_member_key_duration_removes_the_stored_default(kind, cleared):
+    """A blank or null Default Key Duration removes the stored default instead of storing ""."""
+    written = await _written_metadata_with_budget(kind, {"team_member_key_duration": cleared})
+
+    assert written == {k: v for k, v in _STORED_METADATA_WITH_BUDGET.items() if k != "team_member_key_duration"}
+
+
+@pytest.mark.asyncio
+async def test_clearing_team_member_key_duration_writes_no_top_level_column():
+    from litellm.proxy._types import LiteLLM_BudgetTable
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+        patch(  # test-quality-ok: update_team imports update_budget at call time; the module attribute is its only seam
+            "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+            AsyncMock(return_value=LiteLLM_BudgetTable(budget_id="budget-existing-123")),
+        ),
+    ):
+        _, update_mock = await _drive_team_write(
+            "post",
+            existing_metadata=dict(_STORED_METADATA_WITH_BUDGET),
+            payload={"team_member_key_duration": None},
+        )
+
+    assert "team_member_key_duration" not in update_mock.call_args.kwargs["data"]
+
+
+@pytest.mark.parametrize("bad", ["soon", "d7", "-2"])
+def test_update_team_request_rejects_an_unparseable_key_duration(bad):
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import UpdateTeamRequest
+
+    with pytest.raises(ValidationError, match="team_member_key_duration"):
+        UpdateTeamRequest(team_id="t", team_member_key_duration=bad)
+
+
+def test_update_team_request_accepts_never_expires_as_a_key_duration():
+    from litellm.proxy._types import UpdateTeamRequest
+
+    assert UpdateTeamRequest(team_id="t", team_member_key_duration="-1").team_member_key_duration == "-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["post", "patch"])
 async def test_explicit_null_metadata_with_budget_field_still_clears_metadata(kind):
     """``metadata: null`` is an explicit clear, so only the server-owned budget link survives."""
     written = await _written_metadata_with_budget(kind, {"metadata": None, "team_member_budget": 7.0})
