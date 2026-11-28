@@ -31,6 +31,7 @@ import qohashLogo from "../../../../../public/assets/logos/qohash.jpg";
 import recoLogo from "../../../../../public/assets/logos/reco.png";
 import repelloAiLogo from "../../../../../public/assets/logos/repelloai.png";
 import straikerLogo from "../../../../../public/assets/logos/straiker.svg";
+import dataandmoreLogo from "../../../../../public/assets/logos/dataandmore.png";
 import wingbackLogo from "../../../../../public/assets/logos/wingback.png";
 import xecguardLogo from "../../../../../public/assets/logos/xecguard.svg";
 import zscalerLogo from "../../../../../public/assets/logos/zscaler.svg";
@@ -334,6 +335,7 @@ export const guardrailLogoMap = {
   "LLM Shield Proxy": llmShieldProxyLogo.src,
   "Conduct Guard": conductLogo.src,
   Wingback: wingbackLogo.src,
+  "Data & More": dataandmoreLogo.src,
   "Airia Guardrail": airiaLogo.src,
   CollieAi: collieaiLogo.src,
   Reco: recoLogo.src,
