@@ -23,7 +23,7 @@ from typing import (
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -53,6 +53,7 @@ from litellm.proxy.auth.authorization_dependencies import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.openai_error_payload import error_status_code, openai_error_param, openai_error_type
+from litellm.proxy.deps.repositories import AccountingDeliveryRepositoryDep
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, drop_committed_spend
 from litellm.proxy.spend_tracking.session_page import (
@@ -1361,6 +1362,35 @@ async def get_global_activity_exceptions(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": str(e)},
         )
+
+
+class SpendAccountingDelay(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    pending_count: int
+    oldest_pending_seconds: float
+
+
+@router.get(
+    "/spend/accounting/status",
+    tags=["Budget & Spend Tracking"],
+)
+async def get_spend_accounting_status(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    repository: AccountingDeliveryRepositoryDep,
+) -> SpendAccountingDelay | None:
+    """Return the current spend accounting delay, if any. Proxy admin roles only."""
+    if not is_admin_view_safe(user_api_key_dict):
+        raise HTTPException(status_code=403, detail="Only proxy admins can read accounting status")
+    if repository is None:
+        raise HTTPException(status_code=503, detail="Accounting status requires a database connection")
+    backlog: Final = await repository.backlog()
+    if not backlog.is_delayed:
+        return None
+    return SpendAccountingDelay(
+        pending_count=backlog.pending_count,
+        oldest_pending_seconds=backlog.oldest_pending_seconds,
+    )
 
 
 @router.get(

@@ -85,6 +85,7 @@ vi.mock("@/components/networking", () => ({
   dailyActivityKeySearchCall: vi.fn(),
   dailyActivityModelTopKeysCall: vi.fn(),
   dailyActivityExportCall: vi.fn(),
+  spendAccountingStatusCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
   requestErrorActivityCall: vi.fn(),
   tagListCall: vi.fn(),
@@ -287,6 +288,7 @@ describe("UsagePage", () => {
   const mockUserDailyActivityUserPageCall = vi.mocked(networking.userDailyActivityUserPageCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
+  const mockSpendAccountingStatusCall = vi.mocked(networking.spendAccountingStatusCall);
   const mockRequestErrorActivityCall = vi.mocked(networking.requestErrorActivityCall);
   const mockSubscriptionUsageCall = vi.mocked(networking.subscriptionUsageCall);
   const mockUseAgents = vi.mocked(useAgents);
@@ -523,6 +525,8 @@ describe("UsagePage", () => {
 
   beforeEach(() => {
     testQueryClient.clear();
+    mockSpendAccountingStatusCall.mockReset();
+    mockSpendAccountingStatusCall.mockResolvedValue(null);
     mockSubscriptionUsageCall.mockReset();
     mockSubscriptionUsageCall.mockResolvedValue(mockSubscriptionUsage);
     mockClientUsagePanel.mockClear();
@@ -631,6 +635,63 @@ describe("UsagePage", () => {
       expect(screen.getByTestId("subscription-cost-card")).toHaveAttribute("data-usage", "null");
       rendered.unmount();
     }
+  });
+
+  it("warns administrators during accounting delays and refreshes spend when the delay clears", async () => {
+    mockSpendAccountingStatusCall.mockResolvedValue({ pending_count: 1, oldest_pending_seconds: 497 });
+    renderWithProviders(<UsagePage {...defaultProps} />, {
+      searchParams: "?from=2024-01-01&to=2024-01-07",
+    });
+
+    const announcement = overview().getByRole("status", { name: "" });
+    expect(announcement).toBeEmptyDOMElement();
+    const notice = await overview().findByRole("note");
+    expect(notice).toHaveTextContent("Spend reporting is delayed");
+    expect(notice).toHaveTextContent("1 spend update pending. Oldest wait 8 min.");
+    expect(announcement).toHaveTextContent(/^Spend reporting is delayed$/);
+    expect(await overview().findByText("$125.75")).toBeVisible();
+
+    mockSpendAccountingStatusCall.mockResolvedValue({ pending_count: 1_234, oldest_pending_seconds: 600 });
+    await act(async () => {
+      await testQueryClient.invalidateQueries({ queryKey: ["spendAccountingStatus"] });
+    });
+
+    expect(await overview().findByText("1,234 spend updates pending. Oldest wait 10 min.")).toBeVisible();
+    expect(announcement).toHaveTextContent(/^Spend reporting is delayed$/);
+
+    mockSpendAccountingStatusCall.mockResolvedValue(null);
+    mockUserDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      metadata: { ...mockSpendData.metadata, total_spend: 210.5 },
+    });
+    await act(async () => {
+      await testQueryClient.invalidateQueries({ queryKey: ["spendAccountingStatus"] });
+    });
+
+    expect(await overview().findByText("$210.50")).toBeVisible();
+    expect(overview().queryByRole("note")).not.toBeInTheDocument();
+    expect(announcement).toBeEmptyDOMElement();
+  });
+
+  it("replaces stale delay details when the accounting status check fails", async () => {
+    mockSpendAccountingStatusCall.mockResolvedValue({ pending_count: 1, oldest_pending_seconds: 497 });
+    renderWithProviders(<UsagePage {...defaultProps} />);
+    expect(await overview().findByText("1 spend update pending. Oldest wait 8 min.")).toBeVisible();
+
+    mockSpendAccountingStatusCall.mockRejectedValue(new Error("Accounting status request failed"));
+    await act(async () => {
+      await testQueryClient.invalidateQueries({ queryKey: ["spendAccountingStatus"] });
+    });
+
+    await waitFor(() => expect(overview().getByRole("note")).toHaveTextContent("Spend reporting status unavailable"));
+    expect(overview().queryByText("1 spend update pending. Oldest wait 8 min.")).not.toBeInTheDocument();
+
+    mockSpendAccountingStatusCall.mockResolvedValue({ pending_count: 2, oldest_pending_seconds: 660 });
+    await act(async () => {
+      await testQueryClient.invalidateQueries({ queryKey: ["spendAccountingStatus"] });
+    });
+
+    expect(await overview().findByText("2 spend updates pending. Oldest wait 11 min.")).toBeVisible();
   });
 
   it("lets a proxy admin edit subscription fees but shows an admin viewer the same card read-only", async () => {

@@ -79,6 +79,10 @@ class DeliveryBacklog(BaseModel):
     parked_count: int
     oldest_pending_seconds: float
 
+    @property
+    def is_delayed(self) -> bool:
+        return self.oldest_pending_seconds > 300
+
 
 class DeliveryStorage(BaseModel):
     model_config = ConfigDict(frozen=True)

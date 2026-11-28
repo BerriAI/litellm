@@ -803,6 +803,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/tags",
         "/global/spend/all_tag_names",
         "/spend/capture_rate",
+        "/spend/accounting/status",
     ]
 
     public_routes = frozenset(

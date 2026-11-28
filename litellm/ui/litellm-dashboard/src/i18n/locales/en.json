@@ -15879,6 +15879,12 @@
         "description": "When a reusable credential is used, it will appear as a tag prefixed with <prefix/>in this view.",
         "close": "Close"
       },
+      "accountingDelay": {
+        "title": "Spend reporting is delayed",
+        "detail_one": "{{pending}} spend update pending. Oldest wait {{minutes}} min.",
+        "detail_other": "{{pending}} spend updates pending. Oldest wait {{minutes}} min.",
+        "unavailable": "Spend reporting status unavailable"
+      },
       "clientScope": {
         "allUsers": "All users",
         "myUsage": "My usage"

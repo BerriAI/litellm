@@ -128,7 +128,7 @@ async def _report(
                 proxy_logging_obj,
                 message=f"Accounting delivery storage requires review. Retained batches={storage.batch_count}, table bytes={storage.table_bytes}.",
             )
-    if backlog.oldest_pending_seconds > 300 and writer.accounting_delay_alerts.due(interval):
+    if backlog.is_delayed and writer.accounting_delay_alerts.due(interval):
         await _alert(
             proxy_logging_obj,
             message=f"Accounting deliveries are delayed. Pending={backlog.pending_count}, oldest={backlog.oldest_pending_seconds:.0f}s.",
