@@ -10,10 +10,11 @@ use litellm_framer::sse;
 use litellm_host::call::CallOutput;
 use litellm_host_http::Sse;
 use litellm_inference_messages::{
-    MessagesBody, MessagesCall, MessagesRoute, MessagesSettings, MessagesShaping, messages_body,
-    route::Messages,
+    MessagesBody, MessagesCall, MessagesRoute, MessagesSettings, MessagesShaping, VertexShaping,
+    messages_body, route::Messages,
 };
 use litellm_llms::anthropic::model_capabilities::messages_route_capabilities;
+use litellm_llms::vertex_ai::common_utils::supported_regions;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_llms_types::formats::messages::{
     MessagesOptionalParams,
@@ -31,6 +32,7 @@ use crate::{
     error::ErrorFormat,
     hooks::CallType,
     model_restamp::{ReportedModel, Stamp},
+    pricing,
     record::{self, Recorder},
     routing::{self, Host, Prompt, RouteAttempt, RouteChunks},
     serve::{self, Call, Endpoint},
@@ -47,6 +49,7 @@ const OPENROUTER_API_HEADERS: [&str; 2] = [
 const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
 const TOOLS: &str = "tools";
+const VERTEX_AI: &str = "vertex_ai";
 /// The keys a request sets its own messages settings by. Python reads them from the call's kwargs
 /// and never sends them on.
 pub const REQUEST_SETTINGS: [&str; 2] = ["drop_params", "additional_drop_params"];
@@ -161,11 +164,18 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
 
     async fn run(&self, attempt: &Attempt) -> Result<Self::Output, Error> {
         let deployment = &attempt.deployment;
-        let shaping = shaping(
+        let cost_map = self.gateway.cost_map();
+        let mut shaping = shaping(
             deployment,
-            self.gateway.cost_map().catalog(),
+            cost_map.catalog(),
             &self.gateway.messages_settings,
         );
+        shaping.settings.pricing = pricing::priced_as(
+            deployment,
+            cost_map.catalog(),
+            self.gateway.secrets.as_ref(),
+        )
+        .await?;
         let call = MessagesCall {
             timeout: routing::timeout(
                 deployment,
@@ -215,8 +225,9 @@ fn is_set(flag: Option<&Spelled<bool>>) -> bool {
 }
 
 /// How the messages route shapes a call to `deployment`: the `configured` settings under its own
-/// `drop_params` and `additional_drop_params`, and the capabilities `catalog` and its
-/// `model_info` declare.
+/// `drop_params` and `additional_drop_params`, the capabilities `catalog` and its `model_info`
+/// declare, and for Claude on Vertex AI the model's `supported_regions`, which route the call as
+/// they route it in Python.
 fn shaping(
     deployment: &Deployment,
     catalog: &Catalog,
@@ -250,7 +261,12 @@ fn shaping(
                     .and_then(Value::as_bool)
             },
         ),
-        ..MessagesShaping::default()
+        vertex: match deployment.provider() {
+            VERTEX_AI => VertexShaping {
+                supported_regions: supported_regions(catalog, &params.model),
+            },
+            _ => VertexShaping::default(),
+        },
     }
 }
 
@@ -433,14 +449,11 @@ impl From<MessagesStreamUsage> for Counts {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use litellm_router_core::{DeploymentSpec, RouterConfig};
-    use litellm_router_types::RouterSettings;
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
+    use crate::test_support::deployment;
 
     fn deployment_shaping(global: bool, drop_params: bool) -> MessagesShaping {
         MessagesShaping {
@@ -518,24 +531,6 @@ mod tests {
             counts(&CallOutput::Complete(body)).map(Counts::total),
             Some(132)
         );
-    }
-
-    fn deployment(litellm_params: Value, model_info: Value) -> Arc<Deployment> {
-        let (config, dynamic) = RouterConfig::from_settings(&RouterSettings::default()).unwrap();
-        let router = litellm_router_core::Router::new(
-            RouterConfig {
-                model_list: vec![DeploymentSpec {
-                    model_name: "public-model".into(),
-                    litellm_params: litellm_params.as_object().cloned().unwrap(),
-                    model_info: model_info.as_object().cloned().unwrap(),
-                    ..DeploymentSpec::default()
-                }],
-                ..config
-            },
-            dynamic,
-        )
-        .unwrap();
-        router.registry().group("public-model").unwrap().remove(0)
     }
 
     fn catalog() -> Catalog {

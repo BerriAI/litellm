@@ -337,6 +337,75 @@ async fn a_sign_in_that_links_its_own_id_is_the_entry_python_caches_for_the_row_
     );
 }
 
+async fn stored_sso_user_ids(pool: &PgPool) -> Vec<(String, Option<String>)> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Assertion reads are outside the compile-checked query set"
+    )]
+    let read =
+        sqlx::query_as(r#"SELECT user_id, sso_user_id FROM "LiteLLM_UserTable" ORDER BY user_id"#);
+    read.fetch_all(pool).await.unwrap()
+}
+
+fn unverified(signing_in: SignIn) -> SignIn {
+    SignIn {
+        email_verified: Some(false),
+        ..signing_in
+    }
+}
+
+/// A read before a sign-in finds the user the sign-in would resolve to and writes no SSO link.
+/// `full` holds `sso` and `full@example.com`, `created` holds neither, and `emailed` holds only
+/// `emailed@example.com`.
+#[rstest]
+#[case::by_id_that_a_sign_in_would_link(
+    sign_in("created", Some("created"), None, false),
+    Some("created")
+)]
+#[case::by_sso_id(sign_in("new", Some("sso"), None, false), Some("full"))]
+#[case::by_email_of_an_unlinked_row(
+    sign_in("new", Some("sso-new"), Some("Emailed@Example.com"), false),
+    Some("emailed")
+)]
+#[case::by_email_of_a_linked_row_under_links_any_user(
+    sign_in("new", Some("sso-new"), Some("full@example.com"), true),
+    Some("full")
+)]
+#[case::not_by_email_of_a_linked_row(
+    sign_in("new", Some("sso-new"), Some("full@example.com"), false),
+    None
+)]
+#[case::not_by_an_unverified_email(
+    unverified(sign_in("new", None, Some("emailed@example.com"), false)),
+    None
+)]
+#[case::by_an_unverified_email_under_links_any_user(
+    unverified(sign_in("new", None, Some("emailed@example.com"), true)),
+    Some("emailed")
+)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_user_found_for_a_sign_in_is_read_without_being_linked(
+    #[future(awt)] users: Users,
+    #[case] signing_in: SignIn,
+    #[case] user_id: Option<&str>,
+) {
+    execute(
+        users.postgres.pool(),
+        r#"INSERT INTO "LiteLLM_UserTable" (user_id, user_email, created_at, updated_at)
+           VALUES ('emailed', 'emailed@example.com', '2026-11-01 00:00:00', '2026-11-01 00:00:00')"#,
+    )
+    .await;
+    let before = stored_sso_user_ids(users.postgres.pool()).await;
+
+    let found = users.database.found(&signing_in, Side::Read).await.unwrap();
+
+    let after = stored_sso_user_ids(users.postgres.pool()).await;
+    assert_eq!(
+        (found.map(|user| user.user_id), after),
+        (user_id.map(str::to_owned), before)
+    );
+}
+
 /// `full` holds `sso` and `full@example.com`, `created` holds neither, and `emailed` holds only
 /// `emailed@example.com`.
 #[rstest]

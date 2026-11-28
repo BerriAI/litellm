@@ -1207,6 +1207,14 @@ async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(
         if "id" in job_call.kwargs
     }
     assert scheduled_seconds["add_deployment_job"] == configured_interval
+    scheduled = next(
+        call for call in mock_scheduler.add_job.call_args_list if call.kwargs.get("id") == "add_deployment_job"
+    )
+    assert scheduled.kwargs["kwargs"] == {"skip_unchanged_mcp_catalog": True}
+    mock_proxy_config.add_deployment.assert_awaited_once_with(
+        prisma_client=mock_prisma_client,
+        proxy_logging_obj=mock_proxy_logging,
+    )
     assert "get_credentials_job" not in scheduled_seconds
 
 

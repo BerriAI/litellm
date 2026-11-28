@@ -10,6 +10,7 @@ import litellm
 from litellm.constants import INVALID_VIRTUAL_KEY_ERROR_MARKER
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.auth_checks import TeamNotFoundError
+from litellm.proxy.auth.auth_utils import mark_authentication_failure
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.rust_bridge._native import (
@@ -75,4 +76,7 @@ def raise_denial(outcome: RustAuthOutcome) -> NoReturn:
     denial: Final = outcome.denial
     if denial is None:
         raise RuntimeError("rust auth reported a denial without one")
-    raise denial_error(denial)
+    error: Final = denial_error(denial)
+    if outcome.failed_authentication:
+        mark_authentication_failure(error)
+    raise error

@@ -1186,11 +1186,6 @@
       "count": 1
     }
   },
-  "src/components/ModelInfoEditForm.tsx": {
-    "max-lines": {
-      "count": 1
-    }
-  },
   "src/components/Navbar/BlogDropdown/BlogDropdown.test.tsx": {
     "max-nested-callbacks": {
       "count": 10
@@ -1551,9 +1546,6 @@
   "src/components/email_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "prefer-const": {
-      "count": 1
     }
   },
   "src/components/key_info_utils.tsx": {
@@ -1687,7 +1679,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 3
+      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 1

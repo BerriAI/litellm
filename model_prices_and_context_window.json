@@ -127351,5 +127351,93 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "databricks/databricks-gemini-nano-banana-2-1": {
+        "cache_creation_input_token_cost": 1.87502e-06,
+        "cache_creation_input_token_cost_priority": 3.37498e-06,
+        "cache_read_input_token_cost": 1.8753e-07,
+        "cache_read_input_token_cost_priority": 3.3747e-07,
+        "input_cost_per_image_token": 1.87502e-06,
+        "input_cost_per_image_token_priority": 3.37498e-06,
+        "input_cost_per_token": 1.87502e-06,
+        "input_cost_per_token_priority": 3.37498e-06,
+        "input_dbu_cost_per_token": 2.6786e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 32768,
+        "metadata": {"notes":"Costs per token are the published Global DBU rates times $0.070 per DBU. The '*_dbu_cost_per_token' fields are provided for reference; cost calculation reads the dollar '*_cost_per_token' fields. Image output tokens are billed separately from text output tokens."},
+        "mode": "chat",
+        "output_cost_per_image_token": 3.749998e-05,
+        "output_cost_per_image_token_priority": 6.750002e-05,
+        "output_cost_per_token": 9.37503e-06,
+        "output_cost_per_token_priority": 1.687497e-05,
+        "output_dbu_cost_per_token": 0.000133929,
+        "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_function_calling": false,
+        "supports_prompt_caching": true,
+        "supports_vision": true
+    },
+    "databricks/system.ai.gemini-4-neon": {
+        "cache_creation_input_token_cost": 3e-06,
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "metadata": {"notes":"Databricks publishes no DBU rate for Gemini 4 Neon yet, so costs per token are the Google Vertex AI Global rates. Gemini 4 Neon on Databricks is available only through Unity Gateway with the model service name system.ai.gemini-4-neon."},
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_video_input": true,
+        "supports_vision": true
+    },
+    "databricks/databricks-kimi-k3-1-pro-fast": {
+        "cache_creation_input_token_cost": 1.99997e-06,
+        "cache_read_input_token_cost": 1.9999e-07,
+        "input_cost_per_token": 1.99997e-06,
+        "input_dbu_cost_per_token": 2.8571e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "metadata": {"notes":"Databricks publishes no rate for the Kimi K3.1 Pro Fast endpoint yet, so the rates are those of databricks-kimi-k3-1-pro, which serves the same model. Input/output cost per token is dbu cost * $0.070. Billing reads the per-token dollar fields; the '*_dbu_cost_per_token' fields are kept for reference."},
+        "mode": "chat",
+        "output_cost_per_token": 9.99999e-06,
+        "output_dbu_cost_per_token": 0.000142857,
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "token_count_framing": 100.0
     }
 }
