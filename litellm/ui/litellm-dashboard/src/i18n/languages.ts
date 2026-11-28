@@ -10,6 +10,7 @@ export const LANGUAGE_STORAGE_KEY = "litellm_language";
 
 export const LOCALES: Locales = new Map([
   ["zh-CN", () => import("./locales/zh-CN.json").then((module) => module.default)],
+  ["zh-TW", () => import("./locales/zh-TW.json").then((module) => module.default)],
 ]);
 
 export const browserLanguageStore: LanguageStore = {
