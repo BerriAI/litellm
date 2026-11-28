@@ -2,18 +2,19 @@
 //! apart by name, so a field added to the cached key does not compile here until it is honored,
 //! left to a host step or named as one no step is asked about.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 use litellm_gateway_auth_core::{
     KeyHash, StoredKey,
     authn::key::{KeyRecord, Keyed},
     authz::ModelList,
-    record::Budget,
+    record::{Budget, ModelBudget},
 };
 use litellm_redis_store::auth_cache::KeyEntry;
 
 use super::{
+    affiliation::read_bag,
     carried::{Carried, carried, newer},
     metadata::Metadata,
 };
@@ -42,6 +43,7 @@ pub struct Key {
     name: Option<Arc<str>>,
     /// The key's own budget, which its budget counter is planned from.
     own_budget: Budget,
+    model_max_budget: Arc<BTreeMap<String, ModelBudget>>,
     /// The first budget column the row holds that the native app never enforces, which
     /// `key_budgets` declines.
     pub(super) budget: Option<&'static str>,
@@ -82,6 +84,10 @@ impl Key {
     pub(crate) fn budget(&self) -> Budget {
         self.own_budget
     }
+
+    pub(crate) fn model_max_budget(&self) -> &Arc<BTreeMap<String, ModelBudget>> {
+        &self.model_max_budget
+    }
 }
 
 #[cfg(test)]
@@ -98,6 +104,7 @@ impl Key {
             alias: alias.map(Arc::from),
             name: None,
             own_budget: Budget::default(),
+            model_max_budget: Arc::default(),
             budget: None,
             checked_budget: None,
             aliased: false,
@@ -369,6 +376,7 @@ pub(super) fn read(key: &KeyEntry) -> Result<Keyed<Key>, &'static str> {
                 max: key.max_budget,
                 spend: key.spend,
             },
+            model_max_budget: Arc::new(read_bag(&key.model_max_budget).unwrap_or_default()),
             budget,
             checked_budget,
             aliased,

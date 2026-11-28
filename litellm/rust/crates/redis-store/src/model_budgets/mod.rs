@@ -66,6 +66,8 @@ impl Period {
 /// The shared start and spend keys for a model budget.
 pub struct ModelBudgets {
     cache: DualCache<Number>,
+    clock: Clock,
+    started_at: Duration,
 }
 
 impl ModelBudgets {
@@ -75,6 +77,8 @@ impl ModelBudgets {
 
     fn with_clock(remote: Option<Remote>, clock: Clock) -> Self {
         Self {
+            started_at: clock(),
+            clock: clock.clone(),
             cache: DualCache::new(
                 Arc::new(RemoteSlot::new(remote)),
                 MemorySettings::default(),
@@ -99,6 +103,29 @@ impl ModelBudgets {
             None => self.cache.memory().get(&key)?,
         };
         Ok(spend.map(Number::as_f64).unwrap_or_default())
+    }
+
+    pub async fn spend_with_legacy(
+        &self,
+        counter: &Counter<'_>,
+        requested: &str,
+        now: Timestamp,
+    ) -> Result<f64, Error> {
+        let spend = self.spend(counter).await?;
+        let carry_legacy = matches!(counter.scope, Scope::Key | Scope::EndUser)
+            && counter.model != requested
+            && Period::parse(counter.duration)
+                .and_then(|period| period.duration(now))
+                .is_some_and(|duration| (self.clock)().saturating_sub(self.started_at) < duration);
+        if !carry_legacy {
+            return Ok(spend);
+        }
+        self.spend(&Counter {
+            model: requested,
+            ..*counter
+        })
+        .await
+        .map(|legacy| spend + legacy)
     }
 
     pub async fn charge(
@@ -147,9 +174,56 @@ impl ModelBudgets {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::key_includes_legacy(Scope::Key, "provider/claude", 3599, 0.75)]
+    #[case::end_user_includes_legacy(Scope::EndUser, "provider/claude", 3599, 0.75)]
+    #[case::team_has_no_legacy(Scope::Team, "provider/claude", 3599, 0.25)]
+    #[case::owner_has_no_legacy(Scope::User, "provider/claude", 3599, 0.25)]
+    #[case::member_has_no_legacy(Scope::TeamMember, "provider/claude", 3599, 0.25)]
+    #[case::same_name_only_counts_once(Scope::Key, "claude", 3599, 0.25)]
+    #[case::legacy_read_stops_after_one_period(Scope::Key, "provider/claude", 3600, 0.25)]
+    #[tokio::test]
+    async fn legacy_spend_is_counted_only_during_the_upgrade_window(
+        #[case] scope: Scope,
+        #[case] requested: &str,
+        #[case] elapsed: u64,
+        #[case] expected: f64,
+    ) {
+        let ticks = Arc::new(AtomicU64::new(100));
+        let reading = ticks.clone();
+        let store = ModelBudgets::with_clock(
+            None,
+            Arc::new(move || Duration::from_secs(reading.load(Ordering::Relaxed))),
+        );
+        ticks.fetch_add(elapsed, Ordering::Relaxed);
+        let counter = Counter {
+            scope,
+            id: "caller",
+            model: "claude",
+            duration: "1h",
+        };
+        let legacy = Counter {
+            model: "provider/claude",
+            ..counter
+        };
+        let now = Timestamp::from_second(1_800_000_000).unwrap();
+        let period = Period::parse(counter.duration).unwrap();
+        store.charge(&counter, period, now, 0.25).await.unwrap();
+        store.charge(&legacy, period, now, 0.5).await.unwrap();
+        assert_eq!(
+            store
+                .spend_with_legacy(&counter, requested, now)
+                .await
+                .unwrap(),
+            expected
+        );
+    }
 
     #[rstest]
     #[case::fixed("daily", "2024-01-31T12:00:00Z", 1)]

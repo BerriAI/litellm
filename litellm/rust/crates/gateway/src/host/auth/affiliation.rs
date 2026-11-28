@@ -32,7 +32,7 @@ use super::{
 /// The `metadata` key SCIM sets to `False` on a user it deactivated.
 const SCIM_ACTIVE: &str = "scim_active";
 
-fn read_bag<T: DeserializeOwned>(bag: &Bag) -> Option<T> {
+pub(super) fn read_bag<T: DeserializeOwned>(bag: &Bag) -> Option<T> {
     serde_json::from_str(&json::dumps(&Value::Dict(bag.entries().to_vec())).ok()?).ok()
 }
 
