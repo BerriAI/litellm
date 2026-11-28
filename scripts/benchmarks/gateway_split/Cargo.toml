@@ -1,0 +1,19 @@
+[package]
+name = "gateway-split-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+async-stream = "=0.3.6"
+axum = "=0.8.9"
+bytes = "=1.11.1"
+clap = { version = "=4.6.7", features = ["derive"] }
+futures-util = "=0.3.34"
+http-body-util = "=0.1.5"
+hyper-util = { version = "=0.1.20", features = ["client-legacy", "http1", "tokio"] }
+serde_json = "=1.0.149"
+sha2 = "=0.10.9"
+tokio = { version = "=1.53.1", features = ["full"] }
