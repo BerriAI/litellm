@@ -20248,7 +20248,12 @@ async def fallback_login(request: Request):
     Example:
     """
     from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+    from litellm.proxy.common_utils.admin_ui_utils import require_admin_ui_enabled
     from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import SSO_FALLBACK_COOKIE
+
+    disabled_response = require_admin_ui_enabled()
+    if disabled_response is not None:
+        return disabled_response
 
     login_page: Final = RedirectResponse(
         url=get_custom_url(str(request.base_url)).rstrip("/") + "/ui/login", status_code=303
@@ -20268,7 +20273,12 @@ async def fallback_login(request: Request):
 async def login(request: Request):
     global premium_user, general_settings, master_key
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
+    from litellm.proxy.common_utils.admin_ui_utils import require_admin_ui_enabled
     from litellm.proxy.utils import get_custom_url
+
+    disabled_response = require_admin_ui_enabled()
+    if disabled_response is not None:
+        return disabled_response
 
     form: Final = await request.form()
     username: Final = str(form.get("username"))
@@ -20389,8 +20399,13 @@ async def login_resume(request: Request) -> RedirectResponse:
 async def login_v2(request: Request):
     global premium_user, general_settings, master_key
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
+    from litellm.proxy.common_utils.admin_ui_utils import require_admin_ui_enabled
     from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
     from litellm.proxy.utils import get_custom_url
+
+    disabled_response = require_admin_ui_enabled()
+    if disabled_response is not None:
+        return disabled_response
 
     try:
         body: Final = _LOGIN_REQUEST_BODY.validate_python(await request.json())
@@ -20456,7 +20471,12 @@ async def login_v2(request: Request):
 async def login_v3(request: Request):
     global premium_user, general_settings, master_key
     from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object, encode_ui_session_jwt
+    from litellm.proxy.common_utils.admin_ui_utils import require_admin_ui_enabled
     from litellm.proxy.utils import get_custom_url
+
+    disabled_response = require_admin_ui_enabled()
+    if disabled_response is not None:
+        return disabled_response
 
     try:
         if not general_settings.get("control_plane_url"):
@@ -20528,7 +20548,12 @@ async def login_v3(request: Request):
 
 @router.post("/v3/login/exchange", include_in_schema=False)  # exchange single-use opaque code for JWT
 async def login_v3_exchange(request: Request):
+    from litellm.proxy.common_utils.admin_ui_utils import require_admin_ui_enabled
     from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
+
+    disabled_response = require_admin_ui_enabled()
+    if disabled_response is not None:
+        return disabled_response
 
     try:
         if not general_settings.get("control_plane_url"):
@@ -20600,6 +20625,12 @@ async def onboarding(invite_link: str, request: Request):
     - Get user from db
     - Pass in user_email if set
     """
+    from litellm.proxy.common_utils.admin_ui_utils import require_admin_ui_enabled
+
+    disabled_response = require_admin_ui_enabled()
+    if disabled_response is not None:
+        return disabled_response
+
     global prisma_client, master_key, general_settings
     from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
@@ -20750,6 +20781,12 @@ async def _rollback_onboarding_invite_claim(
 
 async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
     global master_key, general_settings
+    from litellm.proxy.common_utils.admin_ui_utils import is_admin_ui_disabled
+
+    if is_admin_ui_disabled():
+        # Minted here with jwt.encode directly rather than through
+        # encode_ui_session_jwt, so the session-issuance choke point does not see it.
+        raise HTTPException(status_code=401, detail={"error": "Admin UI is disabled"})
 
     response: Final = await generate_key_helper_fn(
         llm_router=llm_router,

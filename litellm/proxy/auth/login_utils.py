@@ -21,6 +21,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy.common_utils.admin_ui_utils import is_admin_ui_disabled
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -511,6 +512,12 @@ def encode_ui_session_jwt(returned_ui_token_object: ReturnedUITokenObject, maste
     master key rotates, and the session-cookie readers that require a bounded lifetime
     (the MCP interactive sign-in) reject it.
     """
+    if is_admin_ui_disabled():
+        # The security property is that no Admin UI session can be minted while the switch is
+        # on, not merely that the usual login page is unreachable. Enforcing it here rather
+        # than per-route covers /login, /v2/login, /v3/login, /v3/login/exchange and the SSO
+        # callback together, and covers any future login path by construction.
+        raise HTTPException(status_code=401, detail={"error": "Admin UI is disabled"})
     claims: Final[dict[str, object]] = {**cast(dict, returned_ui_token_object), "exp": _ui_session_exp_timestamp()}
     return jwt.encode(claims, master_key, algorithm="HS256")
 
