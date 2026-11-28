@@ -126,6 +126,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     classifier_input_snapshot,
     is_classifier_call,
 )
+from litellm.litellm_core_utils.gateway_io_logging import capture_external_egress
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
@@ -2256,6 +2257,15 @@ class Logging(LiteLLMLoggingBaseClass):
                     if not has_attributes(_metadata, _MetadataSlot, "__setitem__"):
                         raise TypeError(f"'{type(_metadata).__name__}' object does not support item assignment")
                     _metadata["raw_request"] = unlogged_raw_request
+            if litellm.enable_gateway_io_logging:
+                try:
+                    self.model_call_details["_gateway_external_egress"] = capture_external_egress(
+                        additional_args=additional_args,
+                        model_call_details=self.model_call_details,
+                        api_key=api_key,
+                    )
+                except Exception as _gateway_io_error:
+                    verbose_logger.debug("gateway_io_logging pre_call capture failed: %s", _gateway_io_error)
             if getattr(self, "logger_fn", None) and callable(self.logger_fn):
                 try:
                     self.logger_fn(

@@ -4252,6 +4252,12 @@ def _apply_credential_overrides_from_model_config(
     5. Team default override (defaultconfig)
     6. Deployment default (no action needed)
     """
+    if litellm.enable_gateway_io_logging:
+        for _meta_key in ("litellm_metadata", "metadata"):
+            _strip_meta = data.get(_meta_key)
+            if isinstance(_strip_meta, dict):
+                _strip_meta.pop("_gateway_credential_name", None)
+                _strip_meta.pop("_gateway_credential_source", None)
     # Feature flag gate — disabled by default, opt in with litellm.enable_model_config_credential_overrides = True
     if not litellm.enable_model_config_credential_overrides:
         return
@@ -4312,6 +4318,17 @@ def _apply_credential_overrides_from_model_config(
         if key in credential_values and key not in data:
             data[key] = credential_values[key]
 
+    if litellm.enable_gateway_io_logging:
+        _credential_metadata = (
+            data.get("litellm_metadata")
+            if isinstance(data.get("litellm_metadata"), dict)
+            else data.get("metadata")
+        )
+        if not isinstance(_credential_metadata, dict):
+            _credential_metadata = {}
+            data["metadata"] = _credential_metadata
+        _credential_metadata["_gateway_credential_name"] = str(credential_name)
+        _credential_metadata["_gateway_credential_source"] = "model_config"
     _safe_model: Final = str(model_name).replace("\n", "").replace("\r", "")
     _safe_cred = str(credential_name).replace("\n", "").replace("\r", "")
     verbose_proxy_logger.debug(
