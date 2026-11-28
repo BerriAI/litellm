@@ -6,7 +6,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_native_request
+from litellm.anthropic_beta_gated_fields import SAFEGUARDS, log_beta_gated_strips, strip_beta_gated_native_request
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -29,6 +29,7 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.anthropic.messages.safeguards import proxy_serves_safeguards
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -40,8 +41,10 @@ from litellm.llms.bedrock.common_utils import (
     BedrockError,
     apply_bedrock_invoke_structured_output,
     bedrock_capability_model,
+    bedrock_drops_safeguards,
     bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
+    drops_safeguards_bedrock_rejects,
     ensure_bedrock_anthropic_messages_tool_names,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
@@ -70,6 +73,11 @@ else:
 
 _MODEL_INFO: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _MESSAGE_LIST: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+_OPTIONAL_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+def _safeguards_drop_params(drop_params: object, safeguards: object) -> object:
+    return True if proxy_serves_safeguards(safeguards) else drop_params
 
 
 class AmazonAnthropicClaudeMessagesConfig(
@@ -101,6 +109,14 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
+
+    def drops_model_safeguards(self, model: str, kwargs: Mapping[str, object]) -> bool:
+        return bedrock_drops_safeguards(
+            bedrock_capability_model(model, kwargs.get("base_model")),
+            _MODEL_INFO.validate_python(kwargs.get("model_info")),
+            _safeguards_drop_params(kwargs.get("drop_params"), kwargs.get("safeguards")),
+            sends_beta=True,
+        )
 
     def supports_diagnostics(self) -> bool:
         return False
@@ -531,6 +547,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         anthropic_messages_request: dict,
         injected_thinking_for_clear_thinking: bool,
         litellm_params: GenericLiteLLMParams,
+        safeguards_dropped: bool,
     ) -> list[str]:
         anthropic_model_info: Final = AnthropicModelInfo()
         tools: Final = anthropic_messages_optional_request_params.get("tools")
@@ -574,7 +591,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         dangerous_tool_use_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
         if anthropic_messages_optional_request_params.get("safeguards") is not None:
             beta_set.add(dangerous_tool_use_beta)
-        elif dangerous_tool_use_beta in beta_set and self.drops_dangerous_tool_use_beta_without_safeguards():
+        elif dangerous_tool_use_beta in beta_set and (
+            safeguards_dropped or self.drops_dangerous_tool_use_beta_without_safeguards()
+        ):
             beta_set.discard(dangerous_tool_use_beta)
             verbose_logger.debug(
                 "Bedrock Invoke: dropping %s from client headers because the request has no safeguards. Bedrock "
@@ -715,18 +734,31 @@ class AmazonAnthropicClaudeMessagesConfig(
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
     ) -> dict[str, object]:
-        requested_thinking: Final = anthropic_messages_optional_request_params.get("thinking")
+        params: Final = _OPTIONAL_PARAMS.validate_python(anthropic_messages_optional_request_params)
+        upstream_params: Final = (
+            {key: value for key, value in params.items() if key != SAFEGUARDS}
+            if SAFEGUARDS in params
+            and drops_safeguards_bedrock_rejects(
+                bedrock_capability_model(model, getattr(litellm_params, "base_model", None)),
+                _MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None)),
+                _safeguards_drop_params(getattr(litellm_params, "drop_params", None), params.get(SAFEGUARDS)),
+                self.beta_headers_provider,
+                sends_beta=True,
+            )
+            else params
+        )
+        requested_thinking: Final = upstream_params.get("thinking")
         requested_display_updates: Final = AnthropicModelInfo().is_thinking_display_updates_used(requested_thinking)
         drop_params: Final = getattr(litellm_params, "drop_params", None) is True
         self._clamp_adaptive_reasoning_effort_for_bedrock(
             model=model,
-            optional_params=anthropic_messages_optional_request_params,
+            optional_params=upstream_params,
         )
         anthropic_messages_request = AnthropicMessagesConfig.transform_anthropic_messages_request(
             self=self,
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=upstream_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -805,11 +837,12 @@ class AmazonAnthropicClaudeMessagesConfig(
         filtered_betas: Final = self._get_bedrock_invoke_anthropic_beta_headers(
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            anthropic_messages_optional_request_params=upstream_params,
             headers=headers,
             anthropic_messages_request=anthropic_messages_request,
             injected_thinking_for_clear_thinking=injected_thinking_for_clear_thinking,
             litellm_params=litellm_params,
+            safeguards_dropped=SAFEGUARDS in params and SAFEGUARDS not in upstream_params,
         )
 
         if filtered_betas:

@@ -76,6 +76,8 @@ pub struct BedrockCapabilities {
     #[serde(default)]
     pub supports_per_turn_control: bool,
     #[serde(default)]
+    pub supports_safeguards: bool,
+    #[serde(default)]
     pub supports_server_side_fallback: bool,
     #[serde(default)]
     pub native_output: NativeOutputSupport,
@@ -189,6 +191,7 @@ pub struct MessagesTransformContext {
     pub thinking: ThinkingContext,
     pub drop_params: bool,
     pub drops_unsupported_params: bool,
+    pub drops_rejected_safeguards: bool,
     pub global_drop_params: bool,
     pub claude_base_model: bool,
     pub keeps_unsigned_thinking: bool,
@@ -213,6 +216,7 @@ impl MessagesTransformContext {
             },
             drop_params,
             drops_unsupported_params: false,
+            drops_rejected_safeguards: false,
             global_drop_params: false,
             claude_base_model: false,
             keeps_unsigned_thinking: false,

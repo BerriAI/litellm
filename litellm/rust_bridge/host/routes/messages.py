@@ -110,6 +110,7 @@ from litellm.llms.anthropic.messages.safeguards import (
     SafeguardsEvaluator,
     StreamedSafeguardResults,
     native_route_classifies,
+    proxy_serves_safeguards,
     with_safeguard_results,
 )
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
@@ -164,6 +165,7 @@ class MessagesSettings:
     additional_drop_params: Sequence[str]
     request_timeout: float | None
     drops_unsupported_params: bool
+    drops_rejected_safeguards: bool
     model: str | None = None
     mock_response: Mapping[str, object] | None = None
     stream_cost_model: str | None = None
@@ -1532,6 +1534,8 @@ def settings(
         additional_drop_params=handler.additional_drop_paths(kwargs),
         request_timeout=get_configured_request_timeout(),
         drops_unsupported_params=drops_unsupported_params(kwargs.get("drop_params")),
+        drops_rejected_safeguards=drops_unsupported_params(kwargs.get("drop_params"))
+        or (request is not None and proxy_serves_safeguards(request.get("safeguards"))),
         ascii_response_headers=aiohttp,
         joined_reads=aiohttp,
         detached_drain_timeout=ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS if asynchronous else None,
@@ -2457,7 +2461,17 @@ def _handler_model(request: Mapping[str, object]) -> tuple[str, str | None]:
     return model, provider
 
 
+def _route_drops_safeguards(request: Mapping[str, object]) -> bool:
+    return proxy_serves_safeguards(request["safeguards"]) and handler.route_drops_safeguards(
+        *_handler_model(request), request
+    )
+
+
 def safeguards(request: Mapping[str, object]) -> MessagesSafeguards | None:
-    if "safeguards" not in request or not native_route_classifies(str(request["model"]), request["safeguards"]):
+    if "safeguards" not in request:
+        return None
+    if not native_route_classifies(str(request["model"]), request["safeguards"]) and not _route_drops_safeguards(
+        request
+    ):
         return None
     return MessagesSafeguards(request)

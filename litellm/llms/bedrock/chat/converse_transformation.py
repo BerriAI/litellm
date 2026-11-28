@@ -17,7 +17,12 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.anthropic_beta_gated_fields import active_beta_values, log_beta_gated_strips, strip_beta_gated_thinking
+from litellm.anthropic_beta_gated_fields import (
+    SAFEGUARDS,
+    active_beta_values,
+    log_beta_gated_strips,
+    strip_beta_gated_thinking,
+)
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import (
     BEDROCK_MIN_THINKING_BUDGET_TOKENS,
@@ -93,7 +98,9 @@ from litellm.llms.bedrock.common_utils import (
     bedrock_native_output_retry_requested,
     bedrock_supports_tool_search,
     deployment_model_info,
+    drops_safeguards_bedrock_rejects,
     requests_output_config_format,
+    without_safeguards,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -103,7 +110,7 @@ from litellm.llms.bedrock.request_metadata import (
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
-from litellm.types.llms.anthropic import ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -2605,9 +2612,25 @@ class AmazonConverseConfig(BaseConfig):
         if gated_thinking.stripped:
             log_beta_gated_strips(gated_thinking.stripped, model=model, provider="bedrock_converse")
             additional_request_params["thinking"] = gated_thinking.thinking
+        cache_injection_points: Final = additional_request_params.pop("cache_control_injection_points", None)
+        sent_fields: Final = _JSON_OBJECT.validate_python(additional_request_params)
+        request_fields: Final = {
+            **(
+                without_safeguards(sent_fields)
+                if SAFEGUARDS in sent_fields
+                and drops_safeguards_bedrock_rejects(
+                    bedrock_capability_model(model, self._deployment_base_model(litellm_params or {})),
+                    model_info,
+                    drop_params,
+                    "bedrock_converse",
+                    sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+                    in active_beta_values({}, body_betas),  # pyright: ignore[reportUnknownArgumentType]  # same bare dict
+                )
+                else sent_fields
+            )
+        }
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config
-        cache_injection_points: Final = additional_request_params.pop("cache_control_injection_points", None)
         if (
             cache_injection_points
             and len(bedrock_tools) > 0
@@ -2637,7 +2660,7 @@ class AmazonConverseConfig(BaseConfig):
             )
             if tool_choice_values is not None:
                 bedrock_tool_config["toolChoice"] = tool_choice_values
-                self._drop_tool_choice_type_conflicting_with_tool_config(additional_request_params)
+                self._drop_tool_choice_type_conflicting_with_tool_config(request_fields)
 
         config_block_entries: Final = tuple(
             (config_name, config_class, inference_params.pop(config_name, None))
@@ -2647,9 +2670,9 @@ class AmazonConverseConfig(BaseConfig):
         data: Final[CommonRequestObject] = {
             "inferenceConfig": self._transform_inference_params(inference_params=inference_params),
         }
-        if additional_request_params:
-            data["additionalModelRequestFields"] = additional_request_params
-        if "thinking" in additional_request_params or AnthropicModelInfo.thinks_by_default(model, "bedrock"):
+        if request_fields:
+            data["additionalModelRequestFields"] = request_fields
+        if "thinking" in request_fields or AnthropicModelInfo.thinks_by_default(model, "bedrock"):
             data["additionalModelResponseFieldPaths"] = ("/usage/output_tokens_details",)
         if system_content_blocks:
             data["system"] = system_content_blocks

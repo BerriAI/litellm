@@ -1,6 +1,7 @@
 use std::sync::LazyLock;
 
 use crate::anthropic::common_utils::supports_effort_param;
+use crate::anthropic::messages::transformation::is_claude_model;
 use crate::base_llm::messages::context::{
     BedrockCapabilities, MessagesModelCapabilities, NativeOutputSupport, SupportedEffortTiers,
 };
@@ -28,6 +29,7 @@ const BEDROCK_NATIVE_OUTPUT: &str = "supports_bedrock_native_structured_output";
 const NATIVE_OUTPUT_BY_DEFAULT: &str = "supports_bedrock_native_structured_output_by_default";
 const OUTPUT_CONFIG: &str = "supports_output_config";
 const PER_TURN_CONTROL: &str = "supports_per_turn_control";
+const SAFEGUARDS: &str = "supports_safeguards";
 const SERVER_SIDE_FALLBACK: &str = "supports_server_side_fallback";
 const PROMPT_CACHE_TTL_PRICE: &str = "cache_creation_input_token_cost_above_1hr";
 const BACKSTOP_PREFIXES: [&str; 4] = [
@@ -209,6 +211,14 @@ pub fn bedrock_model_capabilities(
         supports_tool_search: probe.supports("supports_tool_search"),
         supports_per_turn_control: declared(PER_TURN_CONTROL)
             .unwrap_or_else(|| probe.supports(PER_TURN_CONTROL)),
+        supports_safeguards: declared(SAFEGUARDS).unwrap_or_else(|| {
+            match base_model.map(strip_bedrock_routing_prefix) {
+                Some(base) if is_bedrock_application_inference_profile_arn(model) => {
+                    safeguards_support(&Probe::new(catalog, base, base, BEDROCK, &|_| None), base)
+                }
+                _ => safeguards_support(&probe, model),
+            }
+        }),
         supports_server_side_fallback: declared(SERVER_SIDE_FALLBACK).unwrap_or_else(|| {
             match base_model.map(strip_bedrock_routing_prefix) {
                 Some(base) if is_bedrock_application_inference_profile_arn(model) => {
@@ -303,6 +313,16 @@ impl<'a> Probe<'a> {
     fn bare_supports(&self, capability: &str) -> bool {
         self.info.is_some() && flag(self.bare, capability) == Some(true)
     }
+
+    fn mapped(&self, capability: &str) -> Option<bool> {
+        flag(self.info.as_ref(), capability)
+    }
+}
+
+fn safeguards_support(probe: &Probe, model: &str) -> bool {
+    probe
+        .mapped(SAFEGUARDS)
+        .unwrap_or_else(|| !is_claude_model(model) || probe.supports(SAFEGUARDS))
 }
 
 fn model_info_flag(info: &Fields, capability: &str) -> Option<bool> {
@@ -484,6 +504,11 @@ mod tests {
             "mode": "chat",
             "supports_adaptive_thinking": true,
             "supports_output_config": true
+        },
+        "amazon.nova-unguarded-v1:0": {
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+            "supports_safeguards": false
         },
         "vertex_ai/claude-test-5": {
             "litellm_provider": "vertex_ai-anthropic_models",
@@ -898,6 +923,84 @@ mod tests {
             messages_route_capabilities(&bundled, model, None, None, &|_| None)
                 .bedrock
                 .supports_server_side_fallback,
+            expected
+        );
+    }
+
+    const SONNET_4_5: &str = "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+    const OPUS_4_1: &str = "bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0";
+
+    #[rstest]
+    #[case::sonnet_4_5(SONNET_4_5, None, true)]
+    #[case::opus_4_1(OPUS_4_1, None, false)]
+    #[case::sonnet_4("bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0", None, false)]
+    #[case::claude_3_5("bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0", None, false)]
+    #[case::unmapped_newer_claude("bedrock/us.anthropic.claude-opus-9-v1:0", None, true)]
+    #[case::other_family("bedrock/amazon.nova-pro-v1:0", None, true)]
+    #[case::word_named_claude("bedrock/anthropic.claude-mythos-preview", None, true)]
+    #[case::application_profile(APPLICATION, None, true)]
+    #[case::deployment_opts_in(OPUS_4_1, Some(true), true)]
+    #[case::deployment_opts_out(SONNET_4_5, Some(false), false)]
+    fn bedrock_safeguards_follow_the_deployment_then_the_catalog_as_python_does(
+        bundled: Catalog,
+        #[case] model: &str,
+        #[case] declared: Option<bool>,
+        #[case] expected: bool,
+    ) {
+        let lookup = |capability: &str| declared.filter(|_| capability == "supports_safeguards");
+
+        assert_eq!(
+            bedrock_model_capabilities(&bundled, model, None, &lookup).supports_safeguards,
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::old_base_model(Some("us.anthropic.claude-opus-4-1-20250805-v1:0"), false)]
+    #[case::prefixed_flagged_base_model(Some(SONNET_4_5), true)]
+    #[case::no_base_model(None, true)]
+    fn application_profile_safeguards_follow_its_base_model_as_python_does(
+        bundled: Catalog,
+        #[case] base_model: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            bedrock_model_capabilities(&bundled, APPLICATION, base_model, &|_| None)
+                .supports_safeguards,
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::flagged_off("bedrock/amazon.nova-unguarded-v1:0", false)]
+    #[case::unmapped("bedrock/amazon.nova-unlisted-v1:0", true)]
+    fn non_claude_bedrock_safeguards_follow_the_cost_map_flag_first(
+        catalog: Catalog,
+        #[case] model: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            bedrock_model_capabilities(&catalog, model, None, &|_| None).supports_safeguards,
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle("bedrock_mantle/anthropic.claude-sonnet-5", true)]
+    #[case::amazon_mantle("bedrock/mantle/anthropic.claude-mythos-preview", true)]
+    #[case::amazon_mantle_old_claude(
+        "bedrock/mantle/anthropic.claude-opus-4-1-20250805-v1:0",
+        false
+    )]
+    fn mantle_routes_read_safeguards_off_the_bedrock_row_as_python_does(
+        bundled: Catalog,
+        #[case] model: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            messages_route_capabilities(&bundled, model, None, None, &|_| None)
+                .bedrock
+                .supports_safeguards,
             expected
         );
     }

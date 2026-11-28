@@ -513,6 +513,37 @@ fn pop_output_config_under_global_drop(
     }
 }
 
+fn without_safeguards_bedrock_rejects(
+    request: MessagesRequest,
+    context: &MessagesTransformContext,
+    settings: &InvokeRequestSettings,
+) -> (MessagesRequest, InvokeRequestSettings) {
+    if request.params.safeguards.is_none()
+        || !context.drops_rejected_safeguards
+        || context.thinking.capabilities.bedrock.supports_safeguards
+    {
+        return (request, *settings);
+    }
+    tracing::warn!(
+        "Dropped safeguards for model={} provider={} because drop_params is on or the proxy's safeguards classifier answers them, and the model map does not flag supports_safeguards for the model. A deployment keeps them with model_info supports_safeguards true.",
+        request.model,
+        settings.beta_headers_provider
+    );
+    (
+        MessagesRequest {
+            params: MessagesOptionalParams {
+                safeguards: None,
+                ..request.params
+            },
+            ..request
+        },
+        InvokeRequestSettings {
+            drops_dangerous_tool_use_beta_without_safeguards: true,
+            ..*settings
+        },
+    )
+}
+
 /// Port of Python's `_strip_unsupported_bedrock_invoke_fields`.
 fn strip_unsupported_bedrock_invoke_fields(body: Body, settings: &InvokeRequestSettings) -> Body {
     let stripped: Vec<&String> = body
@@ -537,6 +568,8 @@ pub(crate) fn transform_anthropic_messages_request(
     headers: Headers,
     settings: &InvokeRequestSettings,
 ) -> Result<(MessagesRequest, Headers), Error> {
+    let (request, settings) = without_safeguards_bedrock_rejects(request, context, settings);
+    let settings = &settings;
     let model = request.model.clone();
     let stream = request.params.stream.clone();
     let capabilities = &context.thinking.capabilities;
@@ -1185,5 +1218,59 @@ mod tests {
             MessagesModelCapabilities::default(),
         );
         assert_eq!((wire.get("model"), wire.get("stream")), (None, None));
+    }
+
+    fn sent_safeguards(
+        supports_safeguards: bool,
+        drops_rejected_safeguards: bool,
+    ) -> (Option<Value>, Value) {
+        let capabilities = with_bedrock(
+            MessagesModelCapabilities::default(),
+            BedrockCapabilities {
+                supports_safeguards,
+                ..BedrockCapabilities::default()
+            },
+        );
+        let (wire, _) = transformed_with(
+            hello(
+                "anthropic.claude-opus-4-1-20250805-v1:0",
+                json!({"safeguards": [{"type": "dangerous_tool_use"}]}),
+            ),
+            &MessagesTransformContext {
+                drops_rejected_safeguards,
+                ..context(capabilities, false)
+            },
+            vec![(
+                "anthropic-beta".into(),
+                "dangerous-tool-use-2026-09-03,context-1m-2025-08-07".into(),
+            )],
+        )
+        .unwrap();
+        (
+            wire.get("safeguards").cloned(),
+            wire["anthropic_beta"].clone(),
+        )
+    }
+
+    #[rstest]
+    #[case::model_with_support(true, true)]
+    #[case::without_drop_params_or_a_classifier(false, false)]
+    fn a_route_dropping_rejected_safeguards_drops_them_and_their_beta_only_where_bedrock_rejects_them(
+        #[case] supports_safeguards: bool,
+        #[case] drops_rejected_safeguards: bool,
+    ) {
+        assert_eq!(
+            (
+                sent_safeguards(supports_safeguards, drops_rejected_safeguards),
+                sent_safeguards(false, true),
+            ),
+            (
+                (
+                    Some(json!([{"type": "dangerous_tool_use"}])),
+                    json!(["context-1m-2025-08-07", "dangerous-tool-use-2026-09-03"]),
+                ),
+                (None, json!(["context-1m-2025-08-07"])),
+            )
+        );
     }
 }

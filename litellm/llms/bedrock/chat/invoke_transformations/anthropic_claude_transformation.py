@@ -5,7 +5,7 @@ import httpx
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.anthropic_beta_gated_fields import strip_beta_gated_request_body
+from litellm.anthropic_beta_gated_fields import active_beta_values, strip_beta_gated_request_body
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
@@ -46,6 +46,7 @@ from litellm.llms.bedrock.common_utils import (
     strip_bedrock_routing_prefix,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
+    without_safeguards_bedrock_rejects,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -66,6 +67,7 @@ else:
 
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
+_OPTIONAL_PARAMS: Final = TypeAdapter(dict[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
@@ -261,27 +263,43 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict[str, object],
         headers: dict[str, object],
     ) -> dict[str, object]:
+        params: Final = _OPTIONAL_PARAMS.validate_python(optional_params)
+        upstream_params: Final = dict(
+            without_safeguards_bedrock_rejects(
+                params,
+                model,
+                _LITELLM_PARAMS.validate_python(litellm_params),
+                "bedrock_invoke",
+                sent_betas=active_beta_values(headers, params.get("anthropic_beta")),
+            )
+        )
         _anthropic_request: Final = self._build_bedrock_anthropic_request_base(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=upstream_params,
             litellm_params=litellm_params,
             headers=headers,
         )
 
         self._convert_document_url_sources_to_base64(_anthropic_request)
-        beta_list: Final = self._compute_bedrock_invoke_beta_headers(
+        header_and_auto_betas: Final = self._compute_bedrock_invoke_beta_headers(
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=upstream_params,
             headers=headers,
             thinking=_anthropic_request.get("thinking"),
             history_holds_tool_search=replays_tool_search(
                 OBJECT_MAPPING_ADAPTER.validate_python(_anthropic_request).get("messages")
             ),
         )
-        if beta_list:
-            _anthropic_request["anthropic_beta"] = beta_list
+        body_safeguards_beta: Final = (
+            active_beta_values({}, upstream_params.get("anthropic_beta"))
+            & {ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value}
+            if "safeguards" in upstream_params
+            else frozenset[str]()
+        )
+        if header_and_auto_betas:
+            _anthropic_request["anthropic_beta"] = sorted({*header_and_auto_betas, *body_safeguards_beta})
 
         return dict(
             strip_beta_gated_request_body(
@@ -303,14 +321,21 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         unguarded: Final = AnthropicConfig.transform_extra_body(
             self, extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
         )
+        upstream: Final = without_safeguards_bedrock_rejects(
+            unguarded,
+            model,
+            litellm_params,
+            "bedrock_invoke",
+            sent_betas=active_beta_values({}, unguarded.get("anthropic_beta", request.get("anthropic_beta"))),
+        )
         stripped: Final = strip_beta_gated_request_body(
-            {**request, **unguarded},
+            {**request, **upstream},
             {},
             drop_params=litellm_params.get("drop_params"),
             model=model,
             provider="bedrock_invoke",
         )
-        return {key: stripped[key] for key in unguarded if key in stripped}
+        return {key: stripped[key] for key in upstream if key in stripped}
 
     @property
     def uses_async_transform_request(self) -> bool:

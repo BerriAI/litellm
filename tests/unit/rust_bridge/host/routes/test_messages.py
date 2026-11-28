@@ -116,6 +116,7 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "additional_drop_params": ("metadata.user_id",),
         "request_timeout": 1800.0,
         "drops_unsupported_params": True,
+        "drops_rejected_safeguards": True,
         "model": None,
         "mock_response": None,
         "stream_cost_model": None,
@@ -2049,6 +2050,88 @@ def test_safeguards_classify_only_what_the_proxy_answers(
     monkeypatch.setattr(proxy_server, "general_settings", general_settings)
 
     assert (messages_host.safeguards(request_fields) is not None) is classifies
+
+
+_OPUS_4_1_ON_BEDROCK: Final = "us.anthropic.claude-opus-4-1-20250805-v1:0"
+_BEDROCK_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/abc123"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment", "classifies"),
+    (
+        pytest.param(
+            {"model": f"bedrock/invoke/{_OPUS_4_1_ON_BEDROCK}", "drop_params": True}, True, id="opus_4_1_drop_params"
+        ),
+        pytest.param(
+            {"model": "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0", "drop_params": True},
+            False,
+            id="sonnet_4_5_drop_params",
+        ),
+        pytest.param(
+            {"model": f"bedrock/invoke/{_OPUS_4_1_ON_BEDROCK}"}, True, id="opus_4_1_classifier_without_drop_params"
+        ),
+        pytest.param(
+            {
+                "model": f"bedrock/mantle/{_BEDROCK_PROFILE_ARN}",
+                "base_model": f"bedrock/{_OPUS_4_1_ON_BEDROCK}",
+                "drop_params": True,
+            },
+            True,
+            id="profile_arn_of_opus_4_1",
+        ),
+    ),
+)
+async def test_safeguards_classify_exactly_what_the_bedrock_route_drops(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment: Mapping[str, object],
+    classifies: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", _CLASSIFIER_SETTINGS)
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    classifier: Final = messages_host.safeguards(
+        {**deployment, "safeguards": _DANGEROUS_TOOL_USE, "messages": [{"role": "user", "content": "hi"}]}
+    )
+
+    assert (classifier is not None and await classifier.open_stream()) is classifies
+
+
+@pytest.mark.parametrize(
+    ("general_settings", "deployment", "drops"),
+    (
+        pytest.param(_CLASSIFIER_SETTINGS, {}, True, id="classifier_without_drop_params"),
+        pytest.param({}, {"drop_params": True}, True, id="drop_params_without_classifier"),
+        pytest.param({}, {}, False, id="neither"),
+    ),
+)
+def test_settings_let_bedrock_drop_rejected_safeguards_under_drop_params_or_the_proxy_classifier(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: Mapping[str, object],
+    deployment: Mapping[str, object],
+    drops: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    projected: Final = messages_host.settings(
+        deployment,
+        {
+            **_CALL,
+            "model": f"bedrock/invoke/{_OPUS_4_1_ON_BEDROCK}",
+            "safeguards": _DANGEROUS_TOOL_USE,
+            **deployment,
+            **_AWS,
+        },
+        asynchronous=True,
+    )
+
+    assert projected["drops_rejected_safeguards"] is drops
 
 
 @pytest.mark.asyncio

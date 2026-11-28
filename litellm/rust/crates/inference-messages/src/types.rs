@@ -97,6 +97,8 @@ pub struct MessagesSettings {
     #[serde(default)]
     pub drops_unsupported_params: bool,
     #[serde(default)]
+    pub drops_rejected_safeguards: bool,
+    #[serde(default)]
     pub global_drop_params: bool,
     #[serde(default)]
     pub intercepted: bool,
