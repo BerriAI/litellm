@@ -73,6 +73,7 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    request_body_kind,
     safe_get_request_headers,
 )
 from litellm.types.mcp import MCPAuth
@@ -1350,6 +1351,14 @@ if MCP_AVAILABLE:
         )
 
         reject_disallowed_mcp_client(request.headers, user_api_key_dict)
+        if request_body_kind(request.headers.get("content-type", "")) == "form":
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail={
+                    "error": "unsupported_media_type",
+                    "message": "Send the request body as JSON with the header 'Content-Type: application/json'",
+                },
+            )
         try:
             user_api_key_dict = await acting_user_auth(user_api_key_dict)
             body: Final = await request.json()
