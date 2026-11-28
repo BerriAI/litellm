@@ -1355,6 +1355,25 @@ def test_upstream_4xx_without_model_maps_to_bad_request():
     assert "Cannot cancel a synchronous response." in excinfo.value.message
 
 
+def test_azure_500_raised_by_litellm_before_any_request_stays_a_non_retryable_api_error():
+    from litellm.llms.azure.common_utils import AzureOpenAIError
+
+    original_exception = AzureOpenAIError(
+        status_code=500,
+        message="azure_client is not an instance of AzureOpenAI or OpenAI",
+    )
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider="azure",
+        )
+
+    assert type(excinfo.value) is litellm.APIError
+    assert excinfo.value.status_code == 500
+
+
 def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -1601,7 +1620,7 @@ OPENAI_SHAPED = {
 
 DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
     "ai21": {402: (litellm.APIError, 402)},
-    "azure": {402: (litellm.APIError, 402), 403: (litellm.APIError, 403), 500: (litellm.APIError, 500)},
+    "azure": {402: (litellm.APIError, 402), 403: (litellm.APIError, 403)},
     "azure_ai": {402: (litellm.APIError, 402)},
     "bedrock": {
         500: (litellm.ServiceUnavailableError, 503),
