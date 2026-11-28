@@ -5,12 +5,14 @@ Tests PII detection and masking for different message formats
 
 import asyncio
 import copy
+import datetime
 import json
 import os
 import re
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from itertools import chain
 from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
@@ -26,9 +28,11 @@ import litellm
 from litellm import mock_completion
 from litellm.caching.caching import DualCache
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.anthropic.messages.stream_assembly import anthropic_sse_started_blocks
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
+from litellm.llms.gemini.google_genai.guardrail_translation.handler import GoogleGenAIGenerateContentHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
 from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import UserAPIKeyAuth
@@ -40,12 +44,15 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     _coalesce_first_sse_frame,
     _SsePreface,
 )
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
 from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import LitellmParams, Mode, PiiAction, PiiEntityType
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     FunctionCallArgumentsDeltaEvent,
+    FunctionCallArgumentsDoneEvent,
     OutputItemAddedEvent,
     OutputItemDoneEvent,
     OutputTextDeltaEvent,
@@ -53,15 +60,19 @@ from litellm.types.llms.openai import (
     RefusalDeltaEvent,
     RefusalDoneEvent,
     ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseFunctionToolCall,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
+    ChatCompletionMessageToolCall,
     Choices,
     Delta,
     Function,
+    GenericGuardrailAPIInputs,
     Message,
     ModelResponse,
     StreamingChoices,
@@ -2609,7 +2620,11 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_cut_off_by_an_upstr
         ),
         _anthropic_sse(
             "content_block_delta",
-            {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"command": "l'}},
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": '{"command": "l'},
+            },
         ),
         _anthropic_sse("error", upstream_error),
     )
@@ -2651,7 +2666,11 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_mask_the_text_besid
         ),
         _anthropic_sse(
             "content_block_delta",
-            {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"command" "ls"'}},
+            {
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": '{"command" "ls"'},
+            },
         ),
         _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 1}),
         _anthropic_sse("error", upstream_error),
@@ -3242,7 +3261,11 @@ _REPLY_WITH_THINKING_SEARCH_AND_A_TOOL_CALL: Final = (
     ),
     _anthropic_sse(
         "content_block_start",
-        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+        },
     ),
     _anthropic_sse(
         "content_block_delta",
@@ -3282,7 +3305,10 @@ _REPLY_WITH_THINKING_SEARCH_AND_A_TOOL_CALL: Final = (
         {
             "type": "content_block_delta",
             "index": 3,
-            "delta": {"type": "citations_delta", "citation": {"type": "web_search_result_location", "cited_text": "sun"}},
+            "delta": {
+                "type": "citations_delta",
+                "citation": {"type": "web_search_result_location", "cited_text": "sun"},
+            },
         },
     ),
     _block_stop_sse(3),
@@ -3458,9 +3484,7 @@ def _tool_verdicts(*tool_use_ids: str) -> list[dict[str, object]]:
                 {"type": "refusal", "category": "cyber", "explanation": f"Calls {_PHONE}"},
                 _tool_verdicts("toolu_0", "toolu_1"),
             ),
-            _verdict_end_sse(
-                {"type": "refusal", "category": "cyber", "explanation": None}, _tool_verdicts("toolu_1")
-            ),
+            _verdict_end_sse({"type": "refusal", "category": "cyber", "explanation": None}, _tool_verdicts("toolu_1")),
         ),
         (_verdict_end_sse(None, {"explanation": f"Calls {_PHONE}"}), _verdict_end_sse(None, None)),
     ],
@@ -3558,7 +3582,10 @@ def _tool_input_of(chunks: Iterable[object]) -> object:
     [
         ('{"number": 2125550147, "vip": true}', {"number": "<PHONE_NUMBER>", "vip": True}),
         ('{"number": -2125550147}', {"number": "-<PHONE_NUMBER>"}),
-        ('{"numbers": [2125550147, 7], "note": "call 2125550147"}', {"numbers": ["<PHONE_NUMBER>", 7], "note": "call <PHONE_NUMBER>"}),
+        (
+            '{"numbers": [2125550147, 7], "note": "call 2125550147"}',
+            {"numbers": ["<PHONE_NUMBER>", 7], "note": "call <PHONE_NUMBER>"},
+        ),
     ],
 )
 async def test_apply_to_output_streaming_anthropic_sse_masks_a_number_in_a_tool_input_as_a_string(
@@ -3947,7 +3974,9 @@ async def test_tool_calls_without_text_pii_are_sent_as_is_where_the_config_does_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entities", [None, {}], ids=["unset", "empty"])
-@pytest.mark.parametrize(("mode", "scope"), [("post_call", None), ("pre_call", "both")], ids=["post_call", "scope-both"])
+@pytest.mark.parametrize(
+    ("mode", "scope"), [("post_call", None), ("pre_call", "both")], ids=["post_call", "scope-both"]
+)
 @pytest.mark.parametrize("endpoint", [*_NON_STREAMED_TOOL_INPUTS, "messages_streamed"])
 async def test_tool_calls_without_text_pii_are_sent_as_is_where_the_config_lists_no_entities(
     endpoint: str,
@@ -4173,7 +4202,7 @@ STREAMS_WITH_A_NON_OBJECT_LINE_AND_NO_ANTHROPIC_FRAME: Final = {
     "list-type": (b'data: {"type": []}\n\n', b'data: {"text": "4111"}\n\n'),
     "dict-type": (b'data: {"type": {"a": 1}}\n\n', b'data: {"text": "4111"}\n\n'),
     "error-frame-with-a-list-type": (b'event: error\ndata: {"type": []}\n\n', b'data: {"text": "4111"}\n\n'),
-    "cut-character-at-the-end": (b'data: [5]\xe2',),
+    "cut-character-at-the-end": (b"data: [5]\xe2",),
     "word-then-non-object-before-gemini": (b"data: hello\n\n", b"data: 5\n\n", _GEMINI_TEXT_FRAME),
     "null-then-non-object-before-gemini": (b"data: null\n\n", b"data: 5\n\n", _GEMINI_TEXT_FRAME),
     "word-then-list-type-before-gemini": (b"data: hello\n\n", b'data: {"type": []}\n\n', _GEMINI_TEXT_FRAME),
@@ -5087,51 +5116,47 @@ async def test_output_parse_pii_streaming_responses_completed_event_unmasked(
 
 
 @pytest.mark.asyncio
-async def test_output_parse_pii_streaming_mixed_chunks_flushes_buffered(
-    mock_user_api_key,
-):
-    """
-    Regression test: when output_parse_pii=True and a stream mixes buffered
-    ModelResponseStream chunks with a /v1/responses event, the buffered chat
-    chunks must still be forwarded (in order) instead of being dropped at the
-    saw_non_chat_chunk early return.
-    """
-    guardrail = OPTIONAL_PresidioPIIMasking(
-        mock_testing=True,
-        output_parse_pii=True,
-    )
-
-    class FakeResponsesEvent:
-        def __init__(self, event_type: str):
-            self.type = event_type
-
-    model_chunk = ModelResponseStream(
-        id="chatcmpl-mixed-unmask-1",
-        choices=[],
-        created=1,
-        model="gpt-4",
-        object="chat.completion.chunk",
-        system_fingerprint=None,
-    )
-    response_completed = FakeResponsesEvent("response.completed")
-
-    async def mock_stream():
-        yield model_chunk
-        yield response_completed
-
-    collected = []
-    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-        user_api_key_dict=mock_user_api_key,
-        response=mock_stream(),
-        request_data={
-            "metadata": {
-                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
-            }
+@pytest.mark.parametrize("terminal_type", ("response.completed", "response.incomplete"))
+async def test_mixed_responses_stream_restores_arguments_and_terminal_text(
+    mock_user_api_key: UserAPIKeyAuth, terminal_type: str
+) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    token: Final = "<PERSON_1>"
+    original: Final = 'Jane "Q"'
+    arguments: Final = json.dumps({"name": token})
+    terminal: Final = {
+        "type": terminal_type,
+        "response": {
+            "output": [
+                {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "lookup", "arguments": arguments},
+                {"type": "message", "content": [{"type": "output_text", "text": token}]},
+            ]
         },
-    ):
-        collected.append(chunk)
+    }
 
-    assert collected == [model_chunk, response_completed]
+    async def upstream() -> AsyncIterator[object]:
+        yield _chat_delta_chunk("Guest <PER")
+        yield {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": arguments}
+        yield _chat_delta_chunk("SON_1> confirmed")
+        yield terminal
+
+    first, delta, second, ended = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=upstream(),
+            request_data={"metadata": {"pii_tokens": {token: original}}},
+        )
+    ]
+    assert isinstance(first, ModelResponseStream)
+    assert isinstance(second, ModelResponseStream)
+    chat_text: Final = (first.choices[0].delta.content or "") + (second.choices[0].delta.content or "")
+    assert chat_text == f"Guest {original} confirmed"
+    assert json.loads(delta["delta"]) == {"name": original}
+    tool, message = ended["response"]["output"]
+    assert ended["type"] == terminal_type
+    assert json.loads(tool["arguments"]) == {"name": original}
+    assert message["content"][0]["text"] == original
 
 
 @pytest.mark.asyncio
@@ -5349,7 +5374,9 @@ def test_unmask_sse_bytes_chunk_handles_malformed_json():
 )
 def test_unmask_sse_bytes_chunk_unmasks_the_next_event_past_one_it_cannot_decode(undecodable_payload: bytes):
     undecodable_line = b"data: " + undecodable_payload
-    masked_delta = b'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hi <PERSON_1>"}}'
+    masked_delta = (
+        b'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hi <PERSON_1>"}}'
+    )
 
     result = OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
         undecodable_line + b"\n\n" + masked_delta + b"\n\n", {"<PERSON_1>": "Bobby"}
@@ -6304,7 +6331,13 @@ _PERSON_NAME: Final = re.compile(r"\b[A-Z][a-z]+ [A-Z][a-z]+\b")
 
 def _person_spans(text: str) -> list[dict]:
     return [
-        {"entity_type": "PERSON", "start": match.start(), "end": match.end(), "score": 0.85, "analysis_explanation": None}
+        {
+            "entity_type": "PERSON",
+            "start": match.start(),
+            "end": match.end(),
+            "score": 0.85,
+            "analysis_explanation": None,
+        }
         for match in _PERSON_NAME.finditer(text)
     ]
 
@@ -6510,9 +6543,7 @@ def test_validate_environment_missing_http(base_url):
         if not (base_url.startswith("https://") or base_url.startswith("http://")):
             expected_url = "http://" + base_url
 
-        assert (
-            pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/"
-        ), "Got={}, Expected={}".format(
+        assert pii_masking.presidio_anonymizer_api_base == f"{expected_url}/anonymize/", "Got={}, Expected={}".format(
             pii_masking.presidio_anonymizer_api_base, f"{expected_url}/anonymize/"
         )
         assert pii_masking.presidio_analyzer_api_base == f"{expected_url}/analyze/"
@@ -6552,20 +6583,13 @@ async def test_output_parsing():
     new_response = await pii_masking.async_post_call_success_hook(
         user_api_key_dict=UserAPIKeyAuth(),
         data={
-            "messages": [
-                {"role": "system", "content": "You are an helpfull assistant"}
-            ],
-            "metadata": {
-                "pii_tokens": {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}
-            },
+            "messages": [{"role": "system", "content": "You are an helpfull assistant"}],
+            "metadata": {"pii_tokens": {"<PERSON>": "Jane Doe", "<PHONE_NUMBER>": "034453334"}},
         },
         response=response,
     )
 
-    assert (
-        new_response.choices[0].message.content
-        == "Hello Jane Doe! How can I assist you today?"
-    )
+    assert new_response.choices[0].message.content == "Hello Jane Doe! How can I assist you today?"
 
 
 input_a_anonymizer_results = {
@@ -6608,9 +6632,7 @@ async def test_presidio_pii_masking_input_a():
     """
     Tests to see if correct parts of sentence anonymized
     """
-    pii_masking = OPTIONAL_PresidioPIIMasking(
-        mock_testing=True, mock_redacted_text=input_a_anonymizer_results
-    )
+    pii_masking = OPTIONAL_PresidioPIIMasking(mock_testing=True, mock_redacted_text=input_a_anonymizer_results)
 
     _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
@@ -6639,9 +6661,7 @@ async def test_presidio_pii_masking_input_b():
     """
     Tests to see if correct parts of sentence anonymized
     """
-    pii_masking = OPTIONAL_PresidioPIIMasking(
-        mock_testing=True, mock_redacted_text=input_b_anonymizer_results
-    )
+    pii_masking = OPTIONAL_PresidioPIIMasking(mock_testing=True, mock_redacted_text=input_b_anonymizer_results)
 
     _api_key = "sk-98765"
     user_api_key_dict = UserAPIKeyAuth(api_key=_api_key)
@@ -6728,16 +6748,12 @@ async def test_presidio_language_configuration():
     assert analyze_request_es["language"] == "es"
     assert analyze_request_es["text"] == test_text_es
 
-    presidio_guardrail_default = OPTIONAL_PresidioPIIMasking(
-        pii_entities_config={}, mock_testing=True
-    )
+    presidio_guardrail_default = OPTIONAL_PresidioPIIMasking(pii_entities_config={}, mock_testing=True)
 
     test_text_en = "My phone number is +1 555-123-4567"
 
-    analyze_request_default = (
-        presidio_guardrail_default._get_presidio_analyze_request_payload(
-            text=test_text_en, presidio_config=None, request_data={}
-        )
+    analyze_request_default = presidio_guardrail_default._get_presidio_analyze_request_payload(
+        text=test_text_en, presidio_config=None, request_data={}
     )
 
     assert analyze_request_default["language"] == "en"
@@ -6749,9 +6765,7 @@ async def test_presidio_language_configuration_with_per_request_override():
     """Test that per-request language configuration overrides the default configured language"""
     litellm.turn_on_debug()
 
-    presidio_guardrail = OPTIONAL_PresidioPIIMasking(
-        pii_entities_config={}, presidio_language="de", mock_testing=True
-    )
+    presidio_guardrail = OPTIONAL_PresidioPIIMasking(pii_entities_config={}, presidio_language="de", mock_testing=True)
 
     test_text = "Test text with PII"
 
@@ -6822,7 +6836,9 @@ class _InMemoryPresidioTransport(asyncio.Transport):
         if not separator:
             return
         request_line, *header_lines = head.decode().split("\r\n")
-        headers: Final = {name.lower(): value.strip() for name, _, value in (line.partition(":") for line in header_lines)}
+        headers: Final = {
+            name.lower(): value.strip() for name, _, value in (line.partition(":") for line in header_lines)
+        }
         if len(body) < int(headers.get("content-length", "0")):
             return
         self._received = b""
@@ -6840,7 +6856,16 @@ class _InMemoryPresidioTransport(asyncio.Transport):
             self._analyzed.put_nowait(analyze_request)
             return _card_and_email_spans(analyze_request.get("text") or "")
         assert path == "/anonymize", path
-        return _PresidioAnonymizeReply(text=_ANONYMIZE_REQUEST.validate_json(body)["text"], items=())
+        payload: Final = _ANONYMIZE_REQUEST.validate_json(body)
+        text: Final = payload["text"]
+        spans: Final = sorted(payload.get("analyzer_results", ()), key=lambda span: span["start"])
+        starts: Final = (0, *(span["end"] for span in spans))
+        ends: Final = (*(span["start"] for span in spans), len(text))
+        markers: Final = (*(f"<{span['entity_type']}>" for span in spans), "")
+        redacted: Final = "".join(
+            text[start:end] + marker for start, end, marker in zip(starts, ends, markers, strict=True)
+        )
+        return _PresidioAnonymizeReply(text=redacted, items=())
 
     def writelines(self, list_of_data: Iterable[bytes | bytearray | memoryview]) -> None:
         self.write(b"".join(bytes(chunk) for chunk in list_of_data))
@@ -6986,9 +7011,7 @@ async def test_legacy_pii_masking_config_registers_logging_only_guardrail(monkey
     assert pii_masking_obj is not None
     assert hasattr(pii_masking_obj, "logging_only")
     assert pii_masking_obj.event_hook == GuardrailEventHooks.logging_only
-    assert pii_masking_obj.should_run_guardrail(
-        data={}, event_type=GuardrailEventHooks.logging_only
-    )
+    assert pii_masking_obj.should_run_guardrail(data={}, event_type=GuardrailEventHooks.logging_only)
 
 
 async def _one_session(guardrail: OPTIONAL_PresidioPIIMasking) -> aiohttp.ClientSession:
@@ -7030,7 +7053,9 @@ async def test_apply_guardrail_records_its_verdict_on_a_request_dict_that_starts
     )
     request_data: Final[dict[str, object]] = {}
 
-    await guardrail.apply_guardrail(inputs={"texts": ["my name is Jane"]}, request_data=request_data, input_type="request")
+    await guardrail.apply_guardrail(
+        inputs={"texts": ["my name is Jane"]}, request_data=request_data, input_type="request"
+    )
 
     recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
     assert [record["guardrail_name"] for record in recorded] == ["presidio-pii"]
@@ -7235,3 +7260,1079 @@ async def test_apply_to_output_ends_a_responses_stream_cut_short_mid_tool_call_b
 
     with pytest.raises(UndeliverableStreamRewrite):
         await anext(released)
+
+
+_EMAIL_PATTERN: Final = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_masks_a_later_output_item_when_a_responses_stream_ends_on_a_tool_item():
+    reasoning: Final = BaseLiteLLMOpenAIResponseObject(type="reasoning", id="rs_1", summary=[])
+    tool_call: Final = BaseLiteLLMOpenAIResponseObject(
+        type="function_call", id="fc_1", call_id="call_1", name="lookup", arguments="{}", status="completed"
+    )
+    events: Final = (
+        OutputItemAddedEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=reasoning),
+        OutputItemDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=reasoning),
+        *(
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_1",
+                output_index=1,
+                content_index=0,
+                delta=delta,
+            )
+            for delta in ("Contact ", "alice@example.com")
+        ),
+        OutputItemDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=2, item=tool_call),
+    )
+
+    async with _guardrail_over_regex_presidio(PiiEntityType.EMAIL_ADDRESS, _EMAIL_PATTERN, PiiAction.MASK) as guardrail:
+        collected: Final = await _drain_output_masking(guardrail, events)
+
+    assert "alice@example.com" not in json.dumps([event.model_dump() for event in collected], default=str)
+    assert "".join(event.delta for event in collected if isinstance(event, OutputTextDeltaEvent)) == (
+        "Contact <EMAIL_ADDRESS>"
+    )
+
+
+_REVERSIBLE_EMAIL: Final = "alice@example.com"
+_UNQUOTED_PERSON_NAME: Final = re.compile(r'(?<!")\b[A-Z][a-z]+ [A-Z][a-z]+\b(?!")')
+
+
+def _function_tool_call(call_id: str, arguments: str) -> dict[str, object]:
+    return {"id": call_id, "type": "function", "function": {"name": "lookup", "arguments": arguments}}
+
+
+def _json_blind_presidio_app() -> web.Application:
+    async def analyze(request: web.Request) -> web.Response:
+        payload: Final = _ANALYZE_REQUEST.validate_json(await request.read())
+        return web.json_response(
+            [
+                PresidioAnalyzeResponseItem(
+                    entity_type="PERSON",
+                    start=match.start(),
+                    end=match.end(),
+                    score=0.85,
+                    analysis_explanation=None,
+                )
+                for match in _UNQUOTED_PERSON_NAME.finditer(payload.get("text") or "")
+            ]
+        )
+
+    app: Final = web.Application()
+    app.router.add_post("/analyze", analyze)
+    app.router.add_post("/anonymize", _fake_anonymize)
+    return app
+
+
+@asynccontextmanager
+async def _reversible_presidio_guardrail(
+    presidio_app: web.Application | None = None,
+    *,
+    pii_entities_config: dict[PiiEntityType | str, PiiAction] | None = None,
+) -> AsyncIterator[OPTIONAL_PresidioPIIMasking]:
+    async with TestServer(presidio_app or _fake_presidio_app()) as server:
+        guardrail: Final = OPTIONAL_PresidioPIIMasking(
+            presidio_analyzer_api_base=str(server.make_url("/")),
+            presidio_anonymizer_api_base=str(server.make_url("/")),
+            output_parse_pii=True,
+            pii_entities_config=(
+                {PiiEntityType.PERSON: PiiAction.MASK} if pii_entities_config is None else pii_entities_config
+            ),
+        )
+        try:
+            yield guardrail
+        finally:
+            await guardrail._close_http_session()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["chat_completions", "anthropic_messages", "responses"])
+async def test_reversible_presidio_restores_non_streaming_tool_calls_across_endpoints(
+    monkeypatch: pytest.MonkeyPatch, endpoint: Literal["chat_completions", "anthropic_messages", "responses"]
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+
+    monkeypatch.setattr(litellm.logging_callback_manager, "add_litellm_callback", lambda _cb: None)
+    async with TestServer(_regex_presidio_app(PiiEntityType.EMAIL_ADDRESS, _EMAIL_PATTERN)) as server:
+        base_url: Final = str(server.make_url("/"))
+        input_guardrail, restore_guardrail = initialize_presidio(
+            LitellmParams(
+                guardrail="presidio",
+                mode="pre_call",
+                default_on=True,
+                presidio_filter_scope="input",
+                output_parse_pii=True,
+                presidio_analyzer_api_base=base_url,
+                presidio_anonymizer_api_base=base_url,
+                pii_entities_config={PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK},
+            ),
+            {"guardrail_name": "presidio-reversible"},
+        )
+        assert isinstance(input_guardrail, OPTIONAL_PresidioPIIMasking)
+        assert isinstance(restore_guardrail, OPTIONAL_PresidioPIIMasking)
+        try:
+            unified: Final = UnifiedLLMGuardrails()
+            if endpoint == "chat_completions":
+                data: dict[str, object] = {
+                    "model": "gpt-4o",
+                    "guardrail_to_apply": input_guardrail,
+                    "messages": [{"role": "user", "content": f"Send mail to {_REVERSIBLE_EMAIL}"}],
+                }
+                await unified.async_pre_call_hook(
+                    UserAPIKeyAuth(request_route="/v1/chat/completions"), DualCache(), data, "acompletion"
+                )
+                placeholder: Final = next(iter(data["metadata"]["pii_tokens"]))
+                assert _REVERSIBLE_EMAIL not in json.dumps(data["messages"])
+                response: Final = ModelResponse(
+                    choices=[
+                        Choices(
+                            index=0,
+                            message=Message(
+                                role="assistant",
+                                content=None,
+                                tool_calls=[_function_tool_call("call_1", json.dumps({"to": placeholder}))],
+                            ),
+                        )
+                    ]
+                )
+                data["guardrail_to_apply"] = restore_guardrail
+                await unified.async_post_call_success_hook(
+                    data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+                )
+                assert json.loads(response.choices[0].message.tool_calls[0].function.arguments) == {
+                    "to": _REVERSIBLE_EMAIL
+                }
+            elif endpoint == "anthropic_messages":
+                data = {
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 64,
+                    "guardrail_to_apply": input_guardrail,
+                    "messages": [{"role": "user", "content": f"Send mail to {_REVERSIBLE_EMAIL}"}],
+                }
+                await unified.async_pre_call_hook(
+                    UserAPIKeyAuth(request_route="/v1/messages"), DualCache(), data, "anthropic_messages"
+                )
+                placeholder = next(iter(data["metadata"]["pii_tokens"]))
+                assert _REVERSIBLE_EMAIL not in json.dumps(data["messages"])
+                anthropic_response: Final[dict[str, object]] = {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-6",
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_1", "name": "send_email", "input": {"to": placeholder}}
+                    ],
+                }
+                data["guardrail_to_apply"] = restore_guardrail
+                await unified.async_post_call_success_hook(
+                    data, UserAPIKeyAuth(request_route="/v1/messages"), anthropic_response
+                )
+                assert anthropic_response["content"][0]["input"] == {"to": _REVERSIBLE_EMAIL}
+            else:
+                data = {
+                    "model": "gpt-4o",
+                    "guardrail_to_apply": input_guardrail,
+                    "input": f"Send mail to {_REVERSIBLE_EMAIL}",
+                }
+                await unified.async_pre_call_hook(
+                    UserAPIKeyAuth(request_route="/v1/responses"), DualCache(), data, "responses"
+                )
+                placeholder = next(iter(data["metadata"]["pii_tokens"]))
+                assert _REVERSIBLE_EMAIL not in str(data["input"])
+                responses_reply: Final = ResponsesAPIResponse.model_validate(
+                    {
+                        "id": "resp_1",
+                        "created_at": 1,
+                        "model": "gpt-4o",
+                        "object": "response",
+                        "status": "completed",
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "id": "fc_1",
+                                "call_id": "call_1",
+                                "name": "send_email",
+                                "arguments": json.dumps({"to": placeholder}),
+                                "status": "completed",
+                            }
+                        ],
+                        "parallel_tool_calls": False,
+                        "tool_choice": "auto",
+                        "tools": [],
+                    }
+                )
+                data["guardrail_to_apply"] = restore_guardrail
+                await unified.async_post_call_success_hook(
+                    data, UserAPIKeyAuth(request_route="/v1/responses"), responses_reply
+                )
+                assert json.loads(str(stream_item_field(responses_reply.output[0], "arguments"))) == {
+                    "to": _REVERSIBLE_EMAIL
+                }
+        finally:
+            await input_guardrail._close_http_session()
+            await restore_guardrail._close_http_session()
+
+
+@pytest.mark.asyncio
+async def test_reversible_presidio_restores_streaming_anthropic_tool_use_arguments_on_ended_stream() -> None:
+    restore_guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, output_parse_pii=True, _callback_role="restore"
+    )
+    stream_chunks: Final = [
+        _message_start_sse(),
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "send", "input": {}},
+            },
+        ),
+        _input_json_delta_sse(0, '{"to": "<EMAIL_ADDRESS_1>"}'),
+        _block_stop_sse(0),
+        *_TOOL_USE_END_SSE,
+    ]
+    request_data: Final[dict[str, object]] = {
+        "metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": _REVERSIBLE_EMAIL}},
+    }
+    collected: Final = await AnthropicMessagesHandler().process_output_streaming_response(
+        responses_so_far=stream_chunks,
+        guardrail_to_apply=restore_guardrail,
+        litellm_logging_obj=MagicMock(),
+        request_data=request_data,
+        deliver_ended_stream_rewrites=True,
+    )
+    assert _tool_input_of(collected) == {"to": _REVERSIBLE_EMAIL}
+
+
+@pytest.mark.asyncio
+async def test_reversible_presidio_restores_streaming_chat_completions_tool_calls() -> None:
+    restore_guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, output_parse_pii=True, _callback_role="restore"
+    )
+
+    async def upstream() -> AsyncIterator[ModelResponseStream]:
+        yield ModelResponseStream(
+            id="chatcmpl-1",
+            model="gpt-4o",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                index=0,
+                                id="call_1",
+                                type="function",
+                                function=Function(
+                                    name="send",
+                                    arguments='{"to": "<EMAIL_ADDRESS_1>", "url": "https://x.test/?q=<EMAIL_A"}',
+                                ),
+                            )
+                        ],
+                    ),
+                    finish_reason=None,
+                )
+            ],
+        )
+        yield _chat_delta_chunk("", finish_reason="tool_calls")
+
+    collected: Final = [
+        chunk
+        async for chunk in restore_guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=upstream(),
+            request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": _REVERSIBLE_EMAIL}}},
+        )
+    ]
+    raw_arguments: Final = "".join(
+        call.function.arguments or ""
+        for chunk in collected
+        if isinstance(chunk, ModelResponseStream)
+        for choice in chunk.choices
+        for call in choice.delta.tool_calls or ()
+    )
+    assert json.loads(raw_arguments) == {
+        "to": _REVERSIBLE_EMAIL,
+        "url": "https://x.test/?q=<EMAIL_A",
+    }
+
+
+@pytest.mark.asyncio
+async def test_reversible_presidio_without_entities_config_skips_request_tool_calls_but_restores_response() -> None:
+    tool_call: Final = _function_tool_call("call_1", json.dumps({"path": "Jane Doe", "to": "<EMAIL_ADDRESS_1>"}))
+    async with _reversible_presidio_guardrail(pii_entities_config={}) as guardrail:
+        request_result: Final = await guardrail.apply_guardrail(
+            inputs={"texts": ["Book for Jane Doe"], "tool_calls": [tool_call]},
+            request_data={"metadata": {}},
+            input_type="request",
+        )
+        assert request_result["texts"] == ["Book for <PERSON_1>"]
+        assert request_result["tool_calls"] == [tool_call]
+
+        response_result: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": [_function_tool_call("call_1", '{"to": "<EMAIL_ADDRESS_1>"}')]},
+            request_data={"metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": _REVERSIBLE_EMAIL}}},
+            input_type="response",
+        )
+        assert json.loads(response_result["tool_calls"][0]["function"]["arguments"]) == {"to": _REVERSIBLE_EMAIL}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        (
+            '{"url":"https://collector.invalid/?q=<EMAIL_A","guest":"<EMAIL_ADDRESS_1>"}',
+            f'{{"url":"https://collector.invalid/?q=<EMAIL_A","guest":"{_REVERSIBLE_EMAIL}"}}',
+        ),
+        (
+            '{"items":[{"url":"https://collector.invalid/?q=<EMAIL_ADDRESS_"}],"guest":"<EMAIL_ADDRESS_1>"}',
+            f'{{"items":[{{"url":"https://collector.invalid/?q=<EMAIL_ADDRESS_"}}],"guest":"{_REVERSIBLE_EMAIL}"}}',
+        ),
+        ('["<EMAIL_A","<EMAIL_ADDRESS_1>"]', f'["<EMAIL_A","{_REVERSIBLE_EMAIL}"]'),
+        ('  "https://collector.invalid/?q=<EMAIL_A"  ', '  "https://collector.invalid/?q=<EMAIL_A"  '),
+        ("https://collector.invalid/?q=<EMAIL_A", "https://collector.invalid/?q=<EMAIL_A"),
+    ],
+)
+async def test_tool_arguments_restore_only_complete_tokens_while_text_recovers_truncated_tokens(
+    arguments: str, expected: str
+) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    request_data: Final[dict[str, object]] = {"metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": _REVERSIBLE_EMAIL}}}
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="lookup", arguments=arguments)
+    )
+    result: Final = await guardrail.apply_guardrail(
+        inputs={"texts": ["Contact <EMAIL_A"], "tool_calls": [tool_call]},
+        request_data=request_data,
+        input_type="response",
+    )
+    assert result["tool_calls"][0].function.arguments == expected
+    assert result["texts"] == [f"Contact {_REVERSIBLE_EMAIL}"]
+
+    stream_reply: Final = ModelResponse(
+        choices=[
+            Choices(
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content="Contact <EMAIL_A",
+                    tool_calls=[_function_tool_call("call_1", arguments)],
+                ),
+            )
+        ]
+    )
+    await guardrail._process_response_for_pii(response=stream_reply, request_data=request_data, mode="unmask")
+    assert stream_reply.choices[0].message.content == f"Contact {_REVERSIBLE_EMAIL}"
+    assert stream_reply.choices[0].message.tool_calls[0].function.arguments == expected
+
+
+@pytest.mark.asyncio
+async def test_restore_escapes_original_values_so_tool_call_arguments_stay_valid_json() -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        event_hook="pre_call", default_on=True, output_parse_pii=True, mock_testing=True
+    )
+    original: Final = 'Apt "B"\nFloor 2'
+    response: Final = ModelResponse(
+        choices=[
+            Choices(
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[_function_tool_call("call_1", '{"address": "<LOCATION_1>"}')],
+                ),
+            )
+        ]
+    )
+    data: Final = {"metadata": {"pii_tokens": {"<LOCATION_1>": original}}, "guardrail_to_apply": guardrail}
+
+    await UnifiedLLMGuardrails().async_post_call_success_hook(
+        data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+    )
+
+    assert json.loads(response.choices[0].message.tool_calls[0].function.arguments) == {"address": original}
+
+
+@pytest.mark.asyncio
+async def test_names_inside_json_tool_calls_are_masked_even_when_analyzer_needs_bare_text() -> None:
+    async with _reversible_presidio_guardrail(_json_blind_presidio_app()) as guardrail:
+        data: dict[str, object] = {
+            "model": "claude-fable-5-1",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_function_tool_call("call_1", '{"guest": "Jane Doe"}')],
+                }
+            ],
+        }
+        await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    masked: Final = json.loads(data["messages"][0]["tool_calls"][0]["function"]["arguments"])
+    pii_tokens: Final = data.get("metadata", {}).get("pii_tokens", {})
+    assert pii_tokens.get(masked["guest"]) == "Jane Doe"
+
+
+@pytest.mark.asyncio
+async def test_tool_call_arguments_without_pii_reach_model_byte_for_byte_and_empty_or_custom_pass_through() -> None:
+    clean_args: Final = '{"city":"Boston","days":[1,2]}'
+    custom_call: Final = {"id": "call_2", "type": "custom", "custom": {"name": "run", "input": "ok"}}
+    empty_call: Final = _function_tool_call("call_3", "")
+    async with _reversible_presidio_guardrail() as guardrail:
+        data: dict[str, object] = {
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "Plan a trip for Jane Doe."},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_function_tool_call("call_1", clean_args), custom_call, empty_call],
+                },
+            ],
+        }
+        await OpenAIChatCompletionsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert data["messages"][0]["content"] != "Plan a trip for Jane Doe."
+    assert data["messages"][1]["tool_calls"][0]["function"]["arguments"] == clean_args
+    assert data["messages"][1]["tool_calls"][1] == custom_call
+    assert data["messages"][1]["tool_calls"][2]["function"]["arguments"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "surface",
+    ["chat_client", "chat_server", "anthropic_tool_use", "gemini_function_call"],
+)
+async def test_masking_history_tool_calls_replays_byte_identical_prefix_across_turns(
+    surface: Literal["chat_client", "chat_server", "anthropic_tool_use", "gemini_function_call"],
+) -> None:
+    async with _reversible_presidio_guardrail() as guardrail:
+        if surface == "gemini_function_call":
+            earlier_gemini: Final = [
+                {"role": "user", "parts": [{"text": "My name is John Smith."}]},
+                {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "functionCall": {"name": "lookup", "args": {"name": "Alice Brown"}},
+                            "thoughtSignature": "sig-turn-1",
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": "lookup", "response": {"status": "Found one match."}}}],
+                },
+            ]
+            later_gemini: Final = [
+                *earlier_gemini,
+                {"role": "model", "parts": [{"text": "Noted."}]},
+                {"role": "user", "parts": [{"text": "Now add Bob Jones."}]},
+            ]
+            gemini_first: Final = {
+                "model": "gemini-2.5-flash",
+                "contents": copy.deepcopy(earlier_gemini),
+            }
+            gemini_second: Final = {
+                "model": "gemini-2.5-flash",
+                "contents": copy.deepcopy(later_gemini),
+            }
+            await GoogleGenAIGenerateContentHandler().process_input_messages(
+                data=gemini_first, guardrail_to_apply=guardrail
+            )
+            await GoogleGenAIGenerateContentHandler().process_input_messages(
+                data=gemini_second, guardrail_to_apply=guardrail
+            )
+            assert "Alice Brown" not in json.dumps(gemini_first["contents"])
+            assert gemini_first["contents"][1]["parts"][0]["thoughtSignature"] == "sig-turn-1"
+            assert gemini_second["contents"][: len(earlier_gemini)] == gemini_first["contents"]
+            return
+
+        if surface == "anthropic_tool_use":
+            earlier_anthropic: Final = [
+                {"role": "user", "content": "My name is John Smith."},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {"name": "Alice Brown"}}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "Found one match."}],
+                },
+            ]
+            later_anthropic: Final = [
+                *earlier_anthropic,
+                {"role": "assistant", "content": "Noted."},
+                {"role": "user", "content": "Now add Bob Jones."},
+            ]
+            anthropic_first: Final = {
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 64,
+                "messages": copy.deepcopy(earlier_anthropic),
+            }
+            anthropic_second: Final = {
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 64,
+                "messages": copy.deepcopy(later_anthropic),
+            }
+            await AnthropicMessagesHandler().process_input_messages(data=anthropic_first, guardrail_to_apply=guardrail)
+            await AnthropicMessagesHandler().process_input_messages(data=anthropic_second, guardrail_to_apply=guardrail)
+            assert "Alice Brown" not in json.dumps(anthropic_first["messages"])
+            assert anthropic_second["messages"][: len(earlier_anthropic)] == anthropic_first["messages"]
+            return
+
+        assistant_msg: Final = (
+            {
+                "role": "assistant",
+                "content": None,
+                "provider_specific_fields": {
+                    "server_tool_calls": [_function_tool_call("srv_1", '{"query": "Alice Brown"}')]
+                },
+            }
+            if surface == "chat_server"
+            else {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [_function_tool_call("call_1", '{"name": "Alice Brown"}')],
+            }
+        )
+        earlier_chat: Final = [
+            {"role": "user", "content": "My name is John Smith."},
+            assistant_msg,
+            {"role": "tool", "tool_call_id": "call_1", "content": "Found one match."},
+        ]
+        later_chat: Final = [
+            *earlier_chat,
+            {"role": "assistant", "content": "Noted."},
+            {"role": "user", "content": "Now add Bob Jones."},
+        ]
+        chat_first: Final = {"model": "gpt-4o", "messages": copy.deepcopy(earlier_chat)}
+        chat_second: Final = {"model": "gpt-4o", "messages": copy.deepcopy(later_chat)}
+        await OpenAIChatCompletionsHandler().process_input_messages(data=chat_first, guardrail_to_apply=guardrail)
+        await OpenAIChatCompletionsHandler().process_input_messages(data=chat_second, guardrail_to_apply=guardrail)
+        assert "Alice Brown" not in json.dumps(chat_first["messages"])
+        assert chat_second["messages"][: len(earlier_chat)] == chat_first["messages"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("texts", "tool_arguments", "offsets", "literals"),
+    [
+        pytest.param(
+            ("The guest was <PERSON_1>.", "Book for Jane Doe."), (), (), ("<PERSON_1>",), id="literal-in-earlier-text"
+        ),
+        pytest.param(("Ask <PERSON_1> about Jane Doe.",), (), (), ("<PERSON_1>",), id="literal-beside-value"),
+        pytest.param(
+            ("Seen <PERSON_1> and <PERSON_2>.", "Book for Jane Doe.", "Add John Smith."),
+            (),
+            (),
+            ("<PERSON_1>", "<PERSON_2>"),
+            id="spare-skips-reserved-and-held",
+        ),
+        pytest.param(
+            (),
+            (r'{"url": "https://example.invalid/?q=\u003cPERSON_1\u003e", "guest": "Alice Brown"}',),
+            (0,),
+            ("<PERSON_1>",),
+            id="unicode-escaped-literal-in-same-tool-args",
+        ),
+        pytest.param(
+            ("Book for Jane Doe.",),
+            (r'{"url": "https://example.invalid/?q=\u003cPERSON_1\u003e"}',),
+            (0,),
+            ("<PERSON_1>",),
+            id="unicode-escaped-literal-in-earlier-tool-args",
+        ),
+        pytest.param(
+            ("Book for Jane Doe.", "Keep literal <PERSON_1>."),
+            (),
+            (),
+            ("<PERSON_1>",),
+            id="literal-in-later-text",
+        ),
+        pytest.param(
+            ("Book for Jane Doe.",),
+            ('{"literal": "<PERSON_1>"}',),
+            (1,),
+            ("<PERSON_1>",),
+            id="literal-in-later-tool-args",
+        ),
+        pytest.param(
+            ("Book for Jane Doe.",),
+            (r'{"url": "https://example.invalid/?q=\u003cPERSON_1\u003e"}',),
+            (1,),
+            ("<PERSON_1>",),
+            id="unicode-escaped-literal-in-later-tool-args",
+        ),
+    ],
+)
+async def test_literal_tokens_in_request_or_tool_arguments_are_reserved_and_never_collide(
+    texts: tuple[str, ...],
+    tool_arguments: tuple[str, ...],
+    offsets: tuple[int, ...],
+    literals: tuple[str, ...],
+) -> None:
+    async with _reversible_presidio_guardrail() as guardrail:
+        inputs: Final[GenericGuardrailAPIInputs] = (
+            {
+                "texts": list(texts),
+                "tool_calls": [_function_tool_call(f"call_{idx}", args) for idx, args in enumerate(tool_arguments)],
+                "tool_call_text_offsets": offsets,
+            }
+            if tool_arguments
+            else {"texts": list(texts)}
+        )
+        request_data: Final[dict[str, object]] = {"metadata": {}}  # mutable-ok: guardrail writes pii_tokens
+        result: Final = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+
+    pii_tokens: Final = request_data["metadata"]["pii_tokens"]
+    assert set(literals).isdisjoint(pii_tokens)
+    restored: Final = await guardrail.apply_guardrail(inputs=result, request_data=request_data, input_type="response")
+    assert restored["texts"] == list(texts)
+    if tool_arguments:
+        assert [json.loads(c["function"]["arguments"]) for c in restored["tool_calls"]] == [
+            json.loads(args) for args in tool_arguments
+        ]
+
+
+@pytest.mark.asyncio
+async def test_later_tool_call_literal_token_is_not_corrupted_on_chat_handler_roundtrip() -> None:
+    async with _reversible_presidio_guardrail() as guardrail:
+        request_data: Final[dict[str, object]] = {  # mutable-ok: handler writes masked content and pii_tokens
+            "model": "gpt-4o",
+            "messages": [
+                {"role": "user", "content": "Book for Jane Doe."},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_function_tool_call("call_1", '{"literal": "<PERSON_1>"}')],
+                },
+            ],
+        }
+        await OpenAIChatCompletionsHandler().process_input_messages(data=request_data, guardrail_to_apply=guardrail)
+
+        pii_tokens: Final = request_data["metadata"]["pii_tokens"]
+        assert "<PERSON_1>" not in pii_tokens
+        assigned: Final = next(token for token, original in pii_tokens.items() if original == "Jane Doe")
+        response: Final = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            _function_tool_call("call_2", json.dumps({"literal": "<PERSON_1>", "guest": assigned}))
+                        ],
+                    ),
+                )
+            ]
+        )
+        await OpenAIChatCompletionsHandler().process_output_response(
+            response=response, guardrail_to_apply=guardrail, request_data=request_data
+        )
+        assert json.loads(response.choices[0].message.tool_calls[0].function.arguments) == {
+            "literal": "<PERSON_1>",
+            "guest": "Jane Doe",
+        }
+
+
+@pytest.mark.asyncio
+async def test_reversible_presidio_restores_responses_completed_event_tool_call_arguments(
+    mock_user_api_key: UserAPIKeyAuth,
+) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True, _callback_role="restore")
+    original_name: Final = 'Jane "Q"\nDoe'
+    completed_event: Final = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            output=[
+                ResponseFunctionToolCall(
+                    type="function_call",
+                    id="fc_1",
+                    call_id="call_1",
+                    name="lookup",
+                    arguments=json.dumps({"name": "<PERSON_1>", "partial": "<PERSON_"}),
+                    status="completed",
+                )
+            ],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        ),
+    )
+
+    async def upstream() -> AsyncIterator[object]:
+        yield completed_event
+
+    collected: Final = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=upstream(),
+            request_data={"metadata": {"pii_tokens": {"<PERSON_1>": original_name}}},
+        )
+    ]
+
+    assert len(collected) == 1
+    tool_call: Final = collected[0].response.output[0]
+    assert json.loads(tool_call.arguments) == {"name": original_name, "partial": "<PERSON_"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interleave_chat", (False, True))
+async def test_reversible_presidio_restores_full_responses_stream_tool_call_events(
+    mock_user_api_key: UserAPIKeyAuth,
+    interleave_chat: bool,
+) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True, _callback_role="restore")
+    masked_args: Final = '{"name": "<PERSON_1>"}'
+    in_progress_call: Final = BaseLiteLLMOpenAIResponseObject(
+        type="function_call", id="fc_1", call_id="call_1", name="lookup", arguments="", status="in_progress"
+    )
+    completed_call: Final = BaseLiteLLMOpenAIResponseObject(
+        type="function_call", id="fc_1", call_id="call_1", name="lookup", arguments=masked_args, status="completed"
+    )
+    response_envelope: Final = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        output=[
+            ResponseFunctionToolCall(
+                type="function_call",
+                id="fc_1",
+                call_id="call_1",
+                name="lookup",
+                arguments=masked_args,
+                status="completed",
+            )
+        ],
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+    events: Final[tuple[object, ...]] = (
+        ResponseCreatedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_CREATED,
+            response=ResponsesAPIResponse(
+                id="resp_1", created_at=1, output=[], parallel_tool_calls=False, tool_choice="auto", tools=[]
+            ),
+        ),
+        OutputItemAddedEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=in_progress_call),
+        FunctionCallArgumentsDeltaEvent(
+            type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+            item_id="fc_1",
+            output_index=0,
+            delta='{"name": "<PER',
+        ),
+        FunctionCallArgumentsDeltaEvent(
+            type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+            item_id="fc_1",
+            output_index=0,
+            delta='SON_1>"}',
+        ),
+        FunctionCallArgumentsDoneEvent(
+            type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+            item_id="fc_1",
+            output_index=0,
+            arguments=masked_args,
+        ),
+        OutputItemDoneEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=completed_call),
+        ResponseCompletedEvent(type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=response_envelope),
+    )
+
+    chat: Final = ModelResponseStream(choices=[])
+
+    async def upstream() -> AsyncIterator[object]:
+        if interleave_chat:
+            yield chat
+        for event in events:
+            yield event
+            if interleave_chat and isinstance(event, FunctionCallArgumentsDeltaEvent):
+                yield chat
+        if interleave_chat:
+            yield chat
+
+    collected: Final = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=upstream(),
+            request_data={"metadata": {"pii_tokens": {"<PERSON_1>": "Jane Doe"}}},
+        )
+    ]
+
+    chat_positions: Final = tuple(index for index, chunk in enumerate(collected) if chunk is chat)
+    assert chat_positions == ((0, 4, 6, 10) if interleave_chat else ())
+    deltas: Final = "".join(event.delta for event in collected if isinstance(event, FunctionCallArgumentsDeltaEvent))
+    assert json.loads(deltas) == {"name": "Jane Doe"}
+    done_event: Final = next(event for event in collected if isinstance(event, FunctionCallArgumentsDoneEvent))
+    assert json.loads(done_event.arguments) == {"name": "Jane Doe"}
+    item_done_event: Final = next(event for event in collected if isinstance(event, OutputItemDoneEvent))
+    assert json.loads(item_done_event.item.arguments) == {"name": "Jane Doe"}
+    completed: Final = next(event for event in collected if isinstance(event, ResponseCompletedEvent))
+    assert json.loads(completed.response.output[0].arguments) == {"name": "Jane Doe"}
+
+
+@pytest.mark.asyncio
+async def test_reversible_presidio_restores_anthropic_streaming_tool_use_via_unified_guardrail() -> None:
+    restore_guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, output_parse_pii=True, _callback_role="restore"
+    )
+    stream_chunks: Final = (
+        _message_start_sse(),
+        _tool_use_start_sse(0),
+        _input_json_delta_sse(0, '{"to": "<EMAIL_'),
+        _input_json_delta_sse(0, 'ADDRESS_1>"}'),
+        _block_stop_sse(0),
+        *_TOOL_USE_END_SSE,
+    )
+
+    async def upstream() -> AsyncIterator[bytes]:
+        for chunk in stream_chunks:
+            yield chunk
+
+    request_data: Final = {
+        "model": "claude-sonnet-4-6",
+        "guardrail_to_apply": restore_guardrail,
+        "metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": _REVERSIBLE_EMAIL}},
+    }
+    collected: Final = [
+        chunk
+        async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/messages"),
+            response=upstream(),
+            request_data=request_data,
+        )
+    ]
+
+    assert _tool_input_of(collected) == {"to": _REVERSIBLE_EMAIL}
+
+
+@pytest.mark.asyncio
+async def test_reversible_presidio_restores_anthropic_streaming_tool_use_via_proxy_logging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.logging_callback_manager, "add_litellm_callback", lambda _cb: None)
+    async with TestServer(_regex_presidio_app(PiiEntityType.EMAIL_ADDRESS, _EMAIL_PATTERN)) as server:
+        base_url: Final = str(server.make_url("/"))
+        callbacks: Final = initialize_presidio(
+            LitellmParams(
+                guardrail="presidio",
+                mode="pre_call",
+                default_on=True,
+                presidio_filter_scope="input",
+                output_parse_pii=True,
+                presidio_analyzer_api_base=base_url,
+                presidio_anonymizer_api_base=base_url,
+                pii_entities_config={PiiEntityType.EMAIL_ADDRESS: PiiAction.MASK},
+            ),
+            {"guardrail_name": "presidio-reversible-stream"},
+        )
+        monkeypatch.setattr(litellm, "callbacks", list(callbacks))
+        try:
+            stream_chunks: Final = (
+                _message_start_sse(),
+                _tool_use_start_sse(0),
+                _input_json_delta_sse(0, '{"to": "<EMAIL_ADDRESS_1>"}'),
+                _block_stop_sse(0),
+                *_TOOL_USE_END_SSE,
+            )
+
+            async def upstream() -> AsyncIterator[bytes]:
+                for chunk in stream_chunks:
+                    yield chunk
+
+            logging_obj: Final = Logging(
+                model="claude-sonnet-4-6",
+                messages=[{"role": "user", "content": f"Email {_REVERSIBLE_EMAIL}"}],
+                stream=True,
+                call_type="anthropic_messages",
+                start_time=datetime.datetime(2026, 1, 1),
+                litellm_call_id="call-presidio-stream-1",
+                function_id="test",
+            )
+            collected: Final = [
+                chunk
+                async for chunk in ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+                    response=upstream(),
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/messages"),
+                    request_data={
+                        "model": "claude-sonnet-4-6",
+                        "litellm_logging_obj": logging_obj,
+                        "metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": _REVERSIBLE_EMAIL}},
+                    },
+                )
+            ]
+            assert _tool_input_of(collected) == {"to": _REVERSIBLE_EMAIL}
+        finally:
+            for callback in callbacks:
+                if isinstance(callback, OPTIONAL_PresidioPIIMasking):
+                    await callback._close_http_session()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uses_unified_hook", (False, True), ids=("direct", "unified"))
+@pytest.mark.parametrize("has_delta", (False, True), ids=("item-only", "cut-argument-delta"))
+async def test_reversible_presidio_restores_finished_responses_tool_item_without_an_envelope(
+    uses_unified_hook: bool, has_delta: bool
+) -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, event_hook="post_call", default_on=True, output_parse_pii=True, _callback_role="restore"
+    )
+    token: Final = "<PERSON_1>"
+    original: Final = 'Jane "Q"'
+    arguments: Final = json.dumps({"name": token})
+    finished: Final = OutputItemDoneEvent(
+        type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        output_index=0,
+        item=BaseLiteLLMOpenAIResponseObject(
+            type="function_call", id="fc_1", call_id="call_1", name="lookup", arguments=arguments, status="completed"
+        ),
+    )
+
+    async def upstream() -> AsyncIterator[object]:
+        if has_delta:
+            yield FunctionCallArgumentsDeltaEvent(
+                type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+                item_id="fc_1",
+                output_index=0,
+                delta='{"name": "<PER',
+            )
+        yield finished
+
+    auth: Final = UserAPIKeyAuth(api_key="test-key", request_route="/v1/responses")
+    data: Final = {"metadata": {"pii_tokens": {token: original}}}
+    stream: Final = (
+        UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=auth, response=upstream(), request_data=data, guardrail_to_apply=guardrail
+        )
+        if uses_unified_hook
+        else guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=auth, response=upstream(), request_data=data
+        )
+    )
+    sent: Final = [event async for event in stream]
+    assert len(sent) == (2 if has_delta else 1)
+    item: Final = sent[-1]
+    assert isinstance(item, OutputItemDoneEvent)
+    assert json.loads(item.item.arguments) == {"name": original}
+    if has_delta:
+        delta: Final = sent[0]
+        assert isinstance(delta, FunctionCallArgumentsDeltaEvent)
+        assert json.loads(delta.delta) == {"name": original}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "scope", "streaming", "expected"),
+    (
+        ("pre_call", None, True, _EMAIL),
+        (["pre_call", "post_call"], None, True, _EMAIL),
+        (["pre_call", "post_call"], None, False, _EMAIL),
+        (["pre_call", "post_call"], "input", False, _EMAIL),
+        ("pre_call", "output", True, "<EMAIL_ADDRESS>"),
+        ("pre_call", "both", True, "<EMAIL_ADDRESS>"),
+    ),
+    ids=("default-stream", "two-hooks-stream", "issue-config", "input-non-stream", "output-stream", "both-stream"),
+)
+async def test_reversible_presidio_chat_tool_arguments_follow_the_configured_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str | list[str],
+    scope: Literal["input", "output", "both"] | None,
+    streaming: bool,
+    expected: str,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    callbacks: Final = initialize_presidio(
+        LitellmParams(
+            guardrail="presidio",
+            mode=mode,
+            default_on=True,
+            output_parse_pii=True,
+            presidio_filter_scope=scope,
+            presidio_analyzer_api_base="http://presidio.test/",
+            presidio_anonymizer_api_base="http://presidio.test/",
+        ),
+        {"guardrail_name": "presidio-tool-round-trip"},
+    )
+    analyzed: Final[asyncio.Queue[PresidioAnalyzeRequest]] = asyncio.Queue()
+    for callback in callbacks:
+        assert isinstance(callback, OPTIONAL_PresidioPIIMasking)
+        callback._http_session = aiohttp.ClientSession(connector=_InMemoryPresidioConnector(analyzed))
+    auth: Final = UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions")
+    proxy: Final = ProxyLogging(user_api_key_cache=DualCache())
+    try:
+        data: Final = await proxy.pre_call_hook(
+            auth,
+            {"model": "test-model", "messages": [{"role": "user", "content": _EMAIL}]},
+            "acompletion",
+            guardrails_only=True,
+        )
+        forwarded: Final = data["messages"][0]["content"]
+        assert forwarded == (_EMAIL if scope == "output" else "<EMAIL_ADDRESS_1>")
+        arguments: Final = json.dumps({"to": forwarded})
+        expected_text: Final = _CARD_NUMBER if scope == "input" else "<CREDIT_CARD>"
+        if streaming:
+
+            async def upstream() -> AsyncIterator[ModelResponseStream]:
+                call: Final = ChatCompletionDeltaToolCall(
+                    id="call_1", type="function", index=0, function=Function(name="lookup", arguments=arguments)
+                )
+                yield ModelResponseStream(
+                    id="chatcmpl-1",
+                    choices=[
+                        StreamingChoices(
+                            index=0, delta=Delta(role="assistant", content=_CARD_NUMBER, tool_calls=[call])
+                        )
+                    ],
+                )
+                yield _chat_delta_chunk("", finish_reason="tool_calls")
+
+            data["litellm_logging_obj"] = Logging(
+                model="test-model",
+                messages=data["messages"],
+                stream=True,
+                call_type="acompletion",
+                start_time=datetime.datetime(2026, 1, 1),
+                litellm_call_id="call-presidio-round-trip",
+                function_id="test",
+            )
+            chunks: Final = proxy.async_post_call_streaming_iterator_hook(
+                response=upstream(), user_api_key_dict=auth, request_data=data
+            )
+            deltas: Final = [chunk.choices[0].delta async for chunk in chunks if chunk.choices]
+            calls: Final = chain.from_iterable(delta.tool_calls or () for delta in deltas)
+            assert "".join(delta.content or "" for delta in deltas) == expected_text
+            assert json.loads("".join(call.function.arguments for call in calls)) == {"to": expected}
+        else:
+            response: Final = ModelResponse(
+                choices=[
+                    Choices(
+                        index=0,
+                        finish_reason="tool_calls",
+                        message=Message(
+                            role="assistant",
+                            content=_CARD_NUMBER,
+                            tool_calls=[_function_tool_call("call_1", arguments)],
+                        ),
+                    )
+                ]
+            )
+            sent: Final = await proxy.post_call_success_hook(data=data, response=response, user_api_key_dict=auth)
+            assert sent.choices[0].message.content == expected_text
+            assert json.loads(sent.choices[0].message.tool_calls[0].function.arguments) == {"to": expected}
+    finally:
+        for callback_to_close in callbacks:
+            if isinstance(callback_to_close, OPTIONAL_PresidioPIIMasking):
+                await callback_to_close._close_http_session()

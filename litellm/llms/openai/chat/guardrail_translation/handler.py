@@ -17,6 +17,7 @@ This pattern can be replicated for other message formats (e.g., Anthropic).
 import json
 import time
 import uuid
+from bisect import bisect_right
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
@@ -95,6 +96,13 @@ if TYPE_CHECKING:
 
 _REFUSAL_CONTENT_POSITION: Final = -1
 _REFUSAL_FIELD: Final = "refusal"
+
+
+def _tool_call_text_offsets(
+    text_task_mappings: Sequence[tuple[int, int | None]], tool_call_message_indices: Iterable[int]
+) -> tuple[int, ...]:
+    text_message_indices: Final = tuple(msg_idx for msg_idx, _ in text_task_mappings)
+    return tuple(bisect_right(text_message_indices, msg_idx) for msg_idx in tool_call_message_indices)
 
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
@@ -183,10 +191,22 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
             *(call for _, call in legacy_function_call_tasks),
         ]
+        all_tool_call_message_indices: Final = (
+            *(msg_idx for msg_idx, _ in tool_call_task_mappings),
+            *(msg_idx for (msg_idx, _), _ in server_tool_call_tasks),
+            *(msg_idx for msg_idx, _ in legacy_function_call_tasks),
+        )
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
         if texts_to_check or tool_calls_with_server_calls:
-            inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
+            inputs: Final = (
+                GenericGuardrailAPIInputs(
+                    texts=texts_to_check,
+                    tool_call_text_offsets=_tool_call_text_offsets(text_task_mappings, all_tool_call_message_indices),
+                )
+                if tool_calls_with_server_calls
+                else GenericGuardrailAPIInputs(texts=texts_to_check)
+            )
             if images_to_check:
                 inputs["images"] = images_to_check
             if tool_calls_with_server_calls:
@@ -1628,6 +1648,7 @@ def _function_call_of(message: object) -> object:
 def _legacy_function_call_tasks(
     messages: Iterable[object],
 ) -> tuple[tuple[int, dict[str, object]], ...]:  # mutable-ok: the dict shape guardrail tool_calls inputs take
+    """The deprecated `function_call` of each message, paired with its message index."""
     calls: Final = ((msg_idx, _function_call_of(message)) for msg_idx, message in enumerate(messages))
     return tuple((msg_idx, {"type": "function", "function": call}) for msg_idx, call in calls if call)
 

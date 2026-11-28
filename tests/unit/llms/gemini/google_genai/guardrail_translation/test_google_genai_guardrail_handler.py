@@ -439,7 +439,9 @@ async def test_a_guardrail_returning_fewer_texts_than_it_got_blocks_the_request_
 
 @pytest.mark.asyncio
 async def test_a_masked_string_part_in_a_tuple_blocks_the_request_instead_of_sending_the_card() -> None:
-    request: Final = {"contents": [{"role": "user", "parts": ("card 4111111111111111", {"text": "card 4222222222222222"})}]}
+    request: Final = {
+        "contents": [{"role": "user", "parts": ("card 4111111111111111", {"text": "card 4222222222222222"})}]
+    }
     original: Final = copy.deepcopy(request)
 
     with pytest.raises(UnappliableRequestRewrite) as rejected:
@@ -972,9 +974,7 @@ async def _scan_sse_stream(guardrail: _ToolCallGuardrail, part: Mapping[str, obj
     )
 
 
-async def _scan_object_stream(
-    guardrail: _ToolCallGuardrail, part: Mapping[str, object] = FUNCTION_CALL_PART
-) -> None:
+async def _scan_object_stream(guardrail: _ToolCallGuardrail, part: Mapping[str, object] = FUNCTION_CALL_PART) -> None:
     function_call: Final = part.get("functionCall")
     sdk_part: Final = SimpleNamespace(
         text=part.get("text"),
@@ -1162,7 +1162,10 @@ TWO_FUNCTION_CALL_PARTS: Final = (FUNCTION_CALL_PART, SECOND_FUNCTION_CALL_PART)
 
 async def _guardrail_two_request_calls(guardrail: _ToolCallGuardrail) -> None:
     await GoogleGenAIGenerateContentHandler().process_input_messages(
-        data={"model": "gemini-2.5-flash", "contents": [{"role": "model", "parts": copy.deepcopy(TWO_FUNCTION_CALL_PARTS)}]},
+        data={
+            "model": "gemini-2.5-flash",
+            "contents": [{"role": "model", "parts": copy.deepcopy(TWO_FUNCTION_CALL_PARTS)}],
+        },
         guardrail_to_apply=guardrail,
     )
 
@@ -1185,7 +1188,6 @@ async def test_a_guardrail_dropping_one_of_several_tool_calls_is_rejected_instea
         await guardrail_two_calls(_ToolCallGuardrail(rewrite=rewrite))
 
 
-
 RENAMED_FUNCTION_CALL_PART: Final = {
     "functionCall": {"name": "review_payment", "args": {"card": "4111 1111", "amount": 12.5}}
 }
@@ -1197,7 +1199,10 @@ def _renamed_to_review_payment(tool_calls: Sequence[ChatCompletionToolCallChunk]
 
 @pytest.mark.asyncio
 async def test_a_tool_call_the_guardrail_renames_goes_out_under_the_new_name_as_on_chat() -> None:
-    data: Final = {"model": "gemini-2.5-flash", "contents": [{"role": "model", "parts": [copy.deepcopy(FUNCTION_CALL_PART)]}]}
+    data: Final = {
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "model", "parts": [copy.deepcopy(FUNCTION_CALL_PART)]}],
+    }
 
     await GoogleGenAIGenerateContentHandler().process_input_messages(
         data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=_renamed_to_review_payment)
@@ -1210,6 +1215,7 @@ async def test_a_tool_call_the_guardrail_renames_goes_out_under_the_new_name_as_
     assert data["contents"][0]["parts"] == [RENAMED_FUNCTION_CALL_PART]
     assert guardrailed_reply == _model_reply(RENAMED_FUNCTION_CALL_PART)
 
+
 STREAMED_FUNCTION_CALL_PARTS: Final = (
     {"functionCall": {"name": "send_payment", "willContinue": True}},
     {
@@ -1221,7 +1227,11 @@ STREAMED_FUNCTION_CALL_PARTS: Final = (
     {"functionCall": {"partialArgs": [{"jsonPath": "$.card", "stringValue": "1111"}]}},
     {"functionCall": {"name": "search", "args": {"query": "invoices"}}},
 )
-SNAKE_CASE_FIELDS: Final = {"functionCall": "function_call", "partialArgs": "partial_args", "willContinue": "will_continue"}
+SNAKE_CASE_FIELDS: Final = {
+    "functionCall": "function_call",
+    "partialArgs": "partial_args",
+    "willContinue": "will_continue",
+}
 
 
 def _sse_frames(parts: Sequence[object]) -> list[object]:
@@ -1231,7 +1241,10 @@ def _sse_frames(parts: Sequence[object]) -> list[object]:
 def _sdk_value(value: object) -> object:
     if isinstance(value, dict):
         return SimpleNamespace(
-            **{SNAKE_CASE_FIELDS.get(key, key): item if key == "args" else _sdk_value(item) for key, item in value.items()}
+            **{
+                SNAKE_CASE_FIELDS.get(key, key): item if key == "args" else _sdk_value(item)
+                for key, item in value.items()
+            }
         )
     if isinstance(value, list):
         return [_sdk_value(item) for item in value]
@@ -1240,7 +1253,9 @@ def _sdk_value(value: object) -> object:
 
 def _sdk_chunks(parts: Sequence[object]) -> list[object]:
     return [
-        SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[_sdk_value({"text": None, **part})]))])
+        SimpleNamespace(
+            candidates=[SimpleNamespace(content=SimpleNamespace(parts=[_sdk_value({"text": None, **part})]))]
+        )
         for part in parts
     ]
 
@@ -1375,3 +1390,35 @@ async def test_masked_partial_function_call_arg_is_written_back_as_the_only_valu
     )
 
     assert data["contents"][0]["parts"][1]["functionCall"]["partialArgs"] == masked_partial_args
+
+
+@pytest.mark.asyncio
+async def test_input_messages_emit_tool_call_text_offsets_in_conversation_order() -> None:
+    data: Final = {
+        "model": "gemini-2.5-flash",
+        "systemInstruction": {"parts": [{"text": "System prompt"}]},
+        "contents": [
+            {"role": "user", "parts": [{"text": "First user text"}]},
+            {"role": "model", "parts": [{"functionCall": {"name": "search", "args": {"q": "one"}}}]},
+            {
+                "role": "user",
+                "parts": [{"functionResponse": {"name": "search", "response": {"result": "found"}}}],
+            },
+            {
+                "role": "model",
+                "parts": [
+                    {"functionCall": {"name": "charge", "willContinue": True}},
+                    {"functionCall": {"partialArgs": [{"jsonPath": "$.card", "stringValue": "4111"}]}},
+                ],
+            },
+            {"role": "user", "parts": [{"text": "Second user text"}]},
+            {"role": "model", "parts": [{"functionCall": {"name": "notify", "args": {"to": "two"}}}]},
+        ],
+    }
+    guardrail: Final = _ToolCallGuardrail()
+
+    await GoogleGenAIGenerateContentHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    (inputs,) = guardrail.seen
+    assert len(inputs["tool_calls"]) == 3
+    assert inputs["tool_call_text_offsets"] == (2, 3, 4)
