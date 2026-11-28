@@ -15,7 +15,7 @@ from typing_extensions import LiteralString
 
 import litellm
 from litellm._internal_context import with_service_target
-from litellm._logging import verbose_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.litellm_core_utils.core_helpers import (
@@ -277,6 +277,22 @@ def initial_budget_windows_json(raw_windows: object) -> str:
     return budget_windows_json(
         None if raw_windows is None else BUDGET_WINDOWS_ADAPTER.validate_python(raw_windows), stored=None
     )
+
+
+def _default_internal_user_params() -> Mapping[str, object]:
+    return litellm.default_internal_user_params or {}
+
+
+def licensed_default_internal_user_params() -> Mapping[str, object]:
+    from litellm.proxy.proxy_server import premium_user
+
+    default_params: Final = _default_internal_user_params()
+    if premium_user is True or not default_params.get("model_max_budget"):
+        return default_params
+    verbose_proxy_logger.warning(
+        "default_internal_user_params keys not applied without an enterprise license: model_max_budget"
+    )
+    return {key: value for key, value in default_params.items() if key != "model_max_budget"}
 
 
 def get_new_internal_user_defaults(user_id: str, user_email: str | None = None) -> dict[str, object]:

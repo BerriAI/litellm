@@ -102,6 +102,7 @@ from litellm.proxy.management_helpers.team_roster_sync import user_tx_db
 from litellm.proxy.management_helpers.utils import (
     BUDGET_WINDOWS_ADAPTER,
     budget_windows_json,
+    licensed_default_internal_user_params,
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows, run_off_loop_if_fips
@@ -289,7 +290,7 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
     if litellm.default_internal_user_params and (
         data.user_role != LitellmUserRoles.PROXY_ADMIN.value and data.user_role != LitellmUserRoles.PROXY_ADMIN
     ):
-        for key, value in litellm.default_internal_user_params.items():
+        for key, value in licensed_default_internal_user_params().items():
             if key == "available_teams":
                 continue
             elif (
@@ -298,6 +299,8 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
                 or key == "models"
                 and isinstance(data_json[key], list)
                 and len(data_json[key]) == 0
+                or key == "model_max_budget"
+                and data_json[key] == {}
             ):
                 data_json[key] = value
 

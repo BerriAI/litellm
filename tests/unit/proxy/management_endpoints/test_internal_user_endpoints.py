@@ -6284,3 +6284,38 @@ async def test_user_duration_edits_use_the_writers_current_schedule(
     persisted: Final = {**stored, **transaction.litellm_usertable.upsert.call_args.kwargs["data"]["update"]}
     assert persisted["budget_duration"] == "45m"
     assert persisted["budget_reset_at"] == datetime.fromisoformat(expected)
+
+
+@pytest.mark.parametrize(
+    ("premium_user", "request_fields", "expected"),
+    [
+        (True, {"user_role": "internal_user"}, {"gpt-4o": {"budget_limit": 5.0, "time_period": "30d"}}),
+        (True, {}, {"gpt-4o": {"budget_limit": 5.0, "time_period": "30d"}}),
+        (
+            True,
+            {"user_role": "internal_user", "model_max_budget": {"gpt-4o-mini": {"budget_limit": 1.0}}},
+            {"gpt-4o-mini": {"budget_limit": 1.0}},
+        ),
+        (True, {"user_role": "proxy_admin"}, {}),
+        (False, {"user_role": "internal_user"}, {}),
+    ],
+    ids=["internal-user", "no-role", "explicit-budget-wins", "proxy-admin-excluded", "no-enterprise-license"],
+)
+def test_update_internal_new_user_params_applies_the_default_model_max_budget(
+    monkeypatch: pytest.MonkeyPatch, premium_user: bool, request_fields: dict[str, object], expected: dict[str, object]
+) -> None:
+    import litellm
+    from litellm.proxy._types import NewUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_internal_new_user_params
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
+    monkeypatch.setattr(
+        litellm,
+        "default_internal_user_params",
+        {"model_max_budget": {"gpt-4o": {"budget_limit": 5.0, "time_period": "30d"}}},
+    )
+    data: Final = NewUserRequest(user_email="new-user@example.com", **request_fields)
+
+    result: Final = _update_internal_new_user_params(data_json=data.model_dump(), data=data)
+
+    assert result["model_max_budget"] == expected
