@@ -697,7 +697,11 @@ def test_application_profile_arn_without_base_model_warns_when_adaptive_thinking
 
     assert fields["thinking"]["type"] == "enabled"
     assert any(
-        _PROFILE_ARN in record.getMessage() and "`base_model`" in record.getMessage() for record in caplog.records
+        _PROFILE_ARN in record.getMessage()
+        and "`model_info.base_model`" in record.getMessage()
+        and "system inference profile or foundation model" in record.getMessage()
+        and "`base_model` argument" in record.getMessage()
+        for record in caplog.records
     )
 
 
