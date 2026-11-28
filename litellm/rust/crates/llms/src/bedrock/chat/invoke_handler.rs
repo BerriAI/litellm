@@ -259,6 +259,14 @@ fn bedrock_error(status: u16, message: String, headers: &[(String, String)]) -> 
     ))
 }
 
+fn bedrock_event_error(status: u16, message: String, headers: &[(String, String)]) -> Error {
+    Error::Http(litellm_http::Error::upstream_stream_event(
+        status,
+        message,
+        request_id_headers(headers),
+    ))
+}
+
 /// Port of Python's `EventStreamTally.add_event`.
 fn add_event(tally: &SharedEventStreamTally, message: &Message) {
     let message_type = header_text(message, ":message-type");
@@ -369,9 +377,9 @@ fn parse_message_from_response(
                     .iter()
                     .find(|(known, _)| *known == exception_type)
                     .map_or(400, |(_, status)| *status);
-                bedrock_error(status, format!("{exception_type} {body}"), headers)
+                bedrock_event_error(status, format!("{exception_type} {body}"), headers)
             }
-            None => bedrock_error(400, body.into_owned(), headers),
+            None => bedrock_event_error(400, body.into_owned(), headers),
         };
         return Err(error);
     }
@@ -379,7 +387,7 @@ fn parse_message_from_response(
     if let Some((event_type, status)) =
         event_type.and_then(|event_type| Some((event_type, event_status(event_type).flatten()?)))
     {
-        return Err(bedrock_error(
+        return Err(bedrock_event_error(
             status,
             format!("{event_type} {body}"),
             headers,
@@ -524,6 +532,10 @@ mod tests {
         (status, body.to_string(), error.upstream_headers().to_vec())
     }
 
+    fn is_stream_event(error: Option<&Error>) -> bool {
+        matches!(error, Some(Error::Http(error)) if error.is_upstream_stream_event())
+    }
+
     #[tokio::test]
     async fn chunk_events_decode_to_anthropic_events() {
         let event = json!({"type": "message_stop"});
@@ -535,17 +547,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case::throttling("throttlingException", 429)]
+    #[case::internal_server("internalServerException", 500)]
     #[case::model_stream_error("modelStreamErrorException", 424)]
     #[case::validation("validationException", 400)]
+    #[case::throttling("throttlingException", 429)]
+    #[case::model_timeout("modelTimeoutException", 408)]
+    #[case::service_unavailable("serviceUnavailableException", 503)]
     #[case::unmodeled("somethingNewException", 400)]
     #[tokio::test]
-    async fn exception_frames_raise_their_modeled_status(
+    async fn exception_frames_raise_their_modeled_status_as_a_stream_event(
         #[case] exception_type: &str,
         #[case] status: u16,
+        #[values(0, 1)] preceding_chunks: usize,
     ) {
         let wire = [
-            chunk(&json!({"type": "ping"})),
+            chunk(&json!({"type": "ping"})).repeat(preceding_chunks),
             frame(
                 &[
                     (":message-type", "exception"),
@@ -556,7 +572,8 @@ mod tests {
         ]
         .concat();
         let (events, error) = decoded(wire).await;
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), preceding_chunks);
+        assert!(is_stream_event(error.as_ref()));
         assert_eq!(
             upstream(error),
             (
@@ -567,16 +584,36 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::internal_server("internalServerException", 500)]
+    #[case::model_stream_error("modelStreamErrorException", 424)]
+    #[case::validation("validationException", 400)]
+    #[case::throttling("throttlingException", 429)]
+    #[case::model_timeout("modelTimeoutException", 408)]
+    #[case::service_unavailable("serviceUnavailableException", 503)]
     #[tokio::test]
-    async fn an_error_event_type_raises_its_status() {
+    async fn an_error_event_type_raises_its_status_as_a_stream_event(
+        #[case] event_type: &str,
+        #[case] status: u16,
+    ) {
         let wire = frame(
-            &[
-                (":message-type", "event"),
-                (":event-type", "internalServerException"),
-            ],
+            &[(":message-type", "event"), (":event-type", event_type)],
             b"boom",
         );
-        assert_eq!(upstream(decoded(wire).await.1).0, 500);
+        let error = decoded(wire).await.1;
+        assert!(is_stream_event(error.as_ref()));
+        assert_eq!(
+            upstream(error),
+            (status, format!("{event_type} boom"), request_id())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_error_message_without_an_exception_type_is_a_400_stream_event() {
+        let wire = frame(&[(":message-type", "error")], b"denied");
+        let error = decoded(wire).await.1;
+        assert!(is_stream_event(error.as_ref()));
+        assert_eq!(upstream(error), (400, "denied".to_string(), request_id()));
     }
 
     fn request_id() -> Vec<(String, String)> {
@@ -597,7 +634,9 @@ mod tests {
         #[case] wire: Vec<u8>,
     ) {
         let received = wire.len();
-        let (status, body, headers) = upstream(decoded(wire).await.1);
+        let error = decoded(wire).await.1;
+        assert!(!is_stream_event(error.as_ref()));
+        let (status, body, headers) = upstream(error);
         assert_eq!((status, headers), (502, request_id()));
         assert!(
             body.contains("decoded to no events")
@@ -614,7 +653,9 @@ mod tests {
             &[(":message-type", "event"), (":event-type", "mystery")],
             b"{}",
         );
-        let (status, body, _) = upstream(decoded(wire.clone()).await.1);
+        let error = decoded(wire.clone()).await.1;
+        assert!(!is_stream_event(error.as_ref()));
+        let (status, body, _) = upstream(error);
         assert_eq!(
             (status, body),
             (
@@ -633,6 +674,7 @@ mod tests {
         let truncated = chunk(&json!({"type": "message_stop"}));
         let wire = [complete, truncated[..20].to_vec()].concat();
         let (events, error) = decoded(wire).await;
+        assert!(!is_stream_event(error.as_ref()));
         let (status, body, _) = upstream(error);
         assert_eq!(events.len(), 1);
         assert_eq!(status, 502);
@@ -696,6 +738,7 @@ mod tests {
         #[case] kind: &str,
     ) {
         let (decoded_events, error) = decoded(wire).await;
+        assert!(!is_stream_event(error.as_ref()));
         let (status, body, headers) = upstream(error);
         assert_eq!(
             (decoded_events.len(), status, headers),

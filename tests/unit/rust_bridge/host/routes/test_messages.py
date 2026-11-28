@@ -19,6 +19,7 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
+import openai
 import pytest
 from google.auth import exceptions as google_auth
 from pydantic import TypeAdapter, ValidationError
@@ -639,6 +640,107 @@ def test_an_upstream_status_maps_through_the_provider_error_class() -> None:
     assert isinstance(mapped, litellm.RateLimitError)
     assert "slow down" in str(mapped)
     assert mapped.__context__ is upstream
+
+
+def _bedrock_upstream(status: int, body: str, *, stream_failure: bool, stream_event: bool) -> ValueError:
+    failure: Final = ValueError(status, body)
+    failure.headers = [("x-amzn-requestid", "rid-1")]  # pyright: ignore[reportAttributeAccessIssue]  # native field
+    failure.messages_stream_failure = stream_failure  # pyright: ignore[reportAttributeAccessIssue]  # native marker
+    failure.messages_stream_event = stream_event  # pyright: ignore[reportAttributeAccessIssue]  # native marker
+    return failure
+
+
+@pytest.mark.parametrize(
+    ("status", "exception_type"),
+    [
+        (500, "internalServerException"),
+        (424, "modelStreamErrorException"),
+        (400, "validationException"),
+        (429, "throttlingException"),
+        (408, "modelTimeoutException"),
+        (503, "serviceUnavailableException"),
+    ],
+)
+def test_a_bedrock_stream_error_event_maps_to_the_pre_stream_class_keeping_the_status_bedrock_sent(
+    status: int, exception_type: str
+) -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import provider_origin_status, routing_classification
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    body: Final = f'{exception_type} {{"message":"boom"}}'
+    request: Final = {"model": _BEDROCK_INVOKE}
+    event: Final = _bedrock_upstream(status, body, stream_failure=True, stream_event=True)
+
+    mapped: Final = messages_host.map_failure(event, request, "bedrock")
+    before_the_stream: Final = messages_host.map_failure(
+        _bedrock_upstream(status, body, stream_failure=False, stream_event=False), request, "bedrock"
+    )
+
+    routed_as: Final = routing_classification(mapped)
+    response: Final = getattr(mapped, "response", None)
+    assert isinstance(mapped, openai.APIError)
+    assert type(mapped) is type(before_the_stream)
+    assert getattr(mapped, "status_code", None) == status
+    assert provider_origin_status(mapped) == status
+    assert body in str(mapped)
+    assert mapped.__context__ is event
+    assert type(routed_as) is BedrockError
+    assert (routed_as.status_code, routed_as.message) == (status, body)
+    assert isinstance(response, httpx.Response)
+    assert response.status_code == status
+    assert response.headers.get("x-amzn-requestid") == "rid-1"
+    assert (response.headers, response.content, response.request.method, response.request.url) == (
+        routed_as.response.headers,
+        routed_as.response.content,
+        routed_as.response.request.method,
+        routed_as.response.request.url,
+    )
+    assert routing_classification(before_the_stream) is before_the_stream
+
+
+@pytest.mark.parametrize(
+    ("status", "exception_type"),
+    [(424, "modelStreamErrorException"), (500, "internalServerException")],
+)
+def test_a_bedrock_stream_error_event_that_reads_as_a_timeout_keeps_the_status_bedrock_sent(
+    status: int, exception_type: str
+) -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import provider_origin_status, routing_classification
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    body: Final = f'{exception_type} {{"message":"Model invocation timed out"}}'
+    mapped: Final = messages_host.map_failure(
+        _bedrock_upstream(status, body, stream_failure=True, stream_event=True), {"model": _BEDROCK_INVOKE}, "bedrock"
+    )
+
+    routed_as: Final = routing_classification(mapped)
+    response: Final = getattr(mapped, "response", None)
+    assert type(mapped) is litellm.Timeout
+    assert mapped.status_code == status
+    assert provider_origin_status(mapped) == status
+    assert isinstance(response, httpx.Response)
+    assert response.status_code == status
+    assert type(routed_as) is BedrockError
+    assert (routed_as.status_code, routed_as.message) == (status, body)
+
+
+@pytest.mark.parametrize("status", [502, 500])
+def test_a_bedrock_stream_failure_the_decoder_made_up_still_raises_the_raw_bedrock_error(status: int) -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import routing_classification
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    made_up: Final = _bedrock_upstream(
+        status,
+        "Bedrock answered the stream with HTTP 200 but its body decoded to no events",
+        stream_failure=True,
+        stream_event=False,
+    )
+
+    mapped: Final = messages_host.map_failure(made_up, {"model": _BEDROCK_INVOKE}, "bedrock")
+
+    assert type(mapped) is BedrockError
+    assert mapped.status_code == status
+    assert routing_classification(mapped) is mapped
 
 
 @pytest.mark.parametrize(

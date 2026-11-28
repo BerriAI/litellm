@@ -27,6 +27,7 @@ from typing import (
 from urllib.parse import SplitResult, urlsplit
 
 import httpx
+import openai
 from aiohttp import ClientPayloadError
 from aiohttp.http_exceptions import ContentLengthError, TransferEncodingError
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -40,6 +41,7 @@ from litellm.constants import (
     ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS,
     ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS,
 )
+from litellm.exceptions import error_response_without_credentials
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import exception_mapping_utils
 from litellm.litellm_core_utils.core_helpers import (
@@ -51,7 +53,11 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
     stream_cost_injection_requested,
 )
-from litellm.litellm_core_utils.exception_mapping_utils import is_aws_credential_error, with_deployment_debug_info
+from litellm.litellm_core_utils.exception_mapping_utils import (
+    is_aws_credential_error,
+    keep_routing_classification,
+    with_deployment_debug_info,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
 from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1348,6 +1354,25 @@ def _bedrock_stream_error(error: Exception, request: Mapping[str, object]) -> Ex
     return _config_error(status, text, headers, request, "bedrock")
 
 
+_UNKNOWN_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
+
+
+def _bedrock_stream_event_error(
+    stream_error: Exception, error: Exception, request: Mapping[str, object], request_provider: str
+) -> Exception:
+    """Keeps the status Bedrock sent, and the router's classification of the raw `BedrockError`, which the
+    stream raised unmapped before, so retries, cooldowns and the proxy's answer stay as they were."""
+    mapped: Final = _public_provider_error(stream_error, error, request, request_provider)
+    status: Final = getattr(stream_error, "status_code", None)
+    if isinstance(status, int) and isinstance(mapped, (openai.APIStatusError, litellm.Timeout)):
+        mapped.status_code = status
+        response: Final = getattr(mapped, "response", None)
+        if isinstance(response, httpx.Response):
+            mapped.response = error_response_without_credentials(status, response, _UNKNOWN_REQUEST_URL)
+    keep_routing_classification(mapped, stream_error)
+    return mapped
+
+
 def map_failure(
     error: Exception,
     request: Mapping[str, object],
@@ -1359,6 +1384,8 @@ def map_failure(
     secrets the host read to send the call, such as azure_ai's `AZURE_API_BASE`."""
     if request_provider == "bedrock" and getattr(error, "messages_stream_failure", False):
         stream_error: Final = _bedrock_stream_error(error, request)
+        if stream_error is not None and getattr(error, "messages_stream_event", False):
+            return _bedrock_stream_event_error(stream_error, error, request, request_provider)
         if stream_error is not None:
             return stream_error
     if getattr(error, "messages_timeout", None) == "Body":

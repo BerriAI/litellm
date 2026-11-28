@@ -10,6 +10,7 @@ from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, 
 from pathlib import Path
 from typing import Final, cast  # noqa: TID251  # narrows the untyped Messages entries to their call shape
 
+import openai
 import pytest
 from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ProfileNotFound
 from pydantic import TypeAdapter
@@ -19,9 +20,12 @@ from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import model_cost_table
 from litellm.llms.bedrock.base_aws_llm import AwsAuthError
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthError
+from litellm.router_rust.invoke.streaming import _RECORDINGS
+from litellm.types.router import AllowedFailsPolicy, RetryPolicy
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_RESPONSE, RATE_LIMITED
-from tests.test_litellm_rust.support.isolation import rebound
+from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
 from tests.test_litellm_rust.support.recording_server import RecordedRequest, RecordingServer, ResponseSpec, relaxed
 from tests.test_litellm_rust.support.routing import assert_served_natively
 
@@ -563,6 +567,92 @@ async def test_bedrock_invoke_stream_failure_raises_and_logs_what_python_does(
     [rust_logged] = recorder.logged
     kind, logged_response, _ = _billed(rust_logged)
     assert [kind, logged_response] == expected["billed"]
+
+
+def _deployment(model_group: str, model: str, server: RecordingServer) -> dict[str, object]:
+    return {"model_name": model_group, "litellm_params": {"model": model, "api_base": server.base_url, **AWS}}
+
+
+def _error_event(exception_type: str) -> ResponseSpec:
+    return ResponseSpec(body=_wire_frame("exception", exception_type, b'{"message": "boom"}'))
+
+
+async def _routed_failure(router: litellm.Router, model_group: str) -> Exception | None:
+    try:
+        async for _ in cast(  # cast-ok: a streamed Messages answer yields SSE bytes
+            AsyncIterator[bytes],
+            await router.aanthropic_messages(model=model_group, messages=list(MESSAGES), max_tokens=64, stream=True),
+        ):
+            pass
+    except Exception as error:  # noqa: BLE001  # the routed failure is what the test reads
+        return error
+    return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exception_type", "status", "retry_policy"),
+    (
+        pytest.param(
+            "internalServerException",
+            500,
+            RetryPolicy(ServiceUnavailableErrorRetries=1, DefaultRetries=0),
+            id="internal-server",
+        ),
+        pytest.param(
+            "serviceUnavailableException",
+            503,
+            RetryPolicy(ServiceUnavailableErrorRetries=1, DefaultRetries=0),
+            id="service-unavailable",
+        ),
+        pytest.param(
+            "throttlingException", 429, RetryPolicy(RateLimitErrorRetries=1, DefaultRetries=0), id="throttling"
+        ),
+        pytest.param("modelTimeoutException", 408, RetryPolicy(TimeoutErrorRetries=1, DefaultRetries=0), id="timeout"),
+    ),
+)
+async def test_a_routed_bedrock_stream_error_event_retries_by_the_policy_its_raw_error_falls_under(
+    server: RecordingServer, exception_type: str, status: int, retry_policy: RetryPolicy
+) -> None:
+    server.default_response = _error_event(exception_type)
+
+    with isolated_callback_registries():
+        router: Final = litellm.Router(
+            model_list=[_deployment("primary", BEDROCK_MODEL, server)], num_retries=0, retry_policy=retry_policy
+        )
+        raised: Final = await _routed_failure(router, "primary")
+        await asyncio.gather(*_RECORDINGS)
+
+    assert isinstance(raised, openai.APIError)
+    assert getattr(raised, "status_code", None) == status
+    assert_served_natively(server, count=1)
+
+
+@pytest.mark.asyncio
+async def test_a_bedrock_rate_limit_stream_event_keeps_the_allowed_fails_its_raw_error_had(
+    server: RecordingServer,
+) -> None:
+    server.default_response = _error_event("throttlingException")
+    _, mapped = await _failed_stream(_rust, server)
+
+    with isolated_callback_registries():
+        router: Final = litellm.Router(
+            model_list=[_deployment("primary", BEDROCK_MODEL, server)],
+            allowed_fails=3,
+            allowed_fails_policy=AllowedFailsPolicy(RateLimitErrorAllowedFails=0),
+        )
+        settings: Final = router.settings()
+        mapped_allowance: Final = settings.allowed_fails_for(mapped)
+        raw_allowance: Final = settings.allowed_fails_for(BedrockError(status_code=429, message="throttlingException"))
+        rate_limit_allowance: Final = settings.allowed_fails_for(
+            litellm.RateLimitError(message="rate limited", llm_provider="bedrock", model="m")
+        )
+
+    assert isinstance(mapped, litellm.RateLimitError)
+    assert rate_limit_allowance == 0
+    assert mapped_allowance == raw_allowance
+    assert mapped_allowance != rate_limit_allowance
+    assert_served_natively(server, count=1)
 
 
 @pytest.mark.asyncio
