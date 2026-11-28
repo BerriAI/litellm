@@ -9,6 +9,7 @@ response parsing, and streaming chunk parsing for models served with
 import datetime
 import json
 from collections.abc import Iterable, Mapping, Sequence
+from itertools import chain
 from typing import Final
 
 import httpx
@@ -106,16 +107,15 @@ def _to_cohere_tool_call(tool_call: ChatCompletionAssistantToolCall) -> CohereTo
 def adapt_messages_to_cohere_standard(
     messages: list[AllMessageValues],
 ) -> list[CohereMessage]:
-    """Build a Cohere ``chatHistory`` list from an OpenAI-format message array.
+    """Convert an OpenAI-format message array into a Cohere ``chatHistory``.
 
-    - All messages except the *last user message* are included. The caller pulls
-      the last user message into the request's top-level ``message`` field, so
-      trailing tool results (the standard agentic continuation pattern) still
-      appear in ``chatHistory`` and reach the model.
-    - If no user message exists, every message is included (no slice).
+    Every message is converted in order, including the last user turn and any
+    trailing tool result. The caller decides which message becomes the request's
+    top-level ``message`` and lifts a trailing tool result into the top-level
+    ``toolResults`` field, see :func:`build_cohere_request_messages`.
+
     - System messages must be filtered out by the caller (they are routed into
-      ``preambleOverride`` separately) — they are not represented in
-      ``chatHistory``.
+      ``preambleOverride`` separately) and are not represented in ``chatHistory``.
     - Tool results are expressed as OCI ``CohereToolMessage.toolResults`` entries,
       with the originating call's name and parameters resolved from the preceding
       assistant message via a ``tool_call_id`` lookup.
@@ -129,16 +129,8 @@ def adapt_messages_to_cohere_standard(
         for tool_call in msg["tool_calls"] or []
     }
 
-    last_user_index: Final = next(
-        (i for i in range(len(messages) - 1, -1, -1) if messages[i].get("role") == "user"),
-        None,
-    )
-    history_source: Final = (
-        messages if last_user_index is None else [m for i, m in enumerate(messages) if i != last_user_index]
-    )
-
     chat_history: Final[list[CohereMessage]] = []
-    for msg in history_source:
+    for msg in messages:
         role = msg.get("role")
         content = extract_text_content(msg.get("content"))
 
@@ -170,6 +162,48 @@ def adapt_messages_to_cohere_standard(
                 chat_history.append(CohereToolMessage(toolResults=[tool_result]))
 
     return chat_history
+
+
+def _trailing_tool_split_index(chat_history: Sequence[CohereMessage]) -> int:
+    """Index where the trailing run of TOOL entries starts (``len`` if there is none)."""
+    trailing_tool_count: Final = next(
+        (i for i, entry in enumerate(reversed(chat_history)) if not isinstance(entry, CohereToolMessage)),
+        len(chat_history),
+    )
+    return len(chat_history) - trailing_tool_count
+
+
+def _flatten_tool_results(tool_messages: Sequence[CohereMessage]) -> Sequence[CohereToolResult]:
+    return list(
+        chain.from_iterable(entry.toolResults for entry in tool_messages if isinstance(entry, CohereToolMessage))
+    )
+
+
+def build_cohere_request_messages(
+    messages: Sequence[AllMessageValues],
+) -> tuple[str, Sequence[CohereMessage], Sequence[CohereToolResult]]:
+    """Split OpenAI-format messages into Cohere's ``message``, ``chatHistory`` and ``toolResults``.
+
+    A tool-result turn, the standard agentic continuation where the last message
+    is a tool result, must send those results in the request's top-level
+    ``toolResults`` and leave ``message`` empty. OCI rejects a request that sets
+    ``message`` while the last ``chatHistory`` entry holds tool results, and it
+    rejects an empty ``message`` unless ``toolResults`` is present. The user turn
+    that triggered the call stays in ``chatHistory``.
+
+    Any other turn puts the last user message's text in ``message`` and every
+    preceding message in ``chatHistory``.
+    """
+    non_system_messages: Final = [m for m in messages if m.get("role") != "system"]
+    converted: Final = adapt_messages_to_cohere_standard(non_system_messages)
+
+    split_index: Final = _trailing_tool_split_index(converted)
+    if split_index < len(converted):
+        return "", converted[:split_index], _flatten_tool_results(converted[split_index:])
+
+    user_messages: Final = [m for m in non_system_messages if m.get("role") == "user"]
+    message: Final = extract_text_content(user_messages[-1]["content"]) if user_messages else ""
+    return message, converted[:-1], []
 
 
 def _resolved_oci_parameter_schema(raw_parameters: dict[str, JsonValue]) -> JsonValue:
