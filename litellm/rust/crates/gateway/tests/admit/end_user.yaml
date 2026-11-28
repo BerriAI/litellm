@@ -2,7 +2,8 @@
 # user's row and refuses the request over its budget or its model list. The gateway reads the row
 # the same way and serves a request whose end user has no row, or a row that only describes it.
 # An end user whose row holds anything the native app does not apply goes to Python, whoever the
-# caller is.
+# caller is, over the column when the gateway copies it and over `end_user` when it declines the
+# row.
 config:
   model_list:
     - model_name: claude
@@ -28,6 +29,7 @@ rows:
   - LiteLLM_EndUserTable: {user_id: eu-broke, spend: 10, budget_id: b-low, models: [], blocked: false}
   - LiteLLM_EndUserTable: {user_id: eu-models, spend: 0, models: [other-model], blocked: false}
   - LiteLLM_EndUserTable: {user_id: eu-blocked, spend: 0, models: [], blocked: true}
+  - LiteLLM_EndUserTable: {user_id: eu-defaulted, spend: 0, models: [], blocked: false, default_model: claude}
   - LiteLLM_EndUserTable: {user_id: eu-region, spend: 0, models: [], blocked: false, allowed_model_region: eu}
   - LiteLLM_EndUserTable: {user_id: eu-spent, spend: 3, models: [], blocked: false, alias: acme}
 
@@ -51,14 +53,21 @@ requests:
     body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-models}}
     expect: python
     reason: body
-    over: end_user
+    over: models
 
   - name: a key naming a blocked end user
     headers: {authorization: Bearer sk-bare}
     body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-blocked}}
     expect: python
     reason: body
-    over: end_user
+    over: blocked
+
+  - name: a key naming an end user with a default model
+    headers: {authorization: Bearer sk-bare}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-defaulted}}
+    expect: python
+    reason: body
+    over: default_model
 
   - name: a key naming an end user held to a region
     headers: {authorization: Bearer sk-bare}

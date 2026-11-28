@@ -202,7 +202,8 @@ impl Admit {
 
     /// The caller with the end user its body names. The request goes to Python when that end
     /// user's row holds what the native app does not apply, when the row could not be read, or when
-    /// the proxy reads a database the gateway cannot sign in to.
+    /// the proxy reads a database the gateway cannot sign in to. One whose record holds a column
+    /// nothing native reads yet goes over that column, and any other over `end_user`.
     async fn with_end_user(
         &self,
         caller: Authenticated<NativeRows>,
@@ -216,13 +217,16 @@ impl Admit {
             EndUsers::NoDatabase => None,
             EndUsers::Unread => return Err(Reason::new(Refused::Body, "end_user")),
         };
-        match Box::pin(host::auth::end_user(store, end_user_id)).await {
-            Ok(end_user) => Ok(Authenticated::from(Caller {
-                end_user,
-                ..Caller::clone(&caller)
-            })),
-            Err(_) => Err(Reason::new(Refused::Body, "end_user")),
+        let Ok(end_user) = Box::pin(host::auth::end_user(store, end_user_id)).await else {
+            return Err(Reason::new(Refused::Body, "end_user"));
+        };
+        if let Some(column) = host::auth::unserved_end_user(&end_user) {
+            return Err(Reason::new(Refused::Body, column));
         }
+        Ok(Authenticated::from(Caller {
+            end_user,
+            ..Caller::clone(&caller)
+        }))
     }
 
     /// The body is read only for a request that passes every other check, and parsed once: an

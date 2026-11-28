@@ -41,7 +41,7 @@ use litellm_redis_store::auth_cache::KeyEntry;
 use serde_json::Value;
 
 pub(crate) use affiliation::{unserved, unserved_project, unserved_user};
-pub(crate) use end_user::end_user;
+pub(crate) use end_user::{end_user, unserved as unserved_end_user};
 pub use key::Key;
 pub(crate) use models::{allowed_models, layers};
 pub use store::AuthStore;
