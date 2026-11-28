@@ -4274,6 +4274,7 @@ dependencies = [
  "litellm-secret-value",
  "litellm-secrets",
  "litellm-spend-log-writer",
+ "litellm-standard-logging",
  "litellm-token-counter",
  "litellm-tracing",
  "litellm-yaml",
