@@ -1531,7 +1531,7 @@ async def test_route_request_pass_through_never_falls_back_to_the_global_model_f
         ("atranscription", "file", "/audio/transcriptions"),
         ("arerank", "query", "/rerank"),
         ("acompact_responses", "input", "/responses/compact"),
-        ("anthropic_messages", "messages", "anthropic_messages"),
+        ("anthropic_messages", "messages", "/messages"),
         ("agenerate_content", "contents", "agenerate_content"),
         ("aocr", "document", "/ocr"),
         ("avector_store_search", "query", "avector_store_search"),
