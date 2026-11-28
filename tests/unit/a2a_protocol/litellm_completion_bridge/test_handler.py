@@ -65,6 +65,7 @@ def test_agent_completion_kwargs_drops_model_provider_and_agent_only_keys() -> N
             "agent_id": "id-1",
             "agent_card_params": {"url": WORKSPACE},
             A2A_USER_API_KEY_HASH_PARAM: "hash",
+            "token_exchange": {"client_id": "c", "client_secret": "obo-secret"},
         }
     )
     assert dict(kwargs) == {"api_base": WORKSPACE, "api_key": "pat-1"}

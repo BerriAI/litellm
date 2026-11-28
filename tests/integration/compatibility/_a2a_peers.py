@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Final, Literal
 
-from integration._support.client import Gateway
+from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
@@ -25,6 +25,7 @@ from pydantic import JsonValue
 Dialect = Literal["langgraph", "v1"]
 LEGACY_METHODS: Final = frozenset({"message/send", "message/stream"})
 V1_METHODS: Final = frozenset({"SendMessage", "SendStreamingMessage"})
+TASK_METHODS: Final = frozenset({"tasks/get", "tasks/cancel"})
 HINT: Final = (
     "(the agent replied in the A2A 0.3 dialect while its card declares 1.0; "
     'set litellm_params.a2a_protocol_version: "0.3" on this agent)'
@@ -85,6 +86,17 @@ class Peer:
             return _json({"jsonrpc": "2.0", "id": body["id"], "error": dict(self.error)})
         if self.dialect == "v1" and method not in V1_METHODS:
             return _json({"jsonrpc": "2.0", "id": body["id"], "error": {"code": -32601, "message": "Method not found"}})
+        if method in TASK_METHODS:
+            request_id: Final = JSON_OBJECT.validate_json(request.body)["id"]
+            task_id, context_id = self._ids()
+            state: Final = "canceled" if method == "tasks/cancel" else "completed"
+            found: Final[dict[str, JsonValue]] = {
+                "kind": "task",
+                "id": task_id,
+                "contextId": context_id,
+                "status": {"state": state},
+            }
+            return _json({"jsonrpc": "2.0", "id": request_id, "result": found})
         text: Final = _input_text(body["params"]["message"])
         reply: Final = "echo: " + text
         if method in {"message/stream", "SendStreamingMessage"}:

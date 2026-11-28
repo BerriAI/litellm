@@ -11,9 +11,9 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, TypeVar
 from urllib.parse import urlparse
 
 import httpx
@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -43,6 +44,13 @@ from litellm.proxy.agent_endpoints.databricks_oauth import (
     AgentBackendAuth,
     has_databricks_oauth,
     resolve_databricks_backend_auth,
+)
+from litellm.proxy.agent_endpoints.token_exchange import (
+    ExchangedAgentToken,
+    ExchangedTokenRejected,
+    exchange_agent_token,
+    has_token_exchange,
+    without_token_exchange,
 )
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -132,6 +140,9 @@ def _httpx_url(url: object) -> str | httpx.URL:
     return httpx.URL(url)  # pyright: ignore[reportArgumentType]  # httpx.URL raises its own TypeError
 
 
+_REJECTED_STATUS_CODES: Final = frozenset({"401", "403"})
+
+
 def _sse_event(payload: object) -> str:
     """Frame a JSON-RPC object as a single A2A SSE event (``data: <json>\\n\\n``)."""
     return f"data: {json.dumps(payload)}\n\n"
@@ -218,11 +229,97 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, 
     )
 
 
+async def _exchange_agent_token(
+    litellm_params: Mapping[str, object],
+    custom_llm_provider: object,
+    *,
+    agent: "AgentResponse",
+    request_headers: Mapping[str, str],
+    user_api_key_auth: UserAPIKeyAuth,
+) -> ExchangedAgentToken:
+    if custom_llm_provider:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent '{agent.agent_name}' uses OBO token exchange, which needs an agent reached by URL "
+            "(no custom_llm_provider).",
+        )
+    resource: Final = str((agent.agent_card_params or {}).get("url") or agent.agent_id)
+    return await exchange_agent_token(litellm_params, agent.agent_id, resource, request_headers, user_api_key_auth)
+
+
+def _exchanged_backend_auth(litellm_params: Mapping[str, object], exchanged: ExchangedAgentToken) -> AgentBackendAuth:
+    return AgentBackendAuth(litellm_params=without_token_exchange(litellm_params), header=exchanged.header)
+
+
+_Reply: Final = TypeVar("_Reply")
+_Event: Final = TypeVar("_Event")
+
+
+async def _relaying_rejection(call: Awaitable[_Reply], exchanged: ExchangedAgentToken | None) -> _Reply:
+    try:
+        return await call
+    except Exception as error:
+        rejection: Final = await exchanged.rejection(error) if exchanged is not None else None
+        if rejection is None:
+            raise
+        raise rejection from error
+
+
+async def _failing_the_call_on_refusal(
+    call: Awaitable[_Reply],
+    *,
+    proxy_logging_obj: ProxyLogging,
+    request_data: dict[str, object],  # mutable-ok: the failure hook stamps its logging state onto the request data
+    user_api_key_dict: UserAPIKeyAuth,
+) -> _Reply:
+    try:
+        return await call
+    except HTTPException as refusal:
+        try:
+            await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
+                request_data=request_data,
+                original_exception=refusal,
+                user_api_key_dict=user_api_key_dict,
+                route="/a2a/{agent_id}",
+            )
+        except Exception:  # noqa: BLE001  # a logging failure must not change the refusal the caller gets
+            verbose_proxy_logger.exception("Failed to record refused A2A token exchange")
+        raise
+
+
+async def _stream_relaying_rejection(
+    events: AsyncIterator[_Event], exchanged: ExchangedAgentToken
+) -> AsyncGenerator[_Event, None]:
+    try:
+        async for event in events:
+            yield event
+    except Exception as error:
+        rejection: Final = await exchanged.rejection(error)
+        if rejection is None:
+            raise
+        raise rejection from error
+
+
 async def _resolve_backend_auth(
     litellm_params: dict[str, object],
     custom_llm_provider: object,
     agent_extra_headers: Mapping[str, str] | None = None,
+    *,
+    agent: "AgentResponse",
+    request_headers: Mapping[str, str],
+    user_api_key_auth: UserAPIKeyAuth,
 ) -> AgentBackendAuth:
+    if has_token_exchange(litellm_params):
+        return _exchanged_backend_auth(
+            litellm_params,
+            await _exchange_agent_token(
+                litellm_params,
+                custom_llm_provider,
+                agent=agent,
+                request_headers=request_headers,
+                user_api_key_auth=user_api_key_auth,
+            ),
+        )
     databricks_auth: Final = await resolve_databricks_backend_auth(litellm_params)
     if has_databricks_oauth(litellm_params):
         return databricks_auth
@@ -308,8 +405,32 @@ class _JsonRpcRequestId(BaseModel):
 async def _jsonrpc_request_id(request: Request) -> str | int | None:
     try:
         return _JsonRpcRequestId.model_validate_json(await request.body()).id
-    except ValidationError:
+    except (ValidationError, RuntimeError):
         return None
+
+
+class _RefusalData(TypedDict):
+    type: ReadOnly[str]
+    param: ReadOnly[str | None]
+    code: ReadOnly[str]
+
+
+class _RefusalError(TypedDict):
+    code: ReadOnly[int]
+    message: ReadOnly[str]
+    data: ReadOnly[_RefusalData]
+
+
+def _refusal_error(error: ProxyException) -> _RefusalError:
+    return {
+        "code": -32000,
+        "message": error.message,
+        "data": {"type": error.type, "param": error.param, "code": error.code},
+    }
+
+
+def _refusal_frame(request_id: str | int | None, error: ProxyException) -> str:
+    return _sse_event({"jsonrpc": "2.0", "id": request_id, "error": _refusal_error(error)})
 
 
 async def _jsonrpc_refusal(request: Request, refusal: ProxyException | HTTPException) -> JSONResponse:
@@ -323,11 +444,7 @@ async def _jsonrpc_refusal(request: Request, refusal: ProxyException | HTTPExcep
         content={
             "jsonrpc": "2.0",
             "id": await _jsonrpc_request_id(request),
-            "error": {
-                "code": -32000,
-                "message": error.message,
-                "data": {"type": error.type, "param": error.param, "code": error.code},
-            },
+            "error": _refusal_error(error),
         },
         status_code=int(error.code),
         headers=error.headers if isinstance(refusal, ProxyException) else refusal.headers,
@@ -415,6 +532,7 @@ async def _a2a_sse_event_source(
     request_id: str | int | None = None,
     extra_headers: Mapping[str, str] | None = None,
     served_version: A2AVersion = "0.3",
+    raise_rejections: bool = False,
 ) -> AsyncGenerator[object, None]:
     """Stream an upstream A2A SSE response as parsed JSON-RPC event dicts.
 
@@ -439,6 +557,8 @@ async def _a2a_sse_event_source(
     resp: Final = await async_client.send(req, stream=True)
     try:
         if not resp.is_success:
+            if raise_rejections and str(resp.status_code) in _REJECTED_STATUS_CODES:
+                resp.raise_for_status()
             error_body: Final = await resp.aread()
             error_event: Mapping[str, object] | None = None
             try:
@@ -498,19 +618,26 @@ async def _forward_jsonrpc_sse(
     user_api_key_dict: UserAPIKeyAuth | None = None,
     request_data: dict[str, object] | None = None,
     served_version: A2AVersion = "0.3",
+    exchanged_token: ExchangedAgentToken | None = None,
 ) -> StreamingResponse:
-    event_source: Final = _a2a_sse_event_source(
+    upstream_events: Final = _a2a_sse_event_source(
         agent_url,
         body,
         request_id=request_id,
         extra_headers=extra_headers,
         served_version=served_version,
+        raise_rejections=exchanged_token is not None,
+    )
+    event_source: Final = (
+        upstream_events if exchanged_token is None else _stream_relaying_rejection(upstream_events, exchanged_token)
     )
 
     def _serialize_chunk(chunk: object) -> str:
         return f"data: {json.dumps(chunk)}\n\n"
 
-    def _serialize_error(proxy_exc: object) -> str:
+    def _serialize_error(proxy_exc: ProxyException) -> str:
+        if exchanged_token is not None and proxy_exc.code in _REJECTED_STATUS_CODES:
+            return _refusal_frame(request_id, proxy_exc)
         return (
             "data: "
             + json.dumps(
@@ -568,6 +695,7 @@ async def _handle_stream_message(
     request_data: dict[str, object] | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     served_version: A2AVersion = "0.3",
+    exchanged_token: ExchangedAgentToken | None = None,
 ) -> StreamingResponse:
     """Handle message/stream method via SDK functions.
 
@@ -629,7 +757,7 @@ async def _handle_stream_message(
                 id=request_id,
                 params=message_send_params,
             )
-            a2a_stream: Final = asend_message_streaming(
+            sdk_stream: Final = asend_message_streaming(
                 request=a2a_request,
                 api_base=api_base,
                 litellm_params=litellm_params,
@@ -638,6 +766,9 @@ async def _handle_stream_message(
                 proxy_server_request=proxy_server_request,
                 agent_extra_headers=agent_extra_headers,
                 agent_name=agent_name,
+            )
+            a2a_stream: Final = (
+                sdk_stream if exchanged_token is None else _stream_relaying_rejection(sdk_stream, exchanged_token)
             )
 
             if (
@@ -650,7 +781,9 @@ async def _handle_stream_message(
                     ProxyBaseLLMRequestProcessing,
                 )
 
-                def _sse_error(proxy_exc: object) -> str:
+                def _sse_error(proxy_exc: ProxyException) -> str:
+                    if exchanged_token is not None and proxy_exc.code in _REJECTED_STATUS_CODES:
+                        return _refusal_frame(request_id, proxy_exc)
                     return _sse_event(
                         {
                             "jsonrpc": "2.0",
@@ -981,6 +1114,23 @@ async def invoke_agent_a2a(
         )
         request_data = data
 
+        exchanged_token: Final = (
+            await _failing_the_call_on_refusal(
+                _exchange_agent_token(
+                    litellm_params,
+                    custom_llm_provider,
+                    agent=agent,
+                    request_headers=request.headers,
+                    user_api_key_auth=user_api_key_dict,
+                ),
+                proxy_logging_obj=proxy_logging_obj,
+                request_data=data,
+                user_api_key_dict=user_api_key_auth_for_call,
+            )
+            if has_token_exchange(litellm_params)
+            else None
+        )
+
         # Build merged headers for the backend agent
         static_headers: Final[Mapping[str, str]] = dict(agent.static_headers or {})
 
@@ -1011,7 +1161,18 @@ async def invoke_agent_a2a(
             dynamic_headers=dynamic_headers or None,
             static_headers=static_headers or None,
         )
-        backend_auth: Final = await _resolve_backend_auth(litellm_params, custom_llm_provider, merged_agent_headers)
+        backend_auth: Final = (
+            _exchanged_backend_auth(litellm_params, exchanged_token)
+            if exchanged_token is not None
+            else await _resolve_backend_auth(
+                litellm_params,
+                custom_llm_provider,
+                merged_agent_headers,
+                agent=agent,
+                request_headers=request.headers,
+                user_api_key_auth=user_api_key_dict,
+            )
+        )
         agent_extra_headers: Final = _forwarding_headers(
             caller_identity=caller_identity,
             request_data=data,
@@ -1058,16 +1219,19 @@ async def invoke_agent_a2a(
             # Defer spend-log until after post_call_success_hook so guardrail
             # results written by the unified_guardrail hook are captured.
             logging_obj.defer_async_logging = True
-            response = await asend_message(
-                model=f"a2a_agent/{agent_name}",
-                request=a2a_request,
-                api_base=agent_url,
-                litellm_params=forwarded_litellm_params,
-                agent_id=agent.agent_id,
-                metadata=data.get("metadata", {}),
-                proxy_server_request=data.get("proxy_server_request"),
-                litellm_logging_obj=logging_obj,
-                agent_extra_headers=agent_extra_headers,
+            response = await _relaying_rejection(
+                asend_message(
+                    model=f"a2a_agent/{agent_name}",
+                    request=a2a_request,
+                    api_base=agent_url,
+                    litellm_params=forwarded_litellm_params,
+                    agent_id=agent.agent_id,
+                    metadata=data.get("metadata", {}),
+                    proxy_server_request=data.get("proxy_server_request"),
+                    litellm_logging_obj=logging_obj,
+                    agent_extra_headers=agent_extra_headers,
+                ),
+                exchanged_token,
             )
 
             try:
@@ -1112,6 +1276,7 @@ async def invoke_agent_a2a(
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,
                 served_version=served_version,
+                exchanged_token=exchanged_token,
             )
         elif method in {
             "tasks/get",
@@ -1154,7 +1319,9 @@ async def invoke_agent_a2a(
                 "method": method,
                 "params": params,
             }
-            result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=agent_extra_headers)
+            result = await _relaying_rejection(
+                _forward_jsonrpc(agent_url, forward_body, extra_headers=agent_extra_headers), exchanged_token
+            )
             if method == "agent/getAuthenticatedExtendedCard":
                 card: Final = result.get("result")
                 if isinstance(card, dict):
@@ -1205,6 +1372,7 @@ async def invoke_agent_a2a(
                 user_api_key_dict=user_api_key_auth_for_call,
                 request_data=data,
                 served_version=served_version,
+                exchanged_token=exchanged_token,
             )
 
         else:
@@ -1222,6 +1390,8 @@ async def invoke_agent_a2a(
             )
         except Exception:
             pass
+        if isinstance(e, ExchangedTokenRejected):
+            raise HTTPException(status_code=e.status_code, detail=e.message) from e
         if isinstance(e, litellm.BadRequestError):
             return _jsonrpc_error(body.get("id"), -32602, e.message, 400)
         if isinstance(e, litellm.AuthenticationError) and caused_by_entra_rejection(e):

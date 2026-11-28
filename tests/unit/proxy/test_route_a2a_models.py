@@ -683,6 +683,32 @@ async def test_route_a2a_bridge_agent_calls_without_client_extra_headers_it_drop
     assert response.choices[0].message.content == "pong"
 
 
+@respx.mock
+@pytest.mark.parametrize("provider", [{}, {"custom_llm_provider": "databricks_agent", "model": "my-agent"}])
+async def test_route_a2a_agent_with_token_exchange_answers_400_before_calling_it(
+    httpx_transport: None, provider: dict[str, str]
+) -> None:
+    agent = AgentResponse(
+        agent_id="obo-agent-id",
+        agent_name="obo-agent",
+        agent_card_params={"url": WORKSPACE},
+        litellm_params={
+            **provider,
+            "token_exchange": {"token_exchange_endpoint": f"{WORKSPACE}/token", "client_id": "c", "client_secret": "s"},
+        },
+    )
+    upstream = respx.route(host="adb-1.azuredatabricks.net").mock(return_value=httpx.Response(200, json=A2A_REPLY))
+    data = {"model": "a2a/obo-agent", "messages": [{"role": "user", "content": "ping"}]}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
+        with pytest.raises(HTTPException) as refused:
+            await route_a2a_agent_request(data=data, route_type="acompletion")
+
+    assert refused.value.status_code == 400
+    assert "only supported on /a2a/{agent_id}" in refused.value.detail
+    assert not upstream.called
+
+
 PER_QUERY_PRICE: Final = {"cost_per_query": 0.05}
 PER_TOKEN_PRICE: Final = {"input_cost_per_token": 0.0001, "output_cost_per_token": 0.0002}
 AGENT_URL: Final = "https://agent.example.com/a2a"

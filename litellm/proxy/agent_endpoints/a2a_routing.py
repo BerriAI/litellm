@@ -24,6 +24,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     resolve_databricks_backend_auth,
 )
+from litellm.proxy.agent_endpoints.token_exchange import has_token_exchange
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.types.agents import AgentResponse
 from litellm.types.utils import CustomPricingLiteLLMParams
@@ -182,6 +183,11 @@ async def route_a2a_agent_request(
             )
 
     litellm_params: Final = agent.litellm_params or {}
+    if has_token_exchange(litellm_params):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent '{agent_name}' uses OBO token exchange, which is only supported on /a2a/{{agent_id}}.",
+        )
 
     if litellm_params.get("custom_llm_provider") in A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS:
         _bill_as_agent(data, agent, litellm_params)

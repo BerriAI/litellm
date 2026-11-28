@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 
 _REGISTRY_PARAMS_KEPT_OUT_OF_OPTIONAL_PARAMS: Final = (
-    frozenset({"api_key", "api_base", "headers", "model"}) | AZURE_ENTRA_LITELLM_PARAM_KEYS
+    frozenset({"api_key", "api_base", "headers", "model", "token_exchange"}) | AZURE_ENTRA_LITELLM_PARAM_KEYS
 )
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
@@ -102,6 +102,13 @@ class A2AConfig(BaseConfig):
             )
 
             agent: Final = global_agent_registry.get_agent_by_name(agent_name)
+            token_exchange: Final = (agent.litellm_params or {}).get("token_exchange") if agent else None
+            if token_exchange is not None and token_exchange is not False:
+                raise A2AError(
+                    status_code=400,
+                    message=f"Agent '{agent_name}' has a token_exchange block, and OBO token exchange is only "
+                    "supported on /a2a/{agent_id}.",
+                )
             if agent:
                 # Get api_base from agent card URL
                 if api_base is None and agent.agent_card_params:

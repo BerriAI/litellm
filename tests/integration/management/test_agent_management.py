@@ -145,3 +145,46 @@ def test_agent_reads_redact_credentials_filter_by_key_permission_and_keep_the_st
         assert invoked.json()["result"]["parts"] == [{"kind": "text", "text": "authorized"}], invoked.text
         posts: Final = tuple(item for item in wire.drain() if item.method == "POST")
         assert [post.headers["authorization"] for post in posts] == [f"Bearer {secret}"], posts
+
+
+def test_only_admins_read_an_agents_token_exchange_block(gateway: Gateway) -> None:
+    marker: Final = "agentobo" + uuid.uuid4().hex[:12]
+    block: Final = {
+        "token_exchange_endpoint": "https://user:pass@idp.example.com/token",
+        "client_id": "agent-client",
+        "client_secret": "obo-secret-" + uuid.uuid4().hex,
+        "audience": "api://agent",
+    }
+    with gateway.scenario() as scenario:
+        created: Final = gateway.request(
+            "POST",
+            "/v1/agents",
+            {
+                "agent_name": marker,
+                "agent_card_params": _peer_card("https://agent.example.com", marker),
+                "litellm_params": {"token_exchange": block},
+            },
+        )
+        assert created.status_code == 200, created.text
+        identity: Final = str(created.json()["agent_id"])
+        scenario.cleanups.callback(gateway.request, "DELETE", f"/v1/agents/{identity}")
+        reader: Final = scenario.key(object_permission={"agents": [identity]})
+
+        fetched: Final = gateway.client.get(f"/v1/agents/{identity}", headers={"Authorization": f"Bearer {reader}"})
+        listed: Final = gateway.client.get("/v1/agents", headers={"Authorization": f"Bearer {reader}"})
+        for response in (fetched, listed):
+            assert response.status_code == 200, response.text
+            assert "user:pass" not in response.text and block["client_secret"] not in response.text, response.text
+        assert (_AgentRead.model_validate_json(fetched.content).litellm_params or {})["token_exchange"] == _REDACTED
+        assert [
+            (agent.litellm_params or {})["token_exchange"]
+            for agent in map(_AgentRead.model_validate, listed.json())
+            if agent.agent_id == identity
+        ] == [_REDACTED], listed.text
+
+        admin: Final = gateway.request("GET", f"/v1/agents/{identity}")
+        assert admin.status_code == 200, admin.text
+        assert (_AgentRead.model_validate_json(admin.content).litellm_params or {})["token_exchange"] == {
+            **block,
+            "client_secret": _REDACTED,
+        }, admin.text
