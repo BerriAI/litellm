@@ -29,10 +29,10 @@ def get_base_model_for_pricing(model_name: str) -> str:
 
     model_name = model_name.lower()
 
-    # Check for MoE models in the form <number>x<number>b
-    moe_match: Final = re.search(r"(\d+)x(\d+)b", model_name)
+    # Check for MoE models in the form <number>x<number>b, where Fireworks writes 1.5b as 1p5b
+    moe_match: Final = re.search(r"(\d+)x(\d+(?:p\d+)?)b", model_name)
     if moe_match:
-        total_billion: Final = int(moe_match.group(1)) * int(moe_match.group(2))
+        total_billion: Final = int(moe_match.group(1)) * float(moe_match.group(2).replace("p", "."))
         if total_billion <= FIREWORKS_AI_56_B_MOE:
             return "fireworks-ai-moe-up-to-56b"
         elif total_billion <= FIREWORKS_AI_176_B_MOE:
