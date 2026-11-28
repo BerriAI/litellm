@@ -131,6 +131,10 @@ _INTERNAL_HEALTH_CHECK_API_KEYS: Final = (
     hash_token(token=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME),
 )
 
+_HEALTH_CHECK_LOG_FILTER_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"model_id": "health_check_deployment_id", "model_group": "health_check_model_group"}
+)
+
 _RowT = TypeVar("_RowT")
 
 
@@ -2999,10 +3003,23 @@ async def ui_view_spend_logs(
             ("end_user", "end_user"),
         ]:
             val = where_conditions.get(wc_key)
-            if val is not None and isinstance(val, str):
-                sql_conditions.append(f"{sql_col} = ${p}")
-                sql_params.append(val)
-                p += 1
+            if not isinstance(val, str):
+                continue
+            if (
+                not is_v2
+                and not exclude_internal_health_checks
+                and (probe_field := _HEALTH_CHECK_LOG_FILTER_FIELDS.get(sql_col)) is not None
+            ):
+                sql_conditions.append(
+                    f"({sql_col} = ${p} OR (api_key IN (${p + 1}, ${p + 2}) "
+                    f"AND metadata->'spend_logs_metadata'->>'{probe_field}' = ${p}))"
+                )
+                sql_params.extend((val, *_INTERNAL_HEALTH_CHECK_API_KEYS))
+                p += 3
+                continue
+            sql_conditions.append(f"{sql_col} = ${p}")
+            sql_params.append(val)
+            p += 1
 
         request_id_filter: Final = where_conditions.get("request_id")
         exact_request_id_first: Final = f"(request_id = ${p}) DESC, " if isinstance(request_id_filter, str) else ""

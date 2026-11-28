@@ -7,7 +7,7 @@ import itertools
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, TypeVar
 
 from pydantic import TypeAdapter
 
@@ -159,6 +159,11 @@ def wildcard_health_check_models(wildcard: str, custom_llm_provider: str) -> tup
     return tuple(dict.fromkeys((*served_probes, *provider_probes)))
 
 
+class HealthCheckLogDeployment(NamedTuple):
+    id: str
+    model_group: str
+
+
 class HealthCheckHelpers:
     @staticmethod
     async def ahealth_check_wildcard_models(
@@ -185,6 +190,8 @@ class HealthCheckHelpers:
     @staticmethod
     def update_model_params_with_health_check_tracking_information(
         model_params: dict[str, object],
+        *,
+        log_deployment: HealthCheckLogDeployment | None = None,
     ) -> dict[str, object]:
         """
         Updates the health check model params with tracking information.
@@ -201,6 +208,16 @@ class HealthCheckHelpers:
         litellm_metadata: Final[Mapping[str, object]] = {
             **HealthCheckHelpers._get_metadata_for_health_check_call(),
             "model_info": TypeAdapter(dict[str, object]).validate_python(model_params).get("model_info") or {},
+            **(
+                {
+                    "spend_logs_metadata": {
+                        "health_check_deployment_id": log_deployment.id,
+                        "health_check_model_group": log_deployment.model_group,
+                    }
+                }
+                if log_deployment is not None
+                else {}
+            ),
         }
         model_params[_metadata_variable_name] = litellm_metadata
         model_params = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
