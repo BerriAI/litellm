@@ -9,6 +9,7 @@ import httpx
 import pytest
 import redis
 import respx
+from integration._support.ports import allocate_port
 from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, wire_server
 
@@ -18,6 +19,7 @@ from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy.hooks.batch_redis_get import PROXY_BatchRedisRequests
 
@@ -654,3 +656,52 @@ async def test_completion_caching_on_router(redis_response_cache: Cache) -> None
     second: Final = await router.acompletion(model="completion-model", messages=messages)
 
     assert second.id == first.id
+
+
+async def _pump(src: asyncio.StreamReader, dst: asyncio.StreamWriter, delay: float) -> None:
+    while data := await src.read(65536):
+        await asyncio.sleep(delay)
+        dst.write(data)
+        await dst.drain()
+
+
+@pytest.mark.asyncio
+async def test_redis_async_increment_keeps_ttl_when_client_cancels_mid_reply() -> None:
+    """A counter increment cancelled while Redis is replying still carries its TTL."""
+    redis_host: Final = os.environ["REDIS_HOST"]
+    redis_port: Final = int(os.environ["REDIS_PORT"])
+    redis_password: Final = os.environ.get("REDIS_PASSWORD")
+
+    async def relay(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        up_reader, up_writer = await asyncio.open_connection(redis_host, redis_port)
+        pumps: Final = [
+            asyncio.ensure_future(_pump(reader, up_writer, 0.0)),
+            asyncio.ensure_future(_pump(up_reader, writer, 0.3)),
+        ]
+        await asyncio.wait(pumps, return_when=asyncio.FIRST_COMPLETED)
+        for pending in pumps:
+            pending.cancel()
+        up_writer.close()
+        writer.close()
+
+    relay_port: Final = allocate_port()
+    server: Final = await asyncio.start_server(relay, "127.0.0.1", relay_port)
+    cache: Final = RedisCache(host="127.0.0.1", port=relay_port, password=redis_password, namespace="cancel-probe")
+    key: Final = f"spend:key:{uuid.uuid4()}"
+    admin: Final = redis.asyncio.Redis(host=redis_host, port=redis_port, password=redis_password)
+    try:
+        await cache.init_async_client().ping()
+        task: Final = asyncio.ensure_future(cache.async_increment(key=key, value=0.25, ttl=60, refresh_ttl=False))
+        await asyncio.sleep(0.15)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.5)
+
+        assert await admin.get(f"cancel-probe:{key}") == b"0.25"
+        assert 0 < await admin.ttl(f"cancel-probe:{key}") <= 60
+    finally:
+        await admin.delete(f"cancel-probe:{key}")
+        await admin.aclose()
+        await cache.init_async_client().aclose()
+        server.close()
