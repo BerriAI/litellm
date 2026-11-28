@@ -1194,7 +1194,7 @@ jobs:
         timeout-minutes: ${{ matrix.timeout-minutes }}
         env:
           TEST_PATH: ${{ matrix.test-path }}
-          MAX_FAILURES: "10"
+          MAX_FAILURES: "0"
           WORKERS: ${{ matrix.workers }}
           RERUNS: ${{ matrix.reruns }}
           TEST_TIMEOUT_SECONDS: "120"
