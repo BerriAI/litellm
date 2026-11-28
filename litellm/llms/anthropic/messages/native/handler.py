@@ -109,6 +109,7 @@ __all__ = ("anthropic_messages", "anthropic_messages_handler")
 _SAFEGUARD_KWARGS: Final = TypeAdapter(Mapping[str, object])
 _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
 _DROP_PATHS: Final = TypeAdapter(list[object])
+_FORWARDED_KWARGS: Final = TypeAdapter(dict[str, object])
 
 
 def additional_drop_paths(kwargs: Mapping[str, object]) -> tuple[str, ...]:
@@ -879,7 +880,7 @@ def anthropic_messages_handler(
             api_base=bridge.api_base,
             client=client,
             custom_llm_provider=custom_llm_provider,
-            **kwargs,
+            **_FORWARDED_KWARGS.validate_python(kwargs),
         )
 
     anthropic_messages_provider_config: Final = _native_messages_config(

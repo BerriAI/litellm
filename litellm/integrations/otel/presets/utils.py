@@ -1,6 +1,6 @@
 """Shared helpers for the integration presets."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Final
 
 from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, is_unconfigured_placeholder
@@ -17,6 +17,11 @@ def ensure_mappers(mapper_names: Iterable[str], *names: str) -> list[str]:
         if name not in result:
             result.append(name)
     return result
+
+
+def dynamic_param_text(params: Mapping[str, object], key: str) -> str | None:
+    value: Final = params.get(key)
+    return str(value) if value else None
 
 
 def credential_gated_exporters(

@@ -10,6 +10,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, dict_from_pairs
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
@@ -668,15 +669,15 @@ class BaseLLMAIOHTTPHandler:
 
     def _handle_error(self, e: Exception, provider_config: BaseConfig):
         status_code: Final = getattr(e, "status_code", 500)
-        error_headers = getattr(e, "headers", None)
+        error_headers = attribute_or_none(e, "headers")
         error_text = getattr(e, "text", str(e))
         error_response: Final[object] = getattr(e, "response", None)
         if error_headers is None and error_response:
-            error_headers = getattr(error_response, "headers", None)
+            error_headers = attribute_or_none(error_response, "headers")
         if error_response and hasattr(error_response, "text"):
             error_text = getattr(error_response, "text", error_text)
         if error_headers:
-            error_headers = dict(error_headers)
+            error_headers = dict(dict_from_pairs(error_headers))
         else:
             error_headers = {}
         raise provider_config.get_error_class(

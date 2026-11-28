@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, Literal, cast
+from typing import Final, Literal, NoReturn, Protocol, TypeAlias, cast
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict
@@ -21,7 +21,7 @@ from litellm.constants import (
     STREAM_FINISH_CHOICE_FIELDS,
     VLLM_CHOICE_FIELDS,
 )
-from litellm.litellm_core_utils.core_helpers import iter_items, subscript
+from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, require_attributes, subscript
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_extra_attribute
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
@@ -71,6 +71,38 @@ _MODEL_RESPONSE_FIELDS: Final[frozenset[str]] = frozenset(ModelResponse.model_fi
 
 
 _ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
+
+JsonArrayOrScalar: TypeAlias = list[object] | str | int | float
+DecodedJson: TypeAlias = dict[str, object] | JsonArrayOrScalar | None
+
+
+class JsonResponse(Protocol):
+    def json(self) -> DecodedJson: ...
+
+
+def decoded_json(response: JsonResponse) -> DecodedJson:
+    return response.json()
+
+
+def _raise_missing_attribute(value: object, name: str) -> NoReturn:
+    require_attributes(value, object, name)
+    raise AttributeError(f"{type(value).__name__!r} object has no attribute {name!r}")
+
+
+def _raise_unsubscriptable(value: object, key: str) -> NoReturn:
+    subscript(value, key)
+    raise TypeError(f"{type(value).__name__!r} object is not subscriptable")
+
+
+def _raise_on_present_keys(value: object, keys: Iterable[str]) -> None:
+    for key in keys:
+        if json_contains(value, key):
+            _raise_unsubscriptable(value, key)
+
+
+def _raise_invalid_rerank_fields(value: object) -> NoReturn:
+    _RERANK_RESPONSE_FIELDS.validate_python(value)
+    raise TypeError(f"{type(value).__name__!r} object is not a mapping")
 
 
 class _ImageResponseFields(TypedDict, total=False, extra_items=object):
@@ -455,7 +487,7 @@ async def convert_to_streaming_response_async(
 
 
 def convert_to_streaming_response(
-    response_object: dict | None = None,
+    response_object: dict | JsonArrayOrScalar | None = None,
 ) -> Generator[ModelResponseStream, None, None]:
     # used for yielding Cache hits when stream == True
     if response_object is None:
@@ -463,6 +495,9 @@ def convert_to_streaming_response(
 
     model_response_object: Final = ModelResponseStream()
     choice_list: Final[list[StreamingChoices]] = []
+
+    if isinstance(response_object, (list, str, int, float)):
+        _raise_missing_attribute(response_object, "get")
 
     if not isinstance(response_object.get("choices"), list):
         from litellm.exceptions import APIError
@@ -808,8 +843,13 @@ def should_convert_tool_call_to_json_mode(
 _should_convert_tool_call_to_json_mode = should_convert_tool_call_to_json_mode
 
 
+def _transcription_optional_keys(hidden_params: Mapping[str, object]) -> tuple[str, ...]:
+    cache_hit_keys: Final = ("request_id", "truncated") if hidden_params.get("cache_hit") is True else ()
+    return ("language", "task", "duration", "words", "segments", *cache_hit_keys)
+
+
 def convert_to_model_response_object(
-    response_object: dict | None = None,
+    response_object: dict | JsonArrayOrScalar | None = None,
     model_response_object: ModelResponse
     | EmbeddingResponse
     | ImageResponse
@@ -849,7 +889,9 @@ def convert_to_model_response_object(
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
     # Some OpenAI-compatible providers (e.g., Apertis) return empty error objects
     # even on success. Only raise if the error contains meaningful data.
-    if response_object is not None and "error" in response_object and response_object["error"] is not None:
+    if isinstance(response_object, (list, str, int, float)):
+        _raise_on_present_keys(response_object, ("error",))
+    elif response_object is not None and "error" in response_object and response_object["error"] is not None:
         error_obj: Final = response_object["error"]
         has_meaningful_error = False
 
@@ -891,6 +933,9 @@ def convert_to_model_response_object(
                 # for returning cached responses, we need to yield a generator
                 return convert_to_streaming_response(response_object=response_object)
             choice_list: Final[list[Choices]] = []
+
+            if isinstance(response_object, (list, str, int, float)):
+                _raise_missing_attribute(response_object, "get")
 
             if not isinstance(response_object.get("choices"), list):
                 from litellm.exceptions import APIError
@@ -1043,6 +1088,10 @@ def convert_to_model_response_object(
             if model_response_object is None:
                 model_response_object = EmbeddingResponse()
 
+            if isinstance(response_object, (list, str, int, float)):
+                _raise_on_present_keys(response_object, ("model", "object"))
+                _raise_unsubscriptable(response_object, "data")
+
             if "model" in response_object:
                 model_response_object.model = response_object["model"]
 
@@ -1076,6 +1125,9 @@ def convert_to_model_response_object(
             if response_object is None:
                 raise Exception("Error in response object format")
 
+            if isinstance(response_object, (list, str, int, float)):
+                _raise_missing_attribute(response_object, "update")
+
             return LiteLLMResponseObjectHandler.convert_to_image_response(
                 response_object=response_object,
                 model_response_object=model_response_object,
@@ -1091,12 +1143,17 @@ def convert_to_model_response_object(
             if model_response_object is None:
                 model_response_object = TranscriptionResponse()
 
+            if isinstance(response_object, (list, str, int, float)):
+                _raise_on_present_keys(response_object, ("text",))
+                _raise_on_present_keys(
+                    response_object, _transcription_optional_keys(_FIELD_MAP.validate_python(hidden_params))
+                )
+                _raise_missing_attribute(response_object, "get")
+
             if "text" in response_object:
                 model_response_object.text = response_object["text"]
 
-            cache_hit: Final = _FIELD_MAP.validate_python(hidden_params).get("cache_hit") is True
-            cache_hit_keys: Final = ("request_id", "truncated") if cache_hit else ()
-            optional_keys: Final = ("language", "task", "duration", "words", "segments", *cache_hit_keys)
+            optional_keys: Final = _transcription_optional_keys(_FIELD_MAP.validate_python(hidden_params))
             for key in optional_keys:  # not guaranteed to be in response
                 if key in response_object:
                     setattr(model_response_object, key, response_object[key])
@@ -1139,6 +1196,10 @@ def convert_to_model_response_object(
             if model_response_object is None:
                 model_response_object = RerankResponse.model_validate(response_object)
                 return model_response_object
+
+            if isinstance(response_object, (list, str, int, float)):
+                _raise_on_present_keys(response_object, ("id", "meta", "results"))
+                _raise_invalid_rerank_fields(response_object)
 
             if "id" in response_object:
                 model_response_object.id = response_object["id"]

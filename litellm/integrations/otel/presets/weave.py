@@ -1,5 +1,6 @@
 """Weave (W&B) preset."""
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.integrations.otel.model.config import (
@@ -9,13 +10,13 @@ from litellm.integrations.otel.model.config import (
 )
 from litellm.integrations.otel.presets.utils import (
     credential_gated_exporters,
+    dynamic_param_text,
     ensure_mappers,
 )
 from litellm.integrations.weave.weave_otel import (
     get_weave_authorization_header,
     get_weave_otel_config,
 )
-from litellm.types.utils import StandardCallbackDynamicParams
 
 
 def weave_preset(
@@ -53,13 +54,13 @@ def weave_preset(
     )
 
 
-def weave_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
+def weave_dynamic_headers(params: Mapping[str, object]) -> dict[str, str]:
     """Per-request Weave OTLP headers from team/key dynamic params."""
     headers: Final[dict[str, str]] = {}
-    api_key: Final = params.get("wandb_api_key")
+    api_key: Final = dynamic_param_text(params, "wandb_api_key")
     if api_key:
         headers["Authorization"] = get_weave_authorization_header(api_key=api_key)
-    project_id: Final = params.get("weave_project_id")
+    project_id: Final = dynamic_param_text(params, "weave_project_id")
     if project_id:
         headers["project_id"] = project_id
     return headers

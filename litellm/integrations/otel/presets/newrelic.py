@@ -14,8 +14,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import ensure_mappers
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.integrations.otel.presets.utils import dynamic_param_text, ensure_mappers
 
 #: Region -> OTLP base endpoint. A fixed table by design: team config picks a
 #: region enum rather than a free-form endpoint, so callback vars can never
@@ -79,13 +78,13 @@ def newrelic_preset(
     )
 
 
-def newrelic_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
+def newrelic_dynamic_headers(params: Mapping[str, object]) -> dict[str, str]:
     """Per-request New Relic OTLP headers from team/key dynamic params."""
-    api_key: Final = params.get("newrelic_api_key")
+    api_key: Final = dynamic_param_text(params, "newrelic_api_key")
     return {header: value for header, value in (("api-key", api_key),) if value}
 
 
-def newrelic_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str:
+def newrelic_dynamic_endpoint(params: Mapping[str, object]) -> str:
     """Per-request OTLP endpoint for the team's ``newrelic_region``.
 
     Always the team's own region endpoint, defaulting to US when the team left
@@ -95,7 +94,7 @@ def newrelic_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str:
     spans rejected by an EU-configured default (or vice versa). An unknown
     region likewise resolves to the documented US default rather than a guess.
     """
-    region: Final = params.get("newrelic_region")
+    region: Final = dynamic_param_text(params, "newrelic_region")
     default_endpoint: Final = NEWRELIC_OTLP_ENDPOINT_BY_REGION[_DEFAULT_REGION]
     if not region:
         return default_endpoint

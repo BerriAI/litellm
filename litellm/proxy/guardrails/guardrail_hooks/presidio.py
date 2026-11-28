@@ -118,6 +118,7 @@ _PRESIDIO_ANONYMIZE_ADAPTER: Final[TypeAdapter[_PresidioAnonymizeResponse | None
     _PresidioAnonymizeResponse | None
 )
 _DECODED_JSON: Final = TypeAdapter(object)
+_TRANSLATED_RESPONSE: Final = TypeAdapter(object)
 
 
 class _JsonResponse(Protocol):
@@ -1622,10 +1623,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             translation: Final = get_guardrail_translation_mapping(CallTypes(call_type))()
         except ValueError:
             return result
-        return await translation.process_output_response(
-            response=copy.deepcopy(result),
-            guardrail_to_apply=self,
-            request_data={"metadata": {}, "litellm_call_id": kwargs.get("litellm_call_id")},
+        return _TRANSLATED_RESPONSE.validate_python(
+            await translation.process_output_response(
+                response=copy.deepcopy(result),
+                guardrail_to_apply=self,
+                request_data={"metadata": {}, "litellm_call_id": kwargs.get("litellm_call_id")},
+            )
         )
 
     async def async_post_call_success_hook(

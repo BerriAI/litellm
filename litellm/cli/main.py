@@ -52,11 +52,21 @@ def _interpreter_import() -> "_Import":
     return builtins.__import__
 
 
+def _module_attribute_lookup() -> Callable[[types.ModuleType, str], object]:
+    return types.ModuleType.__getattribute__
+
+
+def _attribute_lookup() -> Callable[[object, str], object]:
+    return getattr
+
+
 SDK_PACKAGE: Final = "litellm"
 CLI_PACKAGE: Final = "litellm.proxy.client"
 _INITIALIZATION_LOCK: Final = threading.RLock()
 _BUILTIN_IMPORT: Final = _interpreter_import()
 _IMPORT_MODULE: Final = importlib.import_module
+_MODULE_ATTRIBUTE_LOOKUP: Final = _module_attribute_lookup()
+_ATTRIBUTE_LOOKUP: Final = _attribute_lookup()
 _LOADING_CLI_CODE: Final = contextvars.ContextVar("_LOADING_CLI_CODE", default=False)
 
 
@@ -68,7 +78,7 @@ class _SDKUntilFirstUse(types.ModuleType):
     def __getattribute__(self, name: str) -> object:
         if not _is_dunder(name):
             _initialize(self)
-        return types.ModuleType.__getattribute__(self, name)
+        return _MODULE_ATTRIBUTE_LOOKUP(self, name)
 
 
 class _SDKInitializing(types.ModuleType):
@@ -76,7 +86,7 @@ class _SDKInitializing(types.ModuleType):
         with _INITIALIZATION_LOCK:
             if type(self) is _SDKInitializing:
                 raise AttributeError(f"partially initialized module {SDK_PACKAGE!r} has no attribute {name!r}")
-        return getattr(self, name)
+        return _ATTRIBUTE_LOOKUP(self, name)
 
 
 def _become(sdk: types.ModuleType, state: type[types.ModuleType]) -> None:

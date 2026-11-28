@@ -126,8 +126,12 @@ def _cannot_have_created(error: openai.APIError) -> bool:
     )
 
 
+def _header_value(headers: Mapping[str, str], name: str) -> str | None:
+    return headers.get(name)
+
+
 def _retry_the_provider_asked_for(response: httpx.Response) -> bool | None:
-    match response.headers.get("x-should-retry"):
+    match _header_value(response.headers, "x-should-retry"):
         case "true":
             return True
         case "false":

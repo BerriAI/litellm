@@ -1,5 +1,6 @@
 """Arize preset — OTLP exporter to Arize + OpenInference vocabulary."""
 
+from collections.abc import Mapping
 from typing import Final
 
 from pydantic import Field
@@ -11,9 +12,8 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import credential_gated_exporters, ensure_mappers
+from litellm.integrations.otel.presets.utils import credential_gated_exporters, dynamic_param_text, ensure_mappers
 from litellm.types.integrations.arize import ArizeConfig
-from litellm.types.utils import StandardCallbackDynamicParams
 
 #: Arize routes an export to a project by the ``model_id`` resource attribute and
 #: rejects one that names none, so this is the project when ``ARIZE_PROJECT_NAME``
@@ -81,14 +81,14 @@ def _arize_headers(arize_cfg: ArizeConfig) -> str | None:
     return ",".join(pieces)
 
 
-def arize_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
+def arize_dynamic_headers(params: Mapping[str, object]) -> dict[str, str]:
     """Per-request Arize OTLP headers from team/key dynamic params."""
     headers: Final[dict[str, str]] = {}
     # ``arize_space_key`` is the suggested param and wins over ``arize_space_id``.
-    space: Final = params.get("arize_space_key") or params.get("arize_space_id")
+    space: Final = dynamic_param_text(params, "arize_space_key") or dynamic_param_text(params, "arize_space_id")
     if space:
         headers["arize-space-id"] = space
-    api_key: Final = params.get("arize_api_key")
+    api_key: Final = dynamic_param_text(params, "arize_api_key")
     if api_key:
         headers["api_key"] = api_key
     return headers

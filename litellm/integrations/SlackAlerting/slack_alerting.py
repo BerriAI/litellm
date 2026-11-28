@@ -31,7 +31,7 @@ from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_ale
 from litellm.integrations.SlackAlerting.hanging_request_check import (
     AlertingHangingRequestCheck,
 )
-from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes, subscript
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, float_of, require_attributes, subscript
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
     add_key_name_and_team_to_alert,
@@ -1926,13 +1926,13 @@ Model Info:
             if spend_per_team is not None:
                 _spend_message += "\n*Team Spend Report:*\n"
                 for spend in spend_per_team:
-                    _team_spend = round(float(spend["total_spend"]), 4)
+                    _team_spend = round(float_of(spend["total_spend"]), 4)
                     _spend_message += f"Team: `{spend['team_alias']}` | Spend: `${_team_spend}`\n"
 
             if spend_per_tag is not None:
                 _spend_message += "\n*Tag Spend Report:*\n"
                 for spend in spend_per_tag:
-                    _tag_spend = round(float(spend["total_spend"]), 4)
+                    _tag_spend = round(float_of(spend["total_spend"]), 4)
                     _spend_message += f"Tag: `{spend['individual_request_tag']}` | Spend: `${_tag_spend}`\n"
 
             await self.send_alert(
@@ -1987,7 +1987,7 @@ Model Info:
                 _spend_message += "\n*Team Spend Report:*\n"
                 for spend in monthly_spend_per_team:
                     _team_spend = spend["total_spend"]
-                    _team_spend = float(_team_spend)
+                    _team_spend = float_of(_team_spend)
                     # round to 4 decimal places
                     _team_spend = round(_team_spend, 4)
                     _spend_message += f"Team: `{spend['team_alias']}` | Spend: `${_team_spend}`\n"
@@ -1996,7 +1996,7 @@ Model Info:
                 _spend_message += "\n*Tag Spend Report:*\n"
                 for spend in monthly_spend_per_tag:
                     _tag_spend = spend["total_spend"]
-                    _tag_spend = float(_tag_spend)
+                    _tag_spend = float_of(_tag_spend)
                     # round to 4 decimal places
                     _tag_spend = round(_tag_spend, 4)
                     _spend_message += f"Tag: `{spend['individual_request_tag']}` | Spend: `${_tag_spend}`\n"

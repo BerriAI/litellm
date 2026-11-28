@@ -91,7 +91,11 @@ class _RequestTraceExclusionMiddleware:
                 await self.app(scope, request_receive, send)
 
 
-def _stamp_read_ahead(scope: "Scope", read_ahead_ns: int) -> None:
+class _SupportsSetDefault(Protocol):
+    def setdefault(self, key: str, default: object, /) -> object: ...
+
+
+def _stamp_read_ahead(scope: _SupportsSetDefault, read_ahead_ns: int) -> None:
     state: Final[object] = scope.setdefault("state", {})
     if isinstance(state, dict):
         state[BODY_READ_AHEAD_NS] = read_ahead_ns

@@ -12,8 +12,7 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import credential_gated_exporters, ensure_mappers
-from litellm.types.utils import StandardCallbackDynamicParams
+from litellm.integrations.otel.presets.utils import credential_gated_exporters, dynamic_param_text, ensure_mappers
 
 MIXPANEL_PROJECT_TOKEN_ENV: Final = "MIXPANEL_PROJECT_TOKEN"
 
@@ -98,16 +97,16 @@ def mixpanel_preset(
 
 
 def mixpanel_dynamic_headers(
-    params: StandardCallbackDynamicParams,
+    params: Mapping[str, object],
 ) -> dict[str, str]:  # mutable-ok: DYNAMIC_HEADERS_BY_CALLBACK returns a dict
-    token: Final = (params.get("mixpanel_project_token") or "").strip()
+    token: Final = (dynamic_param_text(params, "mixpanel_project_token") or "").strip()
     if not token:
         return {}
     return {"Authorization": mixpanel_authorization_header(token)}
 
 
-def mixpanel_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str | None:
+def mixpanel_dynamic_endpoint(params: Mapping[str, object]) -> str | None:
     """The region endpoint of the project ``params`` name, or ``None`` to keep the operator's own endpoint."""
-    if not (params.get("mixpanel_project_token") or "").strip():
+    if not (dynamic_param_text(params, "mixpanel_project_token") or "").strip():
         return None
-    return _resolve_region_endpoint(params.get("mixpanel_region"))
+    return _resolve_region_endpoint(dynamic_param_text(params, "mixpanel_region"))

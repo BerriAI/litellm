@@ -1357,6 +1357,10 @@ async def _opensearch_store_params(
     return params, vector_store
 
 
+def _content_type(headers: Mapping[str, str]) -> str | None:
+    return headers.get("content-type")
+
+
 async def _opensearch_fallback_request(
     api: tuple[str, ...],
     operation: IndexOperation | None,
@@ -1378,7 +1382,7 @@ async def _opensearch_fallback_request(
         path=IndexPath(provider_index, api),
         operation=operation,
         provider_index=provider_index,
-        content_type=request.headers.get("content-type"),
+        content_type=_content_type(request.headers),
         query=tuple(request.url.params.multi_items()),
         body=request.content,
         store_params=with_named_credential(target.params),

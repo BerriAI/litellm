@@ -6,7 +6,6 @@ WebSocket session route, with a client that never speaks.
 """
 
 import asyncio
-import json
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, TypeAlias
@@ -14,7 +13,7 @@ from typing import Final, TypeAlias
 from starlette.datastructures import URL, Headers
 from starlette.websockets import WebSocketDisconnect
 
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, json_loaded
 from litellm.litellm_core_utils.realtime_errors import refused_handshake_status
 
 SIDEBAND_ATTACH_TIMEOUT_SECONDS: Final = 10.0
@@ -30,7 +29,7 @@ _SIDEBAND_SUPERVISORS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: hol
 
 def _event(data: str) -> Mapping[str, object]:
     try:
-        return as_str_mapping(json.loads(data)) or {}
+        return as_str_mapping(json_loaded(data)) or {}
     except ValueError:
         return {}
 

@@ -5,7 +5,7 @@ from functools import partial, reduce
 from io import BufferedReader, BytesIO
 from itertools import chain
 from pathlib import Path
-from typing import Any, Final, Protocol, cast, get_type_hints, runtime_checkable
+from typing import Final, Protocol, cast, get_type_hints, runtime_checkable
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
@@ -191,7 +191,7 @@ class ImageEditRequestUtils:
         return cast(ImageEditOptionalRequestParams, filtered_params)
 
     @staticmethod
-    def get_image_content_type(image_data: Any) -> str:
+    def get_image_content_type(image_data: object) -> str:
         """
         Detect the content type of image data using existing LiteLLM utils.
 

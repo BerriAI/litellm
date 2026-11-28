@@ -5,7 +5,7 @@ import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from functools import partial
+from functools import partial, reduce
 from itertools import groupby
 from types import MappingProxyType
 from typing import (
@@ -35,7 +35,7 @@ from litellm.constants import (
     SPEND_CAPTURE_RATE_MAX_RANGE_DAYS,
 )
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, float_of, sum_of
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.auth_checks import get_key_object
@@ -161,76 +161,8 @@ def _registered_deployment(registry: _DeploymentRegistry[_DeploymentT], model: s
     return matches[-1] if matches else None
 
 
-class _ActivityRow(TypedDict):
-    date: str
-    api_requests: int
-    total_tokens: int
-
-
-class _ActivityModelRow(TypedDict):
-    model_group: str
-    date: str
-    api_requests: int
-    total_tokens: int
-
-
-class _DeploymentExceptionsRow(TypedDict):
-    api_base: str
-    date: str
-    num_rate_limit_exceptions: int
-
-
-class _ExceptionsRow(TypedDict):
-    date: str
-    num_rate_limit_exceptions: int
-
-
-class _ModelIdSpendRow(TypedDict):
-    model_id: str
-    spend: float
-
-
-class _TagNameRow(TypedDict):
-    individual_request_tag: str
-
-
-class _TeamSpendRow(TypedDict):
-    team_alias: str | None
-    total_spend: float
-
-
-class _TagSpendRow(TypedDict):
-    individual_request_tag: str
-    total_spend: float
-
-
 class _SpendLogsCountRow(TypedDict):
     total_count: int
-
-
-class _PgClassRow(TypedDict):
-    relname: str
-    relkind: str
-
-
-class _TotalSpendRow(TypedDict):
-    total_spend: float
-
-
-class _TeamDailySpendRow(TypedDict):
-    team_alias: str | None
-    spend_date: str | None
-    total_spend: float
-
-
-class _EndUserRow(TypedDict):
-    end_user: str | None
-
-
-class _DailyTagSpendRow(TypedDict):
-    individual_request_tag: str
-    log_count: int
-    total_spend: float
 
 
 class _SessionSpendRow(TypedDict):
@@ -273,17 +205,34 @@ class _SessionSpendStats(NamedTuple):
 _SessionSpendMap: TypeAlias = Mapping[tuple[str, str], _SessionSpendStats]
 
 
-class _SpendDailySummaryRow(TypedDict):
-    day: ReadOnly[str]
-    api_key: ReadOnly[str]
-    user: ReadOnly[str | None]
-    model: ReadOnly[str]
-    spend: ReadOnly[float]
-
-
-async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT]:
-    """Run a raw read query and return its rows as the row type the caller declares."""
+async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[Mapping[str, object]]:
+    """Run a raw read query and return its rows."""
     return await prisma_client.db.query_raw(sql_query, *args)
+
+
+def _iso_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    raise TypeError("fromisoformat: argument must be str")
+
+
+def _display_date(row: Mapping[str, object]) -> str:
+    return datetime.fromisoformat(_iso_text(row["date"])).strftime("%b %d")
+
+
+def _display_dated_rows(rows: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
+    dated_rows: Final = sorted(((_display_date(row), row) for row in rows), key=lambda dated: dated[0])
+    return [{**row, "date": display_date} for display_date, row in dated_rows]
+
+
+def _column_total(rows: Sequence[Mapping[str, object]], column: str) -> object:
+    return reduce(sum_of, (row.get(column, 0) for row in rows), 0)
+
+
+def _rounded_spend(value: object) -> float:
+    if isinstance(value, (int, float)):
+        return round(value, 2)
+    raise TypeError(f"type {type(value).__name__} doesn't define __round__ method")
 
 
 async def _scope_api_keys(
@@ -302,13 +251,15 @@ async def _scope_api_keys(
     return None
 
 
-async def _query_raw_or_none(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT] | None:
+async def _query_raw_or_none(
+    prisma_client: PrismaClient, sql_query: str, *args: object
+) -> Sequence[Mapping[str, object]] | None:
     """``_query_raw`` for the call sites that guard the result against ``None``."""
     return await _query_raw(prisma_client, sql_query, *args)
 
 
 async def _query_spend_logs(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT]:
-    return cast(  # cast-ok: callers declare the row shape their SELECT list produces, as with _query_raw
+    return cast(  # cast-ok: callers declare the row shape their SELECT list produces
         "Sequence[_RowT]", await query_raw_within_statement_timeout(prisma_client, sql_query, *args)
     )
 
@@ -470,18 +421,18 @@ ORDER BY 1
 
 
 def _sum_spend_by(
-    rows: Sequence[_SpendDailySummaryRow], column: Literal["api_key", "user", "model"]
-) -> Mapping[str | None, float]:
+    rows: Sequence[Mapping[str, object]], column: Literal["api_key", "user", "model"]
+) -> Mapping[object, float]:
     keys: Final = frozenset(row[column] for row in rows)
-    return {key: sum(float(row["spend"]) for row in rows if row[column] == key) for key in keys}
+    return {key: sum(float_of(row["spend"]) for row in rows if row[column] == key) for key in keys}
 
 
-def _daily_summary_item(summary_date: date, rows: Sequence[_SpendDailySummaryRow]) -> Mapping[str, object]:
-    api_key_spend: Final = {key: value for key, value in _sum_spend_by(rows, "api_key").items() if key is not None}
+def _daily_summary_item(summary_date: date, rows: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    api_key_spend: Final = {key: value for key, value in _sum_spend_by(rows, "api_key").items() if isinstance(key, str)}
     return {
         **api_key_spend,
         "startTime": summary_date,
-        "spend": sum(float(row["spend"]) for row in rows),
+        "spend": sum(float_of(row["spend"]) for row in rows),
         "users": _sum_spend_by(rows, "user"),
         "models": _sum_spend_by(rows, "model"),
     }
@@ -807,7 +758,7 @@ async def get_global_activity_internal_user(
     AND "user" = $3
     GROUP BY date_trunc('day', "startTime")
     """
-    db_response: Final[Sequence[_ActivityRow] | None] = await _query_raw_or_none(
+    db_response: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(
         prisma_client, sql_query, start_date, end_date, user_id
     )
 
@@ -873,7 +824,7 @@ async def get_global_activity(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        db_response: Sequence[_ActivityRow] | None
+        db_response: Sequence[Mapping[str, object]] | None
         if (
             user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
             or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -895,25 +846,10 @@ async def get_global_activity(
         if db_response is None:
             return []
 
-        sum_api_requests = 0
-        sum_total_tokens = 0
-        daily_data: list[_ActivityRow] = []
-        for row in db_response:
-            # cast date to datetime
-            _date_obj = datetime.fromisoformat(row["date"])
-            row["date"] = _date_obj.strftime("%b %d")
-
-            daily_data.append(row)
-            sum_api_requests += row.get("api_requests", 0)
-            sum_total_tokens += row.get("total_tokens", 0)
-
-        # sort daily_data by date
-        daily_data = sorted(daily_data, key=lambda x: x["date"])
-
         data_to_return: Final = {
-            "daily_data": daily_data,
-            "sum_api_requests": sum_api_requests,
-            "sum_total_tokens": sum_total_tokens,
+            "daily_data": _display_dated_rows(db_response),
+            "sum_api_requests": _column_total(db_response, "api_requests"),
+            "sum_total_tokens": _column_total(db_response, "total_tokens"),
         }
 
         return data_to_return
@@ -949,7 +885,7 @@ async def get_global_activity_model_internal_user(
     AND "user" = $3
     GROUP BY model_group, date_trunc('day', "startTime")
     """
-    db_response: Final[Sequence[_ActivityModelRow] | None] = await _query_raw_or_none(
+    db_response: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(
         prisma_client, sql_query, start_date, end_date, user_id
     )
 
@@ -1038,7 +974,7 @@ async def get_global_activity_model(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        db_response: Sequence[_ActivityModelRow] | None
+        db_response: Sequence[Mapping[str, object]] | None
         if (
             user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
             or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -1070,10 +1006,7 @@ async def get_global_activity_model(
                     "sum_api_requests": 0,
                     "sum_total_tokens": 0,
                 }
-            _date_obj = datetime.fromisoformat(row["date"])
-            row["date"] = _date_obj.strftime("%b %d")
-
-            model_ui_data[_model]["daily_data"].append(row)
+            model_ui_data[_model]["daily_data"].append({**row, "date": _display_date(row)})
             model_ui_data[_model]["sum_api_requests"] += row.get("api_requests", 0)
             model_ui_data[_model]["sum_total_tokens"] += row.get("total_tokens", 0)
 
@@ -1204,7 +1137,7 @@ async def get_global_activity_exceptions_per_deployment(
         ORDER BY
             date;
         """
-        db_response: Final[Sequence[_DeploymentExceptionsRow] | None] = await _query_raw_or_none(
+        db_response: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(
             prisma_client, sql_query, start_date_obj, end_date_obj, model_group
         )
         if db_response is None:
@@ -1219,10 +1152,7 @@ async def get_global_activity_exceptions_per_deployment(
                     "daily_data": [],
                     "sum_num_rate_limit_exceptions": 0,
                 }
-            _date_obj = datetime.fromisoformat(row["date"])
-            row["date"] = _date_obj.strftime("%b %d")
-
-            model_ui_data[_model]["daily_data"].append(row)
+            model_ui_data[_model]["daily_data"].append({**row, "date": _display_date(row)})
             model_ui_data[_model]["sum_num_rate_limit_exceptions"] += row.get("num_rate_limit_exceptions", 0)
 
         # sort mode ui data by sum_api_requests -> get top 10 models
@@ -1329,29 +1259,16 @@ async def get_global_activity_exceptions(
         ORDER BY
             date;
         """
-        db_response: Final[Sequence[_ExceptionsRow] | None] = await _query_raw_or_none(
+        db_response: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(
             prisma_client, sql_query, start_date_obj, end_date_obj, model_group
         )
 
         if db_response is None:
             return []
 
-        sum_num_rate_limit_exceptions = 0
-        daily_data: list[_ExceptionsRow] = []
-        for row in db_response:
-            # cast date to datetime
-            _date_obj = datetime.fromisoformat(row["date"])
-            row["date"] = _date_obj.strftime("%b %d")
-
-            daily_data.append(row)
-            sum_num_rate_limit_exceptions += row.get("num_rate_limit_exceptions", 0)
-
-        # sort daily_data by date
-        daily_data = sorted(daily_data, key=lambda x: x["date"])
-
         data_to_return: Final = {
-            "daily_data": daily_data,
-            "sum_num_rate_limit_exceptions": sum_num_rate_limit_exceptions,
+            "daily_data": _display_dated_rows(db_response),
+            "sum_num_rate_limit_exceptions": _column_total(db_response, "num_rate_limit_exceptions"),
         }
 
         return data_to_return
@@ -1497,7 +1414,7 @@ async def get_global_spend_provider(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        db_response: Sequence[_ModelIdSpendRow] | None
+        db_response: Sequence[Mapping[str, object]] | None
         if (
             user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER
             or user_api_key_dict.user_role == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -1544,7 +1461,7 @@ async def get_global_spend_provider(
         for row in db_response:
             _model_id = row["model_id"]
             _provider = "Unknown"
-            if llm_router is not None:
+            if llm_router is not None and isinstance(_model_id, str):
                 _deployment = llm_router.registry().deployment(_model_id)
                 if _deployment is not None:
                     try:
@@ -2252,7 +2169,7 @@ async def global_get_all_tag_names():
         FROM "LiteLLM_SpendLogs";
         """
 
-        db_response: Final[Sequence[_TagNameRow] | None] = await _query_raw_or_none(prisma_client, sql_query)
+        db_response: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(prisma_client, sql_query)
         if db_response is None:
             return []
 
@@ -2365,7 +2282,7 @@ async def global_view_spend_tags(
 async def get_spend_report_for_time_range(
     start_date: str,
     end_date: str,
-) -> tuple[Sequence[_TeamSpendRow] | None, Sequence[_TagSpendRow] | None] | None:
+) -> tuple[Sequence[Mapping[str, object]] | None, Sequence[Mapping[str, object]] | None] | None:
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -2399,7 +2316,7 @@ async def get_spend_report_for_time_range(
         ORDER BY
             total_spend DESC;
         """
-        response: Final[Sequence[_TeamSpendRow] | None] = await _query_raw_or_none(
+        response: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(
             prisma_client, sql_query, start_date_obj, end_date_obj
         )
 
@@ -2415,7 +2332,7 @@ async def get_spend_report_for_time_range(
         ORDER BY total_spend DESC;
         """
 
-        spend_per_tag: Final[Sequence[_TagSpendRow] | None] = await _query_raw_or_none(
+        spend_per_tag: Final[Sequence[Mapping[str, object]] | None] = await _query_raw_or_none(
             prisma_client, sql_query, start_date_obj, end_date_obj
         )
 
@@ -3696,12 +3613,12 @@ async def view_spend_logs(
                 organization_ids=organization_ids,
             )
             sql_query, params = summary_sql_and_params
-            rows: Final[Sequence[_SpendDailySummaryRow]] = await _query_raw(prisma_client, sql_query, *params)
+            rows: Final = await _query_raw(prisma_client, sql_query, *params)
             summary_items: Final = tuple(
-                _daily_summary_item(date.fromisoformat(day), tuple(day_rows))
+                _daily_summary_item(date.fromisoformat(_iso_text(day)), tuple(day_rows))
                 for day, day_rows in groupby(rows, key=lambda row: row["day"])
             )
-            final_date: Final = date.fromisoformat(rows[-1]["day"]) if len(rows) > 0 else None
+            final_date: Final = date.fromisoformat(_iso_text(rows[-1]["day"])) if len(rows) > 0 else None
             end_date_date: Final = end_date_obj.date()
             padding: Final[tuple[Mapping[str, object], ...]] = (
                 ()
@@ -3760,8 +3677,11 @@ async def view_spend_logs(
         )
 
 
-class _EntityIdRow(TypedDict):
-    id: ReadOnly[str]
+def _entity_id(row: Mapping[str, object]) -> str:
+    entity_id: Final = row["id"]
+    if isinstance(entity_id, str):
+        return entity_id
+    raise TypeError(f"expected a text id, got {type(entity_id).__name__}")
 
 
 _COMMITTED_DROP_PAGE_SIZE: Final = 1000
@@ -3782,12 +3702,13 @@ async def _drop_committed_spend_page(
 ) -> str | None:
     from litellm.proxy.proxy_server import spend_counter_store
 
-    rows: Final[Sequence[_EntityIdRow]] = await _query_raw(
+    rows: Final = await _query_raw(
         prisma_client, _COMMITTED_DROP_PAGE_QUERIES[entity], after_id, _COMMITTED_DROP_PAGE_SIZE
     )
+    entity_ids: Final = tuple(_entity_id(row) for row in rows)
     counter_of: Final = _COMMITTED_DROP_COUNTERS[entity]
-    await drop_committed_spend(spend_counter_store, tuple(counter_of(row["id"]) for row in rows))
-    return rows[-1]["id"] if len(rows) == _COMMITTED_DROP_PAGE_SIZE else None
+    await drop_committed_spend(spend_counter_store, tuple(counter_of(entity_id) for entity_id in entity_ids))
+    return entity_ids[-1] if len(rows) == _COMMITTED_DROP_PAGE_SIZE else None
 
 
 async def _drop_committed_spend_pages(prisma_client: PrismaClient, entity: _CommittedDropEntity) -> None:
@@ -3879,7 +3800,7 @@ async def global_spend_refresh():
         WHERE relname = 'MonthlyGlobalSpend';            
         """
         try:
-            resp: Final[Sequence[_PgClassRow]] = await _query_raw(prisma_client, sql_query)
+            resp: Final = await _query_raw(prisma_client, sql_query)
 
             return resp[0]["relkind"] == "m"
         except Exception:
@@ -4073,7 +3994,7 @@ async def global_spend():
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
         sql_query: Final = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
-        response: Final[Sequence[_TotalSpendRow] | None] = await _query_raw_or_none(prisma_client, sql_query)
+        response: Final = await _query_raw_or_none(prisma_client, sql_query)
         if response is not None:
             if isinstance(response, list) and len(response) > 0:
                 total_spend = response[0].get("total_spend", 0.0)
@@ -4223,7 +4144,7 @@ async def global_spend_per_team():
         ORDER BY
             spend_date;
         """
-    response: Final[Sequence[_TeamDailySpendRow]] = await _query_raw(prisma_client, sql_query)
+    response: Final = await _query_raw(prisma_client, sql_query)
 
     # transform the response for the Admin UI
     spend_by_date: Final = {}
@@ -4240,13 +4161,11 @@ async def global_spend_per_team():
         if row_date in spend_by_date:
             # get the team_id for this entry
             # get the spend for this entry
-            spend = row["total_spend"]
-            spend = round(spend, 2)
+            spend = _rounded_spend(row["total_spend"])
             current_date_entries = spend_by_date[row_date]
             current_date_entries[team_alias] = spend
         else:
-            spend = row["total_spend"]
-            spend = round(spend, 2)
+            spend = _rounded_spend(row["total_spend"])
             spend_by_date[row_date] = {team_alias: spend}
 
         if team_alias in total_spend_per_team:
@@ -4300,7 +4219,7 @@ async def global_view_all_end_users():
     SELECT DISTINCT end_user FROM "LiteLLM_SpendLogs"
     """
 
-    db_response: Final[Sequence[_EndUserRow] | None] = await _query_raw_or_none(prisma_client, sql_query)
+    db_response: Final = await _query_raw_or_none(prisma_client, sql_query)
     if db_response is None:
         return []
 
@@ -4580,7 +4499,7 @@ async def ui_get_spend_by_tags(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    response: Sequence[_DailyTagSpendRow] | None = None
+    response: Sequence[Mapping[str, object]] | None = None
     if tags_list is None or (isinstance(tags_list, list) and "all-tags" in tags_list):
         # Get spend for all tags
         sql_query = """
@@ -4624,13 +4543,13 @@ async def ui_get_spend_by_tags(
     # print(response)
     # Bar Chart 1 - Spend per tag - Top 10 tags by spend
     total_spend_per_tag: Final[collections.defaultdict] = collections.defaultdict(float)
-    total_requests_per_tag: Final[collections.defaultdict[object, int]] = collections.defaultdict(int)
+    total_requests_per_tag: Final[collections.defaultdict[object, object]] = collections.defaultdict(int)
     for row in response:
         tag_name = row["individual_request_tag"]
         tag_spend = row["total_spend"]
 
         total_spend_per_tag[tag_name] += tag_spend
-        total_requests_per_tag[tag_name] += row["log_count"]
+        total_requests_per_tag[tag_name] = sum_of(total_requests_per_tag[tag_name], row["log_count"])
 
     sorted_tags: Final = sorted(total_spend_per_tag.items(), key=lambda x: x[1], reverse=True)
     # convert to ui format

@@ -362,12 +362,12 @@ def _caller_auth_for_token(
     """What the token must carry to rebuild the caller: all of it, or only what differs from the stored key."""
     if stored_key is None:
         return user_api_key_dict.model_dump(mode="json", exclude_none=True, exclude=set(_NOT_CARRIED_IN_TOKEN))
-    stored: Final = stored_key.model_dump(mode="json", exclude=set(_NOT_CARRIED_IN_TOKEN))
-    return {
-        name: value
-        for name, value in user_api_key_dict.model_dump(mode="json", exclude=set(_NOT_CARRIED_IN_TOKEN)).items()
-        if stored.get(name) != value
-    }
+    stored: Final = _carried_fields(stored_key)
+    return {name: value for name, value in _carried_fields(user_api_key_dict).items() if stored.get(name) != value}
+
+
+def _carried_fields(key: UserAPIKeyAuth) -> Mapping[str, object]:
+    return key.model_dump(mode="json", exclude=set(_NOT_CARRIED_IN_TOKEN))
 
 
 def _is_usable(stored_key: UserAPIKeyAuth) -> bool:
