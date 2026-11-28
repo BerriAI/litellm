@@ -30,6 +30,9 @@ struct Scenario {
     /// The teams the database holds, each id with the columns set on its row.
     #[serde(default)]
     teams: BTreeMap<String, Columns>,
+    /// The users the database holds, each id with the columns set on its row.
+    #[serde(default)]
+    users: BTreeMap<String, Columns>,
     /// Whether the config reads the database that holds the keys, as its
     /// `general_settings.database_url`.
     #[serde(default)]
@@ -106,7 +109,7 @@ fn stored_config(stored: Stored, held: Held) -> StoredConfig {
 
 type Columns = serde_json::Map<String, serde_json::Value>;
 
-/// The database holding each key and each team of the scenario, a key as a plain row with its
+/// The database holding each key, team and user of the scenario, a key as a plain row with its
 /// columns set on it, and each of its other rows.
 async fn listed(scenario: &Scenario) -> keys::Held {
     let held = keys::Held::start().await;
@@ -119,6 +122,13 @@ async fn listed(scenario: &Scenario) -> keys::Held {
             .chain(columns.clone())
             .collect();
         held.insert_named("LiteLLM_TeamTable", &serde_json::Value::Object(row))
+            .await;
+    }
+    for (user_id, columns) in &scenario.users {
+        let row = std::iter::once(("user_id".to_owned(), serde_json::json!(user_id)))
+            .chain(columns.clone())
+            .collect();
+        held.insert_named("LiteLLM_UserTable", &serde_json::Value::Object(row))
             .await;
     }
     for (table, row) in scenario.rows.iter().flatten() {
@@ -240,6 +250,7 @@ impl Sent {
 #[case::end_user("end_user")]
 #[case::end_user_token_database("end_user_token_database")]
 #[case::virtual_key_team("virtual_key_team")]
+#[case::virtual_key_owner("virtual_key_owner")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
@@ -247,8 +258,10 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let text = std::fs::read_to_string(&path).unwrap();
     let scenario: Scenario =
         serde_yaml_ng::from_value(litellm_yaml::from_str(&text).unwrap()).unwrap();
-    let nothing_held =
-        scenario.keys.is_empty() && scenario.teams.is_empty() && scenario.rows.is_empty();
+    let nothing_held = scenario.keys.is_empty()
+        && scenario.teams.is_empty()
+        && scenario.users.is_empty()
+        && scenario.rows.is_empty();
     let held = match nothing_held {
         true => None,
         false => Some(listed(&scenario).await),

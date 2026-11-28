@@ -315,7 +315,7 @@ mod tests {
     enum Stored {
         Active,
         Revoked,
-        Owned,
+        Unserved,
         Unreachable,
     }
 
@@ -324,7 +324,7 @@ mod tests {
         let columns = match stored {
             Stored::Active => Some(json!({})),
             Stored::Revoked => Some(json!({"blocked": true})),
-            Stored::Owned => Some(json!({"user_id": "owner"})),
+            Stored::Unserved => Some(json!({"soft_budget_cooldown": true})),
             Stored::Unreachable => None,
         };
         let held = match columns {
@@ -353,7 +353,7 @@ mod tests {
     #[case::active(Stored::Active, VIRTUAL_KEY, None)]
     #[case::revoked(Stored::Revoked, VIRTUAL_KEY, Some("invalid_token"))]
     #[case::holding_what_the_native_app_does_not_serve(
-        Stored::Owned,
+        Stored::Unserved,
         VIRTUAL_KEY,
         Some("not_native")
     )]

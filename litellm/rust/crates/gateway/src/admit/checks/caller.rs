@@ -1,29 +1,41 @@
-use litellm_gateway_auth_core::{Credential, Team};
+use litellm_gateway_auth_core::{Credential, Holder, Named, Team};
 
 use super::{Admit, Authentication, Reason, Refused};
 use crate::{
     callbacks::budgets,
-    host::{NativeRows, auth::unserved},
+    host::{
+        NativeRows,
+        auth::{unserved, unserved_user},
+    },
 };
 
 /// Each caller the core hands back is matched by name, with no catch-all, so a caller the native
 /// host learns to serve does not compile here until it is named native or not. A credential the
-/// core did not authenticate is over the error's name. A key in a team stays with Python: over
-/// the first column its team holds that nothing native reads yet, and otherwise over `team`,
-/// since the native spend log charges no team yet.
+/// core did not authenticate is over the error's name. A key in a team or with an owner stays
+/// with Python: over the first column its team, then its owner, holds that nothing native reads
+/// yet, and otherwise over `team` or `user`, since the native spend log charges neither yet.
 pub(super) fn caller(_: &Admit, authentication: &Authentication) -> Option<Reason> {
     match authentication {
         Ok(caller) => match &caller.credential {
             Credential::MasterKey => None,
-            Credential::Key { .. } => caller.affiliation.holder.team().map(|team| {
-                Reason::new(Refused::Credential, unserved_column(team).unwrap_or("team"))
-            }),
+            Credential::Key { .. } => charged(&caller.affiliation.holder)
+                .map(|over| Reason::new(Refused::Credential, over)),
         },
         Err(error) => Some(Reason::new(
             Refused::Credential,
             <&'static str>::from(error),
         )),
     }
+}
+
+/// What keeps a key's holder with Python, if it holds a team or an owner.
+fn charged(holder: &Holder<NativeRows>) -> Option<&'static str> {
+    let team = holder.team();
+    let user = holder.user();
+    team.and_then(unserved_column)
+        .or_else(|| user.and_then(Named::stored).and_then(unserved_user))
+        .or_else(|| team.map(|_| "team"))
+        .or_else(|| user.map(|_| "user"))
 }
 
 /// The column of the caller's team that keeps the caller with Python. A team no row stands behind
