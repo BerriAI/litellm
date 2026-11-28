@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use litellm_auth::AuthServices;
-use litellm_auth_aws::{AwsAuthService, WebIdentityTokenFuture, WebIdentityTokenSource};
-use litellm_auth_gcp::vertex::VertexLoginService;
+use litellm_auth_aws::{WebIdentityTokenFuture, WebIdentityTokenSource};
 use litellm_config::Config;
 use litellm_config_load::{ConfigEnvironment, environment_values};
 use litellm_env::{Lookup, ProcessEnvironment};
@@ -39,14 +38,9 @@ impl Resources {
     pub fn over(config: &Config, process: Arc<dyn Lookup + Send + Sync>) -> Result<Self, Error> {
         let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
         let unauthenticated = Self::sharing(config, process, CoreResources::new(pool.clone()))?;
-        let aws = AwsAuthService::with_web_identity_tokens(Arc::new(SecretWebIdentityTokens(
+        let auth = AuthServices::with_web_identity_tokens(Arc::new(SecretWebIdentityTokens(
             unauthenticated.secrets.clone(),
         )));
-        let auth = AuthServices {
-            vertex_login: VertexLoginService::default().with_aws(aws.clone()),
-            aws,
-            ..AuthServices::default()
-        };
         Ok(Self {
             core: CoreResources {
                 pool,
