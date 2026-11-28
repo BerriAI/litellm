@@ -24,6 +24,7 @@ from litellm.types.rerank import (
     RerankResponseResult,
     RerankTokens,
 )
+from litellm.types.utils import ModelInfo
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -239,6 +240,28 @@ class DeepinfraRerankConfig(BaseRerankConfig):
 
     def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return ["query", "documents"]
+
+    def calculate_rerank_cost(
+        self,
+        model: str,
+        custom_llm_provider: str | None = None,
+        billed_units: RerankBilledUnits | None = None,
+        model_info: ModelInfo | None = None,
+    ) -> tuple[float, float]:
+        if model_info is None or billed_units is None:
+            return 0.0, 0.0
+
+        if "input_cost_per_token" in model_info and model_info["input_cost_per_token"] is not None:
+            total_tokens: Final = billed_units.get("total_tokens")
+            if total_tokens is not None:
+                return model_info["input_cost_per_token"] * total_tokens, 0.0
+
+        if "input_cost_per_query" in model_info and model_info["input_cost_per_query"] is not None:
+            search_units: Final = billed_units.get("search_units")
+            if search_units is not None:
+                return model_info["input_cost_per_query"] * search_units, 0.0
+
+        return 0.0, 0.0
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers

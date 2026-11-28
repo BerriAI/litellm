@@ -301,3 +301,46 @@ class TestDeepinfraRerankTransform:
 
         # Should use the original error message when JSON parsing fails
         assert "Invalid JSON error message" in str(exc_info.value)
+
+    def test_calculate_rerank_cost_per_token(self):
+        """Test cost calculation for DeepInfra rerank using input_cost_per_token."""
+        from litellm.types.rerank import RerankBilledUnits
+
+        billed_units = RerankBilledUnits(total_tokens=1000)
+        model_info = {"input_cost_per_token": 1.0e-08}
+
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model=self.model,
+            billed_units=billed_units,
+            model_info=model_info,
+        )
+
+        assert abs(prompt_cost - 1e-05) < 1e-10
+        assert completion_cost == 0.0
+
+    def test_calculate_rerank_cost_per_query_fallback(self):
+        """Test cost calculation for DeepInfra rerank using input_cost_per_query fallback."""
+        from litellm.types.rerank import RerankBilledUnits
+
+        billed_units = RerankBilledUnits(search_units=2)
+        model_info = {"input_cost_per_query": 0.002}
+
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model=self.model,
+            billed_units=billed_units,
+            model_info=model_info,
+        )
+
+        assert abs(prompt_cost - 0.004) < 1e-10
+        assert completion_cost == 0.0
+
+    def test_calculate_rerank_cost_missing_info(self):
+        """Test cost calculation returns 0 when info is missing."""
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model=self.model,
+            billed_units=None,
+            model_info=None,
+        )
+
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.0
