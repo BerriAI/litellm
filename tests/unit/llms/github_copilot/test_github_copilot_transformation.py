@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 
@@ -14,6 +15,7 @@ from litellm.exceptions import AuthenticationError
 from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
 from litellm.llms.github_copilot.common_utils import (
     GetAccessTokenError,
+    get_copilot_default_headers,
 )
 
 
@@ -129,6 +131,48 @@ def test_completion_github_copilot_mock_response(
     assert "headers" in kwargs
     assert kwargs.get("model") == "gpt-4"
     assert kwargs.get("messages") == messages
+
+
+@pytest.mark.parametrize("is_async", (False, True))
+@respx.mock
+async def test_forwarded_request_headers_keep_the_copilot_headers(is_async, tmp_path, monkeypatch):
+    (tmp_path / "access-token").write_text("gho_unit")
+    monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.delenv("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route = respx.post("https://copilot.example/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-copilot",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5.4",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    kwargs = {
+        "model": "github_copilot/gpt-5.4",
+        "api_base": "https://copilot.example",
+        "messages": [{"role": "user", "content": "hi"}],
+        "headers": {"x-litellm-session-id": "session-1", "X-Request-Id": "client-request"},
+        "num_retries": 0,
+    }
+
+    if is_async:
+        await litellm.acompletion(**kwargs)
+    else:
+        litellm.completion(**kwargs)
+
+    sent = route.calls.last.request
+    copilot_headers = get_copilot_default_headers("gho_unit")
+    assert sent.headers["editor-version"] == copilot_headers["editor-version"]
+    assert sent.headers["copilot-integration-id"] == copilot_headers["copilot-integration-id"]
+    assert sent.headers["authorization"] == "Bearer gho_unit"
+    assert sent.headers["x-litellm-session-id"] == "session-1"
+    assert sent.headers.get_list("x-request-id") == ["client-request"]
 
 
 def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
