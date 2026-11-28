@@ -386,6 +386,9 @@
       "supports_reasoning": true
     }
   },
+  "verda": {
+    "base_url": "https://inference.verda.com/v1",
+    "api_key_env": "VERDA_INFERENCE_API_KEY"
   "vispark": {
     "base_url": "https://api.lab.vispark.in/v1",
     "api_key_env": "VISPARK_LAB_API_KEY",
