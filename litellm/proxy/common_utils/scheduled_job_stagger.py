@@ -33,7 +33,7 @@ import hashlib
 import os
 import socket
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Final, Protocol
 
@@ -125,9 +125,9 @@ class _OffsetTrigger:
         self.offset = offset
 
     def get_next_fire_time(self, previous_fire_time: datetime | None, now: datetime) -> datetime | None:
-        shifted_previous: Final = None if previous_fire_time is None else previous_fire_time - self.offset
-        next_fire_time: Final = self.base.get_next_fire_time(shifted_previous, now - self.offset)
-        return None if next_fire_time is None else next_fire_time + self.offset
+        shifted_previous: Final = None if previous_fire_time is None else _shift(previous_fire_time, -self.offset)
+        next_fire_time: Final = self.base.get_next_fire_time(shifted_previous, _shift(now, -self.offset))
+        return None if next_fire_time is None else _shift(next_fire_time, self.offset)
 
     def __str__(self) -> str:
         return f"{self.base}[+{int(self.offset.total_seconds())}s]"
@@ -135,6 +135,17 @@ class _OffsetTrigger:
 
 # APScheduler type-checks assigned triggers with isinstance, so it has to accept this one
 BaseTrigger.register(_OffsetTrigger)
+
+
+def _shift(moment: datetime, delta: timedelta) -> datetime:
+    """
+    ``moment`` moved by ``delta`` of elapsed time, back in its own zone.
+
+    Plain ``moment + delta`` is wall-clock arithmetic that drops ``fold``: inside a DST fall-back
+    hour it lands an hour early, the next fire never gets past ``now``, and APScheduler keeps
+    appending missed run times until the process runs out of memory.
+    """
+    return (moment.astimezone(timezone.utc) + delta).astimezone(moment.tzinfo)
 
 
 def parse_stagger_settings(general_settings: Mapping[str, object]) -> ScheduledJobStaggerSettings:

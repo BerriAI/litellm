@@ -3,6 +3,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from apscheduler.executors.asyncio import AsyncIOExecutor
@@ -22,6 +23,7 @@ from litellm.proxy.common_utils.scheduled_job_stagger import (
     stagger_trigger,
 )
 
+PARIS = ZoneInfo("Europe/Paris")
 OPERATOR_CRON_JOB_ID = "spend_log_cleanup_job"
 SHARED_INTERVAL_JOB_IDS = ("periodic_reload_job", "add_deployment_job")
 
@@ -248,6 +250,41 @@ def test_a_job_registered_after_startup_still_gets_its_offset():
     offset = _fire_times(shifted, start, 1)[0] - _fire_times(base, start, 1)[0]
     assert timedelta(0) < offset < timedelta(seconds=3600)
     assert _fire_times(shifted, start, 2)[1] - _fire_times(shifted, start, 1)[0] == timedelta(seconds=3600)
+
+
+@pytest.mark.parametrize(
+    "start",
+    [
+        datetime(2026, 10, 25, 2, 30, fold=1, tzinfo=PARIS),  # second pass of the fall-back hour
+        datetime(2026, 3, 29, 1, 58, tzinfo=PARIS),  # just before the spring-forward gap
+    ],
+    ids=["fall-back", "spring-forward"],
+)
+@pytest.mark.parametrize(
+    "base",
+    [
+        IntervalTrigger(seconds=60, start_date=datetime(2026, 1, 1, tzinfo=PARIS), timezone=PARIS),
+        CronTrigger(minute="*", timezone=PARIS),
+    ],
+    ids=["interval", "cron"],
+)
+def test_a_staggered_job_keeps_firing_once_a_minute_across_a_dst_change(base, start):
+    """
+    Inside the repeated fall-back hour the shifted fire used to land an hour before ``now``,
+    so APScheduler never caught up and grew its list of missed run times without bound
+    """
+    shifted = stagger_trigger(
+        job_id="periodic_reload_job",
+        trigger=base,
+        period_seconds=60,
+        settings=_settings(offsets={"periodic_reload_job": 30}),
+        identity="pod-a:1",
+    )
+
+    fires = _fire_times(shifted, start, 4)
+
+    assert 0 < fires[0].timestamp() - start.timestamp() <= 60
+    assert [later.timestamp() - earlier.timestamp() for earlier, later in itertools.pairwise(fires)] == [60] * 3
 
 
 @pytest.mark.parametrize(
