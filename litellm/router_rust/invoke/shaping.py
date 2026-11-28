@@ -203,6 +203,28 @@ def merge_tools_from_deployment(
         )
 
 
+def _merged_extra_body(
+    deployment_extra_body: object, request_extra_body: object
+) -> dict[str, object] | None:  # mutable-ok: provider and cache code reads extra_body only when it is a plain dict
+    if not isinstance(deployment_extra_body, Mapping) or not isinstance(request_extra_body, Mapping):
+        return None
+    return {
+        **_MAPPING.validate_python(request_extra_body),
+        **_MAPPING.validate_python(deployment_extra_body),
+    }
+
+
+def merge_extra_body_from_deployment(
+    deployment_params: Mapping[str, object],
+    kwargs: MutableMapping[str, object],  # mutable-ok: the request kwargs the Python router mutates in place
+) -> None:
+    """The request's ``extra_body`` with the deployment's fields on top, so a client adds fields but never drops
+    or replaces one the deployment sets."""
+    merged: Final = _merged_extra_body(deployment_params.get("extra_body"), kwargs.get("extra_body"))
+    if merged is not None:
+        kwargs["extra_body"] = merged  # rebind-ok: the request kwargs are shaped in place
+
+
 def _deployment_sets_litellm_param(deployment_params: Mapping[str, object], key: str) -> bool:
     value: Final = deployment_params.get(key)
     if value is None:
@@ -720,6 +742,7 @@ def update_kwargs_with_deployment(
     deployment_model_name: Final = deployment.get("model_name")
     for key in _malformed_request_params_the_deployment_sets(deployment_params, defaults, kwargs):
         kwargs.pop(key)
+    merge_extra_body_from_deployment(deployment_params, kwargs)
     forwarded_authorization: Final = forwarded_caller_authorization(kwargs, deployment_params)
     if is_clientside_credential(request_kwargs=dict(kwargs)) or forwarded_authorization is not None:
         model_info, deployment_model, deployment_api_base = (  # rebind-ok: rebound as the Python router rebinds it
