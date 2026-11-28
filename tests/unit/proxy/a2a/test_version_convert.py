@@ -323,3 +323,128 @@ def test_detect_card_version_normalizes_semver_protocol_version():
         _detect_card_version({"protocolVersion": "0.3.0", "supportedInterfaces": []})
         == "0.3"
     )
+
+
+PUSH_CFG_0_3 = {
+    "taskId": "task-1",
+    "pushNotificationConfig": {
+        "id": "cfg-1",
+        "url": "https://cb.example.com/hook",
+        "token": "tok",
+        "authentication": {"schemes": ["Bearer"]},
+    },
+}
+
+PUSH_CFG_1_0 = {
+    "id": "cfg-1",
+    "taskId": "task-1",
+    "url": "https://cb.example.com/hook",
+    "token": "tok",
+    "authentication": {"scheme": "Bearer"},
+}
+
+
+def test_push_config_get_result_0_3_to_1_0_flattens():
+    out = normalize_jsonrpc_response(
+        {"jsonrpc": "2.0", "id": 1, "result": dict(PUSH_CFG_0_3)},
+        "1.0",
+        method="tasks/pushNotificationConfig/get",
+    )
+    result = out["result"]
+    assert "pushNotificationConfig" not in result
+    assert result["id"] == "cfg-1"
+    assert result["taskId"] == "task-1"
+    assert result["url"] == "https://cb.example.com/hook"
+    assert result["token"] == "tok"
+    assert result["authentication"] == {"scheme": "Bearer"}
+
+
+def test_push_config_set_result_1_0_to_0_3_nests():
+    out = normalize_jsonrpc_response(
+        {"jsonrpc": "2.0", "id": 1, "result": dict(PUSH_CFG_1_0)},
+        "0.3",
+        method="tasks/pushNotificationConfig/set",
+    )
+    result = out["result"]
+    assert result["taskId"] == "task-1"
+    nested = result["pushNotificationConfig"]
+    assert nested["id"] == "cfg-1"
+    assert nested["url"] == "https://cb.example.com/hook"
+    assert nested["token"] == "tok"
+    assert nested["authentication"] == {"schemes": ["Bearer"]}
+    assert "url" not in result
+
+
+def test_push_config_same_version_passthrough():
+    cfg = dict(PUSH_CFG_0_3)
+    content = {"jsonrpc": "2.0", "id": 1, "result": cfg}
+    out = normalize_jsonrpc_response(
+        content, "0.3", method="tasks/pushNotificationConfig/get"
+    )
+    assert out is content
+
+
+def test_push_config_list_0_3_array_to_1_0_envelope():
+    items = [dict(PUSH_CFG_0_3), dict(PUSH_CFG_0_3)]
+    items[1]["pushNotificationConfig"] = dict(items[1]["pushNotificationConfig"], id="cfg-2")
+    out = normalize_jsonrpc_response(
+        {"jsonrpc": "2.0", "id": 1, "result": items},
+        "1.0",
+        method="tasks/pushNotificationConfig/list",
+    )
+    result = out["result"]
+    assert [c["id"] for c in result["configs"]] == ["cfg-1", "cfg-2"]
+    assert all("pushNotificationConfig" not in c for c in result["configs"])
+    assert "nextPageToken" not in result
+
+
+def test_push_config_list_1_0_envelope_to_0_3_array_drops_page_token():
+    envelope = {"configs": [dict(PUSH_CFG_1_0)], "nextPageToken": "pg2"}
+    out = normalize_jsonrpc_response(
+        {"jsonrpc": "2.0", "id": 1, "result": envelope},
+        "0.3",
+        method="tasks/pushNotificationConfig/list",
+    )
+    result = out["result"]
+    assert isinstance(result, list)
+    assert result[0]["pushNotificationConfig"]["id"] == "cfg-1"
+
+
+def test_push_config_list_0_3_served_passthrough():
+    items = [dict(PUSH_CFG_0_3)]
+    content = {"jsonrpc": "2.0", "id": 1, "result": items}
+    out = normalize_jsonrpc_response(
+        content, "0.3", method="tasks/pushNotificationConfig/list"
+    )
+    assert out is content
+
+
+def test_push_config_delete_result_passthrough():
+    content = {"jsonrpc": "2.0", "id": 1, "result": {}}
+    for served in ("0.3", "1.0"):
+        out = normalize_jsonrpc_response(
+            content, served, method="tasks/pushNotificationConfig/delete"
+        )
+        assert out is content
+
+
+def test_push_config_malformed_result_falls_back_unchanged():
+    bad = {"taskId": "t", "pushNotificationConfig": {"id": 123, "url": "https://x.example.com"}}
+    out = normalize_jsonrpc_response(
+        {"jsonrpc": "2.0", "id": 1, "result": bad},
+        "1.0",
+        method="tasks/pushNotificationConfig/get",
+    )
+    assert out["result"] == bad
+
+
+def test_send_message_response_accepts_list_result():
+    """0.3 pushNotificationConfig/list returns a bare array; the endpoint wrapper
+    must not reject it (this previously raised a ValidationError -> HTTP 500)."""
+    from litellm.types.agents import LiteLLMSendMessageResponse
+
+    resp = LiteLLMSendMessageResponse.from_dict(
+        {"jsonrpc": "2.0", "id": 1, "result": [dict(PUSH_CFG_0_3)]}, request_id=1
+    )
+    dumped = resp.model_dump(mode="json", exclude_none=True)
+    assert isinstance(dumped["result"], list)
