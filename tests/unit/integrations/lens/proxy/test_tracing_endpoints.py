@@ -244,8 +244,9 @@ def _forward_agent_spans(
 
 
 @pytest.mark.parametrize("path", ("/v1/traces", "/v1/logs"))
+@pytest.mark.parametrize("has_owner_labels", (True, False))
 def test_agent_telemetry_reaches_lens_unchanged_under_the_owner_of_the_key_that_sent_it(
-    client: TestClient, path: str
+    client: TestClient, path: str, has_owner_labels: bool
 ) -> None:
     received: Final = Queue[httpx.Request]()
 
@@ -254,7 +255,12 @@ def test_agent_telemetry_reaches_lens_unchanged_under_the_owner_of_the_key_that_
         return httpx.Response(200, content=b"stored")
 
     client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        api_key="hashed-key", team_id="team-a", org_id="org-a", user_id="user-a"
+        api_key="hashed-key",
+        team_id="team-a",
+        org_id="org-a",
+        user_id="user-a",
+        key_alias="工程 key%" if has_owner_labels else None,
+        user_email="user+test@example.com" if has_owner_labels else None,
     )
     response: Final = _forward_agent_spans(
         client,
@@ -264,6 +270,8 @@ def test_agent_telemetry_reaches_lens_unchanged_under_the_owner_of_the_key_that_
             "content-encoding": "gzip",
             "x-litellm-api-key-hash": "another-key",
             "x-litellm-team-id": "another-team",
+            "x-litellm-key-alias": "another-alias",
+            "x-litellm-user-email": "another-user",
         },
         path,
     )
@@ -285,6 +293,14 @@ def test_agent_telemetry_reaches_lens_unchanged_under_the_owner_of_the_key_that_
         "x-litellm-team-id": "team-a",
         "x-litellm-org-id": "org-a",
         "x-litellm-user-id": "user-a",
+        **(
+            {
+                "x-litellm-key-alias": "%E5%B7%A5%E7%A8%8B%20key%25",
+                "x-litellm-user-email": "user%2Btest%40example.com",
+            }
+            if has_owner_labels
+            else {}
+        ),
     }
 
 
