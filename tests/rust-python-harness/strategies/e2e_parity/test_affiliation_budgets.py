@@ -518,6 +518,101 @@ def test_lifetime_reset_advances_shared_tier_and_linked_spend(proxies: Proxies) 
         _shared_tier_lifetime_reset(proxies, ended)
 
 
+def _persisted_affiliation_log(
+    client: httpx.Client, proxies: Proxies, actual_cost: float
+) -> tuple[float, float, float]:
+    identity: Final = _identity(proxies.database, Case(spend=0.25))
+    token: Final = hashlib.sha256(identity.token.encode()).hexdigest()
+    email: Final = "spent@example.invalid"
+    alias: Final = "parity team"
+    key_alias: Final = "parity key"
+    project_alias: Final = "parity project"
+    project: Final = f"project-{identity.user}"
+    org: Final = f"org-{identity.user}"
+    end_user: Final = f"customer-{identity.user}"
+    with psycopg.connect(proxies.database) as connection:
+        connection.execute(
+            'UPDATE "LiteLLM_UserTable" SET user_email = %s, spend = 0.125, max_budget = 2 WHERE user_id = %s',
+            (email, identity.user),
+        )
+        connection.execute(
+            'UPDATE "LiteLLM_TeamTable" SET spend = 0.25, team_alias = %s WHERE team_id = %s',
+            (alias, identity.team),
+        )
+        connection.execute(
+            """INSERT INTO "LiteLLM_OrganizationTable"
+               (organization_id, organization_alias, budget_id, created_by, updated_by)
+               VALUES (%s, 'parity organization', %s, 'parity', 'parity')""",
+            (org, f"budget-{identity.user}"),
+        )
+        connection.execute(
+            """INSERT INTO "LiteLLM_ProjectTable" (project_id, project_alias, budget_id, created_by, updated_by)
+               VALUES (%s, %s, %s, 'parity', 'parity')""",
+            (project, project_alias, f"budget-{identity.user}"),
+        )
+        connection.execute(
+            """UPDATE "LiteLLM_VerificationToken" SET key_alias = %s, organization_id = %s, project_id = %s
+               WHERE token = %s""",
+            (key_alias, org, project, token),
+        )
+    proxies.redis.set(identity.counter, 0.25)
+    _provider_response(proxies, identity)
+    response: Final = _send(client, identity, end_user)
+    assert response.status_code == 200, response.text
+    rows: Final = eventually(
+        lambda: read_rows(
+            """SELECT api_key, "user", team_id, organization_id, end_user, spend, metadata
+               FROM "LiteLLM_SpendLogs" WHERE api_key = %s""",
+            (token,),
+            database_url=proxies.database,
+        ),
+        lambda rows: len(rows) == 1,
+    )
+    row: Final = rows[0]
+    assert (row["api_key"], row["user"], row["team_id"], row["organization_id"], row["end_user"], row["spend"]) == (
+        token,
+        identity.user,
+        identity.team,
+        org,
+        end_user,
+        pytest.approx(actual_cost),
+    )
+    metadata: Final = row["metadata"]
+    assert isinstance(metadata, dict)
+    assert (
+        metadata["user_api_key_user_email"],
+        metadata["user_api_key_team_alias"],
+        metadata["user_api_key_alias"],
+        metadata["user_api_key_project_id"],
+        metadata["user_api_key_project_alias"],
+    ) == (email, alias, key_alias, project, project_alias)
+    assert identity.token not in json.dumps(metadata)
+    assert not {
+        "user_api_key_team_spend",
+        "user_api_key_team_max_budget",
+        "user_api_key_user_spend",
+        "user_api_key_user_max_budget",
+        "user_api_key_spend",
+        "user_api_key_max_budget",
+        "user_api_key_budget_reservation",
+    }.intersection(metadata)
+    expected: Final = 0.25 + actual_cost
+    settled: Final = eventually(
+        lambda: float(proxies.redis.get(identity.counter)), lambda spend: spend == pytest.approx(expected)
+    )
+    persisted: Final = eventually(
+        lambda: identity.persisted(proxies.database), lambda spend: spend == pytest.approx(expected)
+    )
+    return actual_cost, settled, persisted
+
+
+def test_spend_log_affiliation_fields_match_python(proxies: Proxies, actual_cost: float) -> None:
+    with _paused_between_sweeps(proxies.rust_pid, proxies.redis):
+        python: Final = _persisted_affiliation_log(proxies.python, proxies, actual_cost)
+    with _paused_between_sweeps(proxies.python_pid, proxies.redis):
+        assert _persisted_affiliation_log(proxies.rust, proxies, actual_cost) == pytest.approx(python)
+
+
 @pytest.mark.parametrize("proxies", [False], ids=["postgres"], indirect=True)
 def test_key_window_refuses_using_maintained_spend_without_redis(proxies: Proxies) -> None:
     identity: Final = _identity(proxies.database, Case(owner=True))

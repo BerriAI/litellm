@@ -81,10 +81,15 @@ pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
         key_hash,
         key_alias,
         user_id,
+        user_email: holder
+            .user()
+            .and_then(Named::stored)
+            .and_then(|user| user.user_email.clone()),
         team: holder.team().map(Team::label),
         org: org.as_ref().map(Named::label),
         project: project.as_ref().map(Named::label),
         end_user_id: end_user.end_user_id.clone(),
+        end_user_max_budget: end_user.budget.max,
     }
 }
 
@@ -302,6 +307,7 @@ fn spend_log_input(entries: &CallState) -> Option<Value> {
         call_type,
         route: route(call_type),
         charged: &entries.charged,
+        reservation: entries.budget_reservation.as_ref(),
         call_id: entries.call_id.as_deref(),
         trace_id: &entries.trace_id,
         stream: entries.stream(),
@@ -746,6 +752,7 @@ mod tests {
                 holder: Holder::Member {
                     user: Named::Stored(UserRecord {
                         user_id: "u1".to_owned(),
+                        user_email: Some("owner@example.invalid".to_owned()),
                         ..UserRecord::default()
                     }),
                     team: Team::Row(TeamRecord {
@@ -768,6 +775,10 @@ mod tests {
             },
             EndUserRecord {
                 end_user_id: Some("e1".to_owned()),
+                budget: litellm_gateway_auth_core::record::Budget {
+                    max: Some(2.0),
+                    spend: 0.0,
+                },
                 ..EndUserRecord::default()
             },
         )
@@ -802,6 +813,7 @@ mod tests {
         Charged {
             key_hash: Some("stored".to_owned()),
             key_alias: Some("ci".to_owned()),
+            user_email: Some("owner@example.invalid".to_owned()),
             team: Some(Label {
                 id: "t1".to_owned(),
                 alias: Some("team one".to_owned()),
@@ -815,6 +827,7 @@ mod tests {
                 alias: Some("project one".to_owned()),
             }),
             end_user_id: Some("e1".to_owned()),
+            end_user_max_budget: Some(2.0),
             ..Charged::default()
         }
     )]
@@ -894,5 +907,30 @@ mod tests {
             ),
             (expected.clone(), expected, Some(Scalar::from("e1")))
         );
+    }
+
+    #[rstest]
+    fn spend_log_input_carries_the_end_user_cap_and_resets_in_reservation_order() {
+        let reset = "2026-11-18T12:00:00+00:00";
+        let input = on_a_call(|entries| {
+            entries.call_type = Some(CallType::AnthropicMessages);
+            entries.charged = charged(&member());
+            entries.budget_reservation = Some(litellm_callbacks::BudgetReservation {
+                entries: Some(vec![
+                    Some(litellm_callbacks::ReservationEntry::default()),
+                    Some(litellm_callbacks::ReservationEntry {
+                        window_reset_at: Some(reset.to_owned()),
+                        ..Default::default()
+                    }),
+                ]),
+                finalized: Some(true),
+                ..Default::default()
+            });
+            entries.release();
+            entries.serve(served(Some("msg_1")));
+            spend_log_input(entries).unwrap()
+        });
+        assert_eq!(input["end_user_max_budget"], json!(2.0));
+        assert_eq!(input["window_resets"], json!([null, reset]));
     }
 }

@@ -82,16 +82,18 @@ pub enum Ended {
 }
 
 /// Who a call is charged to, as Python's `UserAPIKeyAuth` names its caller.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Charged {
     /// The hash the key's row is stored under, or Python's alias for the master key.
     pub key_hash: Option<String>,
     pub key_alias: Option<String>,
     pub user_id: Option<String>,
+    pub user_email: Option<String>,
     pub team: Option<Label>,
     pub org: Option<Label>,
     pub project: Option<Label>,
     pub end_user_id: Option<String>,
+    pub end_user_max_budget: Option<f64>,
 }
 
 /// One call as it stands.

@@ -9,6 +9,7 @@
 use std::time::SystemTime;
 
 use jiff::{Timestamp, tz::TimeZone};
+use litellm_callbacks::BudgetReservation;
 use litellm_gateway_inference::{
     CallType, ServedCall,
     record::{Charged, unix},
@@ -31,9 +32,6 @@ const CACHE_OFF: &str = "Cache OFF";
 ///   budget. `BACKGROUND_INTERACTION_COST_POLLING_ENABLED` is a variable `Environment` does not
 ///   read, so admit cannot see it, but it only reaches background Responses jobs, which this
 ///   route never serves.
-/// - `end_user_max_budget` and `window_resets`: none. `host/auth` declines any key with a team,
-///   owner, budget or access group and any end user whose row holds a budget, so only the master
-///   key or a bare key is served, for nobody or for an end user that holds no budget.
 /// - `batch_accounting`: false. `/v1/messages` is the only route served, and it runs no batch.
 /// - `response` and `kwargs_response_cost`: none. The gateway builds no logging payload yet, and
 ///   the cost comes from `Field::Cost`, which the served attempt's settled cost fills.
@@ -45,6 +43,8 @@ enum SpendLogInput<'a> {
         call_type: &'static str,
         stream: bool,
         stream_complete: bool,
+        end_user_max_budget: Option<f64>,
+        window_resets: Vec<Option<&'a str>>,
         row: RowRequest<'a>,
     },
 }
@@ -100,6 +100,7 @@ struct Metadata<'a> {
     user_api_key_hash: Option<&'a str>,
     user_api_key_alias: Option<&'a str>,
     user_api_key_user_id: Option<&'a str>,
+    user_api_key_user_email: Option<&'a str>,
     user_api_key_team_id: Option<&'a str>,
     user_api_key_team_alias: Option<&'a str>,
     user_api_key_org_id: Option<&'a str>,
@@ -156,6 +157,7 @@ pub(super) struct Served<'a> {
     pub(super) call_type: CallType,
     pub(super) route: &'static str,
     pub(super) charged: &'a Charged,
+    pub(super) reservation: Option<&'a BudgetReservation>,
     pub(super) call_id: Option<&'a str>,
     /// The request's `litellm_trace_id`, which a row that names no session is grouped under.
     pub(super) trace_id: &'a str,
@@ -187,6 +189,7 @@ pub(super) fn success(served: &Served<'_>) -> Option<serde_json::Value> {
             user_api_key_hash: charged.key_hash.as_deref(),
             user_api_key_alias: charged.key_alias.as_deref(),
             user_api_key_user_id: charged.user_id.as_deref(),
+            user_api_key_user_email: charged.user_email.as_deref(),
             user_api_key_team_id: charged.team.as_ref().map(|team| team.id.as_str()),
             user_api_key_team_alias: charged.team.as_ref().and_then(|team| team.alias.as_deref()),
             user_api_key_org_id: charged.org.as_ref().map(|org| org.id.as_str()),
@@ -231,6 +234,18 @@ pub(super) fn success(served: &Served<'_>) -> Option<serde_json::Value> {
         call_type: served.call_type.into(),
         stream: served.stream,
         stream_complete: served.stream,
+        end_user_max_budget: charged.end_user_max_budget,
+        window_resets: served
+            .reservation
+            .and_then(|reservation| reservation.entries.as_ref())
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                entry
+                    .as_ref()
+                    .and_then(|entry| entry.window_reset_at.as_deref())
+            })
+            .collect(),
         row: RowRequest { row },
     };
     serde_json::to_value(input).ok()
@@ -301,6 +316,7 @@ mod tests {
             call_type: CallType::AnthropicMessages,
             route: "/v1/messages",
             charged,
+            reservation: None,
             call_id: Some("call-1"),
             trace_id: "trace-1",
             stream,
