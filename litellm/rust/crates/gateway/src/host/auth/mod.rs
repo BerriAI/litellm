@@ -891,9 +891,8 @@ mod tests {
     #[case::budget_duration(json!({"budget_duration": "30d"}))]
     #[case::budget_reset_at(json!({"budget_reset_at": "1970-01-01T00:00:09"}))]
     #[case::budget_limits(json!({"budget_limits": [{"a": 1}]}))]
-    #[case::budget_fallbacks(json!({"budget_fallbacks": {"a": ["b"]}}))]
     #[case::budget_id(json!({"budget_id": "budget"}))]
-    #[case::model_max_budget(json!({"model_max_budget": {"claude": 1}}))]
+    #[case::malformed_model_max_budget(json!({"model_max_budget": {"claude": []}}))]
     #[case::allowed_cache_controls(json!({"allowed_cache_controls": ["no-cache"]}))]
     #[case::allowed_routes(json!({"allowed_routes": ["/v1/messages"]}))]
     #[case::access_group_ids(json!({"access_group_ids": ["group"]}))]
@@ -918,9 +917,9 @@ mod tests {
     )]
     #[case::soft_budget_cooldown(json!({"max_budget": 5.0, "soft_budget_cooldown": true}), false)]
     #[case::budget_limits(json!({"max_budget": 5.0, "budget_limits": [{"a": 1}]}), false)]
-    #[case::budget_fallbacks(json!({"max_budget": 5.0, "budget_fallbacks": {"a": ["b"]}}), false)]
+    #[case::budget_fallbacks(json!({"max_budget": 5.0, "budget_fallbacks": {"a": ["b"]}}), true)]
     #[case::budget_id(json!({"max_budget": 5.0, "budget_id": "budget"}), false)]
-    #[case::model_max_budget(json!({"max_budget": 5.0, "model_max_budget": {"claude": 1}}), false)]
+    #[case::model_max_budget(json!({"max_budget": 5.0, "model_max_budget": {"claude": 1}}), true)]
     #[case::a_temporary_increase(
         json!({"max_budget": 5.0, "metadata": {"temp_budget_increase": 5.0, "temp_budget_expiry": FAR_FUTURE}}),
         false
@@ -1104,7 +1103,7 @@ mod tests {
     #[case::max_budget(json!({"max_budget": 5.0}), "max_budget")]
     #[case::soft_budget(json!({"soft_budget": 1.0}), "soft_budget")]
     #[case::budget_duration(json!({"budget_duration": "30d"}), "budget_duration")]
-    #[case::model_max_budget(json!({"model_max_budget": {"claude": 1}}), "model_max_budget")]
+    #[case::model_max_budget(json!({"model_max_budget": {"claude": 1}}), None::<&str>)]
     #[case::model_aliases(json!({"model_id": 7}), "model_id")]
     #[case::router_settings(json!({"router_settings": {"a": 1}}), "router_settings")]
     #[case::tpm_limit(json!({"tpm_limit": 100}), "tpm_limit")]
@@ -1130,7 +1129,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_key_in_a_team_copies_each_plain_column_its_team_holds_and_names_it_unserved(
         #[case] team: Columns,
-        #[case] column: &str,
+        #[case] column: impl Into<Option<&'static str>>,
     ) {
         let held = in_team(json!({}), team).await;
 
@@ -1139,7 +1138,7 @@ mod tests {
         let Some(Team::Row(team)) = caller.affiliation.holder.team() else {
             panic!("the key holds no team row");
         };
-        assert_eq!(unserved(team), Some(column));
+        assert_eq!(unserved(team), column.into());
     }
 
     /// The database holding [`VIRTUAL_KEY`], owned by a user whose row has `owner` set on it.

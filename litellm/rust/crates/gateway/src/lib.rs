@@ -167,14 +167,10 @@ pub(crate) async fn inference_over(
         )
     });
     let callbacks = Callbacks::new(
-        budget_check
+        model_budget
             .iter()
-            .map(BudgetCheck::registered)
-            .chain(
-                model_budget
-                    .iter()
-                    .map(callbacks::model_budget::ModelBudget::registered),
-            )
+            .map(callbacks::model_budget::ModelBudget::registered)
+            .chain(budget_check.iter().map(BudgetCheck::registered))
             .chain(model_capacity.iter().map(|capacity| capacity.registered()))
             .chain([key_limiter.registered()])
             .chain(spend_log.map(SpendLog::registered))
@@ -187,7 +183,8 @@ pub(crate) async fn inference_over(
         router,
         boot::configured(&config.litellm_settings, variables),
         routing,
-        host::NativeHost::new(Arc::new(callbacks), Arc::new(windows)),
+        host::NativeHost::new(Arc::new(callbacks), Arc::new(windows))
+            .with_model_budget(model_budget),
     )?
     .with_cost_map(cost_map)
     .with_body_check(litellm_gateway_inference::BodyCheck::new(

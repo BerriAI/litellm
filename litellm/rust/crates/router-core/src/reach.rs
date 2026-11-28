@@ -167,6 +167,19 @@ fn direct_fallback_model_names(dynamic: &RouterDynamicConfig, model: &str) -> Ve
 }
 
 impl Router {
+    /// Ordered router fallback targets at authentication time, before pre-routing hooks run.
+    pub fn budget_fallback_targets(&self, model: &str) -> Vec<String> {
+        let snapshot = self.core.snapshot.load();
+        let dynamic = &snapshot.settings.dynamic;
+        dynamic
+            .fallbacks
+            .chain_with_defaults(model, &dynamic.fallback_keys, &dynamic.default_fallbacks)
+            .into_iter()
+            .flatten()
+            .filter_map(|target| target.model().map(str::to_owned))
+            .collect()
+    }
+
     /// `router_fallback_model_names` over every fallback type: each group a failure on `model`
     /// can reach through the router's fallback lists, chained and generic (`*`), with
     /// `default_fallbacks` read as the Python router folds them in. `model` itself is left out,

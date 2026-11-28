@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use futures_util::future::BoxFuture;
 use jiff::Timestamp;
 use litellm_callbacks::{
-    Callback, CallbackError, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, Scalar,
+    Abort, Callback, CallbackError, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, Scalar,
     Selection, Subscription, Verdict, typed,
 };
 use litellm_gateway_auth::Authenticated;
@@ -197,7 +197,12 @@ impl ModelBudget {
         }
     }
 
-    async fn pre_call(&self, model: &str, identity: &Authenticated<NativeRows>) -> HookOutput {
+    pub(crate) async fn exceeded(
+        &self,
+        model: &str,
+        identity: &Authenticated<NativeRows>,
+        only: Option<Scope>,
+    ) -> Result<Option<(Scope, bool, Abort)>, CallbackError> {
         if self.free.is_free(model) {
             return Ok(None);
         }
@@ -212,7 +217,10 @@ impl ModelBudget {
             .find(|entity| entity.scope == Scope::Key)
             .map(|entity| entity.entries);
         let now = Timestamp::now();
-        for entity in entities {
+        for entity in entities
+            .into_iter()
+            .filter(|entity| only.is_none_or(|scope| scope == entity.scope))
+        {
             for requested in std::iter::once(model).chain(expanded.as_deref()) {
                 let key = if entity.scope == Scope::Team {
                     key
@@ -241,9 +249,14 @@ impl ModelBudget {
                         "Budget has been exceeded for model={}: current cost {spend}, max budget {max}",
                         budget.model
                     );
-                    return Ok(Some(Verdict::Abort(over_budget(
-                        serde_json::Map::from_iter([("message".to_owned(), json!(message))]),
-                    ))));
+                    return Ok(Some((
+                        entity.scope,
+                        requested == model,
+                        over_budget(serde_json::Map::from_iter([(
+                            "message".to_owned(),
+                            json!(message),
+                        )])),
+                    )));
                 }
             }
         }
@@ -370,7 +383,10 @@ impl Callback for ModelBudget {
             };
             match input.hook {
                 Hook::PreCall => match input.fields.get::<typed::Model>()? {
-                    Some(model) => self.pre_call(&model, identity).await,
+                    Some(model) => Ok(self
+                        .exceeded(&model, identity, None)
+                        .await?
+                        .map(|(_, _, abort)| Verdict::Abort(abort))),
                     None => Ok(None),
                 },
                 Hook::AttemptEnded => self.succeeded(identity).await,

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use axum::extract::{FromRequest, FromRequestParts, Request};
 use litellm_config::GeneralSettings;
+use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::body::{
     self, Deferred, Deployment, HostTables, Names, OptIn, Params, Policy, Reachable, Surface,
 };
@@ -82,59 +83,58 @@ where
         let call = Call::from_request_parts(&mut parts, gateway).await?;
         let route = parts.uri.path().to_owned();
         let body = match B::from_request(Request::from_parts(parts, body), gateway).await {
-            Ok(body) => check(&call, &route, body.fields()).await.map(|()| body),
+            Ok(body) => gateway
+                .check_body(&call.identity, &route, body.fields())
+                .await
+                .map(|()| body),
             Err(error) => Err(error),
         };
         Ok(Self { call, body })
     }
 }
 
-/// `is_request_body_safe` for the body of a call to `route`. Model checks and the S3 bucket check
-/// are never deferred, since neither route checks a team's buckets in its handler.
-async fn check<H: Host>(
-    call: &Call<H>,
-    route: &str,
-    fields: &Map<String, Value>,
-) -> Result<(), Error> {
-    let gateway = &call.gateway;
-    let BodyCheck { names, policy } = &gateway.body_check;
-    let params = Params::read(fields, names);
-    let request = body::Request {
-        body: &params,
-        surface: Surface::of(Some(route)),
-        model: fields
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-        route_model: None,
-        deferred: Deferred::default(),
-    };
-    let needs = body::needs(&request, names, policy);
-    let team = call
-        .identity
-        .affiliation
-        .holder
-        .team()
-        .map(|team| team.id());
-    let reachable = Reachable {
-        groups: gateway
-            .router
-            .opt_in_groups(&needs.models, team)
-            .iter()
-            .map(|group| {
-                group
-                    .iter()
-                    .map(|deployment| opt_in_deployment(deployment))
-                    .collect()
-            })
-            .collect(),
-    };
-    let credentials = gateway
-        .host
-        .credentials(&needs.credentials)
-        .await
-        .map_err(Error::Credentials)?;
-    body::check(&request, &reachable, &credentials, names, policy).map_err(Error::BodyRejected)
+impl<H: Host> Gateway<H> {
+    /// `is_request_body_safe` for a call to `route`. Model and S3 bucket checks are never deferred.
+    pub async fn check_body(
+        &self,
+        identity: &Authenticated<H::Rows>,
+        route: &str,
+        fields: &Map<String, Value>,
+    ) -> Result<(), Error> {
+        let BodyCheck { names, policy } = &self.body_check;
+        let params = Params::read(fields, names);
+        let request = body::Request {
+            body: &params,
+            surface: Surface::of(Some(route)),
+            model: fields
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            route_model: None,
+            deferred: Deferred::default(),
+        };
+        let needs = body::needs(&request, names, policy);
+        let team = identity.affiliation.holder.team().map(|team| team.id());
+        let reachable = Reachable {
+            groups: self
+                .router
+                .opt_in_groups(&needs.models, team)
+                .iter()
+                .map(|group| {
+                    group
+                        .iter()
+                        .map(|deployment| opt_in_deployment(deployment))
+                        .collect()
+                })
+                .collect(),
+        };
+        let credentials = self
+            .host
+            .credentials(&needs.credentials)
+            .await
+            .map_err(Error::Credentials)?;
+        body::check(&request, &reachable, &credentials, names, policy).map_err(Error::BodyRejected)
+    }
 }
 
 /// A deployment as the check reads it: its group, its provider and what it lets a caller set.

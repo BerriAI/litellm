@@ -67,9 +67,7 @@ requests:
   - name: a member model budget may rewrite a request through a router fallback
     headers: {authorization: Bearer sk-structured}
     body: {model: claude-with-fallback, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: team_member_model_budget_fallback
+    expect: rust
 
   - name: the database fails the membership query
     unavailable: membership

@@ -32,7 +32,10 @@ use litellm_gateway_auth_core::{
 use litellm_gateway_inference::routing::{Host, RouteAttempt};
 use tokio::sync::OnceCell;
 
-use crate::{Gateway, callbacks, callbacks::Callbacks};
+use crate::{
+    Gateway, callbacks,
+    callbacks::{Callbacks, model_budget::ModelBudget},
+};
 
 /// The host the gateway's routes are served through, over each deployment's context window as
 /// read at boot.
@@ -40,11 +43,21 @@ use crate::{Gateway, callbacks, callbacks::Callbacks};
 pub struct NativeHost {
     callbacks: Arc<Callbacks>,
     windows: Arc<ContextWindows>,
+    pub(crate) model_budget: Option<Arc<ModelBudget>>,
 }
 
 impl NativeHost {
     pub fn new(callbacks: Arc<Callbacks>, windows: Arc<ContextWindows>) -> Self {
-        Self { callbacks, windows }
+        Self {
+            callbacks,
+            windows,
+            model_budget: None,
+        }
+    }
+
+    pub(crate) fn with_model_budget(mut self, model_budget: Option<Arc<ModelBudget>>) -> Self {
+        self.model_budget = model_budget;
+        self
     }
 }
 

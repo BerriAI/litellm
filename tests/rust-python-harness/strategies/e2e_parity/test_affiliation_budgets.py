@@ -209,9 +209,24 @@ def proxies(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureReq
       api_base: {upstream.base_url}
     model_info:
       access_groups: [metered-family]
+  - model_name: budget-primary
+    litellm_params:
+      model: anthropic/{MODEL}
+      api_key: parity-mock
+      api_base: {upstream.base_url}
+  - model_name: budget-secondary
+    litellm_params:
+      model: anthropic/{MODEL}
+      api_key: parity-mock
+      api_base: {upstream.base_url}
+    model_info:
+      id: budget-secondary-id
 router_settings:
   model_group_alias:
     metered-alias: metered
+    budget-secondary-alias: budget-secondary
+  fallbacks:
+    - budget-primary: [budget-secondary-alias]
 general_settings:
   master_key: {MASTER_KEY}
   disable_budget_reservation: false
@@ -492,6 +507,39 @@ def test_affiliation_per_model_cap_resolves_budget_name(
     python: Final = _model_budget_outcome(proxies.python, proxies, python_identity, actual_cost, model)
     rust: Final = _model_budget_outcome(proxies.rust, proxies, rust_identity, actual_cost, model)
     assert rust == pytest.approx(python)
+
+
+@pytest.mark.parametrize("scope", ["key", "member"])
+@pytest.mark.parametrize("allowed", [True, False], ids=["allowed", "denied"])
+def test_per_model_budget_fallback_validates_target(
+    proxies: Proxies, actual_cost: float, scope: str, allowed: bool
+) -> None:
+    def outcome(client: httpx.Client) -> tuple[int, str | None]:
+        identity, _, counter = _model_budget_identity(proxies, actual_cost / 2, scope, "budget-primary")
+        proxies.redis.set(counter, actual_cost)
+        hashed: Final = hashlib.sha256(identity.token.encode()).hexdigest()
+        with psycopg.connect(proxies.database) as connection:
+            connection.execute(
+                'UPDATE "LiteLLM_VerificationToken" SET budget_fallbacks = %s, models = %s WHERE token = %s',
+                (
+                    Jsonb({"budget-primary": ["budget-secondary-alias"]} if scope == "key" else {}),
+                    ["budget-primary", "budget-secondary", "budget-secondary-alias"] if allowed else ["budget-primary"],
+                    hashed,
+                ),
+            )
+        _provider_response(proxies, identity)
+        response: Final = _send(client, identity, model="budget-primary")
+        if allowed:
+            assert response.status_code == 200, response.text
+            assert response.headers["x-litellm-model-id"] == "budget-secondary-id"
+            eventually(lambda: identity.persisted(proxies.database), lambda value: value == pytest.approx(actual_cost))
+        else:
+            assert response.status_code == 422, response.text
+            assert identity.persisted(proxies.database) == pytest.approx(0.0)
+        assert float(proxies.redis.get(counter)) == pytest.approx(actual_cost)
+        return response.status_code, response.headers.get("x-litellm-model-id")
+
+    assert outcome(proxies.rust) == outcome(proxies.python)
 
 
 def _outcome(client: httpx.Client, proxies: Proxies, case: Case, actual_cost: float) -> tuple[int, float, float]:

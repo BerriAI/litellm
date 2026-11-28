@@ -56,6 +56,23 @@ fn names_a_hosted_tool(fields: &Map<String, Value>) -> bool {
         .any(|kind| HOSTED_TOOLS.contains(&kind))
 }
 
+/// A container or a file ID belongs to the deployment credentials that created it.
+pub(in crate::admit) fn references_provider_resource(fields: &Map<String, Value>) -> bool {
+    fields.get("container").is_some_and(|container| {
+        container.is_string() || container.get("id").is_some_and(Value::is_string)
+    }) || fields.get("messages").is_some_and(content_references_file)
+}
+
+fn content_references_file(content: &Value) -> bool {
+    if let Some(blocks) = content.as_array() {
+        return blocks.iter().any(content_references_file);
+    }
+    content.get("file_id").is_some_and(Value::is_string)
+        || ["content", "source"]
+            .iter()
+            .any(|key| content.get(key).is_some_and(content_references_file))
+}
+
 /// The end user a body's `metadata.user_id` names (`get_end_user_id_from_request_body`), trimmed
 /// of whitespace (`isspace`), and nobody when nothing is left. Every other place the proxy reads an
 /// end user from is a key or a header an earlier check sends to Python.
@@ -77,8 +94,23 @@ fn is_a_user_id(metadata: &Value) -> bool {
 mod tests {
     use litellm_config::Config;
     use rstest::rstest;
+    use serde_json::json;
 
     use super::*;
+
+    #[rstest]
+    #[case::container(json!({"container": "container_1"}), true)]
+    #[case::file(json!({"messages": [{"content": [{"source": {"type": "file", "file_id": "file_1"}}]}]}), true)]
+    #[case::inline(json!({"messages": [{"content": [{"source": {"type": "text", "data": "inline"}}]}]}), false)]
+    fn provider_resources_cannot_move_to_a_budget_fallback(
+        #[case] body: Value,
+        #[case] blocks_fallback: bool,
+    ) {
+        assert_eq!(
+            references_provider_resource(body.as_object().unwrap()),
+            blocks_fallback
+        );
+    }
 
     fn named(body: &str) -> Option<String> {
         let admit = Admit::over(&Config::default(), vec![]);

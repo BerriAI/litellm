@@ -15,9 +15,13 @@ use axum::{body::Body, extract::Request, http::request::Parts};
 use litellm_config::{Config, Environment};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_gateway_auth::{Auth, Authenticated, Preauthenticated};
-use litellm_gateway_auth_core::{Allowlists, Caller, authz::ModelList};
+use litellm_gateway_auth_core::{Allowlists, Caller, Credential, authz::ModelList};
 use litellm_gateway_inference::{JsonObject, routing};
-use litellm_router_core::{Router, registry::DeploymentFilter};
+use litellm_redis_store::model_budgets::Scope;
+use litellm_router_core::{
+    Router,
+    registry::{DeploymentFilter, ResolveScope},
+};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -188,23 +192,105 @@ impl Admit {
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
     }
 
-    fn member_budget_fallback(
+    /// Select and check the final body before inference runs any reservation or routing hooks.
+    async fn budget_fallback(
         &self,
         caller: &Authenticated<NativeRows>,
         fields: &Fields,
-    ) -> Option<Reason> {
-        model_budget::member_entries(&caller.affiliation.holder)?;
-        let model = fields.get("model")?.as_str()?;
+        path: &str,
+    ) -> Result<Option<Fields>, Reason> {
+        let (Some(budget), Some(inference), Some(model)) = (
+            self.host.model_budget.as_ref(),
+            self.inference.as_ref(),
+            fields.get("model").and_then(Value::as_str),
+        ) else {
+            return Ok(None);
+        };
+        if checks::references_provider_resource(fields) {
+            return Ok(None);
+        }
+        let key_targets = match &caller.credential {
+            Credential::Key { key } => key.budget_fallbacks(model),
+            Credential::MasterKey => &[],
+        };
         let registry = self.router.registry();
-        let settings = self.router.settings();
-        let dynamic = &settings.dynamic;
-        let groups = [model, registry.alias_of(model).unwrap_or(model)];
-        (dynamic
-            .fallbacks
-            .lookup_groups(&groups, &dynamic.fallback_keys)
-            .is_some_and(|targets| !targets.is_empty())
-            || !dynamic.default_fallbacks.is_empty())
-        .then(|| Reason::new(Refused::Credential, "team_member_model_budget_fallback"))
+        let member_targets = model_budget::member_entries(&caller.affiliation.holder)
+            .map(|_| self.router.budget_fallback_targets(model))
+            .unwrap_or_default();
+        if key_targets.is_empty() && member_targets.is_empty() {
+            return Ok(None);
+        }
+        let reason = || Reason::new(Refused::Credential, "budget_fallbacks");
+        let Some((scope, true, _)) = budget
+            .exceeded(model, caller, None)
+            .await
+            .map_err(|_| reason())?
+        else {
+            return Ok(None);
+        };
+        let targets = match scope {
+            Scope::Key => key_targets,
+            Scope::TeamMember => &member_targets,
+            _ => return Ok(None),
+        };
+        if targets.is_empty() || inference.check_body(caller, path, fields).await.is_err() {
+            return Ok(None);
+        }
+        'candidates: for target in targets {
+            let selected = if scope == Scope::Key {
+                target.as_str()
+            } else {
+                registry.alias_of(target).unwrap_or(target)
+            };
+            let key_only = (scope == Scope::Key).then_some(Scope::Key);
+            if selected == model
+                || budget
+                    .exceeded(target, caller, key_only)
+                    .await
+                    .map_err(|_| reason())?
+                    .is_some()
+            {
+                continue;
+            }
+            let resolved = registry.resolve(selected, ResolveScope::default());
+            for name in [
+                Some(selected),
+                resolved.as_ref().map(|route| route.group.as_str()),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|name| *name != target)
+            {
+                if budget
+                    .exceeded(name, caller, key_only)
+                    .await
+                    .map_err(|_| reason())?
+                    .is_some()
+                {
+                    if scope == Scope::Key {
+                        return Ok(None);
+                    }
+                    continue 'candidates;
+                }
+            }
+            let mut rewritten = fields.clone();
+            rewritten.insert("model".to_owned(), Value::from(selected));
+            if let Some(reason) = checks::BODY
+                .iter()
+                .find_map(|check| check(self, &rewritten))
+            {
+                return Err(reason);
+            }
+            if self.model_access(caller, &rewritten).is_none()
+                && inference.check_body(caller, path, &rewritten).await.is_ok()
+            {
+                return Ok(Some(rewritten));
+            }
+            if scope == Scope::Key {
+                return Ok(None);
+            }
+        }
+        Ok(None)
     }
 
     /// A key whose model list names a model access group goes to Python, which checks the
@@ -294,7 +380,6 @@ impl Admit {
         let over_its_caller = authenticated.as_ref().ok().and_then(|caller| {
             self.model_access(caller, &fields)
                 .or_else(|| self.access_group_budget(caller))
-                .or_else(|| self.member_budget_fallback(caller, &fields))
                 .or_else(|| token_estimate(caller, parts.uri.path(), &mut fields))
         });
         if let Some(reason) = over_its_caller {
@@ -302,7 +387,14 @@ impl Admit {
         }
         if let Ok(caller) = authenticated {
             match self.with_end_user(caller, &fields).await {
-                Ok(caller) => parts.extensions.insert(Preauthenticated(caller)),
+                Ok(caller) => {
+                    match Box::pin(self.budget_fallback(&caller, &fields, parts.uri.path())).await {
+                        Ok(Some(rewritten)) => fields = rewritten,
+                        Ok(None) => {}
+                        Err(reason) => return Err(refused(parts, body, reason)),
+                    }
+                    parts.extensions.insert(Preauthenticated(caller));
+                }
                 Err(reason) => return Err(refused(parts, body, reason)),
             };
         }
