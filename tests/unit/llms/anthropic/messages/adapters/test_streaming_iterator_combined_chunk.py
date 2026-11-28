@@ -422,3 +422,29 @@ def test_native_stream_thinking_blocks_keep_their_text_once():
         {"type": "thinking", "thinking": "efgh", "signature": "SIG_B"},
         {"type": "text", "text": "hi"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_combined_chunk_splitter_handles_none_stream_async():
+    splitter: Final = _CombinedChunkSplitter(None)
+    chunks = []
+    async for chunk in splitter:
+        chunks.append(chunk)
+    assert chunks == []
+
+
+def test_combined_chunk_splitter_handles_none_stream_sync():
+    splitter: Final = _CombinedChunkSplitter(None)
+    chunks = []
+    for chunk in splitter:
+        chunks.append(chunk)
+    assert chunks == []
+
+
+@pytest.mark.asyncio
+async def test_anthropic_stream_wrapper_handles_none_stream_async():
+    wrapper: Final = AnthropicStreamWrapper(completion_stream=None, model="claude-3-5-sonnet-20241022")
+    events = []
+    async for event in wrapper.async_anthropic_sse_wrapper():
+        events.append(event)
+    assert events == []
