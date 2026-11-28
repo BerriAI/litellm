@@ -483,7 +483,14 @@ class TestInterleavedThinkingAndTextReplay:
         assistant_messages = [m for m in messages if m.get("role") == "assistant"]
         assert len(assistant_messages) == 1
         content = assistant_messages[0].get("content")
-        assert content == "EDITED BY CLIENT", f"client edit should be preserved, got: {content}"
+        content_text = (
+            content
+            if isinstance(content, str)
+            else "".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") in ("text", "output_text"))
+            if isinstance(content, list)
+            else ""
+        )
+        assert content_text == "EDITED BY CLIENT", f"client edit should be preserved, got: {content}"
         thinking_blocks = assistant_messages[0].get("thinking_blocks")
         assert thinking_blocks == [self._THINKING_1, self._THINKING_2], (
             f"thinking blocks should still replay, got: {thinking_blocks}"

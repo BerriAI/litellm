@@ -2216,7 +2216,17 @@ class LiteLLMCompletionResponsesConfig:
                 stored_text: Final = "".join(
                     str(b.get("text", "")) for b in full_content if isinstance(b, Mapping) and b.get("type") == "text"
                 )
-                current_text: Final = current_content if isinstance(current_content, str) else ""
+                current_text: Final = (
+                    current_content
+                    if isinstance(current_content, str)
+                    else "".join(
+                        str(b.get("text", ""))
+                        for b in current_content
+                        if isinstance(b, Mapping) and b.get("type") in ("text", "output_text")
+                    )
+                    if isinstance(current_content, list)
+                    else ""
+                )
                 if stored_text == current_text:
                     # Stored text matches the message item: safe to replace with the full
                     # interleaved block list, restoring the original Anthropic block order
