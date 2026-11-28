@@ -1177,7 +1177,7 @@ def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | Non
     is_flag=True,
     type=bool,
     help="To debug the input",
-    envvar="DEBUG",
+    envvar="LITELLM_DEBUG",
 )
 @click.option(
     "--detailed_debug",
