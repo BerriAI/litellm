@@ -19,13 +19,12 @@ use super::{
 
 /// The providers the Python proxy itself serves `/v1/messages` through the Rust route for, as
 /// `RULES` in `litellm/rust_bridge/catalog.py` lists them. Python answers any other provider
-/// through an adapter the gateway has not been compared with. `bedrock_mantle` stays with Python
-/// until the gateway's cost map pricing prices its calls, which it does not yet, while Mantle
-/// reached through `bedrock/mantle/` is priced as a `bedrock` call.
-const MESSAGES_PROVIDERS: [LlmProviders; 4] = [
+/// through an adapter the gateway has not been compared with.
+const MESSAGES_PROVIDERS: [LlmProviders; 5] = [
     LlmProviders::Anthropic,
     LlmProviders::AzureAi,
     LlmProviders::Bedrock,
+    LlmProviders::BedrockMantle,
     LlmProviders::VertexAi,
 ];
 

@@ -230,7 +230,7 @@ pub(crate) fn identity(
 
 #[cfg(test)]
 mod tests {
-    use litellm_cost::query::{Modalities, TokenUsage};
+    use litellm_cost::query::{Modalities, TokenUsage, WebSearchUse};
     use litellm_model_catalog::IntegrityLimits;
     use rstest::rstest;
     use serde_json::json;
@@ -275,6 +275,91 @@ mod tests {
         let receipt = pricing.price(&call("claude-opus-5-5")).unwrap();
 
         assert!((receipt.total - listed).abs() < 1e-12);
+    }
+
+    fn mantle_call(model: &str, region: &str, usage: TokenUsage) -> PricedCall {
+        PricedCall {
+            provider: "bedrock_mantle".to_owned(),
+            identity: PricingIdentity {
+                region: Some(region.to_owned()),
+                ..call(model).identity
+            },
+            usage,
+            ..call(model)
+        }
+    }
+
+    /// A call on the `bedrock_mantle` provider is priced at the rates of the row for its model and region, with
+    /// no uplift on top, as main's `generic_cost_per_token` prices it.
+    #[rstest]
+    #[case::claude(
+        "anthropic.claude-opus-5-5",
+        "us-east-1",
+        "bedrock_mantle/anthropic.claude-opus-5-5"
+    )]
+    #[case::claude_in_a_region_with_its_own_row(
+        "anthropic.claude-opus-5-5",
+        "us-gov-west-1",
+        "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5-5"
+    )]
+    #[case::a_model_that_is_not_claude(
+        "openai.gpt-oss-120b",
+        "us-east-1",
+        "bedrock_mantle/openai.gpt-oss-120b"
+    )]
+    fn a_bedrock_mantle_call_is_priced_at_its_rows_rates(
+        #[case] model: &str,
+        #[case] region: &str,
+        #[case] row: &str,
+    ) {
+        let cost_map = CostMap::bundled();
+        let row = cost_map.catalog().get(row).unwrap();
+        let rate = |key: &str| row[key].as_f64().unwrap();
+        let listed = 1000.0 * rate("input_cost_per_token") + 100.0 * rate("output_cost_per_token");
+        let pricing = CostMapPricing::new(Arc::new(ArcSwap::from_pointee(cost_map)));
+
+        let receipt = pricing
+            .price(&mantle_call(model, region, call(model).usage))
+            .unwrap();
+
+        assert!(
+            (receipt.total - listed).abs() < 1e-12,
+            "{} != {listed}",
+            receipt.total
+        );
+    }
+
+    /// Main bills a Mantle web search per call at the row's medium context price, one call when the response
+    /// reports none.
+    #[rstest]
+    #[case::the_reported_requests(2, 2.0)]
+    #[case::one_call_for_none_reported(0, 1.0)]
+    fn a_bedrock_mantle_web_search_is_billed_per_call(#[case] requests: u64, #[case] calls: f64) {
+        let cost_map = CostMap::bundled();
+        let model = "anthropic.claude-opus-5-5";
+        let per_search = cost_map
+            .catalog()
+            .get("bedrock_mantle/anthropic.claude-opus-5-5")
+            .unwrap()["search_context_cost_per_query"]["search_context_size_medium"]
+            .as_f64()
+            .unwrap();
+        let pricing = CostMapPricing::new(Arc::new(ArcSwap::from_pointee(cost_map)));
+        let without = pricing
+            .price(&mantle_call(model, "us-east-1", call(model).usage))
+            .unwrap();
+        let searched = TokenUsage {
+            web_search: Some(WebSearchUse {
+                requests,
+                context: None,
+            }),
+            ..call(model).usage
+        };
+
+        let receipt = pricing
+            .price(&mantle_call(model, "us-east-1", searched))
+            .unwrap();
+
+        assert!((receipt.total - without.total - calls * per_search).abs() < 1e-12);
     }
 
     /// A cost map installed after a call was priced prices the next call.

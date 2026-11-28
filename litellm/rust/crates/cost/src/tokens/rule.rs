@@ -1,7 +1,9 @@
 //! What each provider branch of main's `cost_per_token` adds on top of `generic_cost_per_token`: which uplifts the
 //! total carries and how the web search tool is billed. Anthropic multiplies speed then geo
 //! (`llms/anthropic/cost_calculation.py`), Bedrock multiplies geo when it looked the row up by name
-//! (`llms/bedrock/cost_calculation.py`), Vertex multiplies its regional endpoint uplift, Azure AI nothing
+//! (`llms/bedrock/cost_calculation.py`), Vertex multiplies its regional endpoint uplift, Azure AI nothing. Bedrock
+//! Mantle has no branch of its own, so main prices it with `generic_cost_per_token` alone and bills its web search per
+//! call, as Bedrock does for a row it did not look up by name
 
 use std::num::NonZeroU64;
 
@@ -65,6 +67,7 @@ impl Rule {
             Provider::Bedrock => Ok(Self::Bedrock {
                 geo: lookup == Lookup::Catalog && at.provenance != Provenance::Registered,
             }),
+            Provider::BedrockMantle => Ok(Self::Bedrock { geo: false }),
             Provider::VertexAi
                 if !VERTEX_TOKEN_PRICED.iter().any(|name| model.contains(name))
                     || prices_above_128k(row)
