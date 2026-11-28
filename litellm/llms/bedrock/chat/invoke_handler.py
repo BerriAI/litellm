@@ -206,6 +206,7 @@ def _stream_decoder(
     json_mode: bool | None,
     sync_stream: bool,
     response_format_schema: ResponseFormatSchema | None = None,
+    tool_name_mappings: Mapping[str, str] | None = None,
 ) -> "AWSEventStreamDecoder":
     if bedrock_invoke_provider == "anthropic":
         return AmazonAnthropicClaudeStreamDecoder(
@@ -218,7 +219,7 @@ def _stream_decoder(
         return AmazonDeepSeekR1StreamDecoder(model=model, sync_stream=sync_stream)
     if bedrock_invoke_provider == "moonshot":
         return AmazonOpenAICompatibleStreamDecoder(model=model, sync_stream=sync_stream)
-    return AWSEventStreamDecoder(model=model, json_mode=json_mode)
+    return AWSEventStreamDecoder(model=model, json_mode=json_mode, tool_name_mappings=tool_name_mappings)
 
 
 _StreamChunk = TypeVar("_StreamChunk")
@@ -244,6 +245,7 @@ async def make_call(
     stream_chunk_size: int | None = None,
     timeout: float | httpx.Timeout | None = None,
     optional_params: Mapping[str, object] | None = None,
+    tool_name_mappings: Mapping[str, str] | None = None,
 ) -> tuple[
     base_model_iterator.MockResponseIterator | AsyncIterator[GChunk | ModelResponseStream | dict[str, object]],
     httpx.Headers,
@@ -301,6 +303,7 @@ async def make_call(
                 json_mode=json_mode,
                 sync_stream=False,
                 response_format_schema=response_format_schema_from_request(data, json_mode),
+                tool_name_mappings=tool_name_mappings,
             )
             completion_stream = decoder.aiter_bytes(
                 aiter_bytes_then_close(response, chunk_size=stream_chunk_size), response_headers=response.headers
@@ -430,7 +433,12 @@ def make_sync_call(
 
 
 class AWSEventStreamDecoder:
-    def __init__(self, model: str, json_mode: bool | None = False) -> None:
+    def __init__(
+        self,
+        model: str,
+        json_mode: bool | None = False,
+        tool_name_mappings: Mapping[str, str] | None = None,
+    ) -> None:
         ensure_optional_import("botocore")
         from botocore.parsers import EventStreamJSONParser
 
@@ -440,6 +448,9 @@ class AWSEventStreamDecoder:
         self.tool_calls_index: int | None = None
         self.response_id: str | None = None
         self.json_mode = json_mode
+        self.tool_name_mappings: dict[str, str] | None = (
+            dict(tool_name_mappings) if tool_name_mappings is not None else None
+        )
         self._current_tool_name: str | None = None
         self._thinking_ran = False
         self._thinking_block_index = -1
@@ -539,7 +550,11 @@ class AWSEventStreamDecoder:
             if "toolUse" in start_obj and start_obj["toolUse"] is not None:
                 ## check tool name was formatted by litellm
                 _response_tool_name: Final = start_obj["toolUse"]["name"]
-                response_tool_name: Final = get_bedrock_tool_name(response_tool_name=_response_tool_name)
+                response_tool_name: Final = (
+                    self.tool_name_mappings.get(_response_tool_name, _response_tool_name)
+                    if self.tool_name_mappings is not None
+                    else get_bedrock_tool_name(response_tool_name=_response_tool_name)
+                )
                 self._current_tool_name = response_tool_name
 
                 # When json_mode is True, suppress the internal json_tool_call

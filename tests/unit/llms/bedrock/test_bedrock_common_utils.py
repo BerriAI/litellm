@@ -2933,3 +2933,122 @@ def test_get_bedrock_tool_name_active_context_authoritative_on_miss():
         assert get_bedrock_tool_name("read_file") == "read_file"
     finally:
         bedrock_tool_name_mappings_context.reset(token)
+
+
+def test_bedrock_converse_sequential_same_thread_and_same_task_no_leak():
+    """
+    Issue #54172: Sequential Bedrock Converse requests on the same thread or asyncio task
+    must start with a fresh request mapping dict and must not leak an earlier request's
+    sanitized tool name mapping.
+    """
+    import asyncio
+    from unittest.mock import patch
+
+    import httpx
+
+    import litellm
+
+    def make_resp(tool_name: str) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"toolUse": {"toolUseId": "t1", "name": tool_name, "input": {}}}],
+                    }
+                },
+                "stopReason": "tool_use",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+            request=httpx.Request("POST", "https://example.com"),
+        )
+
+    def tool_spec(name: str) -> list[dict[str, object]]:
+        return [{"type": "function", "function": {"name": name, "parameters": {"type": "object", "properties": {}}}}]
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+        side_effect=[make_resp("mcp__srv__get-items"), make_resp("mcp__srv__get-items")],
+    ):
+        r1 = litellm.completion(
+            model="bedrock/converse/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=tool_spec("mcp__srv::get-items"),
+            aws_access_key_id="a",
+            aws_secret_access_key="b",
+            aws_region_name="us-east-1",
+        )
+        r2 = litellm.completion(
+            model="bedrock/converse/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=tool_spec("mcp__srv__get-items"),
+            aws_access_key_id="a",
+            aws_secret_access_key="b",
+            aws_region_name="us-east-1",
+        )
+
+    assert r1.choices[0].message.tool_calls[0].function.name == "mcp__srv::get-items"
+    assert r2.choices[0].message.tool_calls[0].function.name == "mcp__srv__get-items"
+
+    async def mock_post(*_args, **_kwargs):
+        return make_resp("mcp__srv__get-items")
+
+    async def run_async_sequence() -> tuple[str, str]:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            side_effect=mock_post,
+        ):
+            a1 = await litellm.acompletion(
+                model="bedrock/converse/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                messages=[{"role": "user", "content": "hi"}],
+                tools=tool_spec("mcp__srv::get-items"),
+                aws_access_key_id="a",
+                aws_secret_access_key="b",
+                aws_region_name="us-east-1",
+            )
+            a2 = await litellm.acompletion(
+                model="bedrock/converse/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                messages=[{"role": "user", "content": "hi"}],
+                tools=tool_spec("mcp__srv__get-items"),
+                aws_access_key_id="a",
+                aws_secret_access_key="b",
+                aws_region_name="us-east-1",
+            )
+            return (
+                a1.choices[0].message.tool_calls[0].function.name,
+                a2.choices[0].message.tool_calls[0].function.name,
+            )
+
+    res1, res2 = asyncio.run(run_async_sequence())
+    assert res1 == "mcp__srv::get-items"
+    assert res2 == "mcp__srv__get-items"
+
+
+def test_aws_event_stream_decoder_uses_isolated_tool_name_mappings():
+    """Streaming decoders snapshot request mappings so concurrent or subsequent requests cannot interfere."""
+    from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
+    from litellm.llms.bedrock.common_utils import bedrock_tool_name_mappings_context
+
+    decoder_a = AWSEventStreamDecoder(
+        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        tool_name_mappings={"mcp__srv__get-items": "mcp__srv::get-items"},
+    )
+    decoder_b = AWSEventStreamDecoder(
+        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        tool_name_mappings={},
+    )
+
+    token = bedrock_tool_name_mappings_context.set({"mcp__srv__get-items": "wrong:leak"})
+    try:
+        chunk_a = decoder_a._handle_converse_start_event(
+            {"toolUse": {"toolUseId": "1", "name": "mcp__srv__get-items"}}
+        )
+        chunk_b = decoder_b._handle_converse_start_event(
+            {"toolUse": {"toolUseId": "2", "name": "mcp__srv__get-items"}}
+        )
+    finally:
+        bedrock_tool_name_mappings_context.reset(token)
+
+    assert chunk_a[0]["function"]["name"] == "mcp__srv::get-items"
+    assert chunk_b[0]["function"]["name"] == "mcp__srv__get-items"
