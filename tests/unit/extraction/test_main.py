@@ -138,6 +138,33 @@ def test_sync_extraction_reads_an_unwrapped_result(respx_mock: respx.MockRouter)
     _assert_invoice_answers(response)
 
 
+@pytest.mark.usefixtures("cloudflare_env")
+def test_extraction_handles_list_answer_with_null_spans(respx_mock: respx.MockRouter) -> None:
+    result: Final = {
+        "model": "clairic",
+        "answers": {
+            "pets": {
+                "type": "list",
+                "value": ["cat", "dog", "cat", "bird", "dog"],
+                "spans": [None, None, None, [32, 36], None],
+            }
+        },
+        "truncated": False,
+        "usage": {"input_tokens": 15, "output_tokens": 5},
+    }
+    route: Final = respx_mock.post(_CLAIRIC_URL).respond(json=result)
+
+    response: Final = litellm.extraction(
+        model="cloudflare/clairic",
+        state="Pets seen today: cat, dog, cat, bird, dog.",
+        fields={"pets": {"type": "list", "items": "text"}},
+    )
+
+    assert route.call_count == 1
+    assert response.answers["pets"].value == ["cat", "dog", "cat", "bird", "dog"]
+    assert response.answers["pets"].spans == (None, None, None, (32, 36), None)
+
+
 def _clairic_transport() -> httpx.MockTransport:
     def respond(request: httpx.Request) -> httpx.Response:
         assert str(request.url) == _CLAIRIC_URL

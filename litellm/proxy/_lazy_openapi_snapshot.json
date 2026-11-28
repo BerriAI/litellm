@@ -11268,10 +11268,17 @@
               "anyOf": [
                 {
                   "items": {
-                    "items": {
-                      "type": "integer"
-                    },
-                    "type": "array"
+                    "anyOf": [
+                      {
+                        "items": {
+                          "type": "integer"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "type": "array"
                 },

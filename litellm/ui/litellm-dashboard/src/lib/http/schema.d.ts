@@ -35904,7 +35904,7 @@ export interface components {
             /** Span */
             span?: number[] | null;
             /** Spans */
-            spans?: number[][] | null;
+            spans?: (number[] | null)[] | null;
             /** Steps */
             steps?: components["schemas"]["JsonValue"][] | null;
             /** Type */

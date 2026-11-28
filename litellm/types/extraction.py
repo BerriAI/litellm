@@ -110,7 +110,7 @@ class ExtractionAnswer(_ClairicObject):
     p_null: OptionalFloat = None
     confidence: OptionalFloat = None
     span: Annotated[tuple[int, ...] | None, _OMITTED_WHEN_NONE] = None
-    spans: Annotated[tuple[tuple[int, ...], ...] | None, _OMITTED_WHEN_NONE] = None
+    spans: Annotated[tuple[tuple[int, ...] | None, ...] | None, _OMITTED_WHEN_NONE] = None
     mean: OptionalJson = None
     median: OptionalJson = None
     p10: OptionalJson = None

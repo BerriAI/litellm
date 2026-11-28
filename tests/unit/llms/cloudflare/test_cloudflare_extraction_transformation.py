@@ -144,6 +144,38 @@ def test_response_parses_typed_answers_and_usage(wrapped: bool) -> None:
     assert response.usage.input_tokens == 416
 
 
+def test_response_parses_list_answer_with_null_spans_entries() -> None:
+    # Cloudflare returns null entries in spans when an item has no unique span in the input (e.g. repeated items)
+    payload: Final = {
+        "result": {
+            "model": "clairic",
+            "answers": {
+                "pets": {
+                    "type": "list",
+                    "value": ["cat", "dog", "cat", "bird", "dog"],
+                    "spans": [None, None, None, [32, 36], None],
+                }
+            },
+            "truncated": False,
+            "usage": {
+                "state_tokens": 10,
+                "input_tokens": 10,
+                "output_tokens": 5,
+            },
+        },
+        "success": True,
+        "errors": [],
+        "messages": [],
+    }
+
+    response: Final = _cloudflare_config().transform_extraction_response(
+        "@cf/cloudflare/clairic", "cloudflare", _response(payload)
+    )
+
+    assert response.answers["pets"].spans == (None, None, None, (32, 36), None)
+    assert response.model_dump(mode="json")["answers"]["pets"]["spans"] == [None, None, None, [32, 36], None]
+
+
 def test_unexpected_response_raises_a_provider_error() -> None:
     with pytest.raises(BaseLLMException) as error:
         _cloudflare_config().transform_extraction_response(
