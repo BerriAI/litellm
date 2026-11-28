@@ -25,6 +25,7 @@ import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
+import { useUserInfo } from "@/app/(dashboard)/hooks/users/useUserInfo";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import i18n from "@/i18n/i18n";
 import { toast } from "@/lib/toast";
@@ -172,6 +173,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   // For non-admins or "my-usage" view, always pass their own user_id
   const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : urlParams.user;
+  const otherUserId = effectiveUserId !== null && effectiveUserId !== userID ? effectiveUserId : null;
+  const { data: otherUserInfo } = useUserInfo(otherUserId);
+  const budgetPending = otherUserId !== null && otherUserInfo === undefined;
+  const budget = otherUserId !== null ? otherUserInfo?.max_budget ?? null : currentUser?.max_budget ?? null;
 
   const clientScopeInput = {
     userId: userID,
@@ -561,7 +566,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                       totals={totals}
                       loading={loading}
                       requestCountsPending={requestCountsPending}
-                      budget={currentUser?.max_budget ?? null}
+                      budget={budget}
+                      budgetPending={budgetPending}
                       subscriptionCosts={
                         <SubscriptionCosts
                           accessToken={accessToken}
