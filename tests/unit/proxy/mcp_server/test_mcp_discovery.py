@@ -148,6 +148,25 @@ class TestMCPRegistryFile:
         assert entry["category"] == "Productivity"
         assert "ms-365-mcp-server" in entry["registry_url"]
 
+    def test_perplexity_uses_streamable_http_with_its_api_key(self, registry_path: str) -> None:
+        with open(registry_path, "r") as f:
+            data: Final = json.load(f)
+
+        perplexity: Final = next(server for server in data["servers"] if server["name"] == "perplexity")
+        assert perplexity == {
+            "name": "perplexity",
+            "title": "Perplexity",
+            "description": "Web search, cited answers, and deep research via the Perplexity API",
+            "icon_url": "/ui/assets/logos/perplexity.png",
+            "category": "Search",
+            "registry_url": "https://registry.modelcontextprotocol.io/servers/ai.perplexity%2Fmcp-server",
+            "transport": "http",
+            # Perplexity's MCP server docs (checked 2026-11-17) name this Streamable HTTP URL and accept the API key
+            # as a bearer token https://docs.perplexity.ai/docs/getting-started/integrations/mcp-server
+            "url": "https://api.perplexity.ai/mcp",
+            "env_vars": [{"name": "PERPLEXITY_API_KEY", "description": "Perplexity API Key", "secret": True}],
+        }
+
     def test_bundled_icons_exist(self, registry_path):
         """An icon served from the proxy's own assets ships twice, as the built copy the wheel packages and as
         the dashboard source copy every Docker image rebuilds from. Both must exist and match or a card goes blank."""
