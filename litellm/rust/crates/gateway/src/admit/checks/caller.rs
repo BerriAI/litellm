@@ -11,10 +11,8 @@ use crate::{
 
 /// Each caller the core hands back is matched by name, with no catch-all, so a caller the native
 /// host learns to serve does not compile here until it is named native or not. A credential the
-/// core did not authenticate is over the error's name. A key in a team or with an owner stays
-/// with Python: over the first column its team, owner or membership holds that nothing native reads
-/// yet, and otherwise over `team` or `user`, since the native spend log charges neither yet. A key
-/// in an organization or project stays with Python the same way, after team and owner.
+/// core did not authenticate is over the error's name. A key with an unserved affiliation is
+/// refused over the first unserved column or over the affiliation itself.
 pub(super) fn caller(_: &Admit, authentication: &Authentication) -> Option<Reason> {
     match authentication {
         Ok(caller) => match &caller.credential {
@@ -23,15 +21,17 @@ pub(super) fn caller(_: &Admit, authentication: &Authentication) -> Option<Reaso
                 let project = caller.affiliation.project.as_ref();
                 charged(&caller.affiliation.holder)
                     .or_else(|| {
-                        caller.affiliation.org.as_ref().map(|org| {
-                            org.stored()
-                                .and_then(unserved_org)
-                                .unwrap_or("organization")
+                        caller.affiliation.org.as_ref().and_then(|org| {
+                            org.stored().map_or(Some("organization"), |row| {
+                                unserved_org(row).or(row
+                                    .budget
+                                    .max
+                                    .is_none()
+                                    .then_some("organization"))
+                            })
                         })
                     })
-                    .or_else(|| {
-                        project.map(|project| unserved_project_column(project).unwrap_or("project"))
-                    })
+                    .or_else(|| project.and_then(unserved_project_column))
                     .map(|over| Reason::new(Refused::Credential, over))
             }
         },
@@ -61,6 +61,7 @@ fn charged(holder: &Holder<NativeRows>) -> Option<&'static str> {
                     || holder.membership().is_some_and(|member| {
                         member.budget.max.is_some()
                             || !member.budget_extras.model_max_budget.is_empty()
+                            || !member.budget_extras.allowed_models.is_empty()
                     }) =>
             {
                 None
@@ -87,24 +88,23 @@ fn unserved_team_column(team: &Team<NativeRows>) -> Option<&'static str> {
     }
 }
 
-/// The column of the caller's project that keeps the caller with Python. A project no row stands
-/// behind holds none.
+/// The column of the caller's project that keeps the caller with Python.
 fn unserved_project_column(project: &Named<ProjectRecord>) -> Option<&'static str> {
     match project {
-        Named::Stored(record) => unserved_project(record),
-        Named::Unstored(_) => None,
+        Named::Stored(record) => {
+            unserved_project(record).or(record.budget.max.is_none().then_some("project"))
+        }
+        Named::Unstored(_) => Some("project"),
     }
 }
 
-/// Python reserves what a call may cost against every budget its caller holds before the call
-/// runs, unless `general_settings.disable_budget_reservation` turns that off. The gateway reserves
-/// nothing, so a caller with a budget goes to Python while reservation is on.
+/// Lifetime key and team counters still require Python when reservations are enabled.
 pub(super) fn budgets(admit: &Admit, authentication: &Authentication) -> Option<Reason> {
     let caller = authentication.as_ref().ok()?;
     let reserves = !admit.config.general_settings.disable_budget_reservation
         && budgets::counters(caller, budgets::Settings::default(), jiff::Timestamp::now())
             .iter()
-            .any(|counter| !matches!(counter.entity_type.as_str(), "User" | "TeamMember"));
+            .any(|counter| matches!(counter.entity_type.as_str(), "Key" | "Team"));
     reserves.then(|| {
         Reason::new(
             Refused::Settings,
@@ -167,7 +167,7 @@ mod tests {
     #[rstest]
     #[case::a_budgeted_key_while_python_reserves(budgeted_key(10.0), false, true)]
     #[case::a_key_at_a_budget_of_zero(budgeted_key(0.0), false, true)]
-    #[case::the_master_key_for_a_budgeted_end_user(master_for_a_budgeted_end_user(), false, true)]
+    #[case::the_master_key_for_a_budgeted_end_user(master_for_a_budgeted_end_user(), false, false)]
     #[case::a_budgeted_key_once_reservation_is_off(budgeted_key(10.0), true, false)]
     #[case::a_caller_with_no_budget(master(), false, false)]
     fn a_caller_python_reserves_for_goes_to_python(

@@ -9,9 +9,7 @@ use litellm_gateway_auth_core::{
 
 use super::NativeRows;
 
-/// The model lists the native host read for `identity`: a key's own and its team's, and none for
-/// the master key. A key that names an owner or anything else that carries a list was declined
-/// when it was authenticated. A team the caller names with no row behind it has no list.
+/// The model lists read for `identity`: the key's, the team's and the team member's.
 pub(crate) fn layers(identity: &Authenticated<NativeRows>) -> impl Iterator<Item = Layer<'_>> {
     let key = match &identity.credential {
         Credential::MasterKey => None,
@@ -23,7 +21,12 @@ pub(crate) fn layers(identity: &Authenticated<NativeRows>) -> impl Iterator<Item
         .team()
         .and_then(team_list)
         .map(Layer::Team);
-    key.into_iter().chain(team)
+    let member = identity
+        .affiliation
+        .holder
+        .membership()
+        .map(|row| Layer::TeamMember(ModelList::read(&row.budget_extras.allowed_models)));
+    key.into_iter().chain(team).chain(member)
 }
 
 /// The team's `models` column, read into a `ModelList`. A key's copy of its team is never served

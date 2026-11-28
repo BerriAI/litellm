@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import subprocess
 import uuid
@@ -17,6 +18,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, JsonValue, TypeAdapter
 from redis import Redis
 
+from litellm.proxy.common_utils.user_api_key_cache import END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.database import read_rows
 from tests.integration._support.ports import allocate_port
@@ -257,6 +259,8 @@ litellm_settings:
             _rust(binary, config, environment, remove_environment) as (native, native_pid),
             Redis(host=state.environment["REDIS_HOST"], port=int(state.environment["REDIS_PORT"])) as redis,
         ):
+            # Cases insert end users directly, without the management write that invalidates the registry.
+            redis.set("end_user_restricted_registry", json.dumps(END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL))
             yield Proxies(
                 python.gateway.client,
                 python.process.pid,
@@ -461,6 +465,102 @@ def _model_budget_identity(
     }.get(scope, f"team_member_model_spend:{len(identity.user)}:{identity.user}:{identity.team}")
     counter: Final = f"{prefix}:{entry}:1h"
     return identity, end_user, counter
+
+
+def _affiliation_lifetime_outcome(
+    proxies: Proxies, client: httpx.Client, scope: str, spend: float, expected_cost: float
+) -> int:
+    identity: Final = _identity(proxies.database, Case(owner=True))
+    identifier: Final = identity.user
+    hashed: Final = hashlib.sha256(identity.token.encode()).hexdigest()
+    end_user: Final = identifier if scope == "end-user" else None
+    counter: Final = f"spend:{'end_user' if scope == 'end-user' else scope}:{identifier}"
+    with psycopg.connect(proxies.database) as connection:
+        connection.execute(
+            """INSERT INTO "LiteLLM_BudgetTable"
+               (budget_id, max_budget, rollover_max_budget, temp_budget_increase, temp_budget_expiry,
+                allowed_models, created_by, updated_by, updated_at)
+               VALUES (%s, 1, 2, 2, NOW() + INTERVAL '1 day', ARRAY['budget-primary'], 'parity', 'parity', NOW())""",
+            (identifier,),
+        )
+        if scope == "org":
+            connection.execute(
+                """INSERT INTO "LiteLLM_OrganizationTable"
+                   (organization_id, organization_alias, budget_id, spend, created_by, updated_by)
+                   VALUES (%s, %s, %s, %s, 'parity', 'parity')""",
+                (identifier, identifier, identifier, spend),
+            )
+            connection.execute(
+                'UPDATE "LiteLLM_VerificationToken" SET organization_id = %s WHERE token = %s', (identifier, hashed)
+            )
+        elif scope == "project":
+            connection.execute(
+                """INSERT INTO "LiteLLM_ProjectTable" (project_id, budget_id, spend, created_by, updated_by)
+                   VALUES (%s, %s, %s, 'parity', 'parity')""",
+                (identifier, identifier, spend),
+            )
+            connection.execute(
+                'UPDATE "LiteLLM_VerificationToken" SET project_id = %s WHERE token = %s', (identifier, hashed)
+            )
+        else:
+            connection.execute(
+                'INSERT INTO "LiteLLM_EndUserTable" (user_id, budget_id, spend) VALUES (%s, %s, %s)',
+                (identifier, identifier, spend),
+            )
+    proxies.redis.set(counter, spend)
+    _provider_response(proxies, identity)
+    response: Final = _send(client, identity, end_user)
+    expected: Final = 200 if expected_cost else 422
+    assert response.status_code == expected, response.text
+    query: Final = {
+        "org": 'SELECT spend FROM "LiteLLM_OrganizationTable" WHERE organization_id = %s',
+        "project": 'SELECT spend FROM "LiteLLM_ProjectTable" WHERE project_id = %s',
+        "end-user": 'SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id = %s',
+    }[scope]
+
+    def settled() -> tuple[float, object]:
+        rows: Final = read_rows(query, (identifier,), database_url=proxies.database)
+        stored: Final = rows[0]["spend"]
+        current: Final = proxies.redis.get(counter)
+        assert isinstance(stored, (int, float)) and isinstance(current, bytes)
+        return float(current), stored
+
+    total: Final = spend + expected_cost
+    assert eventually(settled, lambda value: value == pytest.approx((total, total)), seconds=30) == pytest.approx(
+        (total, total)
+    )
+    return response.status_code
+
+
+@pytest.mark.parametrize("scope", ["end-user", "project", "org"])
+@pytest.mark.parametrize("over", [False, True], ids=["under", "over"])
+def test_affiliation_lifetime_budgets(proxies: Proxies, actual_cost: float, scope: str, over: bool) -> None:
+    spend: Final = 1.5 if over else 0.25
+    cost: Final = 0.0 if over else actual_cost
+    with _paused_between_sweeps(proxies.rust_pid, proxies.redis):
+        python: Final = _affiliation_lifetime_outcome(proxies, proxies.python, scope, spend, cost)
+    with _paused_between_sweeps(proxies.python_pid, proxies.redis):
+        rust: Final = _affiliation_lifetime_outcome(proxies, proxies.rust, scope, spend, cost)
+    assert rust == python
+
+
+@pytest.mark.parametrize("allowed_model", ["metered", "budget-primary"])
+def test_member_budget_allowed_models_constrain_routing(proxies: Proxies, allowed_model: str) -> None:
+    identity: Final = _identity(proxies.database, Case())
+    with psycopg.connect(proxies.database) as connection:
+        connection.execute(
+            'UPDATE "LiteLLM_BudgetTable" SET allowed_models = %s WHERE budget_id = %s',
+            ([allowed_model], f"budget-{identity.user}"),
+        )
+    _provider_response(proxies, identity)
+    python: Final = _send(proxies.python, identity)
+    rust: Final = _send(proxies.rust, identity)
+    if allowed_model == "metered":
+        assert python.status_code == rust.status_code == 200, (python.text, rust.text)
+    else:
+        assert python.status_code == 403, python.text
+        assert rust.status_code == 501, rust.text
+        assert rust.json()["error"]["code"] == "credential"
 
 
 def _model_budget_outcome(

@@ -17,12 +17,13 @@ use crate::{AuthzDenial, DeniedList};
 pub enum Layer<'a> {
     Key(ModelList<'a>),
     Team(ModelList<'a>),
+    TeamMember(ModelList<'a>),
 }
 
 impl<'a> Layer<'a> {
     pub fn list(&self) -> ModelList<'a> {
         match *self {
-            Self::Key(list) | Self::Team(list) => list,
+            Self::Key(list) | Self::Team(list) | Self::TeamMember(list) => list,
         }
     }
 
@@ -30,6 +31,7 @@ impl<'a> Layer<'a> {
         let list = match self {
             Self::Key(_) => DeniedList::Key,
             Self::Team(_) => DeniedList::Team,
+            Self::TeamMember(_) => DeniedList::TeamMember,
         };
         AuthzDenial::ModelAccess {
             list,

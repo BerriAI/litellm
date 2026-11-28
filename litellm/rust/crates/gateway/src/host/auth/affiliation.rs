@@ -486,7 +486,7 @@ pub(crate) fn unserved_membership(membership: &MembershipRecord) -> Option<&'sta
                 model_max_budget: _,
                 model_rpm_limit,
                 model_tpm_limit,
-                allowed_models,
+                allowed_models: _,
                 rollover_max_budget: _,
                 temp_budget_increase: _,
                 temp_budget_expiry: _,
@@ -495,7 +495,6 @@ pub(crate) fn unserved_membership(membership: &MembershipRecord) -> Option<&'sta
     carried![
         model_rpm_limit,
         model_tpm_limit,
-        allowed_models,
         soft_budget,
         rpm_limit,
         tpm_limit,
@@ -654,6 +653,21 @@ pub(super) fn unserved_budget_extras(
     extras: &BudgetExtras,
     serves_model_budget: bool,
 ) -> Option<&'static str> {
+    unserved_budget_extras_for(extras, serves_model_budget, true)
+}
+
+pub(super) fn unserved_affiliation_budget_extras(
+    extras: &BudgetExtras,
+    serves_model_budget: bool,
+) -> Option<&'static str> {
+    unserved_budget_extras_for(extras, serves_model_budget, false)
+}
+
+fn unserved_budget_extras_for(
+    extras: &BudgetExtras,
+    serves_model_budget: bool,
+    checks_lifetime_extras: bool,
+) -> Option<&'static str> {
     let BudgetExtras {
         model_max_budget,
         model_rpm_limit,
@@ -663,17 +677,20 @@ pub(super) fn unserved_budget_extras(
         temp_budget_increase,
         temp_budget_expiry,
     } = extras;
-    let temp_budget_expiry = &temp_budget_expiry.is_some();
     let model_max_budget = &(!serves_model_budget && !model_max_budget.is_empty());
+    let rollover_max_budget = &rollover_max_budget.filter(|_| checks_lifetime_extras);
     carried![
         rollover_max_budget,
         model_max_budget,
         model_tpm_limit,
-        model_rpm_limit,
-        allowed_models,
-        temp_budget_increase,
-        temp_budget_expiry,
+        model_rpm_limit
     ]
+    .or_else(|| {
+        let temp_budget_expiry = &temp_budget_expiry.is_some();
+        checks_lifetime_extras
+            .then(|| carried![allowed_models, temp_budget_increase, temp_budget_expiry])
+            .flatten()
+    })
 }
 
 /// The first column of `org` that holds something nothing in the native app reads yet, which
@@ -686,10 +703,7 @@ pub(crate) fn unserved_org(org: &OrgRecord) -> Option<&'static str> {
         organization_id: _,
         organization_alias: _,
         models,
-        budget: Budget {
-            max: max_budget,
-            spend: _,
-        },
+        budget: _,
         soft_budget,
         limits: MinuteLimits {
             rpm: rpm_limit,
@@ -703,11 +717,10 @@ pub(crate) fn unserved_org(org: &OrgRecord) -> Option<&'static str> {
     let object_permission = &object_permission.is_some();
     let metadata = &metadata.is_some();
     carried![object_permission, metadata]
-        .or_else(|| unserved_budget_extras(budget_extras, false))
+        .or_else(|| unserved_affiliation_budget_extras(budget_extras, false))
         .or_else(|| {
             carried![
                 models,
-                max_budget,
                 soft_budget,
                 rpm_limit,
                 tpm_limit,
@@ -799,10 +812,7 @@ pub(crate) fn unserved_project(project: &ProjectRecord) -> Option<&'static str> 
             rpm: rpm_limit,
             tpm: tpm_limit,
         },
-        budget: Budget {
-            max: max_budget,
-            spend: _,
-        },
+        budget: _,
         soft_budget,
         tpd_limit,
         max_parallel_requests,
@@ -812,13 +822,12 @@ pub(crate) fn unserved_project(project: &ProjectRecord) -> Option<&'static str> 
     let object_permission = &object_permission.is_some();
     let metadata = &metadata.is_some();
     carried![object_permission, metadata]
-        .or_else(|| unserved_budget_extras(budget_extras, false))
+        .or_else(|| unserved_affiliation_budget_extras(budget_extras, false))
         .or_else(|| {
             carried![
                 team_id,
                 models,
                 blocked,
-                max_budget,
                 soft_budget,
                 rpm_limit,
                 tpm_limit,

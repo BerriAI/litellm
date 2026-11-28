@@ -113,9 +113,7 @@ requests:
   - name: a key in a project with a budget
     headers: {authorization: Bearer sk-capped}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: max_budget
+    expect: rust
 
   - name: a key in a project whose budget row holds per-model budgets
     headers: {authorization: Bearer sk-structured}

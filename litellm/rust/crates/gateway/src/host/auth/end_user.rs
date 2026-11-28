@@ -1,18 +1,18 @@
 //! The end user a request names, read through the store and turned into the core's record. The
-//! native app charges and limits no end user. A column a plain value holds is copied onto the
+//! native app charges end users and checks their lifetime and per-model budgets. A column a plain value holds is copied onto the
 //! record, and [`unserved`] names the first one nothing native reads yet, which `admit` sends the
 //! request to Python over. A column that holds a structure, or a value whose type the record has no
 //! counterpart for, is declined here, naming the field.
 
 use litellm_gateway_auth_core::{
     Error,
-    record::{Budget, EndUserRecord, MinuteLimits, ModelRegion},
+    record::{EndUserRecord, MinuteLimits, ModelRegion},
 };
 use litellm_redis_store::auth_cache::{EndUserEntry, ModelRegion as StoredModelRegion};
 
 use super::{
     AuthStore,
-    affiliation::{BudgetRow, budget_row_or_spend, unserved_budget_extras},
+    affiliation::{BudgetRow, budget_row_or_spend, unserved_affiliation_budget_extras},
     carried::{Carried, carried, newer},
     object_permission,
     store::EndUserRead,
@@ -112,10 +112,7 @@ pub(crate) fn unserved(end_user: &EndUserRecord) -> Option<&'static str> {
             rpm: rpm_limit,
             tpm: tpm_limit,
         },
-        budget: Budget {
-            max: max_budget,
-            spend: _,
-        },
+        budget: _,
         soft_budget,
         tpd_limit,
         max_parallel_requests,
@@ -125,7 +122,7 @@ pub(crate) fn unserved(end_user: &EndUserRecord) -> Option<&'static str> {
     } = end_user;
     let object_permission = &object_permission.is_some();
     carried![object_permission]
-        .or_else(|| unserved_budget_extras(budget_extras, true))
+        .or_else(|| unserved_affiliation_budget_extras(budget_extras, true))
         .or_else(|| {
             carried![
                 blocked,
@@ -133,7 +130,6 @@ pub(crate) fn unserved(end_user: &EndUserRecord) -> Option<&'static str> {
                 models,
                 rpm_limit,
                 tpm_limit,
-                max_budget,
                 soft_budget,
                 tpd_limit,
                 max_parallel_requests,
@@ -171,6 +167,7 @@ mod tests {
     #[rstest]
     #[case::nothing_else(json!({}))]
     #[case::what_it_spent_and_is_called(json!({"spend": 12.5, "alias": "acme"}))]
+    #[case::a_budget(json!({"litellm_budget_table": {"max_budget": 1.0}}))]
     fn a_row_that_only_describes_the_end_user_is_served(#[case] columns: Value) {
         let record = record(&stored(columns)).unwrap();
 
@@ -188,7 +185,6 @@ mod tests {
     #[case::a_block(json!({"blocked": true}), "blocked")]
     #[case::a_default_model(json!({"default_model": "claude"}), "default_model")]
     #[case::a_model_list(json!({"models": ["claude"]}), "models")]
-    #[case::a_budget(json!({"litellm_budget_table": {"max_budget": 1.0}}), "max_budget")]
     #[case::a_rate_limit_in_its_budget(json!({"litellm_budget_table": {"tpm_limit": 10}}), "tpm_limit")]
     fn a_plain_column_the_row_holds_is_copied_and_named_unserved(
         #[case] columns: Value,

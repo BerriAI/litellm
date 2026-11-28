@@ -50,16 +50,12 @@ requests:
   - name: the master key naming an end user over its budget
     headers: {authorization: Bearer gateway-key}
     body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-broke}}
-    expect: python
-    reason: body
-    over: max_budget
+    expect: rust
 
   - name: a key naming an end user over its budget
     headers: {authorization: Bearer sk-bare}
     body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-broke}}
-    expect: python
-    reason: body
-    over: max_budget
+    expect: rust
 
   - name: a key naming an end user whose model list leaves the model out
     headers: {authorization: Bearer sk-bare}
@@ -92,9 +88,7 @@ requests:
   - name: an end user over its budget named with space the proxy strips
     headers: {authorization: Bearer sk-bare}
     body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: "\x1c eu-broke\t"}}
-    expect: python
-    reason: body
-    over: max_budget
+    expect: rust
 
   - name: a key naming an end user whose budget sets a rate limit
     headers: {authorization: Bearer sk-bare}

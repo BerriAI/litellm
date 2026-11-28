@@ -77,12 +77,10 @@ requests:
     reason: credential
     over: organization
 
-  - name: an organization has an unserved budget
+  - name: a key names an organization with a budget
     headers: {authorization: Bearer sk-limited}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: max_budget
+    expect: rust
 
   - name: an organization holds structured metadata
     headers: {authorization: Bearer sk-tagged}

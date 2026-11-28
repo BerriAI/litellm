@@ -555,7 +555,11 @@ impl BudgetCheck {
                     && (held.window.is_some()
                         || matches!(
                             held.counter,
-                            SpendCounter::TeamMember { .. } | SpendCounter::User(_)
+                            SpendCounter::TeamMember { .. }
+                                | SpendCounter::User(_)
+                                | SpendCounter::EndUser(_)
+                                | SpendCounter::Org(_)
+                                | SpendCounter::Project(_)
                         ))
             })
             .map(|(held, spend)| {

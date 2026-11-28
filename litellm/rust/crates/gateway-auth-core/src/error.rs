@@ -128,6 +128,7 @@ pub struct ModelAccessDenied<'a> {
 pub enum DeniedList {
     Key,
     Team,
+    TeamMember,
 }
 
 /// A request `authz` refuses for a caller the core authenticated, whichever credential it presented.
