@@ -42,6 +42,7 @@ from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
     OAuthTokenStore,
     TokenStoreUnavailable,
+    fetch_token_result,
 )
 from litellm.proxy.mcp_server.outbound_credentials.result import (
     Error,
@@ -184,10 +185,17 @@ class UpstreamCredentialProvider:
 
         Reads from the same per-user store as the ``authorization_code`` arm, so the discovery
         challenge and the egress agree on whether the user is authorized. Returns a typed ``bool``
-        (no ``httpx2.Auth``), unlike ``resolve_credentials``. A non-per-user mode has no token in the
-        store, so it reads as False without a per-mode branch here.
+        (no ``httpx2.Auth``), unlike ``resolve_credentials``. Only ``unauthorized`` returns ``False``:
+        outages, client misconfiguration and identity-binding failures proceed to egress and surface
+        503/500/412 instead of prompting the user to sign in again.
         """
-        return await self._authz_token(subject, server) is not None
+        try:
+            outcome: Final = await fetch_token_result(self._oauth_token_store, subject.subject_id, server.server_id)
+        except TokenStoreUnavailable:
+            return True
+        if isinstance(outcome, Error):
+            return outcome.error.tag != "unauthorized"
+        return True
 
     def _passthrough(self, subject: Subject) -> Result[httpx2.Auth, CredError]:
         """Forward the caller's own upstream credential verbatim; the gateway mints nothing.
@@ -334,11 +342,16 @@ class UpstreamCredentialProvider:
     async def _authorization_code(
         self, subject: Subject, server: ServerSpec, config: AuthorizationCodeConfig
     ) -> Result[StaticHeaderAuth, CredError]:
-        token: Final = await self._authz_token(subject, server)
-        if token is None:
-            return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
-        header_name, header_value = config.header(token.access_token)
-        return Ok(StaticHeaderAuth(header_value, header_name=header_name))
+        try:
+            outcome: Final = await fetch_token_result(self._oauth_token_store, subject.subject_id, server.server_id)
+        except TokenStoreUnavailable:
+            return Error(CredError.of_upstream_unavailable("OAuth token store is unavailable; retry the request."))
+        match outcome:
+            case Error(err):
+                return Error(err)
+            case Ok(token):
+                header_name, header_value = config.header(token.access_token)
+                return Ok(StaticHeaderAuth(header_value, header_name=header_name))
 
     async def _client_credentials(
         self, server_id: str, config: ClientCredentialsConfig
