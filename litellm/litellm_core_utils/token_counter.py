@@ -2137,6 +2137,7 @@ def _count_anthropic_content(
                     use_default_image_token_count,
                     default_token_count,
                     pdf_pricing,
+                    _content_depth=_content_depth + 1,
                 )
             elif isinstance(field_value, dict):
                 if (
@@ -2144,9 +2145,17 @@ def _count_anthropic_content(
                     and field_name == "content"
                     and (field_mapping := as_str_mapping(content[field_name])) is not None
                 ):
-                    tokens += _count_anthropic_content(
-                        field_mapping,
+                    tokens += _count_content_list(
                         count_function,
+                        [
+                            cast(  # cast-ok: runtime dispatch reads the block's own type field
+                                AnthropicMessagesTextParam
+                                | AnthropicMessagesImageParam
+                                | AnthropicMessagesDocumentParam
+                                | AnthropicSearchResultParam,
+                                field_mapping,
+                            )
+                        ],
                         use_default_image_token_count,
                         default_token_count,
                         pdf_pricing,
@@ -2219,6 +2228,8 @@ def _count_content_list(
     use_default_image_token_count: bool,
     default_token_count: int | None,
     pdf_pricing: PdfPagePricing = "claude",
+    *,
+    _content_depth: int = 0,
 ) -> int:
     """Recursively count tokens from a list of content blocks."""
     try:
@@ -2263,6 +2274,7 @@ def _count_content_list(
                     use_default_image_token_count,
                     default_token_count,
                     pdf_pricing,
+                    _content_depth=_content_depth,
                 )
             elif c["type"] == "tool_reference":
                 # Anthropic tool-search reference block: a lightweight pointer to
