@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -30,6 +31,6 @@ def test_backup_matches_main(model):
 
 def test_glm_5_2_alias_reports_same_retirement() -> None:
     canonical, alias = GLM_5_2_MODELS
-    prices = _load(MAIN_PATH)
+    prices: Final = _load(MAIN_PATH)
 
     assert prices[alias]["deprecation_date"] == prices[canonical]["deprecation_date"]
