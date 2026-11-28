@@ -4223,6 +4223,7 @@ dependencies = [
  "envy",
  "flate2",
  "futures-util",
+ "hex",
  "http-body-util",
  "hyper-util",
  "jiff",

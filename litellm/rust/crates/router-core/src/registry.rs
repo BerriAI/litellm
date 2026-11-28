@@ -1063,7 +1063,7 @@ impl Registry {
     }
 
     /// Whether any deployment is listed under a wildcard pattern.
-    pub(crate) fn has_wildcards(&self) -> bool {
+    pub fn has_wildcards(&self) -> bool {
         !self.wildcards.is_empty()
     }
 
