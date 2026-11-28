@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from litellm.types.llms.openai import ChatCompletionThinkingBlock
 
@@ -11,18 +12,13 @@ _OBJECT: Final = TypeAdapter(dict[str, object])
 _OBJECTS: Final = TypeAdapter(tuple[object, ...])
 
 
-class _SAPThoughtBlock(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
-    content: str = ""
+class _SAPThoughtBlock(LiteLLMBaseModel):
+    content: str | None = None
     signature: str | None = None
 
 
-class _SAPThoughts(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="ignore")
-
+class _SAPThoughts(LiteLLMBaseModel):
     reasoning_content: tuple[_SAPThoughtBlock, ...]
-    thinking_blocks: tuple[ChatCompletionThinkingBlock, ...] = ()
 
 
 def _thinking_block(block: _SAPThoughtBlock) -> ChatCompletionThinkingBlock:
@@ -56,13 +52,13 @@ def _normalize_body(body: object) -> object:
     if parsed is None or fields is None:
         return body
 
-    blocks: Final = tuple(_thinking_block(block) for block in parsed.reasoning_content)
-    reasoning_text: Final = "".join(block.content for block in parsed.reasoning_content)
+    blocks: Final = tuple(_thinking_block(block) for block in parsed.reasoning_content if block.content is not None)
+    reasoning_text: Final = "\n".join(block.content for block in parsed.reasoning_content if block.content is not None)
 
     return {
         **fields,
         "reasoning_content": reasoning_text or None,
-        "thinking_blocks": [*parsed.thinking_blocks, *blocks],
+        "thinking_blocks": list(blocks),
     }
 
 
