@@ -101,6 +101,8 @@ pub enum Provider {
     Anthropic,
     #[strum(serialize = "bedrock")]
     Bedrock,
+    #[strum(serialize = "bedrock_mantle")]
+    BedrockMantle,
     #[strum(serialize = "vertex_ai")]
     VertexAi,
     #[strum(serialize = "azure_ai")]
@@ -431,7 +433,8 @@ mod tests {
     #[case::bedrock("bedrock", Provider::Bedrock)]
     #[case::vertex("vertex_ai", Provider::VertexAi)]
     #[case::azure_ai("azure_ai", Provider::AzureAi)]
-    #[case::other("bedrock_mantle", Provider::Other("bedrock_mantle".to_owned()))]
+    #[case::bedrock_mantle("bedrock_mantle", Provider::BedrockMantle)]
+    #[case::other("openai", Provider::Other("openai".to_owned()))]
     fn a_provider_parses_its_custom_llm_provider_spelling(
         #[case] written: &str,
         #[case] expected: Provider,

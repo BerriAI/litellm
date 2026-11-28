@@ -1,7 +1,7 @@
-# Claude on Vertex AI, Bedrock and Mantle through bedrock/mantle/ is served natively, signed or
-# logged in from the deployment's own aws_* and vertex_* params with no api_key. A bedrock_mantle
-# deployment stays with Python until the gateway prices its calls. Every model Python translates for
-# these providers, and every group or fallback that can reach one, goes to Python.
+# Claude on Vertex AI, Bedrock and Bedrock Mantle, through bedrock/mantle/ or the bedrock_mantle
+# provider, is served natively, signed or logged in from the deployment's own aws_* and vertex_*
+# params with no api_key. Every model Python translates for these providers, and every group or
+# fallback that can reach one, goes to Python.
 config:
   model_list:
     - model_name: vertex-claude
@@ -122,19 +122,15 @@ requests:
     body: {model: bedrock-mantle-route, max_tokens: 16, messages: []}
     expect: rust
 
-  - name: claude on mantle, which the gateway does not price yet
+  - name: claude on the bedrock_mantle provider
     headers: {authorization: Bearer gateway-key}
     body: {model: mantle-claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: model
-    over: model_list.litellm_params.model of provider bedrock_mantle
+    expect: rust
 
-  - name: a claude group with a mantle deployment
+  - name: a claude group with a bedrock_mantle deployment
     headers: {authorization: Bearer gateway-key}
     body: {model: claude-with-mantle, max_tokens: 16, messages: []}
-    expect: python
-    reason: model
-    over: model_list.litellm_params.model of provider bedrock_mantle
+    expect: rust
 
   - name: a group of claude deployments on every cloud provider
     headers: {authorization: Bearer gateway-key}
@@ -172,7 +168,7 @@ requests:
     body: {model: mantle-gpt, max_tokens: 16, messages: []}
     expect: python
     reason: model
-    over: model_list.litellm_params.model of provider bedrock_mantle
+    over: model_list.litellm_params.model bedrock_mantle/openai.gpt-oss-120b is bridged to chat completions
 
   - name: a group that mixes claude with gemini on vertex
     headers: {authorization: Bearer gateway-key}
