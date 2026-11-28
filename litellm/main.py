@@ -9939,6 +9939,8 @@ def speech(
 
 ##### Health Endpoints #######################
 
+_OPENCODE_HEALTH_PROBE_PARAMS: Final = TypeAdapter(dict[str, object])
+
 
 async def ahealth_check(
     model_params: dict,
@@ -9957,7 +9959,11 @@ async def ahealth_check(
         }
     """
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
-    from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers, default_health_check_mode
+    from litellm.litellm_core_utils.health_check_helpers import (
+        HealthCheckHelpers,
+        default_health_check_mode,
+        with_opencode_go_probe_session,
+    )
     from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
@@ -10021,19 +10027,25 @@ async def ahealth_check(
             "extraction": "aextraction",
             "batch": ("alist_batches" if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS else "acompletion"),
         }.get("decisions" if is_decisions_model_mode(mode) else mode, "acompletion")
+        validated_params: Final = _OPENCODE_HEALTH_PROBE_PARAMS.validate_python(model_params)
+        probe_params: Final = (
+            {**with_opencode_go_probe_session(validated_params)}
+            if custom_llm_provider == "opencode_go"
+            else validated_params
+        )
         if "*" in model:
             with without_global_fallbacks():
                 return await HealthCheckHelpers.ahealth_check_wildcard_models(
                     model=model,
                     custom_llm_provider=custom_llm_provider,
-                    model_params=model_params,
+                    model_params=probe_params,
                     litellm_logging_obj=litellm_logging_obj,
                 )
 
         mode_handlers: Final = HealthCheckHelpers.get_mode_handlers(
             model=model,
             custom_llm_provider=custom_llm_provider,
-            model_params=model_params,
+            model_params=probe_params,
             prompt=prompt,
             input=input,
         )
