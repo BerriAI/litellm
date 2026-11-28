@@ -13,11 +13,14 @@ OUTAGE_SECONDS: Final = 10.0
 
 
 class DatabaseRelay:
-    def __init__(self, upstream_host: str, upstream_port: int, trigger: bytes) -> None:
+    def __init__(
+        self, upstream_host: str, upstream_port: int, trigger: bytes, *, outage_seconds: float | None = OUTAGE_SECONDS
+    ) -> None:
         self.port: Final = allocate_port()
         self._upstream_host: Final = upstream_host
         self._upstream_port: Final = upstream_port
         self._trigger: Final = trigger
+        self._outage_seconds: Final = outage_seconds
         self._server: Final = LoopbackServer(self.port, self._serve)
         self._loop: Final = self._server.loop
         self._armed: Final = threading.Event()
@@ -42,7 +45,9 @@ class DatabaseRelay:
         self._writers = ()
 
     async def _serve(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
-        if self.tripped.is_set() and time.monotonic() - self._tripped_at < OUTAGE_SECONDS:
+        if self.tripped.is_set() and (
+            self._outage_seconds is None or time.monotonic() - self._tripped_at < self._outage_seconds
+        ):
             self.refused += 1
             client_writer.close()
             return
@@ -355,10 +360,12 @@ def _relayed_url(database_url: str, port: int) -> str:
 
 
 @contextmanager
-def database_relay(database_url: str, trigger: bytes) -> Generator[tuple[DatabaseRelay, str]]:
+def database_relay(
+    database_url: str, trigger: bytes, *, outage_seconds: float | None = OUTAGE_SECONDS
+) -> Generator[tuple[DatabaseRelay, str]]:
     parts: Final = urlsplit(database_url)
     assert parts.hostname is not None and parts.port is not None, database_url
-    relay: Final = DatabaseRelay(parts.hostname, parts.port, trigger)
+    relay: Final = DatabaseRelay(parts.hostname, parts.port, trigger, outage_seconds=outage_seconds)
     try:
         relay.start()
         yield relay, _relayed_url(database_url, relay.port)
