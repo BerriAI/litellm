@@ -675,7 +675,7 @@ def test_github_copilot_messages_forward_safeguards_without_deriving_the_beta(
             owned.scenario() as scenario,
         ):
             model: Final = scenario.model(model="github_copilot/claude-sonnet-4-5", api_base=peers.api.url)
-            response: Final = _post(owned, messages_body(model, marker), beta=_CLIENT_BETAS_WITH_DANGEROUS)
+            response: Final = _post(owned, messages_body(model, marker))
             _assert_answered(response, marker)
             observed: Final = _only(peers.api.secure)
             _expect_messages(
@@ -683,6 +683,86 @@ def test_github_copilot_messages_forward_safeguards_without_deriving_the_beta(
             )
             assert observed.headers.get("openai-intent") == "messages-proxy", observed.header_names
             _spend_row(f"msg_{marker}")
+
+
+def test_github_copilot_accepts_per_message_effort_with_the_client_beta(gateway: Gateway, tmp_path: Path) -> None:
+    beta: Final = "mid-conversation-output-config-2026-07-01"
+    token_dir: Final = tmp_path / "copilot"
+    token_dir.mkdir()
+    success: Final = _message("44174")
+    reject: Final = _error_peer(400, "invalid_request_error", "messages.2.output_config: Extra inputs are not permitted")
+
+    def copilot_peer(request: Request) -> Reply:
+        accepted: Final = {beta, "per-turn-control-2026-07-01"}
+        if accepted.isdisjoint(request.headers.get("anthropic-beta", "").split(",")):
+            return reject(request)
+        return Reply(body=json.dumps(success).encode())
+
+    with device_login_peers(tmp_path, provider=copilot_peer) as peers:
+        write_copilot_access(token_dir, "synthetic-copilot-token")
+        with (
+            owned_proxy(
+                gateway, tmp_path, {**peers.environment(), "GITHUB_COPILOT_TOKEN_DIR": str(token_dir)}
+            ) as owned,
+            owned.scenario() as scenario,
+        ):
+            model: Final = scenario.model(
+                name="claude-opus-5-5",
+                model="github_copilot/claude-opus-5.5",
+                model_info={"supports_reasoning": True, "supports_adaptive_thinking": True},
+            )
+            messages: Final[tuple[JsonValue, ...]] = (
+                {"role": "user", "content": "Say A."},
+                {"role": "assistant", "content": "A."},
+                {"role": "system", "content": [], "output_config": {"effort": "low"}},
+                {"role": "user", "content": "Say B."},
+            )
+            response: Final = _post(
+                owned,
+                {"model": model, "max_tokens": 64, "output_config": {"effort": "high"}, "messages": list(messages)},
+                beta=beta,
+            )
+            (request,) = peers.api.secure.drain()
+            assert (request.method, request.target) == ("POST", "/v1/messages")
+            body: Final = _JSON_OBJECT.validate_json(request.body)
+            assert body["messages"] == list(messages)
+            assert body["output_config"] == {"effort": "high"}
+            assert response.status_code == 200, response.text
+            assert response.json()["id"] == success["id"]
+            assert beta in request.headers.get("anthropic-beta", "").split(",")
+
+
+def test_github_copilot_chat_completions_do_not_forward_client_anthropic_beta(gateway: Gateway, tmp_path: Path) -> None:
+    token_dir: Final = tmp_path / "copilot"
+    token_dir.mkdir()
+    success: Final = {
+        "id": "chatcmpl-44174",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "B."}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+    }
+    with device_login_peers(tmp_path, provider=lambda request: Reply(body=json.dumps(success).encode())) as peers:
+        write_copilot_access(token_dir, "synthetic-copilot-token")
+        with (
+            owned_proxy(
+                gateway, tmp_path, {**peers.environment(), "GITHUB_COPILOT_TOKEN_DIR": str(token_dir)}
+            ) as owned,
+            owned.scenario() as scenario,
+        ):
+            model: Final = scenario.model(model="github_copilot/gpt-4o", api_base=peers.api.url)
+            response: Final = owned.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": "Say B."}]},
+                headers={"anthropic-beta": "mid-conversation-output-config-2026-07-01"},
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["choices"][0]["message"]["content"] == "B."
+            (request,) = peers.api.drain()
+            assert (request.method, request.target) == ("POST", "/chat/completions")
+            assert "anthropic-beta" not in request.headers
 
 
 def test_non_native_deployments_bridge_to_the_responses_api_without_safeguards_or_the_beta(gateway: Gateway) -> None:

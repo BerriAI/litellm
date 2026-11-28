@@ -75,7 +75,7 @@ from litellm.proxy.pricing_currency import ReferenceRateLookup
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, PROMPT_MANAGEMENT_APPLIED_FIELD
-from litellm.types.utils import CredentialItem
+from litellm.types.utils import CredentialItem, ProviderSpecificHeader
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
@@ -9491,6 +9491,24 @@ def test_client_anthropic_api_headers_stay_off_azure_ai_outside_native_messages(
     forwarded = _headers_forwarded_to({"anthropic-beta": "thinking-binding-controls-2026-08-01"}, "azure_ai")
 
     assert forwarded == {}
+
+
+def test_client_anthropic_api_headers_reach_copilot_only_on_native_messages() -> None:
+    client_headers: Final = {
+        "anthropic-beta": "mid-conversation-output-config-2026-07-01",
+        "anthropic-version": "2023-06-01",
+    }
+    data: Final[
+        dict[str, ProviderSpecificHeader | list[ProviderSpecificHeader]]
+    ] = {}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(data=data, headers=client_headers)
+
+    assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        data["provider_specific_header"], "github_copilot"
+    ) == {}
+    assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        data["provider_specific_header"], "github_copilot", native_anthropic_messages=True
+    ) == client_headers
 
 
 @pytest.mark.asyncio
