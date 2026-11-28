@@ -54,6 +54,8 @@ from litellm.proxy.auth.password_policy import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.callback_config_validation import raise_on_logging_metadata_env_reference
+from litellm.proxy.common_utils.callback_utils import caller_env_reference_check_metadata
 from litellm.proxy.common_utils.openai_error_payload import openai_shaped_proxy_exception, proxy_exception_for
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
@@ -679,6 +681,14 @@ async def new_user(
                 detail=f"Only proxy admins can create administrative users (proxy_admin, proxy_admin_viewer). Attempted to create user with role: {data.user_role}. Your role: {user_api_key_dict.user_role}",
             )
 
+        raise_on_logging_metadata_env_reference(
+            caller_env_reference_check_metadata(
+                data.metadata,
+                None,
+                caller_is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            ),
+            source="user metadata",
+        )
         if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
             enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
             enforce_vector_store_index_grants_are_admin_only(data, None, None, user_api_key_dict, "key")
@@ -1854,6 +1864,8 @@ async def _update_single_user_helper(
         data=user_request,
         non_default_values=non_default_values,
         existing_metadata=existing_metadata or {},
+        metadata_owner=(f"User {_target_user_id}", "user metadata"),
+        caller_is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
     )
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.

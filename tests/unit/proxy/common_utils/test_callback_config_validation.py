@@ -3,14 +3,19 @@ from collections.abc import Iterator
 from typing import Final
 
 import pytest
+from fastapi import HTTPException
 
 from litellm.proxy.common_utils.callback_config_validation import (
+    EnvReferenceSource,
     callback_config_error,
     conflicting_callback_var_error,
     conflicting_span_scope_error,
     credential_reference_rejection,
     cross_entry_family_error,
     logging_metadata_config_error,
+    logging_metadata_env_reference_error,
+    raise_on_logging_metadata_env_reference,
+    raise_on_stored_metadata_env_reference,
 )
 
 
@@ -501,6 +506,107 @@ def test_key_logging_entries_compare_excluded_services_by_parsed_value(
 def test_a_failure_only_entry_rejects_excluded_services() -> None:
     error: Final = callback_config_error("langfuse_otel", {"excluded_services": "redis"}, "failure")
     assert error is not None and "excluded_services" in error and "success_and_failure" in error
+
+
+_LITERAL_ARIZE_VARS: Final = {"arize_api_key": "literal-key", "arize_space_id": "literal-space"}
+
+
+def _arize_entry(**callback_vars: str) -> dict[str, object]:
+    return {
+        "callback_name": "arize",
+        "callback_type": "success",
+        "callback_vars": {**_LITERAL_ARIZE_VARS, **callback_vars},
+    }
+
+
+@pytest.mark.parametrize("field", ["arize_api_key", "arize_space_id"])
+def test_an_env_reference_in_any_logging_entry_is_rejected(field: str) -> None:
+    metadata: Final = {"logging": [_arize_entry(), _arize_entry(**{field: "os.environ/ARIZE_TENANT_1"})]}
+    error: Final = logging_metadata_env_reference_error(metadata)
+    assert error is not None and f"Callback param '{field}'" in error and "os.environ/" in error
+    assert logging_metadata_config_error(metadata) == error
+
+
+def test_an_env_reference_inside_json_string_logging_is_rejected() -> None:
+    metadata: Final = {"logging": json.dumps([_arize_entry(arize_api_key="os.environ/ARIZE_TENANT_1")])}
+    error: Final = logging_metadata_env_reference_error(metadata)
+    assert error is not None and "Callback param 'arize_api_key'" in error
+    assert logging_metadata_config_error(metadata) == error
+    with pytest.raises(HTTPException) as raised:
+        raise_on_logging_metadata_env_reference(metadata, source="key metadata")
+    assert raised.value.status_code == 400
+
+
+def test_an_env_reference_is_rejected_whatever_the_callback_name() -> None:
+    metadata: Final = {"logging": [{"callback_vars": {"langfuse_secret_key": "os.environ/LANGFUSE_SECRET"}}]}
+    assert logging_metadata_env_reference_error(metadata) is not None
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        pytest.param(None, id="no-metadata"),
+        pytest.param({"owner": "x"}, id="no-logging"),
+        pytest.param({"logging": [_arize_entry()]}, id="literal-values"),
+        pytest.param({"logging": [{"callback_name": "arize"}]}, id="no-callback-vars"),
+    ],
+)
+def test_logging_metadata_without_an_env_reference_passes(metadata: dict[str, object] | None) -> None:
+    assert logging_metadata_env_reference_error(metadata) is None
+    raise_on_logging_metadata_env_reference(metadata, source="team metadata")
+
+
+def test_an_env_reference_raises_a_400_carrying_the_error() -> None:
+    metadata: Final = {"logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
+    with pytest.raises(HTTPException) as raised:
+        raise_on_logging_metadata_env_reference(metadata, source="user metadata")
+    assert raised.value.status_code == 400
+    assert raised.value.detail == {"error": logging_metadata_env_reference_error(metadata, source="user metadata")}
+
+
+@pytest.mark.parametrize(
+    ("source", "remedy", "wrong_remedy"),
+    [
+        ("key metadata", "litellm_credential_name", "default_team_settings"),
+        ("user metadata", "litellm_credential_name", "default_team_settings"),
+        ("team metadata", "default_team_settings", "litellm_credential_name"),
+    ],
+)
+def test_the_rejection_names_the_writer_and_a_remedy_that_writer_can_use(
+    source: EnvReferenceSource, remedy: str, wrong_remedy: str
+) -> None:
+    metadata: Final = {"logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
+    error: Final = logging_metadata_env_reference_error(metadata, source=source)
+    assert error is not None and f"(from {source})" in error
+    assert remedy in error and wrong_remedy not in error
+
+
+def _stored_reference_error(requested: dict[str, object], stored: dict[str, object]) -> str:
+    with pytest.raises(HTTPException) as raised:
+        raise_on_stored_metadata_env_reference("Team t1", requested, stored, source="team metadata")
+    assert raised.value.status_code == 400
+    return str(raised.value.detail)
+
+
+def test_resending_the_stored_reference_says_it_is_already_stored() -> None:
+    stored: Final = {"owner": "x", "logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
+    assert "Team t1 already stores this reference" in _stored_reference_error(stored, stored)
+
+
+def test_a_stored_reference_after_a_new_one_is_still_called_already_stored() -> None:
+    stored: Final = {"logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
+    requested: Final = {
+        "logging": [_arize_entry(arize_api_key="os.environ/NEW_KEY"), *stored["logging"]],
+    }
+    error: Final = _stored_reference_error(requested, stored)
+    assert "Team t1 already stores this reference" in error and "Callback param 'arize_space_id'" in error
+
+
+def test_a_new_reference_under_a_stored_param_is_not_called_already_stored() -> None:
+    stored: Final = {"logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
+    requested: Final = {"logging": [_arize_entry(arize_space_id="os.environ/OTHER_SPACE")]}
+    error: Final = _stored_reference_error(requested, stored)
+    assert "already stores" not in error and "Callback param 'arize_space_id'" in error
 
 
 _REFERENCE: Final = {"callback_name": "arize", "callback_type": "success", "litellm_credential_name": "space-a"}

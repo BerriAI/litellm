@@ -137,6 +137,38 @@ async def test_new_user_cannot_mint_customer_bound_keys_without_proxy_admin(bind
 
 
 @pytest.mark.asyncio
+async def test_new_user_refuses_an_encrypted_env_reference(
+    monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    copied: Final = encrypt_callback_vars(
+        {"logging": [{"callback_name": "arize", "callback_vars": {"arize_api_key": "os.environ/ARIZE_KEY_TENANT_1"}}]}
+    )
+    assert "os.environ" not in json.dumps(copied)
+    table: Final = SimpleNamespace(
+        find_first=AsyncMock(return_value=None),
+        count=AsyncMock(return_value=0),
+        create=AsyncMock(return_value=LiteLLM_UserTable(user_id="copied-user")),
+    )
+    mocker.patch("prisma.Prisma", return_value=SimpleNamespace(litellm_usertable=table))
+    database: Final = PrismaClient(
+        database_url="postgresql://unused:unused@localhost/unused",
+        proxy_logging_obj=proxy_server.proxy_logging_obj,
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", database)
+    with pytest.raises(ProxyException) as caught:
+        await new_user(
+            data=NewUserRequest(user_id="copied-user", metadata=copied, auto_create_key=False),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    assert str(caught.value.code) == "400"
+    assert "arize_api_key" in caught.value.message
+    table.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_new_user_reports_missing_database_after_customer_binding_validation(mocker: MockerFixture) -> None:
     mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
     with pytest.raises(ProxyException) as caught:

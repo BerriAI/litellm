@@ -8,13 +8,24 @@ per-integration checks here.
 import math
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
-from typing import Final, Literal, cast  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
+from typing import (
+    Final,
+    Literal,
+    TypeAlias,
+    cast,  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
+)
 
+from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    callback_env_reference_error,
+    is_callback_env_reference,
+)
 from litellm.types.utils import (
     BAGGAGE_METADATA_KEYS_VAR,
     EXCLUDED_SERVICES_VAR,
@@ -35,6 +46,20 @@ _ARIZE_CALLBACK: Final = "arize"
 _ARIZE_OTLP_PROTOCOL_VAR: Final = "arize_otlp_protocol"
 _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
     {"arize_success_sampling_rate", "arize_error_sampling_rate"}
+)
+_LOGGING_METADATA: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+EnvReferenceSource: TypeAlias = Literal["key metadata", "team metadata", "user metadata"]
+_KEY_SECRET_HINT: Final = (
+    "\nTo keep a separate secret per key, a proxy admin can save it as a credential and name it with "
+    "litellm_credential_name in the key's logging entry."
+)
+_ENV_REFERENCE_HINTS: Final[Mapping[EnvReferenceSource, str]] = MappingProxyType(
+    {
+        "key metadata": _KEY_SECRET_HINT,
+        "user metadata": _KEY_SECRET_HINT,
+        "team metadata": "\nTo keep a separate secret per team, a proxy admin can configure the callback for that "
+        "team under litellm_settings.default_team_settings in the proxy config.yaml.",
+    }
 )
 
 
@@ -300,7 +325,7 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     entries: Final = normalize_logging_entries(metadata.get("logging"))
     if isinstance(entries, InvalidLoggingMetadata):
         return entries.message
-    entry_error: Final = next(
+    entry_error: Final = logging_metadata_env_reference_error(metadata) or next(
         (error for entry in entries if (error := _logging_entry_error(entry)) is not None),
         None,
     )
@@ -319,6 +344,70 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
         ),
         None,
     )
+
+
+def logging_metadata_env_reference_error(
+    metadata: Mapping[str, object] | None, *, source: EnvReferenceSource = "key metadata"
+) -> str | None:
+    reference: Final = next(iter(_metadata_env_references(metadata)), None)
+    return None if reference is None else _env_reference_write_error(reference, source)
+
+
+def _env_reference_write_error(reference: tuple[str, str], source: EnvReferenceSource) -> str:
+    return f"{callback_env_reference_error(*reference, source=source)}{_ENV_REFERENCE_HINTS[source]}"
+
+
+def raise_on_logging_metadata_env_reference(metadata: object, *, source: EnvReferenceSource) -> None:
+    error: Final = _metadata_env_reference_error(metadata, source)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
+
+
+def raise_on_stored_metadata_env_reference(
+    owner: str, requested_metadata: object, stored_metadata: object, *, source: EnvReferenceSource
+) -> None:
+    requested: Final = _object_metadata_env_references(requested_metadata)
+    if not requested:
+        return
+    stored: Final = frozenset(_object_metadata_env_references(stored_metadata))
+    already_stored: Final = next((reference for reference in requested if reference in stored), None)
+    if already_stored is None:
+        raise HTTPException(status_code=400, detail={"error": _env_reference_write_error(requested[0], source)})
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": f"{owner} already stores this reference in its metadata, so it must be removed "
+            "before metadata can be saved. Send metadata.logging or metadata.callback_settings without "
+            f"it to clear it. {_env_reference_write_error(already_stored, source)}"
+        },
+    )
+
+
+def _metadata_env_reference_error(metadata: object, source: EnvReferenceSource) -> str | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    return logging_metadata_env_reference_error(_LOGGING_METADATA.validate_python(metadata), source=source)
+
+
+def _object_metadata_env_references(metadata: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(metadata, Mapping):
+        return ()
+    return _metadata_env_references(_LOGGING_METADATA.validate_python(metadata))
+
+
+def _metadata_env_references(metadata: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
+    if not metadata:
+        return ()
+    logging_entries: Final = normalize_logging_entries(metadata.get("logging"), skip_invalid=True)
+    entries: Final = (
+        *(() if isinstance(logging_entries, InvalidLoggingMetadata) else logging_entries),
+        metadata.get("callback_settings"),
+    )
+    return tuple(chain.from_iterable(map(_entry_env_references, entries)))
+
+
+def _entry_env_references(entry: object) -> Iterator[tuple[str, str]]:
+    return ((name, value) for name, value in _entry_callback_vars(entry).items() if is_callback_env_reference(value))
 
 
 def stored_callback_entries(logging_entries: object) -> tuple[tuple[str | None, Mapping[str, str]], ...]:
@@ -385,7 +474,10 @@ def _entry_callback_vars(entry: object) -> Mapping[str, str]:
     callback_vars: Final = entry.get("callback_vars") if isinstance(entry, Mapping) else None
     if not isinstance(callback_vars, Mapping):
         return MappingProxyType({})
-    return MappingProxyType({str(key): str(value) for key, value in callback_vars.items()})
+    typed_vars: Final[Mapping[object, object]] = cast(  # cast-ok: callback_vars is Mapping-checked, keys unvalidated
+        Mapping[object, object], callback_vars
+    )
+    return MappingProxyType({str(key): str(value) for key, value in typed_vars.items()})
 
 
 def _logging_entry_error(entry: object) -> str | None:

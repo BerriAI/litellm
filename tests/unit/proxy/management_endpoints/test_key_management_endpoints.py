@@ -24928,6 +24928,8 @@ def test_prepare_metadata_fields(monkeypatch: pytest.MonkeyPatch) -> None:
             data=data,
             non_default_values=non_default_values,
             existing_metadata=existing_metadata,
+            metadata_owner=("This key", "key metadata"),
+            caller_is_proxy_admin=True,
         ) == expected
 
 
@@ -25276,6 +25278,136 @@ def test_non_admin_resaving_referencing_key_metadata_read_back_encrypted_is_not_
         raise_on_logging_credential_change({"note": "unrelated edit"}, key_row, internal_user)
 
     assert removed.value.status_code == 403
+
+
+def test_a_resent_encrypted_env_reference_is_refused_by_the_key_logging_validator(monkeypatch):
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    resent: Final = encrypt_callback_vars(
+        {
+            "logging": [
+                {
+                    "callback_name": "arize",
+                    "callback_type": "success",
+                    "callback_vars": {"arize_api_key": "os.environ/ARIZE_API_KEY_TENANT_1"},
+                }
+            ]
+        }
+    )
+    assert isinstance(resent, dict) and "os.environ" not in json.dumps(resent)
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_on_invalid_key_logging_config(resent)
+
+    assert exc_info.value.status_code == 400
+    assert "arize_api_key" in str(exc_info.value.detail) and "os.environ/" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize("caller_is_proxy_admin", [True, False])
+@pytest.mark.parametrize(
+    ("owner", "expected"),
+    [
+        pytest.param(("This key", "key metadata"), "This key already stores this reference", id="key"),
+        pytest.param(("User u1", "user metadata"), "User u1 already stores this reference", id="user"),
+    ],
+)
+def test_resending_a_stored_encrypted_env_reference_says_it_is_already_stored(
+    monkeypatch, owner, expected, caller_is_proxy_admin
+):
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    stored: Final = encrypt_callback_vars(
+        {"logging": [{"callback_name": "arize", "callback_vars": {"arize_api_key": "os.environ/ARIZE_KEY_TENANT_1"}}]}
+    )
+    assert isinstance(stored, dict)
+    with pytest.raises(HTTPException) as exc_info:
+        prepare_metadata_fields(
+            data=UpdateKeyRequest(key="sk-1", metadata=stored),
+            non_default_values={"metadata": dict(stored)},
+            existing_metadata=dict(stored),
+            metadata_owner=owner,
+            caller_is_proxy_admin=caller_is_proxy_admin,
+        )
+    assert exc_info.value.status_code == 400
+    assert expected in str(exc_info.value.detail)
+    assert "ARIZE_KEY_TENANT_1" not in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
+    ("caller_is_proxy_admin", "expected"),
+    [
+        pytest.param(True, "Callback param 'arize_api_key' (from key metadata)", id="proxy-admin"),
+        pytest.param(False, "Encrypted callback values can only be sent back unchanged", id="non-admin"),
+    ],
+)
+def test_a_copied_ciphertext_on_key_update_is_decrypted_only_for_proxy_admins(
+    monkeypatch, caller_is_proxy_admin, expected
+):
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    copied: Final = encrypt_callback_vars(
+        {"logging": [{"callback_name": "arize", "callback_vars": {"arize_api_key": "os.environ/ARIZE_KEY_TENANT_1"}}]}
+    )
+    assert isinstance(copied, dict)
+    with pytest.raises(HTTPException) as exc_info:
+        prepare_metadata_fields(
+            data=UpdateKeyRequest(key="sk-1", metadata=copied),
+            non_default_values={"metadata": dict(copied)},
+            existing_metadata={"owner": "x"},
+            metadata_owner=("This key", "key metadata"),
+            caller_is_proxy_admin=caller_is_proxy_admin,
+        )
+    assert exc_info.value.status_code == 400
+    assert expected in str(exc_info.value.detail)
+
+
+def test_an_encrypted_env_reference_inside_json_string_logging_is_refused(monkeypatch):
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    encrypted: Final = encrypt_callback_vars(
+        {"logging": [{"callback_name": "arize", "callback_vars": {"arize_api_key": "os.environ/ARIZE_KEY_TENANT_1"}}]}
+    )
+    resent: Final = {"logging": json.dumps(encrypted["logging"])}
+    assert "os.environ" not in json.dumps(resent)
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_on_invalid_key_logging_config(resent)
+
+    assert exc_info.value.status_code == 400
+    assert "arize_api_key" in str(exc_info.value.detail) and "os.environ/" in str(exc_info.value.detail)
+
+
+def test_a_resent_ciphertext_never_comes_back_decrypted_in_a_validation_error(monkeypatch):
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    secret: Final = "arize-secret-api-key-value"
+    stored: Final = encrypt_callback_vars(
+        {"logging": [{"callback_name": "arize", "callback_vars": {"arize_api_key": secret}}]}
+    )
+    ciphertext: Final = stored["logging"][0]["callback_vars"]["arize_api_key"]
+    assert ciphertext != secret
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_on_invalid_key_logging_config(
+            {
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {"arize_error_sampling_rate": ciphertext},
+                    }
+                ]
+            }
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "arize_error_sampling_rate" in str(exc_info.value.detail)
+    assert secret not in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -25709,3 +25841,36 @@ async def test_key_team_changes_cannot_remove_inherited_header_policy(
         return
     result: Final = await call
     assert result["team_id"] == new_team
+
+
+@pytest.mark.asyncio
+async def test_a_non_admin_copied_ciphertext_on_a_credential_entry_gets_the_fixed_refusal(monkeypatch):
+    from litellm.proxy.common_utils.callback_utils import NON_ADMIN_CIPHERTEXT_ERROR, encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+
+    def credential_entry(public_key: str) -> dict[str, object]:
+        encrypted: Final = encrypt_callback_vars(
+            {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_type": "success",
+                        "litellm_credential_name": "tenant-langfuse",
+                        "callback_vars": {"langfuse_public_key": public_key},
+                    }
+                ]
+            }
+        )
+        assert isinstance(encrypted, dict)
+        return encrypted
+
+    stored: Final = credential_entry("pk-known")
+    for copied_plaintext in ("pk-known", "pk-other"):
+        with pytest.raises(HTTPException) as exc_info:
+            await prepare_key_update_data(
+                UpdateKeyRequest(key="sk-1", metadata=credential_entry(copied_plaintext)),
+                LiteLLM_VerificationToken(token="hashed-sk-1", metadata=stored),
+                user_api_key_dict=UserAPIKeyAuth(user_id="member", user_role=LitellmUserRoles.INTERNAL_USER),
+            )
+        assert (exc_info.value.status_code, exc_info.value.detail) == (400, {"error": NON_ADMIN_CIPHERTEXT_ERROR})

@@ -142,9 +142,15 @@ from litellm.proxy.common_utils.callback_config_validation import (
     InvalidLoggingMetadata,
     mixpanel_logging_metadata_error,
     normalize_logging_entries,
+    raise_on_logging_metadata_env_reference,
+    raise_on_stored_metadata_env_reference,
     string_keyed,
 )
-from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+from litellm.proxy.common_utils.callback_utils import (
+    caller_env_reference_check_metadata,
+    encrypt_callback_vars,
+    env_reference_check_metadata,
+)
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.timezone_utils import (
@@ -1973,6 +1979,15 @@ async def new_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
+        _new_team_metadata: Final[object] = getattr(data, "metadata", None)
+        raise_on_logging_metadata_env_reference(
+            caller_env_reference_check_metadata(
+                _new_team_metadata,
+                None,
+                caller_is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            ),
+            source="team metadata",
+        )
 
         # Check if license is over limit
         total_teams: Final = await _team_db(prisma_client).count()
@@ -2836,6 +2851,16 @@ async def update_team(
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # stored metadata is a bare dict
             user_api_key_dict=user_api_key_dict,
             entity="team",
+        )
+        raise_on_stored_metadata_env_reference(
+            f"Team {data.team_id}",
+            caller_env_reference_check_metadata(
+                getattr(data, "metadata", None),
+                _existing_team_metadata,
+                caller_is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            ),
+            env_reference_check_metadata(_existing_team_metadata),
+            source="team metadata",
         )
 
         check_passthrough_routes_caller_permission(

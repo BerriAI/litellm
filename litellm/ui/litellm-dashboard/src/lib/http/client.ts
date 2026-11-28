@@ -79,6 +79,18 @@ export const deriveErrorMessage = (errorData: any): string => {
   );
 };
 
+const PYTHON_ESCAPES: Readonly<Record<string, string>> = {
+  n: "\n",
+  t: "\t",
+  r: "\r",
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+};
+
+const decodePythonEscapes = (text: string): string =>
+  text.replace(/\\([ntr\\'"])/g, (_, escaped: string) => PYTHON_ESCAPES[escaped]);
+
 /**
  * The proxy serializes HTTPException details as the string form of a Python dict,
  * so a rejection reaches the UI as "{'error': 'actual message'}" (or that string
@@ -98,7 +110,7 @@ export const unwrapProxyErrorMessage = (raw: string): string => {
   } catch {
     const pythonDictMatch = trimmed.match(/^\{'error':\s*(['"])([\s\S]*)\1\}$/);
     if (pythonDictMatch) {
-      return pythonDictMatch[2];
+      return decodePythonEscapes(pythonDictMatch[2]);
     }
   }
   return raw;

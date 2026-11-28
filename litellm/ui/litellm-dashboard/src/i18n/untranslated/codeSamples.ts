@@ -66,7 +66,6 @@ export const codeSamples = {
     vaultConfigJson: '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}',
     memberEmail: "user@example.com",
     memberEmails: "example1@test.com, example2@test.com",
-    callbackEnvVar: (paramName: string) => `os.environ/${paramName.toUpperCase()}`,
   },
   passThrough: {
     headersJson: '{"Authorization": "Bearer your-token", "Content-Type": "application/json"}',
