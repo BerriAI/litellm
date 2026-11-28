@@ -631,6 +631,16 @@ class RustHealthCallbacks:
         except Exception as e:  # noqa: BLE001  # as the Rust call loop treats a success it could not record
             verbose_router_logger.debug("count_realtime_session_success: not recorded. Got - %s", e)
 
+    async def count_realtime_session_refusal(
+        self, kwargs: Mapping[str, object], callbacks: Mapping[str, bool], *, sent: Mapping[str, object]
+    ) -> None:
+        from litellm._logging import verbose_router_logger
+
+        try:
+            await self.report_stream_failure(kwargs, callbacks, sent=sent)
+        except Exception as e:  # noqa: BLE001  # the refused session already ended, as count_realtime_session_success
+            verbose_router_logger.debug("count_realtime_session_refusal: not recorded. Got - %s", e)
+
 
 __all__ = [
     "RustHealthCallbacks",

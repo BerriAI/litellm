@@ -879,6 +879,17 @@ def clean_realtime_session_deployment(call: AttemptCall) -> str | None:
     return None if deployment_id is None else str(deployment_id)
 
 
+def realtime_session_refusal(call: AttemptCall) -> BaseException | None:
+    from litellm.constants import REALTIME_SESSION_REFUSAL_KEY
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    session_logging: Final = call.kwargs.get("litellm_logging_obj")
+    if not reports_own_success(call) or not isinstance(session_logging, LiteLLMLogging):
+        return None
+    refusal: Final = session_logging.model_call_details.get(REALTIME_SESSION_REFUSAL_KEY)
+    return refusal if isinstance(refusal, BaseException) else None
+
+
 # `_scheduler` once `del router.scheduler` ran (None is a scheduler not built yet).
 _NO_SCHEDULER: Final = object()
 
@@ -2841,6 +2852,7 @@ __all__ = [
     "pinned_video_deployment",
     "plan_for",
     "prepare_request",
+    "realtime_session_refusal",
     "reports_own_success",
     "selection_endpoint",
     "stamp_error",

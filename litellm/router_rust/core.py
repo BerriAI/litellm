@@ -120,6 +120,7 @@ from litellm.router_rust.invoke.endpoints import (
     pinned_video_deployment,
     plan_for,
     python_handler_name,
+    realtime_session_refusal,
     reports_own_success,
     scoped_fallback_fields,
     selection_endpoint,
@@ -5853,10 +5854,20 @@ class _Driver:
         # The session re-pin the Python core's success callback runs; a wrapped stream runs it when it ends.
         if not served.get("deferred") and self._core.outcome_callbacks(call.kwargs, sync=False).get("success", True):
             await self._core.repin_after_success(stream.logged(), response)
+        await self._count_realtime_session(call, stream)
+        return served
+
+    async def _count_realtime_session(self, call: AttemptCall, stream: StreamAttempt) -> None:
         session_deployment: Final = clean_realtime_session_deployment(call)
         if session_deployment is not None:
             await self._core.count_realtime_session_success(session_deployment)
-        return served
+        refusal: Final = realtime_session_refusal(call)
+        if refusal is not None:
+            await self._core.count_realtime_session_refusal(
+                stream.failure_logged(refusal),
+                self._core.outcome_callbacks(call.kwargs, sync=False),
+                sent=stream.request,
+            )
 
     def attempt_sync(self, step: Mapping[str, object]) -> Mapping[str, object]:
         step = self._resolve_pods_sync(step)  # rebind-ok: see attempt

@@ -309,6 +309,7 @@ _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
         "failed_to_download_image": 400,
         "image_file_not_found": 400,
         "invalid_request_error": 400,
+        "invalid_api_key": 401,
         "context_length_exceeded": 400,
         "content_policy_violation": 400,
         "cyber_policy": 400,
