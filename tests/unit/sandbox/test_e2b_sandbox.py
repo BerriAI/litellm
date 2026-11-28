@@ -155,6 +155,43 @@ async def test_run_code_targets_jupyter_host_with_access_token():
 
 
 @pytest.mark.asyncio
+async def test_run_code_bash_runs_through_a_shell_and_reports_the_exit_code():
+    client = FakeHTTPClient(
+        execute_lines=[
+            json.dumps({"type": "stdout", "text": "out\n"}),
+            json.dumps({"type": "stderr", "text": "err\n"}),
+            json.dumps({"type": "error", "name": "ExitCode", "value": "3", "traceback": "tb"}),
+        ]
+    )
+    handle = ContainerHandle(id="sbx_xyz", provider="e2b", domain="e2b.app")
+    handle._hidden_params = {"envd_access_token": "tok_run"}
+
+    result = await E2BSandboxConfig().arun_code(
+        container=handle, code="echo out; echo err >&2; exit 3", language="bash", client=client
+    )
+
+    sent = client.calls[0][3]["code"]
+    assert "['bash', '-c'," in sent and "echo out; echo err >&2; exit 3" in sent
+    assert (result.stdout, result.stderr, result.error["name"], result.error["value"]) == (
+        "out\n",
+        "err\n",
+        "ExitCode",
+        "3",
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_code_rejects_an_unsupported_language_before_any_request():
+    client = FakeHTTPClient()
+    handle = ContainerHandle(id="sbx_xyz", provider="e2b", domain="e2b.app")
+    handle._hidden_params = {"envd_access_token": "tok_run"}
+
+    with pytest.raises(ValueError, match="Unsupported sandbox language: cobol"):
+        await E2BSandboxConfig().arun_code(container=handle, code="x", language="cobol", client=client)
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
 async def test_delete_issues_delete_to_sandbox_id():
     client = FakeHTTPClient(delete_status=204)
     handle = ContainerHandle(id="sbx_del", provider="e2b", domain="e2b.app")

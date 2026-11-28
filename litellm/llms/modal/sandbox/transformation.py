@@ -5,7 +5,7 @@ Modal sandbox provider. Modal has no public REST API, so this goes through the `
 import asyncio
 import importlib
 import time
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from types import ModuleType
 from typing import Final, Protocol, TypeVar
@@ -64,7 +64,7 @@ class ModalSandboxConfig(BaseSandboxConfig):
         return key
 
     @asynccontextmanager
-    async def _client(self, api_key: str | None) -> AsyncIterator[tuple[ModuleType, object]]:
+    async def _client(self, api_key: str | None) -> AsyncGenerator[tuple[ModuleType, object]]:
         token_id, token_secret = self.validate_environment(api_key=api_key).split(":", 1)
         try:
             modal: Final = importlib.import_module("modal")
@@ -79,7 +79,7 @@ class ModalSandboxConfig(BaseSandboxConfig):
             await client.close.aio()
 
     @asynccontextmanager
-    async def _sandbox(self, container: ContainerHandle | str, api_key: str | None) -> AsyncIterator[_ModalSandbox]:
+    async def _sandbox(self, container: ContainerHandle | str, api_key: str | None) -> AsyncGenerator[_ModalSandbox]:
         stored_key: Final = container.hidden_params.get("api_key") if isinstance(container, ContainerHandle) else None
         sandbox_id: Final = container.id if isinstance(container, ContainerHandle) else container
         async with self._client(api_key or (str(stored_key) if stored_key else None)) as (modal, client):

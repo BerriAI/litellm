@@ -105,7 +105,12 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
             memory_gib=memory_mb / 1024,
             disk_gib=DEFAULT_DISK_MB / 1024,
         )
-        handle.hidden_params = {"api_key": key, "api_base": base, "sandbox_url": created.sandbox_url}
+        handle.hidden_params = {
+            "api_key": key,
+            "api_base": base,
+            "sandbox_url": created.sandbox_url,
+            "timeout_secs": ttl,
+        }
         return handle
 
     async def arun_code(
@@ -134,14 +139,15 @@ class TensorlakeSandboxConfig(BaseSandboxConfig):
             url=processes, headers=headers, json={"command": "bash", "args": ["-c", shell_command(code, language)]}
         )
         process = _Process.model_validate(started.json())  # rebind-ok: polled until the process exits
-        expires_at: Final = container.expires_at if isinstance(container, ContainerHandle) else None
         while process.status == "running":
-            if expires_at is not None and time.time() > expires_at:
-                raise TimeoutError(f"Tensorlake process {process.pid} was still running when its sandbox timed out.")
             await asyncio.sleep(PROCESS_POLL_SECONDS)
-            process = _Process.model_validate(
-                (await http.get(url=f"{processes}/{process.pid}", headers=headers)).json()
-            )
+            polled = (await http.get(url=f"{processes}/{process.pid}", headers=headers)).json()
+            if not isinstance(polled, dict) or "status" not in polled:
+                raise RuntimeError(f"Tensorlake sandbox {sandbox_id} stopped before process {process.pid} finished.")
+            process = _Process.model_validate(polled)
+        ttl: Final = container.hidden_params.get("timeout_secs") if isinstance(container, ContainerHandle) else None
+        if isinstance(container, ContainerHandle) and isinstance(ttl, int):
+            container.expires_at = time.time() + ttl
 
         stdout: Final = _Output.model_validate(
             (await http.get(url=f"{processes}/{process.pid}/stdout", headers=headers)).json()

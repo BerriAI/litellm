@@ -13,6 +13,8 @@ from collections.abc import Callable
 from typing import Final
 
 import httpx
+import time
+
 import pytest
 
 import litellm
@@ -401,19 +403,46 @@ async def test_tensorlake_reports_a_killed_process_by_its_status(status):
 
 
 @pytest.mark.asyncio
-async def test_tensorlake_stops_polling_a_process_that_outlives_its_sandbox():
+async def test_tensorlake_stops_polling_when_the_sandbox_goes_away(monkeypatch):
+    monkeypatch.setattr("litellm.llms.tensorlake.sandbox.transformation.PROCESS_POLL_SECONDS", 0)
+    polls = []
+
+    def route(method: str, url: str, json: object) -> object:
+        if method == "POST":
+            return {"pid": 7, "status": "running"}
+        polls.append(url)
+        return {"pid": 7, "status": "running"} if len(polls) < 3 else {"error": "sandbox terminated"}
+
+    with pytest.raises(RuntimeError, match="stopped before process 7 finished"):
+        await litellm.arun_code(
+            provider="tensorlake", container="tl_1", code="1", api_key="k", client=FakeHTTPClient(route)
+        )
+    assert len(polls) == 3
+
+
+@pytest.mark.asyncio
+async def test_tensorlake_command_outliving_the_idle_timeout_returns_and_extends_the_cost_window(monkeypatch):
+    monkeypatch.setattr("litellm.llms.tensorlake.sandbox.transformation.PROCESS_POLL_SECONDS", 0)
+    polls = []
+
     def route(method: str, url: str, json: object) -> object:
         if method == "POST" and url.endswith("/sandboxes"):
             return {"sandbox_id": "tl_1", "sandbox_url": "https://tl_1.sandbox.example"}
-        return {"pid": 7, "status": "running"}
+        if method == "POST":
+            return {"pid": 7, "status": "running"}
+        if url.endswith("/7"):
+            polls.append(url)
+            return {"pid": 7, "status": "exited", "exit_code": 0}
+        return {"lines": ["done"]}
 
     client = FakeHTTPClient(route)
-    handle = await litellm.acreate_sandbox(provider="tensorlake", api_key="k", client=client)
+    handle = await litellm.acreate_sandbox(provider="tensorlake", api_key="k", timeout=60, client=client)
     handle.expires_at = 0.0
 
-    with pytest.raises(TimeoutError, match="still running"):
-        await litellm.arun_code(provider="tensorlake", container=handle, code="1", client=client)
-    assert (await litellm.asandbox_cost(provider="modal", container=handle)).source == "estimate"
+    result = await litellm.arun_code(provider="tensorlake", container=handle, code="1", client=client)
+
+    assert (result.stdout, result.exit_code, len(polls)) == ("done\n", 0, 1)
+    assert handle.expires_at == pytest.approx(time.time() + 60, abs=5)
 
 
 @pytest.mark.asyncio

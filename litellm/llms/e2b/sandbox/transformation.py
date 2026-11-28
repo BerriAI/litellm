@@ -22,6 +22,7 @@ from litellm.llms.base_llm.sandbox.transformation import (
     BaseSandboxConfig,
     CodeExecutionResult,
     ContainerHandle,
+    shell_command,
 )
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -40,6 +41,22 @@ _MESSAGE: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(
     Mapping[str, object] | None, config=ConfigDict(hide_input_in_errors=True)
 )
 _TEXT: Final = TypeAdapter(str, config=ConfigDict(strict=True, hide_input_in_errors=True))
+
+
+def _bash_cell(code: str) -> str:
+    """
+    The e2b kernel runs Python, so Bash goes through a subprocess that keeps stdout and
+    stderr apart and reports a non-zero exit as an `ExitCode` error like the other providers.
+    """
+    return (
+        "import subprocess as _lt_sp, sys as _lt_sys\n"
+        f"_lt_p = _lt_sp.run(['bash', '-c', {shell_command(code, 'bash')!r}], capture_output=True, text=True, "
+        "errors='replace')\n"
+        "_lt_sys.stdout.write(_lt_p.stdout)\n"
+        "_lt_sys.stderr.write(_lt_p.stderr)\n"
+        "if _lt_p.returncode:\n"
+        "    raise type('ExitCode', (Exception,), {})(str(_lt_p.returncode))\n"
+    )
 
 
 class E2BSandboxConfig(BaseSandboxConfig):
@@ -107,9 +124,12 @@ class E2BSandboxConfig(BaseSandboxConfig):
         code: str,
         api_key: str | None = None,
         env_vars: Mapping[str, object] | None = None,
+        language: str = "python",
         client: AsyncHTTPHandler | None = None,
         **kwargs: object,
     ) -> CodeExecutionResult:
+        if language not in ("bash", "python"):
+            raise ValueError(f"Unsupported sandbox language: {language}. Use 'python' or 'bash'.")
         handle: Final = self._as_handle(container)
         hidden_params: Final = cast(  # cast-ok: preserve mapping operations on the validated handle
             dict[str, object], getattr(handle, HIDDEN_PARAMS_ATTR)
@@ -132,7 +152,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
         response: Final = await self._http(client).post(
             url=url,
             headers=headers,
-            json={"code": code, "context_id": None, "env_vars": env_vars},
+            json={"code": _bash_cell(code) if language == "bash" else code, "context_id": None, "env_vars": env_vars},
             stream=True,
         )
         lines: Final = await self._read_capped_lines(response)
