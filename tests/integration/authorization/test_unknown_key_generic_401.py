@@ -1,5 +1,4 @@
 import asyncio
-import json
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -15,7 +14,7 @@ import websockets
 from pydantic import BaseModel, ConfigDict, JsonValue
 from websockets.exceptions import InvalidStatus
 
-from tests.integration._support.client import Gateway, delete_key_if_present, eventually, object_value, string_value
+from tests.integration._support.client import Gateway, delete_key_if_present, eventually, string_value
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from tests.integration._support.provider import SharedProvider
@@ -270,24 +269,22 @@ def test_a_deleted_key_gets_the_generic_401_on_both_proxies(
     assert provider.received() == ()
 
 
-def test_an_unknown_key_failure_row_keeps_its_hash_and_records_the_generic_message(
+def test_an_unknown_key_writes_no_spend_row_while_a_known_key_refused_for_its_model_does(
     gateway: Gateway, provider: SharedProvider
 ) -> None:
     key: Final = _unknown_key()
     _assert_generic_refusal(_send(gateway, ROUTES["chat"], key), key)
-    rows: Final = eventually(
-        lambda: read_rows('SELECT status, metadata FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (_digest(key),)),
-        lambda found: len(found) == 1,
-        seconds=15,
-    )
-    assert rows[0]["status"] == "failure"
-    error: Final = object_value(object_value(rows[0]["metadata"])["error_information"])
-    assert (error["error_class"], error["error_code"], error["error_message"]) == (
-        "KeyNotFoundError",
-        "401",
-        GENERIC_MESSAGE,
-    )
-    assert key not in json.dumps(rows[0]["metadata"])
+    with gateway.scenario() as scenario:
+        known: Final = scenario.key(models=[f"not-{uuid.uuid4().hex}"])
+        refused: Final = _send(gateway, ROUTES["chat"], known)
+        assert refused.status_code == 403, refused.text
+        known_rows: Final = eventually(
+            lambda: read_rows('SELECT status FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (_digest(known),)),
+            lambda found: len(found) == 1,
+            seconds=70,
+        )
+    assert known_rows == [{"status": "failure"}]
+    assert read_rows('SELECT status FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (_digest(key),)) == []
     assert provider.received() == ()
 
 

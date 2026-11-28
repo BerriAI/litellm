@@ -3,8 +3,9 @@
 //! into headers, in one pass: it knows every header's name and the order they go out in, and reads
 //! the record only through what `CallState` and `AttemptRecord` expose. It writes the custom
 //! headers of Python's `get_custom_headers` (the cache key, what the router did for the call, and
-//! the call's details: the deployment's model and api base, its durations, the time spent in
-//! callbacks and the provider's own headers, or on an error what the proxy's handler adds to it),
+//! the call's details: the deployment's model and api base, the cost the route settled, its
+//! durations, the time spent in callbacks and the provider's own headers, or on an error what the
+//! proxy's handler adds to it),
 //! then the headers callbacks and Rust code added, then the defaults. It runs inside
 //! `record::scoped`, so it reads the record of the call it responds to, and it closes the record's
 //! header bag as it writes, so a header added after the head, a stream's end included, is refused.
@@ -23,6 +24,8 @@ use axum::{
     middleware::Next,
     response::Response,
 };
+use litellm_cost::receipt::{Breakdown, Receipt};
+use litellm_host::interceptors::Cost;
 use litellm_python_compat::{datetime::milliseconds, number::round, repr::float_repr};
 use litellm_router_core::RouterResponse;
 use serde_json::{Map, Value};
@@ -386,6 +389,9 @@ fn served_details(entries: &CallState, now: Instant) -> Vec<(String, String)> {
     if hidden && let Some(base) = deployment.and_then(|deployment| deployment.api_base.as_deref()) {
         out.put("x-litellm-model-api-base", api_base(base));
     }
+    for (name, value) in cost_headers(attempt.and_then(|record| record.cost.as_ref())) {
+        out.put(name, value);
+    }
     out.put("x-litellm-response-duration-ms", float_repr(total));
     if let Some(wait) = attempt.and_then(|record| record.wait) {
         let outside = match attempt.and_then(|record| record.started) {
@@ -418,6 +424,70 @@ fn served_details(entries: &CallState, now: Instant) -> Vec<(String, String)> {
     present(out)
 }
 
+const RESPONSE_COST: &str = "x-litellm-response-cost";
+
+/// Python's `cost_headers` for the cost the served attempt's route settled: the total, and for a
+/// call it priced the breakdown Python stores beside it, with the cache read and write taken out
+/// of the input and each cache or reasoning amount sent only above zero. A stream's meter settles
+/// after its head goes out, and a cost the route left unsettled is not known, so neither sends
+/// any. Python sends a stream a breakdown of zeros it priced from no usage, which tells the client
+/// the call cost nothing, so that is left out on purpose.
+fn cost_headers(cost: Option<&Cost>) -> Vec<(&'static str, String)> {
+    let amounts = match cost {
+        Some(Cost::Priced(priced)) => breakdown(&priced.receipt),
+        Some(Cost::Reported { amount }) => vec![(RESPONSE_COST, amount.as_f64())],
+        Some(Cost::CacheHit) => vec![(RESPONSE_COST, Some(0.0))],
+        Some(Cost::Metered(_) | Cost::Deferred) | None => Vec::new(),
+    };
+    amounts
+        .into_iter()
+        .filter_map(|(name, amount)| Some((name, float_repr(amount?))))
+        .collect()
+}
+
+fn breakdown(receipt: &Receipt) -> Vec<(&'static str, Option<f64>)> {
+    let Breakdown {
+        cache_read,
+        cache_creation,
+        reasoning,
+    } = receipt.breakdown;
+    let above_zero = |amount: f64| (amount > 0.0).then_some(amount);
+    vec![
+        (RESPONSE_COST, Some(receipt.total)),
+        ("x-litellm-response-cost-original", Some(receipt.original())),
+        (
+            "x-litellm-response-cost-discount-amount",
+            Some(receipt.discount.amount),
+        ),
+        (
+            "x-litellm-response-cost-margin-amount",
+            Some(receipt.margin.total),
+        ),
+        (
+            "x-litellm-response-cost-margin-percent",
+            Some(receipt.margin.percent),
+        ),
+        (
+            "x-litellm-response-cost-input",
+            Some(receipt.prompt.get() - cache_read - cache_creation),
+        ),
+        (
+            "x-litellm-response-cost-output",
+            Some(receipt.completion.get()),
+        ),
+        ("x-litellm-response-cost-cache-read", above_zero(cache_read)),
+        (
+            "x-litellm-response-cost-cache-creation",
+            above_zero(cache_creation),
+        ),
+        ("x-litellm-response-cost-reasoning", above_zero(reasoning)),
+        (
+            "x-litellm-response-cost-tool-usage",
+            Some(receipt.tools.get()),
+        ),
+    ]
+}
+
 /// The headers the proxy's handler adds to a response that ended on `error`: a zero response
 /// cost, the timeout of the provider attempt that raised it, and on OCR, whose errors go through
 /// `handle_llm_api_exception`, the provider's own headers. `/v1/messages` builds its error
@@ -426,7 +496,7 @@ fn error_details(call_type: Option<CallType>, error: &ErrorResponse) -> Vec<(Str
     if !error.in_handler {
         return Vec::new();
     }
-    let mut out = vec![("x-litellm-response-cost".to_owned(), "0".to_owned())];
+    let mut out = vec![(RESPONSE_COST.to_owned(), "0".to_owned())];
     if let Some(timeout) = error.timeout {
         out.push((
             "x-litellm-timeout".to_owned(),
@@ -468,6 +538,11 @@ impl Routing {
 mod tests {
     use std::time::Duration;
 
+    use litellm_cost::{
+        adjust::{Discount, Margin},
+        money::Usd,
+    };
+    use litellm_host::interceptors::{PricedCost, StreamMeter};
     use rstest::rstest;
     use serde_json::json;
 
@@ -834,6 +909,76 @@ mod tests {
         assert_eq!(
             sent.into_iter()
                 .filter(|(name, _)| name.ends_with("-duration-ms") && !name.contains("callback"))
+                .collect::<Vec<_>>(),
+            pairs(expected)
+        );
+    }
+
+    fn priced() -> Cost {
+        let usd = |amount| Usd::new(amount).unwrap();
+        Cost::Priced(Box::new(PricedCost {
+            receipt: Receipt {
+                prompt: usd(3.0),
+                completion: usd(2.0),
+                tools: usd(0.25),
+                discount: Discount {
+                    percent: 0.2,
+                    amount: 0.5,
+                },
+                margin: Margin {
+                    percent: 0.1,
+                    fixed: 0.0,
+                    total: 0.25,
+                },
+                breakdown: Breakdown {
+                    cache_read: 0.5,
+                    cache_creation: 0.0,
+                    reasoning: 0.125,
+                },
+                ..Receipt::of_total(5.0)
+            },
+            service_tier: None,
+            data_residency: None,
+        }))
+    }
+
+    #[rstest]
+    #[case::a_priced_answer_splits_the_cache_read_out_of_the_input_and_leaves_zero_amounts_out(
+        Some(priced()),
+        false,
+        &[
+            ("x-litellm-response-cost", "5.0"),
+            ("x-litellm-response-cost-original", "5.25"),
+            ("x-litellm-response-cost-discount-amount", "0.5"),
+            ("x-litellm-response-cost-margin-amount", "0.25"),
+            ("x-litellm-response-cost-margin-percent", "0.1"),
+            ("x-litellm-response-cost-input", "2.5"),
+            ("x-litellm-response-cost-output", "2.0"),
+            ("x-litellm-response-cost-cache-read", "0.5"),
+            ("x-litellm-response-cost-reasoning", "0.125"),
+            ("x-litellm-response-cost-tool-usage", "0.25"),
+        ]
+    )]
+    #[case::the_providers_own_figure(
+        Some(Cost::Reported { amount: serde_json::Number::from_f64(0.001).unwrap() }),
+        false,
+        &[("x-litellm-response-cost", "0.001")]
+    )]
+    #[case::a_cache_hit(Some(Cost::CacheHit), false, &[("x-litellm-response-cost", "0.0")])]
+    #[case::a_cost_the_route_could_not_settle(Some(Cost::Deferred), false, &[])]
+    #[case::no_cost_at_all(None, false, &[])]
+    #[case::a_stream(Some(Cost::Metered(StreamMeter::default())), true, &[])]
+    fn a_served_response_carries_the_cost_its_route_settled(
+        #[case] cost: Option<Cost>,
+        #[case] stream: bool,
+        #[case] expected: &[(&str, &str)],
+    ) {
+        let mut entries = served_call(CallType::AnthropicMessages, stream);
+        entries.attempt.as_mut().unwrap().cost = cost;
+        let sent = served_details(&entries, Instant::now());
+        assert_eq!(
+            sent.into_iter()
+                .filter(|(name, _)| name.starts_with("x-litellm-response-cost"))
                 .collect::<Vec<_>>(),
             pairs(expected)
         );

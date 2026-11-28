@@ -1,7 +1,8 @@
 import asyncio
 import json
 from collections.abc import Awaitable, Coroutine, Mapping, Sequence
-from contextvars import ContextVar
+from contextlib import ExitStack
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
@@ -9,7 +10,7 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
-from litellm._internal_context import service_target
+from litellm._internal_context import in_post_response_phase, service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger_v2.call import CallContext
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
@@ -17,6 +18,7 @@ from litellm.integrations.custom_logger_v2.field_sources import HookArgs, with_s
 from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers
 from litellm.integrations.custom_logger_v2.outcomes import Abort, Patch
 from litellm.integrations.custom_logger_v2.rust import RustHandle, RustLogger, rust_logger
+from litellm.integrations.otel.runtime import background_job_span
 from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 from litellm.litellm_core_utils.secret_redaction import (
@@ -365,6 +367,20 @@ class _SpendLogRustLogger(RustLogger):
             return await super().run_rust(hook, reads, view, ctx)
         finally:
             _SPEND_LOG_CALL.reset(token)
+
+    async def _handled(
+        self, hook: Hook, fields: Mapping[str, object], call: Mapping[str, object] | None, state: object
+    ) -> object:
+        start: Final = super()._handled
+        if not in_post_response_phase():
+            return await start(hook, fields, call, state)
+        report_context: Final = copy_context()
+        scopes: Final = ExitStack()
+        report_context.run(scopes.enter_context, background_job_span("spend_log", detached=True))
+        try:
+            return await report_context.run(start, hook, fields, call, state)
+        finally:
+            report_context.run(scopes.close)
 
 
 @dataclass(frozen=True, slots=True)

@@ -1135,6 +1135,67 @@ def _push_schema() -> None:
     _prisma("db", "push", "--schema", "litellm/proxy/schema.prisma", "--skip-generate")
 
 
+def test_default_team_settings_preserve_member_caps_on_save_and_restart(gateway: Gateway, tmp_path: Path) -> None:
+    config: Final = tmp_path / "default-team-settings.yaml"
+    config.write_text(
+        json.dumps(
+            {
+                "model_list": [],
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "coordination_redis": {"host": "os.environ/REDIS_HOST", "port": "os.environ/REDIS_PORT"},
+                },
+                "router_settings": {"redis_host": "os.environ/REDIS_HOST", "redis_port": "os.environ/REDIS_PORT"},
+            }
+        )
+    )
+    caps: Final = {"omitted": 100.0, "null": 200.0, "zero": 300.0}
+    expected: Final = {"omitted": 100.0, "null": 200.0, "zero": 0.0}
+    teams: Final[list[JsonValue]] = [
+        {"team_id": "omitted", "user_role": "user"},
+        {"team_id": "null", "user_role": "admin", "max_budget_in_team": None},
+        {"team_id": "zero", "user_role": "user", "max_budget_in_team": 0.0},
+    ]
+
+    def member_caps(proxy: Gateway) -> dict[str, JsonValue]:
+        def member_cap(team_id: str) -> JsonValue:
+            info: Final = object_value(proxy.get("/team/info", params={"team_id": team_id})["team_info"])
+            budget: Final = info.get("team_member_budget_table")
+            return None if budget is None else object_value(budget)["max_budget"]
+
+        return {team_id: member_cap(team_id) for team_id in caps}
+
+    with scratch_database("default_team_settings") as database_url:
+        environment: Final = {"DATABASE_URL": database_url}
+        with owned_proxy(gateway, tmp_path / "before-restart", environment, config=config, workers=2) as proxy:
+            for team_id, cap in caps.items():
+                proxy.post("/team/new", {"team_id": team_id, "team_alias": team_id, "team_member_budget": cap})
+            assert member_caps(proxy) == caps
+
+            saved: Final = proxy.request(
+                "PATCH", "/update/internal_user_settings", {"user_role": "internal_user_viewer", "teams": teams}
+            )
+            assert saved.status_code == 200, saved.text
+            after_save: Final = member_caps(proxy)
+            proxy.post("/team/update", {"team_id": "omitted", "team_member_budget": caps["omitted"]})
+            proxy.post("/team/update", {"team_id": "null", "team_member_budget": caps["null"]})
+            assert member_caps(proxy) == expected
+
+        with owned_proxy(gateway, tmp_path / "after-restart", environment, config=config, workers=2) as restarted:
+            defaults: Final = object_value(restarted.get("/get/internal_user_settings")["values"])
+            assert defaults["teams"] == [
+                {"team_id": "omitted", "user_role": "user", "max_budget_in_team": None},
+                {"team_id": "null", "user_role": "admin", "max_budget_in_team": None},
+                {"team_id": "zero", "user_role": "user", "max_budget_in_team": 0.0},
+            ]
+            after_restart: Final = member_caps(restarted)
+
+    assert {"after save": after_save, "after restart": after_restart} == {
+        "after save": expected,
+        "after restart": expected,
+    }
+
+
 def _push_schema_with_environment_variables_revision_trigger() -> None:
     _push_schema()
     _prisma(

@@ -56,17 +56,25 @@ impl ReportContext {
 pub(crate) struct RedisCall {
     pub(crate) context: ReportContext,
     pub(crate) event_loop: Option<EventLoop>,
-    pub(crate) call_type: &'static str,
+    pub(crate) call_type: Option<&'static str>,
 }
 
 impl RedisCall {
+    pub(crate) fn caller(py: Python<'_>, call_type: Option<&'static str>) -> PyResult<Self> {
+        Ok(Self {
+            context: ReportContext::of_caller(py)?,
+            event_loop: EventLoop::running(py),
+            call_type,
+        })
+    }
+
     /// The deadline's flush of a request's post-call batch. Built when a post-call declaration
     /// arms the deadline, so it is the declaring caller's request the flush is reported under.
     pub(crate) fn deadline_flush(py: Python<'_>) -> PyResult<Self> {
         Ok(Self {
             context: ReportContext::of_deadline_flush(py)?,
             event_loop: EventLoop::running(py),
-            call_type: "post_call_redis_batch",
+            call_type: Some("post_call_redis_batch"),
         })
     }
 
@@ -206,7 +214,8 @@ impl RedisEvents for ServiceLoggingEvents {
             Some(call) => (
                 call.context.clone(),
                 call.event_loop.clone().or_else(|| self.event_loop.clone()),
-                call.call_type,
+                call.call_type
+                    .unwrap_or_else(|| operation_call_type(event.operation)),
             ),
             None => (
                 self.context.clone(),
@@ -309,7 +318,7 @@ def record_redis_breaker(state):
             RedisCall {
                 context: ReportContext::of_caller(py).unwrap(),
                 event_loop: caller_loop.map(|caller_loop| stand_in_loop(py, caller_loop)),
-                call_type: "async_increment",
+                call_type: Some("async_increment"),
             }
         })
     }

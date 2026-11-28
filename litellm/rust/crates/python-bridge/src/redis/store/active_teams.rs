@@ -84,4 +84,8 @@ impl NativeActiveTeams {
             Duration::from_secs(window_seconds),
         ))
     }
+
+    fn flush_local(&self) {
+        self.0.flush_local();
+    }
 }

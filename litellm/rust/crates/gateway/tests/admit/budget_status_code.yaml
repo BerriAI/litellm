@@ -1,0 +1,20 @@
+# The status Python answers an over-budget caller with, which the native app always answers 422,
+# sends every request to Python when the config sets it.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  litellm_settings:
+    budget_exceeded_status_code: 400
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: the master key
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: litellm_settings.budget_exceeded_status_code

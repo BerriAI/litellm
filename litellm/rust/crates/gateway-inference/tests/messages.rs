@@ -17,9 +17,9 @@ use wiremock::{
 const MESSAGE_SSE: &str = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
 #[rstest]
-#[case::anthropic("anthropic/test-model", "/v1/messages", true)]
-#[case::azure("azure_ai/test-model", "/anthropic/v1/messages", false)]
-#[case::deepseek("deepseek/test-model", "/anthropic/v1/messages", true)]
+#[case::anthropic("anthropic/claude-test-model", "/v1/messages", true)]
+#[case::azure("azure_ai/claude-test-model", "/anthropic/v1/messages", false)]
+#[case::deepseek("deepseek/claude-test-model", "/anthropic/v1/messages", true)]
 #[tokio::test]
 async fn messages_reaches_the_provider_and_preserves_json_or_sse(
     #[case] model: &str,
@@ -29,7 +29,7 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(
 ) {
     let upstream = MockServer::start().await;
     let message = json!({"id": "msg_test", "type": "message", "role": "assistant",
-        "model": "test-model", "content": [{"type": "text", "text": "hello"}],
+        "model": "claude-test-model", "content": [{"type": "text", "text": "hello"}],
         "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}});
     let sse = MESSAGE_SSE;
     let template = if streaming {
@@ -47,7 +47,7 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(
             .and(header("anthropic-version", "test-version"));
     }
     mock.and(body_json(
-        json!({"model": "test-model", "messages": messages, "max_tokens": 16, "stream": streaming}),
+        json!({"model": "claude-test-model", "messages": messages, "max_tokens": 16, "stream": streaming}),
     ))
     .respond_with(template)
     .expect(1)
@@ -974,6 +974,63 @@ async fn a_served_response_carries_the_custom_headers_python_sends_for_it(#[case
             Some(true),
         )
     );
+}
+
+#[rstest]
+#[case::complete(
+    false,
+    &[
+        ("x-litellm-response-cost", "0.75"),
+        ("x-litellm-response-cost-original", "0.75"),
+        ("x-litellm-response-cost-discount-amount", "0.0"),
+        ("x-litellm-response-cost-margin-amount", "0.0"),
+        ("x-litellm-response-cost-margin-percent", "0.0"),
+        ("x-litellm-response-cost-input", "0.5"),
+        ("x-litellm-response-cost-output", "0.25"),
+        ("x-litellm-response-cost-tool-usage", "0.0"),
+    ]
+)]
+#[case::stream(true, &[])]
+#[tokio::test]
+async fn a_priced_answer_carries_its_cost(
+    #[case] streaming: bool,
+    #[case] expected: &[(&str, &str)],
+) {
+    let upstream = MockServer::start().await;
+    let template = if streaming {
+        ResponseTemplate::new(200).set_body_raw(MESSAGE_SSE, "text/event-stream")
+    } else {
+        message_response()
+    };
+    Mock::given(method("POST"))
+        .respond_with(template)
+        .mount(&upstream)
+        .await;
+    let (app, gateway) =
+        support::app_and_gateway("anthropic/test-model", &upstream.uri(), json!({}));
+    gateway.install(support::cost_map(json!({"test-model": {
+        "litellm_provider": "anthropic",
+        "input_cost_per_token": 0.5,
+        "output_cost_per_token": 0.25,
+    }})));
+    let response = support::post(
+        app,
+        "/v1/messages",
+        json!({"model": "public/model", "max_tokens": 16, "stream": streaming,
+            "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await;
+    let sent: Vec<(String, String)> = response
+        .headers()
+        .iter()
+        .filter(|(name, _)| name.as_str().starts_with("x-litellm-response-cost"))
+        .map(|(name, value)| (name.to_string(), value.to_str().unwrap().to_owned()))
+        .collect();
+    let expected: Vec<(String, String)> = expected
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect();
+    assert_eq!(sent, expected);
 }
 
 /// A `/v1/messages` call the provider fails carries the zero cost and the attempt's timeout the
