@@ -132,6 +132,14 @@ class A2AConfig(BaseConfig):
 
         return api_base, api_key, headers
 
+    @property
+    def supports_stream_param_in_request_body(self) -> bool:
+        """
+        A2A carries streaming in the JSON-RPC method (message/stream), and A2A servers
+        reject unknown top-level JSON-RPC members, so `stream` stays out of the body.
+        """
+        return False
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         """Return list of supported OpenAI parameters"""
         return [
