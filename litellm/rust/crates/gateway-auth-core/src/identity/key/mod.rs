@@ -75,6 +75,14 @@ pub(crate) async fn principal<H: AuthHost>(
     } else {
         None
     };
+    let membership = match (&owner, &team, &key.record.user_id, &key.record.team_id) {
+        (Some(_), Some(team::Read::Stored(_)), Some(user_id), Some(team_id))
+            if H::READ_KEY_AFFILIATIONS =>
+        {
+            Box::pin(host.load_team_membership(user_id, team_id, AffiliationRead::Key)).await?
+        }
+        _ => None,
+    };
     let team = team.map(|team| match team {
         team::Read::Stored(team) => Team::Row(team.row),
         team::Read::KeyCopy(copy) => Team::KeyCopy(copy),
@@ -83,7 +91,7 @@ pub(crate) async fn principal<H: AuthHost>(
     Ok(KeyPrincipal {
         key,
         affiliation: Affiliation {
-            holder: Holder::new(owner, team.map(|team| (team, None))),
+            holder: Holder::new(owner, team.map(|team| (team, membership))),
             org,
             project,
         },

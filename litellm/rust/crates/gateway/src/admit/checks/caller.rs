@@ -5,14 +5,14 @@ use crate::{
     callbacks::budgets,
     host::{
         NativeRows,
-        auth::{unserved, unserved_org, unserved_project, unserved_user},
+        auth::{unserved, unserved_membership, unserved_org, unserved_project, unserved_user},
     },
 };
 
 /// Each caller the core hands back is matched by name, with no catch-all, so a caller the native
 /// host learns to serve does not compile here until it is named native or not. A credential the
 /// core did not authenticate is over the error's name. A key in a team or with an owner stays
-/// with Python: over the first column its team, then its owner, holds that nothing native reads
+/// with Python: over the first column its team, owner or membership holds that nothing native reads
 /// yet, and otherwise over `team` or `user`, since the native spend log charges neither yet. A key
 /// in an organization or project stays with Python the same way, after team and owner.
 pub(super) fn caller(_: &Admit, authentication: &Authentication) -> Option<Reason> {
@@ -48,6 +48,7 @@ fn charged(holder: &Holder<NativeRows>) -> Option<&'static str> {
     let user = holder.user();
     team.and_then(unserved_team_column)
         .or_else(|| user.and_then(Named::stored).and_then(unserved_user))
+        .or_else(|| holder.membership().and_then(unserved_membership))
         .or_else(|| team.map(|_| "team"))
         .or_else(|| user.map(|_| "user"))
 }

@@ -569,7 +569,7 @@ mod tests {
                     holder: Holder::Member {
                         user: Named::Stored("owner u".to_owned()),
                         team: Team::Row("team t".to_owned()),
-                        membership: None,
+                        membership: Some("membership u t".to_owned()),
                     },
                     org: Some(Named::Stored("organization o".to_owned())),
                     project: Some(Named::Stored("project p".to_owned())),
@@ -588,6 +588,7 @@ mod tests {
                 "key_owner u",
                 "key_team t",
                 "org o",
+                "membership u t",
                 "project p",
                 "temp_budget db",
                 "normalize db+prepared",

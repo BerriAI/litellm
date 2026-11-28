@@ -1,21 +1,22 @@
-//! Reads a caller's team, key owner, organization and project from the auth cache into core
-//! records. Each entry is taken apart by name, so a field added to it does not compile here until
-//! it is copied onto the record, read for nothing or declined. A column that holds a structure no
-//! record field has a type for yet is declined here, naming the field, and [`unserved`],
-//! [`unserved_user`], [`unserved_org`] and [`unserved_project`] name the first copied column the
-//! native app does not serve yet.
+//! Reads a caller's team, key owner and their membership, organization and project from the auth
+//! cache into core records. Each entry is taken apart by name, so a field added to it does not
+//! compile here until it is copied onto the record, read for nothing or declined. A column that
+//! holds a structure no record field has a type for yet is declined here, naming the field, and
+//! [`unserved`], [`unserved_user`], [`unserved_membership`], [`unserved_org`] and
+//! [`unserved_project`] name the first copied column the native app does not serve yet.
 
 use litellm_gateway_auth_core::{
+    AffiliationRead,
     authz::ModelList,
     identity::jwt::{Org, Team, User},
     record::{
-        Budget, MinuteLimits, OrgRecord, ProjectRecord, TeamRecord, UserRecord,
+        Budget, MembershipRecord, MinuteLimits, OrgRecord, ProjectRecord, TeamRecord, UserRecord,
     },
     routes::passthrough::PassthroughGrants,
 };
 use litellm_python_compat::Value;
 use litellm_redis_store::auth_cache::{
-    Bag, BudgetEntry, OrganizationEntry, ProjectEntry, TeamEntry, UserEntry,
+    Bag, BudgetEntry, OrganizationEntry, ProjectEntry, TeamEntry, TeamMembershipEntry, UserEntry,
 };
 
 use super::{
@@ -324,6 +325,95 @@ pub(crate) fn unserved_user(user: &UserRecord) -> Option<&'static str> {
     ]
 }
 
+/// The membership's record, or the first field it or its budget row holds that no record field has
+/// a type for yet. A JWT's read declines a membership with any budget of its own.
+pub(super) fn membership(
+    membership: &TeamMembershipEntry,
+    read: AffiliationRead,
+) -> Result<MembershipRecord, &'static str> {
+    let TeamMembershipEntry {
+        user_id,
+        team_id,
+        budget_id,
+        spend,
+        total_spend: _,
+        rollover_credit,
+        litellm_budget_table,
+        unread,
+    } = membership;
+    let unread = &newer(unread);
+    let rollover_credit = &rollover_credit.0;
+    let has_budget = &litellm_budget_table.is_some();
+    if read == AffiliationRead::Jwt
+        && let Some(field) = carried![budget_id, rollover_credit]
+            .or(has_budget.then_some("litellm_budget_table"))
+            .or_else(|| carried![unread])
+    {
+        return Err(field);
+    }
+    if let Some(field) = carried![unread] {
+        return Err(field);
+    }
+    let spend = spend.unwrap_or_default();
+    let BudgetRow {
+        limits,
+        budget,
+        soft_budget,
+        tpd_limit,
+        max_parallel_requests,
+        budget_duration,
+    } = match litellm_budget_table {
+        Some(row) => budget_row(&row.budget, spend)?,
+        None => BudgetRow {
+            budget: Budget { max: None, spend },
+            ..BudgetRow::default()
+        },
+    };
+    Ok(MembershipRecord {
+        user_id: user_id.clone(),
+        team_id: team_id.clone(),
+        limits,
+        budget,
+        rollover_credit: *rollover_credit,
+        soft_budget,
+        tpd_limit,
+        max_parallel_requests,
+        budget_duration,
+    })
+}
+
+/// The first column of `membership` that holds something nothing in the native app reads yet,
+/// which sends its caller to Python, taken apart by name as [`unserved`] takes a team.
+pub(crate) fn unserved_membership(membership: &MembershipRecord) -> Option<&'static str> {
+    let MembershipRecord {
+        user_id: _,
+        team_id: _,
+        limits: MinuteLimits {
+            rpm: rpm_limit,
+            tpm: tpm_limit,
+        },
+        budget: Budget {
+            max: max_budget,
+            spend: _,
+        },
+        rollover_credit,
+        soft_budget,
+        tpd_limit,
+        max_parallel_requests,
+        budget_duration,
+    } = membership;
+    carried![
+        rollover_credit,
+        max_budget,
+        soft_budget,
+        rpm_limit,
+        tpm_limit,
+        tpd_limit,
+        max_parallel_requests,
+        budget_duration
+    ]
+}
+
 /// The organization's record, or the first field it or its budget row holds that no record field
 /// has a type for yet.
 pub(super) fn org(org: &OrganizationEntry) -> Result<Org<OrgRecord>, &'static str> {
@@ -376,6 +466,7 @@ pub(super) fn org(org: &OrganizationEntry) -> Result<Org<OrgRecord>, &'static st
 }
 
 /// A budget row's plain values, which the record of whatever the row budgets copies.
+#[derive(Default)]
 struct BudgetRow {
     limits: MinuteLimits,
     budget: Budget,

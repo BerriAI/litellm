@@ -1,8 +1,7 @@
 # A virtual key that names a user has that owner read natively. An owner whose row holds only
 # what describes it, or that has no row, still sends its key to Python, since the native spend log
 # charges no user yet. An owner that holds a limit or a budget goes to Python over that column,
-# and one whose metadata holds anything but SCIM's flag is not native, and so is an owner in the
-# key's team, whose membership budget the native app does not read.
+# and one whose metadata holds anything but SCIM's flag is not native.
 config:
   model_list:
     - model_name: claude
@@ -79,4 +78,4 @@ requests:
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
-    over: not_native
+    over: team

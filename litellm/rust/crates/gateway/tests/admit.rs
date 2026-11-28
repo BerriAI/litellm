@@ -190,6 +190,7 @@ struct Sent {
 #[serde(rename_all = "snake_case")]
 enum AuthTable {
     Organization,
+    Membership,
 }
 
 impl AuthTable {
@@ -197,6 +198,9 @@ impl AuthTable {
         match self {
             Self::Organization => {
                 r#"ALTER TABLE "LiteLLM_OrganizationTable" RENAME COLUMN "model_spend" TO "unavailable_model_spend""#
+            }
+            Self::Membership => {
+                r#"ALTER TABLE "LiteLLM_TeamMembership" RENAME COLUMN "total_spend" TO "unavailable_total_spend""#
             }
         }
     }
@@ -293,6 +297,7 @@ impl Sent {
 #[case::virtual_key_owner("virtual_key_owner")]
 #[case::virtual_key_project("virtual_key_project")]
 #[case::virtual_key_org("virtual_key_org")]
+#[case::virtual_key_membership("virtual_key_membership")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();

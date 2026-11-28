@@ -625,6 +625,7 @@ impl AuthHost for PythonAuthHost {
         &self,
         user_id: &str,
         team_id: &str,
+        _: litellm_gateway_auth_core::AffiliationRead,
     ) -> Result<Option<PyRow>, Error> {
         let (user_id, team_id) = (user_id.to_owned(), team_id.to_owned());
         self.ask(|reply| Ask::LoadTeamMembership {

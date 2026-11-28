@@ -277,6 +277,7 @@ pub trait AuthHost: Send + Sync {
         &self,
         user_id: &str,
         team_id: &str,
+        read: AffiliationRead,
     ) -> impl Future<Output = Result<Option<MembershipRow<Self>>, Error>> + Send;
 
     fn org(
