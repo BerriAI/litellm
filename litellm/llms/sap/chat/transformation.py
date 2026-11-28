@@ -2,13 +2,14 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
+import os
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import require_get
@@ -49,6 +50,7 @@ from .reasoning import normalize_reasoning_blocks
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
+
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -60,6 +62,14 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
         "model_version",
     }
 )
+
+
+class _OrchestrationConfiguration(BaseModel):
+    """The fields discovery reads from an AI Core /lm/configurations/{id} response"""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    executable_id: str = Field(default="", alias="executableId")
+    name: str = ""
 
 
 def validate_dict(
@@ -215,12 +225,30 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
     @cached_property
     def deployment_url(self) -> str:
         deployments: Final[AICoreDeploymentList] = self._get_from_ai_core("lm/deployments").json()
-        orchestration_deployments: Final = tuple(
+        valid: Final[list[tuple[str, str]]] = [
             (dep["deploymentUrl"], dep["createdAt"])
             for dep in deployments.get("resources", [])
             if dep.get("scenarioId") == "orchestration" and self._is_orchestration_configuration(dep["configurationId"])
-        )
-        return sorted(orchestration_deployments, key=lambda x: x[1], reverse=True)[0][0]
+        ]
+        if not valid:
+            raise GenAIHubOrchestrationError(
+                status_code=400,
+                message=(
+                    "No orchestration deployment found for this SAP AI Core resource group. Create one, or set "
+                    "AICORE_ORCHESTRATION_DEPLOYMENT_URL, or pass deployment_url in optional_params, to skip "
+                    "discovery."
+                ),
+            )
+        # newest first
+        ranked: Final = sorted(valid, key=lambda dep: dep[1], reverse=True)
+        if len(ranked) > 1:
+            litellm.verbose_logger.warning(
+                "SAP: %d orchestration deployments found; using newest (url=%r). Others ignored: %r.",
+                len(ranked),
+                ranked[0][0],
+                [url for url, _ in ranked[1:]],
+            )
+        return ranked[0][0]
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
@@ -309,8 +337,13 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ):
-        api_base_: Final = join_api_base(self.deployment_url, "v2/completion")
-        return api_base_
+        # get_config() can leak the `deployment_url` cached_property object into optional_params; only a str is an override
+        override: Final = optional_params.get("deployment_url")
+        explicit_url: Final = override if isinstance(override, str) else None
+        deployment_url: Final = (
+            explicit_url or os.environ.get("AICORE_ORCHESTRATION_DEPLOYMENT_URL") or self.deployment_url
+        )
+        return join_api_base(deployment_url, "v2/completion")
 
     def _build_prompt_module(
         self,
