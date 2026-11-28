@@ -115,6 +115,7 @@ class Provider(str, Enum):
     HOSTED_VLLM = "hosted_vllm"
     VOYAGE = "voyage"
     JINA_AI = "jina_ai"
+    GNANI = "gnani"
     DEEPGRAM = "deepgram"
     ELEVENLABS = "elevenlabs"
     ASSEMBLYAI = "assemblyai"

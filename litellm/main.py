@@ -9403,7 +9403,7 @@ def speech(
     metadata: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | openai.Timeout | None = None,
     response_format: str | None = None,
-    speed: int | None = None,
+    speed: float | Literal["slow", "medium", "fast"] | None = None,
     instructions: str | None = None,
     client=None,
     headers: dict[str, object] | None = None,
@@ -9705,27 +9705,39 @@ def speech(
             _is_async=aspeech or False,
             stream=stream_audio,
         )
-    elif custom_llm_provider == "gradium" and text_to_speech_provider_config is not None:
+    elif custom_llm_provider in ("gnani", "gradium") and text_to_speech_provider_config is not None:
+        from litellm.llms.gnani.text_to_speech.streaming import GnaniStreamingTextToSpeechConfig
+
+        speech_config: Final = (
+            GnaniStreamingTextToSpeechConfig(_REQUEST_KWARGS_ADAPTER.validate_python(optional_params))
+            if custom_llm_provider == "gnani" and stream_audio
+            else text_to_speech_provider_config
+        )
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
         if api_key is not None:
             litellm_params_dict["api_key"] = api_key
 
-        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: set per provider branch  # pyright: ignore[reportUnknownMemberType]  # untyped shared TTS handler, as for every provider branch
-            model=model,
-            input=input,
-            voice=voice if isinstance(voice, str) else None,
-            text_to_speech_provider_config=text_to_speech_provider_config,
-            text_to_speech_optional_params=optional_params,
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params_dict,
-            logging_obj=logging_obj,
-            timeout=http_timeout,
-            extra_headers=extra_headers,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
-            client=client,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
-            _is_async=aspeech or False,
-            stream=stream_audio,
-        )
+        try:
+            response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: set per provider branch  # pyright: ignore[reportUnknownMemberType]  # untyped shared TTS handler, as for every provider branch
+                model=model,
+                input=input,
+                voice=voice if isinstance(voice, str) else None,
+                text_to_speech_provider_config=speech_config,
+                text_to_speech_optional_params=optional_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params_dict,
+                logging_obj=logging_obj,
+                timeout=http_timeout,
+                extra_headers=extra_headers,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
+                client=client,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
+                _is_async=aspeech or False,
+                stream=stream_audio,
+            )
+        except BaseLLMException as exc:
+            if custom_llm_provider != "gnani":
+                raise
+            raise exception_type(model=model, custom_llm_provider=custom_llm_provider, original_exception=exc)
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
             VertexAILyriaTextToSpeechConfig,

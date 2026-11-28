@@ -26509,6 +26509,25 @@
             "notes": "Nimble Search API pay-as-you-go list price: $5 per 1,000 searches, up to 100 results per search. Volume plans price differently."
         }
     },
+    "gnani/timbre-v2.5": {
+        "litellm_provider": "gnani",
+        "mode": "audio_speech",
+        "provider_specific_entry": {
+            "gnani_speed_shortcuts": 1
+        },
+        "source": "https://docs.gnani.ai/api/TTS/tts-inference",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "gnani/timbre-v3.0": {
+        "litellm_provider": "gnani",
+        "mode": "audio_speech",
+        "source": "https://docs.gnani.ai/api/TTS/tts-inference",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
     "gnani/prisma-v2.5": {
         "litellm_provider": "gnani",
         "mode": "audio_transcription",
