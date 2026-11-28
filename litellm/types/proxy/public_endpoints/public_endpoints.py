@@ -14,6 +14,7 @@ class PublicModelHubInfo(LiteLLMBaseModel):
     # New format: { "displayName": { "url": "...", "index": 0 } }
     # Old format: { "displayName": "url" } (for backward compatibility)
     useful_links: dict[str, str | dict[str, object]] | None
+    publishes_every_model_group: bool = False
 
 
 class ProviderCredentialField(LiteLLMBaseModel):

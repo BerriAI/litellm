@@ -26,6 +26,7 @@ from litellm.proxy._types import (
 from litellm.proxy.db.health_check_latest import latest_by_model_name
 from litellm.proxy.deps.repositories import PluginUploadRepositoryDep
 from litellm.proxy.public_endpoints.model_hub_rows import (
+    EVERY_MODEL_GROUP,
     HubRow,
     ModelGroupRow,
     NoModelsConfigured,
@@ -283,7 +284,7 @@ def _agent_create_fields() -> tuple[AgentCreateInfo, ...]:
     response_model=list[ModelGroupInfoProxy],
 )
 async def public_model_hub():
-    rows: Final = published_hub_rows()
+    rows: Final = await published_hub_rows()
     if isinstance(rows, NoModelsConfigured):
         raise HTTPException(status_code=400, detail=CommonProxyErrors.no_llm_router.value)
 
@@ -463,6 +464,7 @@ async def public_model_hub_info():
         custom_docs_description=custom_docs_description,
         litellm_version=version,
         useful_links=litellm.public_model_groups_links,
+        publishes_every_model_group=EVERY_MODEL_GROUP in (litellm.public_model_groups or ()),
     )
 
 
