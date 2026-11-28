@@ -6636,7 +6636,16 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     if input_tool_name != valid_string:
         # passed tool name was formatted to become valid
         # store it internally so we can use for the response
-        litellm.bedrock_tool_name_mappings.set_cache(key=valid_string, value=input_tool_name)
+        from litellm.llms.bedrock.common_utils import (
+            bedrock_tool_name_mappings_context,
+        )
+
+        ctx = bedrock_tool_name_mappings_context.get()
+        if ctx is not None:
+            ctx[valid_string] = input_tool_name
+
+        if hasattr(litellm, "bedrock_tool_name_mappings") and litellm.bedrock_tool_name_mappings is not None:
+            litellm.bedrock_tool_name_mappings.set_cache(key=valid_string, value=input_tool_name)
 
     return valid_string
 

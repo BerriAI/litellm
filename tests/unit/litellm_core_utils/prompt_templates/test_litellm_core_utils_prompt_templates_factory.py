@@ -5832,6 +5832,21 @@ def test_make_valid_bedrock_tool_name_preserves_hyphens():
     )
 
 
+def test_make_valid_bedrock_tool_name_request_context_and_cache():
+    """make_valid_bedrock_tool_name records to request context if active and to global cache."""
+    from litellm.llms.bedrock.common_utils import bedrock_tool_name_mappings_context
+
+    ctx: dict[str, str] = {}
+    token = bedrock_tool_name_mappings_context.set(ctx)
+    try:
+        sanitized = make_valid_bedrock_tool_name("my:special:tool")
+        assert sanitized == "my_special_tool"
+        assert ctx.get("my_special_tool") == "my:special:tool"
+        assert litellm.bedrock_tool_name_mappings.get_cache("my_special_tool") == "my:special:tool"
+    finally:
+        bedrock_tool_name_mappings_context.reset(token)
+
+
 def test_bedrock_tool_name_sanitized_consistently_in_tools_and_tool_use():
     """toolSpec and toolUse names must match after sanitization (issue #5007)."""
     raw_name = "foo@bar"

@@ -2703,6 +2703,11 @@ class AmazonConverseConfig(BaseConfig):
         headers: dict[str, object] | None = None,
     ) -> RequestObject:
         from litellm.integrations.anthropic_cache_control_hook import routed_model_info
+        from litellm.llms.bedrock.common_utils import bedrock_tool_name_mappings_context
+
+        # Start every request transform with a fresh mapping dict so back-to-back calls
+        # on the same thread/task cannot inherit an earlier request's sanitized tool names.
+        bedrock_tool_name_mappings_context.set({})
 
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
@@ -2843,6 +2848,11 @@ class AmazonConverseConfig(BaseConfig):
         headers: dict[str, object] | None = None,
     ) -> RequestObject:
         from litellm.integrations.anthropic_cache_control_hook import routed_model_info
+        from litellm.llms.bedrock.common_utils import bedrock_tool_name_mappings_context
+
+        # Start every request transform with a fresh mapping dict so back-to-back calls
+        # on the same thread/task cannot inherit an earlier request's sanitized tool names.
+        bedrock_tool_name_mappings_context.set({})
 
         base_model: Final = litellm_params.get("base_model")
         capability_model: Final = bedrock_capability_model(model, base_model)
