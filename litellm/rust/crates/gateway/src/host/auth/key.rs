@@ -9,6 +9,7 @@ use litellm_gateway_auth_core::{
     KeyHash, StoredKey,
     authn::key::{KeyRecord, Keyed},
     authz::ModelList,
+    record::Budget,
 };
 use litellm_python_compat::{Value, json};
 use litellm_redis_store::auth_cache::{Bag, KeyEntry};
@@ -36,6 +37,8 @@ pub struct Key {
     priority: Option<Arc<str>>,
     /// The key's `key_alias`, which its calls are logged under.
     alias: Option<Arc<str>>,
+    /// The key's own budget, which its budget counter is planned from.
+    own_budget: Budget,
     /// The first budget column the row holds, which `key_budgets` declines.
     pub(super) budget: Option<&'static str>,
     /// The row maps model names, which `normalize_model` declines.
@@ -64,6 +67,10 @@ impl Key {
     pub(crate) fn alias(&self) -> Option<&str> {
         self.alias.as_deref()
     }
+
+    pub(crate) fn budget(&self) -> Budget {
+        self.own_budget
+    }
 }
 
 #[cfg(test)]
@@ -78,9 +85,14 @@ impl Key {
             limits: KeyLimits::default(),
             priority: None,
             alias: alias.map(Arc::from),
+            own_budget: Budget::default(),
             budget: None,
             aliased: false,
         }
+    }
+
+    pub(crate) fn with_budget(self, own_budget: Budget) -> Self {
+        Self { own_budget, ..self }
     }
 }
 
@@ -349,6 +361,10 @@ pub(super) fn read(key: &KeyEntry) -> Result<Keyed<Key>, &'static str> {
             },
             priority: metadata.priority.map(Arc::from),
             alias: key.key_alias.as_deref().map(Arc::from),
+            own_budget: Budget {
+                max: key.max_budget,
+                spend: key.spend,
+            },
             budget,
             aliased,
         },
