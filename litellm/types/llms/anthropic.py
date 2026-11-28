@@ -892,6 +892,7 @@ class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     WEB_FETCH = "web_fetch"
     MEMORY = "memory"
     TOOL_SEARCH_TOOL = "tool_search_tool"
+    ADVISOR = "advisor"
 
 
 ANTHROPIC_UNRENDERED_BLOCK_TYPES: Final = frozenset({"fallback"})
