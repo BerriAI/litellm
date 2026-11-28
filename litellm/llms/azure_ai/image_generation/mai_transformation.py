@@ -1,4 +1,5 @@
 import math
+import re
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 
 
 _TOKEN_COUNT_ADAPTER: Final[TypeAdapter[int | float]] = TypeAdapter(int | float)
+_MAI_IMAGE_27_NAME: Final = re.compile(r"mai[-_]?image[-_]?2\.7(?!\d)", re.IGNORECASE)
 
 
 def _token_count_or_none(value: object) -> int | float | None:
@@ -298,11 +300,12 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
                 f"Unsupported size value: '{size}'. Azure AI MAI image models require width and "
                 f"height of at least {self.MIN_DIMENSION_PX} pixels.",
             )
-        if width * height > self.MAX_TOTAL_PX:
+        max_total_px: Final = 2048 * 2048 if _MAI_IMAGE_27_NAME.search(model) else self.MAX_TOTAL_PX
+        if width * height > max_total_px:
             raise self._unsupported(
                 model,
                 f"Unsupported size value: '{size}'. Azure AI MAI image models accept at most "
-                f"{self.MAX_TOTAL_PX} total pixels ({width}x{height} is {width * height}).",
+                f"{max_total_px} total pixels ({width}x{height} is {width * height}).",
             )
 
     def transform_image_generation_response(
