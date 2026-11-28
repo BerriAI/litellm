@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional, TypeAlias, Union
 
 from fastapi import HTTPException
@@ -44,8 +44,14 @@ SCIM_ENTERPRISE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:ent
 SCIM_ENTERPRISE_METADATA_KEY: Final = "scim_enterprise"
 SCIM_ENTITLEMENTS_METADATA_KEY: Final = "scim_entitlements"
 SCIM_ROLES_METADATA_KEY: Final = "scim_roles"
+SCIM_ADDRESSES_METADATA_KEY: Final = "scim_addresses"
 SCIM_DIRECTORY_METADATA_KEYS: Final[frozenset[str]] = frozenset(
-    {SCIM_ENTERPRISE_METADATA_KEY, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_ROLES_METADATA_KEY}
+    {
+        SCIM_ENTERPRISE_METADATA_KEY,
+        SCIM_ENTITLEMENTS_METADATA_KEY,
+        SCIM_ROLES_METADATA_KEY,
+        SCIM_ADDRESSES_METADATA_KEY,
+    }
 )
 
 SCIM_MANAGED_TEAM_METADATA_KEY: Final = "scim_managed"
@@ -68,8 +74,16 @@ class LiteLLM_UserScimMetadata(LiteLLMBaseModel):
     Scim metadata stored in LiteLLM_UserTable.metadata
     """
 
+    userName: str | None = None
+    externalId: str | None = None
+    displayName: str | None = None
     givenName: str | None = None
     familyName: str | None = None
+    formatted: str | None = None
+    middleName: str | None = None
+    honorificPrefix: str | None = None
+    honorificSuffix: str | None = None
+    title: str | None = None
 
 
 # SCIM Resource Models
@@ -117,6 +131,26 @@ class SCIMMultiValuedAttribute(LiteLLMBaseModel):
         return data
 
 
+class SCIMAddress(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    formatted: str | None = None
+    streetAddress: str | None = None
+    locality: str | None = None
+    region: str | None = None
+    postalCode: str | None = None
+    country: str | None = None
+    type: str | None = None
+    primary: bool | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_none_fields(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
+        dumped: Final = _SCIM_SERIALIZED_FIELDS_ADAPTER.validate_python(handler(self))
+        return {k: v for k, v in dumped.items() if v is not None}
+
+
+SCIM_ADDRESS_LIST_ADAPTER: Final = TypeAdapter(list[SCIMAddress])
+
 SCIM_MULTI_VALUED_LIST_ADAPTER: Final = TypeAdapter(list[SCIMMultiValuedAttribute])
 
 SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS: Final = {
@@ -150,8 +184,10 @@ class SCIMUser(SCIMResource):
     userName: str | None = None
     name: SCIMUserName | None = None
     displayName: str | None = None
+    title: str | None = None
     active: bool = True
     emails: list[SCIMUserEmail] | None = None
+    addresses: Sequence[SCIMAddress] | None = None
     groups: list[SCIMUserGroup] | None = None
     entitlements: list[SCIMMultiValuedAttribute] | None = None
     roles: list[SCIMMultiValuedAttribute] | None = None
@@ -167,6 +203,10 @@ class SCIMUser(SCIMResource):
         if self.enterprise_user is None:
             dumped.pop(SCIM_ENTERPRISE_USER_SCHEMA, None)
             dumped.pop("enterprise_user", None)
+        if self.title is None:
+            dumped.pop("title", None)
+        if self.addresses is None:
+            dumped.pop("addresses", None)
         if self.entitlements is None:
             dumped.pop("entitlements", None)
         if self.roles is None:

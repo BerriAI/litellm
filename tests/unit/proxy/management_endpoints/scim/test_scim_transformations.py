@@ -2,12 +2,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member
+from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member, NewUserResponse
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
+    SCIM_ADDRESSES_METADATA_KEY,
+    SCIM_ENTERPRISE_METADATA_KEY,
     SCIM_ENTERPRISE_USER_SCHEMA,
+    SCIMAddress,
     SCIMEnterpriseUser,
     SCIMMultiValuedAttribute,
     SCIMPatchOperation,
@@ -392,6 +395,135 @@ class TestScimTransformations:
 
             assert scim_user.id == user_with_none_email.user_id
             assert scim_user.emails is None or len(scim_user.emails) == 0
+
+    @pytest.mark.asyncio
+    async def test_transform_user_round_trips_entra_profile_fields(self, mock_prisma_client):
+        mock_client, mock_find_unique = mock_prisma_client
+        mock_find_unique.return_value = None
+        object_id = "00000000-0000-4000-8000-000000000001"
+
+        user = LiteLLM_UserTable(
+            user_id=object_id,
+            user_email="scim-test@example.org",
+            user_alias="Example User",
+            sso_user_id=object_id,
+            teams=[],
+            metadata={
+                "scim_metadata": {
+                    "userName": object_id,
+                    "externalId": object_id,
+                    "displayName": "Example User",
+                    "givenName": "Example",
+                    "familyName": "User",
+                    "formatted": "Example User",
+                    "middleName": "M",
+                    "honorificPrefix": "Dr",
+                    "honorificSuffix": "Jr",
+                    "title": "Example Role",
+                },
+                SCIM_ADDRESSES_METADATA_KEY: [{"type": "work", "country": "DE", "locality": "Berlin"}],
+                SCIM_ENTERPRISE_METADATA_KEY: {"organization": "Example Org", "department": "Engineering"},
+            },
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(user)
+
+        assert scim_user.id == object_id
+        assert scim_user.userName == object_id
+        assert scim_user.externalId == object_id
+        assert scim_user.displayName == "Example User"
+        assert scim_user.name is not None
+        assert scim_user.name.givenName == "Example"
+        assert scim_user.name.familyName == "User"
+        assert scim_user.name.formatted == "Example User"
+        assert scim_user.name.middleName == "M"
+        assert scim_user.name.honorificPrefix == "Dr"
+        assert scim_user.name.honorificSuffix == "Jr"
+        assert scim_user.title == "Example Role"
+        assert scim_user.addresses == [SCIMAddress(type="work", country="DE", locality="Berlin")]
+        assert scim_user.enterprise_user == SCIMEnterpriseUser(organization="Example Org", department="Engineering")
+
+    @pytest.mark.asyncio
+    async def test_transform_new_user_response_reads_external_id_from_scim_metadata(self, mock_prisma_client):
+        mock_client, mock_find_unique = mock_prisma_client
+        mock_find_unique.return_value = None
+        object_id = "00000000-0000-4000-8000-000000000002"
+
+        created = NewUserResponse(
+            key="",
+            user_id=object_id,
+            user_email="entra@example.org",
+            user_alias="Entra User",
+            teams=[],
+            metadata={
+                "scim_metadata": {
+                    "userName": object_id,
+                    "externalId": object_id,
+                    "displayName": "Entra User",
+                    "givenName": "Entra",
+                    "familyName": "User",
+                    "formatted": "Entra User",
+                    "title": "Engineer",
+                },
+                SCIM_ADDRESSES_METADATA_KEY: [{"type": "work", "country": "DE"}],
+            },
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(created)
+
+        assert scim_user.userName == object_id
+        assert scim_user.externalId == object_id
+        assert scim_user.displayName == "Entra User"
+        assert scim_user.title == "Engineer"
+        assert scim_user.name is not None
+        assert scim_user.name.formatted == "Entra User"
+        assert scim_user.addresses == [SCIMAddress(type="work", country="DE")]
+
+    @pytest.mark.asyncio
+    async def test_transform_user_recovers_legacy_generic_title_and_formatted_name(self, mock_prisma_client):
+        mock_client, mock_find_unique = mock_prisma_client
+        mock_find_unique.return_value = None
+
+        legacy_user = LiteLLM_UserTable(
+            user_id="legacy-1",
+            user_email="legacy@example.org",
+            teams=[],
+            metadata={
+                "title": "Legacy Role",
+                "name.formatted": "Legacy Formatted",
+                "scim_metadata": {"givenName": "Legacy", "familyName": "User"},
+            },
+        )
+
+        with patch("litellm.proxy.proxy_server.prisma_client", mock_client):
+            scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(legacy_user)
+
+        assert scim_user.title == "Legacy Role"
+        assert scim_user.name is not None
+        assert scim_user.name.formatted == "Legacy Formatted"
+
+    def test_scim_user_serialization_omits_absent_title_and_addresses(self):
+        without_profile = SCIMUser(
+            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+            id="user-1",
+            userName="user@example.com",
+        )
+        dumped_without = without_profile.model_dump(by_alias=True)
+        assert "title" not in dumped_without
+        assert "addresses" not in dumped_without
+
+        with_profile = SCIMUser(
+            schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+            id="user-2",
+            userName="user@example.com",
+            title="Staff Engineer",
+            addresses=[SCIMAddress(type="work", country="GB")],
+        )
+        dumped_with = with_profile.model_dump(by_alias=True)
+        assert dumped_with["title"] == "Staff Engineer"
+        assert dumped_with["addresses"] == [{"type": "work", "country": "GB"}]
 
 
 class TestSCIMPatchOperations:

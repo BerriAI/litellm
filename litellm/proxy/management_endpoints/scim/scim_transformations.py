@@ -66,17 +66,27 @@ class ScimTransformations:
         roles: Final = ScimTransformations._parse_directory_metadata(
             user, SCIM_ROLES_METADATA_KEY, SCIM_MULTI_VALUED_LIST_ADAPTER.validate_python
         )
+        addresses: Final = ScimTransformations._parse_directory_metadata(
+            user, SCIM_ADDRESSES_METADATA_KEY, SCIM_ADDRESS_LIST_ADAPTER.validate_python
+        )
 
         return SCIMUser(
             schemas=schemas,
             id=user.user_id,
+            externalId=ScimTransformations._get_scim_external_id(user),
             userName=ScimTransformations._get_scim_user_name(user),
-            displayName=ScimTransformations._get_scim_user_name(user),
+            displayName=ScimTransformations._get_scim_display_name(user),
             name=SCIMUserName(
                 familyName=ScimTransformations._get_scim_family_name(user),
                 givenName=ScimTransformations._get_scim_given_name(user),
+                formatted=ScimTransformations._get_scim_profile_str(user, "formatted", "name.formatted"),
+                middleName=ScimTransformations._get_scim_profile_str(user, "middleName"),
+                honorificPrefix=ScimTransformations._get_scim_profile_str(user, "honorificPrefix"),
+                honorificSuffix=ScimTransformations._get_scim_profile_str(user, "honorificSuffix"),
             ),
+            title=ScimTransformations._get_scim_profile_str(user, "title", "title"),
             emails=emails,
+            addresses=addresses,
             groups=groups,
             active=active,
             entitlements=entitlements,
@@ -88,6 +98,27 @@ class ScimTransformations:
                 "lastModified": user_updated_at,
             },
         )
+
+    @staticmethod
+    def _non_empty_str(value: object) -> str | None:
+        return value if isinstance(value, str) and len(value) > 0 else None
+
+    @staticmethod
+    def _get_scim_metadata(
+        user: LiteLLM_UserTable | NewUserResponse,
+    ) -> LiteLLM_UserScimMetadata | None:
+        metadata: Final = user.metadata or {}
+        raw: Final = metadata.get("scim_metadata")
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return LiteLLM_UserScimMetadata.model_validate(raw)
+        except ValidationError:
+            verbose_proxy_logger.warning(
+                "Skipping malformed scim_metadata on user %s in SCIM response",
+                user.user_id,
+            )
+            return None
 
     @staticmethod
     def _parse_directory_metadata(
@@ -117,24 +148,62 @@ class ScimTransformations:
     @staticmethod
     def _get_scim_user_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
         """
-        SCIM requires a display name with length > 0
+        SCIM requires a userName with length > 0.
 
-        We use the same userName and displayName for SCIM users
+        Prefer the stored SCIM userName (e.g. Entra objectId) and fall back to user_email.
         """
+        scim_metadata: Final = ScimTransformations._get_scim_metadata(user)
+        if scim_metadata is not None:
+            stored_user_name: Final = ScimTransformations._non_empty_str(scim_metadata.userName)
+            if stored_user_name is not None:
+                return stored_user_name
         if user.user_email and len(user.user_email) > 0:
             return user.user_email
         return ScimTransformations.DEFAULT_SCIM_DISPLAY_NAME
+
+    @staticmethod
+    def _get_scim_display_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
+        scim_metadata: Final = ScimTransformations._get_scim_metadata(user)
+        if scim_metadata is not None:
+            stored_display_name: Final = ScimTransformations._non_empty_str(scim_metadata.displayName)
+            if stored_display_name is not None:
+                return stored_display_name
+        return ScimTransformations._get_scim_user_name(user)
+
+    @staticmethod
+    def _get_scim_external_id(user: LiteLLM_UserTable | NewUserResponse) -> str | None:
+        sso_user_id: Final = ScimTransformations._non_empty_str(getattr(user, "sso_user_id", None))
+        if sso_user_id is not None:
+            return sso_user_id
+        scim_metadata: Final = ScimTransformations._get_scim_metadata(user)
+        if scim_metadata is not None:
+            return ScimTransformations._non_empty_str(scim_metadata.externalId)
+        return None
+
+    @staticmethod
+    def _get_scim_profile_str(
+        user: LiteLLM_UserTable | NewUserResponse,
+        field_name: str,
+        legacy_metadata_key: str | None = None,
+    ) -> str | None:
+        scim_metadata: Final = ScimTransformations._get_scim_metadata(user)
+        if scim_metadata is not None:
+            val: Final = ScimTransformations._non_empty_str(getattr(scim_metadata, field_name, None))
+            if val is not None:
+                return val
+        if legacy_metadata_key is not None:
+            metadata: Final = user.metadata or {}
+            return ScimTransformations._non_empty_str(metadata.get(legacy_metadata_key))
+        return None
 
     @staticmethod
     def _get_scim_family_name(user: LiteLLM_UserTable | NewUserResponse) -> str:
         """
         SCIM requires a family name with length > 0
         """
-        metadata: Final = user.metadata or {}
-        if "scim_metadata" in metadata:
-            scim_metadata: Final[LiteLLM_UserScimMetadata] = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
-            if scim_metadata.familyName and len(scim_metadata.familyName) > 0:
-                return scim_metadata.familyName
+        scim_metadata: Final = ScimTransformations._get_scim_metadata(user)
+        if scim_metadata is not None and scim_metadata.familyName and len(scim_metadata.familyName) > 0:
+            return scim_metadata.familyName
 
         if user.user_alias and len(user.user_alias) > 0:
             return user.user_alias
@@ -145,11 +214,9 @@ class ScimTransformations:
         """
         SCIM requires a given name with length > 0
         """
-        metadata: Final = user.metadata or {}
-        if "scim_metadata" in metadata:
-            scim_metadata: Final[LiteLLM_UserScimMetadata] = LiteLLM_UserScimMetadata(**metadata["scim_metadata"])
-            if scim_metadata.givenName and len(scim_metadata.givenName) > 0:
-                return scim_metadata.givenName
+        scim_metadata: Final = ScimTransformations._get_scim_metadata(user)
+        if scim_metadata is not None and scim_metadata.givenName and len(scim_metadata.givenName) > 0:
+            return scim_metadata.givenName
 
         if user.user_alias and len(user.user_alias) > 0:
             return user.user_alias or ScimTransformations.DEFAULT_SCIM_NAME

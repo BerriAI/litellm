@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 from litellm.proxy.management_endpoints.scim.scim_v2 import _apply_patch_ops, _sync_requested_teams, patch_user
 from litellm.types.proxy.management_endpoints.scim_v2 import (
+    SCIM_ADDRESSES_METADATA_KEY,
     SCIM_ENTERPRISE_METADATA_KEY,
     SCIM_ENTERPRISE_USER_SCHEMA,
     SCIMEnterpriseUser,
@@ -1473,4 +1474,112 @@ def test_apply_patch_ops_pathless_enterprise_value_must_be_a_dict():
     with pytest.raises(HTTPException) as exc_info:
         _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
 
+    assert exc_info.value.status_code == 400
+
+
+def test_apply_patch_ops_updates_entra_profile_and_filtered_addresses():
+    existing_metadata = {
+        "title": "Stale Generic Title",
+        "name.formatted": "Stale Generic Formatted",
+        'addresses[type eq "work"].country': "FR",
+        "scim_metadata": {
+            "userName": "00000000-0000-4000-8000-000000000001",
+            "externalId": "00000000-0000-4000-8000-000000000001",
+            "displayName": "Example User",
+            "givenName": "Example",
+            "familyName": "User",
+            "formatted": "Example User",
+            "title": "Example Role",
+        },
+        SCIM_ADDRESSES_METADATA_KEY: [
+            {"type": "work", "country": "DE", "locality": "Berlin"},
+            {"type": "home", "country": "US"},
+        ],
+        SCIM_ENTERPRISE_METADATA_KEY: {
+            "organization": "Example Organization",
+            "department": "Example Department",
+        },
+    }
+    patch_ops = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(op="Replace", path="externalId", value="00000000-0000-4000-8000-000000000099"),
+            SCIMPatchOperation(op="Replace", path="displayName", value="Example Updated"),
+            SCIMPatchOperation(op="Replace", path="name.formatted", value="Example Updated"),
+            SCIMPatchOperation(op="Replace", path="title", value="Updated Role"),
+            SCIMPatchOperation(op="Replace", path='addresses[type eq "WORK"].country', value="GB"),
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(existing_metadata),
+        patch_ops=patch_ops,
+    )
+
+    assert update_data["sso_user_id"] == "00000000-0000-4000-8000-000000000099"
+    assert update_data["user_alias"] == "Example Updated"
+    metadata = update_data["metadata"]
+    assert isinstance(metadata, dict)
+    assert "title" not in metadata
+    assert "name.formatted" not in metadata
+    assert 'addresses[type eq "work"].country' not in metadata
+    assert metadata["scim_metadata"] == {
+        "userName": "00000000-0000-4000-8000-000000000001",
+        "externalId": "00000000-0000-4000-8000-000000000099",
+        "displayName": "Example Updated",
+        "givenName": "Example",
+        "familyName": "User",
+        "formatted": "Example Updated",
+        "title": "Updated Role",
+    }
+    assert metadata[SCIM_ADDRESSES_METADATA_KEY] == [
+        {"type": "work", "country": "GB", "locality": "Berlin"},
+        {"type": "home", "country": "US"},
+    ]
+    assert metadata[SCIM_ENTERPRISE_METADATA_KEY] == {
+        "organization": "Example Organization",
+        "department": "Example Department",
+    }
+
+
+def test_apply_patch_ops_filtered_address_appends_missing_and_removes_cleanly():
+    patch_ops_add = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(op="replace", path='addresses[type eq "work"].country', value="DE"),
+        ]
+    )
+    update_add, _ = _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops_add)
+    assert update_add["metadata"][SCIM_ADDRESSES_METADATA_KEY] == [{"type": "work", "country": "DE"}]
+
+    patch_ops_remove = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(op="remove", path='addresses[type eq "work"].country'),
+            SCIMPatchOperation(op="remove", path="title"),
+            SCIMPatchOperation(op="remove", path="name.formatted"),
+            SCIMPatchOperation(op="remove", path="displayName"),
+            SCIMPatchOperation(op="remove", path="externalId"),
+            SCIMPatchOperation(op="remove", path="userName"),
+        ]
+    )
+    update_removed, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata(update_add["metadata"]),
+        patch_ops=patch_ops_remove,
+    )
+    assert update_removed["user_alias"] is None
+    assert update_removed["sso_user_id"] is None
+    assert SCIM_ADDRESSES_METADATA_KEY not in update_removed["metadata"]
+    assert update_removed["metadata"]["scim_metadata"] == {}
+
+
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        'addresses[country eq "DE"]',
+        'addresses[type eq "work"].unknownField',
+        "addresses.country",
+    ],
+)
+def test_apply_patch_ops_invalid_addresses_path_raises_400(bad_path: str):
+    patch_ops = SCIMPatchOp(Operations=[SCIMPatchOperation(op="replace", path=bad_path, value="GB")])
+    with pytest.raises(HTTPException) as exc_info:
+        _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
     assert exc_info.value.status_code == 400

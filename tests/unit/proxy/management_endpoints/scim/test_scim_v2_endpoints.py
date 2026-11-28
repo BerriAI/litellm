@@ -76,9 +76,12 @@ from litellm.proxy.management_helpers.team_roster_sync import (
 )
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.scim_v2 import (
+    SCIM_ADDRESSES_METADATA_KEY,
     SCIM_ENTERPRISE_USER_SCHEMA,
     SCIM_MANAGED_TEAM_METADATA_KEY,
     SCIM_TEAM_DATA_METADATA_KEY,
+    SCIMAddress,
+    SCIMEnterpriseUser,
     SCIMGroup,
     SCIMMember,
     SCIMPatchOp,
@@ -7766,3 +7769,265 @@ async def test_a_refused_placeholder_merge_keeps_the_proxy_error_shape(
         "404",
     )
     assert "User not found with ID: ghost-user" in error["message"]
+
+
+@pytest.mark.asyncio
+async def test_handle_existing_user_by_email_persists_sso_user_id(mocker):
+    existing_user = LiteLLM_UserTable(
+        user_id="existing-id",
+        user_email="entra@example.org",
+        user_alias="Old Alias",
+        teams=[],
+        metadata={},
+    )
+    updated_row = LiteLLM_UserTable(
+        user_id="existing-id",
+        user_email="entra@example.org",
+        user_alias="Entra User",
+        sso_user_id="entra-object-id",
+        teams=[],
+        metadata={
+            "scim_metadata": {
+                "userName": "entra-object-id",
+                "externalId": "entra-object-id",
+                "displayName": "Entra User",
+            }
+        },
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=existing_user)
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_row)
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+        AsyncMock(),
+    )
+
+    req = NewUserRequest(
+        user_id="entra-object-id",
+        user_email="entra@example.org",
+        user_alias="Entra User",
+        sso_user_id="entra-object-id",
+        metadata=updated_row.metadata,
+        auto_create_key=False,
+    )
+
+    result = await UserProvisionerHelpers.handle_existing_user_by_email(
+        prisma_client=mock_prisma_client,
+        new_user_request=req,
+    )
+
+    assert result is not None
+    assert result.id == "existing-id"
+    assert result.userName == "entra-object-id"
+    assert result.externalId == "entra-object-id"
+    assert result.displayName == "Entra User"
+    update_kwargs = mock_prisma_client.db.litellm_usertable.update.call_args.kwargs
+    assert update_kwargs["data"]["sso_user_id"] == "entra-object-id"
+
+
+@pytest.mark.asyncio
+async def test_update_user_put_round_trips_entra_profile_fields(mocker):
+    object_id = "00000000-0000-4000-8000-000000000003"
+    existing_user = LiteLLM_UserTable(user_id=object_id, teams=[], metadata={})
+
+    stored_row: dict[str, object] = {}
+
+    async def fake_update(*, where, data):
+        stored_row.update(data)
+        return LiteLLM_UserTable(
+            user_id=where["user_id"],
+            user_email=data["user_email"],
+            user_alias=data["user_alias"],
+            sso_user_id=data["sso_user_id"],
+            teams=data.get("teams", existing_user.teams),
+            metadata=json.loads(data["metadata"]),
+        )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(side_effect=fake_update)
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+        AsyncMock(return_value=existing_user),
+    )
+
+    payload = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User", SCIM_ENTERPRISE_USER_SCHEMA],
+        userName=object_id,
+        externalId=object_id,
+        displayName="PUT Updated",
+        name=SCIMUserName(givenName="Example", familyName="User", formatted="PUT Updated"),
+        emails=[SCIMUserEmail(value="put@example.org", type="work", primary=True)],
+        title="Principal Engineer",
+        addresses=[SCIMAddress(type="work", country="GB")],
+        enterprise_user=SCIMEnterpriseUser(organization="Example Org", department="Platform"),
+    )
+
+    result = await update_user(user_id=object_id, user=payload)
+
+    assert result.userName == object_id
+    assert result.externalId == object_id
+    assert result.displayName == "PUT Updated"
+    assert result.name is not None
+    assert result.name.formatted == "PUT Updated"
+    assert result.title == "Principal Engineer"
+    assert result.addresses == [SCIMAddress(type="work", country="GB")]
+    assert result.enterprise_user == SCIMEnterpriseUser(organization="Example Org", department="Platform")
+
+
+@pytest.mark.asyncio
+async def test_entra_user_round_trip_create_get_patch_and_filter(
+    proxy_scim_client: AsyncClient,
+    proxy_admin_caller: None,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    object_id = "00000000-0000-4000-8000-000000000001"
+    store: dict[str, LiteLLM_UserTable] = {}
+
+    async def fake_new_user(*, data, user_api_key_dict):
+        row = LiteLLM_UserTable(
+            user_id=data.user_id,
+            user_email=data.user_email,
+            user_alias=data.user_alias,
+            sso_user_id=data.sso_user_id,
+            teams=list(data.teams or []),
+            metadata=dict(data.metadata or {}),
+        )
+        store[row.user_id] = row
+        return NewUserResponse(
+            key="",
+            user_id=row.user_id,
+            user_email=row.user_email,
+            user_alias=row.user_alias,
+            teams=row.teams,
+            metadata=row.metadata,
+        )
+
+    async def fake_find_unique(*, where):
+        return store.get(where.get("user_id"))
+
+    async def fake_find_many(*, where=None, skip=0, take=10, order=None):
+        rows = list(store.values())
+        if where and "OR" in where:
+            targets = {c.get("user_email") or c.get("user_id") for c in where["OR"]}
+            rows = [r for r in rows if r.user_email in targets or r.user_id in targets]
+        return rows[skip : skip + take]
+
+    async def fake_count(*, where=None):
+        return len(await fake_find_many(where=where))
+
+    async def fake_update(*, where, data):
+        row = store[where["user_id"]]
+        updated = LiteLLM_UserTable(
+            user_id=row.user_id,
+            user_email=data.get("user_email", row.user_email),
+            user_alias=data.get("user_alias", row.user_alias),
+            sso_user_id=data.get("sso_user_id", row.sso_user_id),
+            teams=data.get("teams", row.teams),
+            metadata=(
+                json.loads(data["metadata"])
+                if isinstance(data.get("metadata"), str)
+                else data.get("metadata", row.metadata)
+            ),
+        )
+        store[row.user_id] = updated
+        return updated
+
+    users = MagicMock()
+    users.find_unique = AsyncMock(side_effect=fake_find_unique)
+    users.find_first = AsyncMock(return_value=None)
+    users.find_many = AsyncMock(side_effect=fake_find_many)
+    users.count = AsyncMock(side_effect=fake_count)
+    users.update = AsyncMock(side_effect=fake_update)
+    _proxy_database(monkeypatch, users=users, teams=MagicMock())
+    monkeypatch.setattr(scim_v2_module, "new_user", AsyncMock(side_effect=fake_new_user))
+    monkeypatch.setattr(scim_v2_module, "_get_scim_admin_group", AsyncMock(return_value=None))
+
+    create_payload = {
+        "schemas": [
+            "urn:ietf:params:scim:schemas:core:2.0:User",
+            SCIM_ENTERPRISE_USER_SCHEMA,
+        ],
+        "userName": object_id,
+        "externalId": object_id,
+        "displayName": "Example User",
+        "name": {
+            "givenName": "Example",
+            "familyName": "User",
+            "formatted": "Example User",
+        },
+        "emails": [{"value": "scim-test@example.org", "type": "work", "primary": True}],
+        "title": "Example Role",
+        "addresses": [{"type": "work", "country": "DE"}],
+        "active": True,
+        SCIM_ENTERPRISE_USER_SCHEMA: {
+            "organization": "Example Organization",
+            "department": "Example Department",
+        },
+    }
+
+    async with proxy_scim_client as client:
+        created_resp = await client.post("/scim/v2/Users", json=create_payload)
+        assert created_resp.status_code == 201
+        created_body = created_resp.json()
+        assert created_body["id"] == object_id
+        assert created_body["userName"] == object_id
+        assert created_body["externalId"] == object_id
+        assert created_body["displayName"] == "Example User"
+        assert created_body["name"]["formatted"] == "Example User"
+        assert created_body["title"] == "Example Role"
+        assert created_body["addresses"] == [{"type": "work", "country": "DE"}]
+        assert created_body[SCIM_ENTERPRISE_USER_SCHEMA]["organization"] == "Example Organization"
+        assert created_body[SCIM_ENTERPRISE_USER_SCHEMA]["department"] == "Example Department"
+        assert store[object_id].sso_user_id == object_id
+        assert SCIM_ADDRESSES_METADATA_KEY in (store[object_id].metadata or {})
+
+        get_resp = await client.get(f"/scim/v2/Users/{object_id}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["userName"] == object_id
+        assert get_resp.json()["externalId"] == object_id
+        assert get_resp.json()["title"] == "Example Role"
+        assert get_resp.json()["addresses"] == [{"type": "work", "country": "DE"}]
+
+        patch_payload = {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [
+                {"op": "Replace", "path": "externalId", "value": object_id},
+                {"op": "Replace", "path": "displayName", "value": "Example Updated"},
+                {"op": "Replace", "path": "name.formatted", "value": "Example Updated"},
+                {"op": "Replace", "path": "title", "value": "Updated Role"},
+                {"op": "Replace", "path": 'addresses[type eq "work"].country', "value": "GB"},
+            ],
+        }
+        patch_resp = await client.patch(f"/scim/v2/Users/{object_id}", json=patch_payload)
+        assert patch_resp.status_code == 200
+
+        after_patch_resp = await client.get(f"/scim/v2/Users/{object_id}")
+        assert after_patch_resp.status_code == 200
+        patched = after_patch_resp.json()
+        assert patched["userName"] == object_id
+        assert patched["externalId"] == object_id
+        assert patched["displayName"] == "Example Updated"
+        assert patched["name"]["formatted"] == "Example Updated"
+        assert patched["title"] == "Updated Role"
+        assert patched["addresses"] == [{"type": "work", "country": "GB"}]
+        assert patched[SCIM_ENTERPRISE_USER_SCHEMA]["organization"] == "Example Organization"
+        assert patched[SCIM_ENTERPRISE_USER_SCHEMA]["department"] == "Example Department"
+
+        filter_resp = await client.get("/scim/v2/Users", params={"filter": f'userName eq "{object_id}"'})
+        assert filter_resp.status_code == 200
+        filter_body = filter_resp.json()
+        assert filter_body["totalResults"] == 1
+        assert filter_body["Resources"][0]["userName"] == object_id
+        assert filter_body["Resources"][0]["title"] == "Updated Role"
+        assert filter_body["Resources"][0]["addresses"] == [{"type": "work", "country": "GB"}]
