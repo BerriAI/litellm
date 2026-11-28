@@ -840,10 +840,20 @@ class TestAgentRBACProxyAdmin:
             )
             self.mock_registry.delete_agent_from_db = AsyncMock()
             self.mock_registry.deregister_agent = MagicMock()
-            resp = self.admin_client.delete(
-                "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
-            )
+            with patch.object(agent_endpoints, "sync_access_groups_for_deleted_agent", new=AsyncMock()) as sync_groups:
+                resp = self.admin_client.delete("/v1/agents/agent-123", headers={"Authorization": "Bearer k"})
             assert resp.status_code == 200
+            # A deleted agent must not stay listed in the access groups that granted it.
+            sync_groups.assert_awaited_once_with(mock_prisma, agent_id="agent-123")
+
+    def test_should_leave_access_groups_alone_when_agent_to_delete_is_missing(self):
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
+            self.mock_registry.delete_agent_from_db = AsyncMock()
+            with patch.object(agent_endpoints, "sync_access_groups_for_deleted_agent", new=AsyncMock()) as sync_groups:
+                resp = self.admin_client.delete("/v1/agents/agent-404", headers={"Authorization": "Bearer k"})
+            assert resp.status_code == 404
+            sync_groups.assert_not_awaited()
 
 
 class TestAgentProtocolVersionValidation:
