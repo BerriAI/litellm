@@ -86,6 +86,7 @@ pub struct SpendLog {
     logs: Arc<SpendLogs>,
     pub(crate) repository: SpendLogRepository,
     pub(crate) budget_resets: BudgetResetRepository,
+    pub(crate) model_budgets: Arc<litellm_redis_store::model_budgets::ModelBudgets>,
     callback: Arc<dyn ErasedCallback>,
     host: Arc<RustSpendLogHost>,
     /// The spend counters the callback charges.
@@ -120,6 +121,12 @@ impl SpendLog {
             logs,
             repository,
             budget_resets: BudgetResetRepository::new(database.clone()),
+            model_budgets: Arc::new(litellm_redis_store::model_budgets::ModelBudgets::new(
+                redis.coordination.clone().map(|client| Remote {
+                    client,
+                    default_ttl: REDIS_DEFAULT_TTL,
+                }),
+            )),
             callback: Arc::new(callback),
             host: Arc::new(RustSpendLogHost::new(Some(rows.clone()))),
             budgets,

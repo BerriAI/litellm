@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_BudgetWindowSpend\" AS stored\n    (entity_type, entity_id, window_duration, window_start, spend, created_at, updated_at)\nVALUES ('model_max_budget', $1, $2, $3, 0, $3, $3)\nON CONFLICT (entity_type, entity_id, window_duration) DO UPDATE\nSET window_start = EXCLUDED.window_start, spend = 0, updated_at = EXCLUDED.updated_at\nWHERE stored.window_start <= $4 AND stored.window_start < EXCLUDED.window_start\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Timestamp",
+        "Timestamp"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "01792c22aa535673667ac5c430044ad4fc72795dca05cdb900b6ce6c3c885207"
+}

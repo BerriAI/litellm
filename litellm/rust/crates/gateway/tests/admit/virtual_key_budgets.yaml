@@ -72,9 +72,7 @@ requests:
   - name: a key with a per-model budget
     headers: {authorization: Bearer sk-model-budget}
     body: {model: claude-haiku-5-5, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: not_native
+    expect: rust
 
   - name: a key with a temporary budget increase
     headers: {authorization: Bearer sk-temporary}

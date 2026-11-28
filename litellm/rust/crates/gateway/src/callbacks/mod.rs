@@ -10,6 +10,8 @@ mod budget_price;
 pub(crate) mod budgets;
 mod fields;
 pub mod hosted;
+pub(crate) mod model_budget;
+mod model_budget_resolution;
 pub mod model_capacity;
 pub mod parallel_request_limiter;
 pub mod spend_log;

@@ -147,6 +147,18 @@ pub(crate) async fn inference_over(
         ModelCapacity::new(read, counters, active, router.clone())
     });
     let cost_map = Arc::new(ArcSwap::from_pointee(CostMap::bundled()));
+    let model_budget = spend_log.map(|spend_log| {
+        callbacks::model_budget::ModelBudget::new(
+            spend_log.model_budgets.clone(),
+            redis
+                .coordination
+                .is_none()
+                .then(|| spend_log.repository.clone()),
+            router.clone(),
+            cost_map.clone(),
+            free.clone(),
+        )
+    });
     let budget_check = spend_log.map(|spend_log| {
         spend_log.budget_check(
             free,
@@ -158,6 +170,11 @@ pub(crate) async fn inference_over(
         budget_check
             .iter()
             .map(BudgetCheck::registered)
+            .chain(
+                model_budget
+                    .iter()
+                    .map(callbacks::model_budget::ModelBudget::registered),
+            )
             .chain(model_capacity.iter().map(|capacity| capacity.registered()))
             .chain([key_limiter.registered()])
             .chain(spend_log.map(SpendLog::registered))

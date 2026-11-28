@@ -338,6 +338,7 @@ pub(super) fn read(key: &KeyEntry) -> Result<Keyed<Key>, &'static str> {
         checked_budget,
         aliased,
     } = held(key);
+    let model_max_budget = read_bag(&key.model_max_budget);
     let metadata = Metadata::read(&key.metadata);
     let unread = metadata.is_none().then_some("metadata");
     if let Some(field) = unasked.or(unread).filter(|_| !blocked) {
@@ -376,8 +377,9 @@ pub(super) fn read(key: &KeyEntry) -> Result<Keyed<Key>, &'static str> {
                 max: key.max_budget,
                 spend: key.spend,
             },
-            model_max_budget: Arc::new(read_bag(&key.model_max_budget).unwrap_or_default()),
-            budget,
+            budget: budget
+                .filter(|field| *field != "model_max_budget" || model_max_budget.is_none()),
+            model_max_budget: Arc::new(model_max_budget.unwrap_or_default()),
             checked_budget,
             aliased,
         },
@@ -531,7 +533,8 @@ mod tests {
     #[case::a_budget_window(json!({"max_budget": 5.0, "budget_limits": [{"budget_duration": "1d", "max_budget": 1.0}]}), Some("budget_limits"), Some("max_budget"))]
     #[case::a_budget_fallback(json!({"max_budget": 5.0, "budget_fallbacks": {"claude": ["haiku"]}}), Some("budget_fallbacks"), Some("max_budget"))]
     #[case::a_budget_row(json!({"budget_id": "budget"}), Some("budget_id"), None)]
-    #[case::a_per_model_budget(json!({"max_budget": 5.0, "model_max_budget": {"claude": {"budget_limit": 1.0}}}), Some("model_max_budget"), Some("max_budget"))]
+    #[case::a_per_model_budget(json!({"max_budget": 5.0, "model_max_budget": {"claude": {"budget_limit": 1.0}}}), None, Some("max_budget"))]
+    #[case::a_malformed_per_model_budget(json!({"model_max_budget": {"claude": []}}), Some("model_max_budget"), None)]
     fn only_a_keys_own_budget_is_one_the_read_time_check_enforces(
         #[case] change: Fields,
         #[case] declined: Option<&str>,

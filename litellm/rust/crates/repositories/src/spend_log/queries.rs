@@ -260,6 +260,40 @@ pub(super) async fn current_window_spend(
     .await?)
 }
 
+pub(super) async fn read_model_budget_window(
+    executor: impl PgExecutor<'_>,
+    id: &str,
+    duration: &str,
+) -> Result<Option<(NaiveDateTime, f64)>, Error> {
+    Ok(sqlx::query_file!(
+        "src/spend_log/queries/read_model_budget_window.sql",
+        id,
+        duration
+    )
+    .fetch_optional(executor)
+    .await?
+    .map(|row| (row.window_start, row.spend)))
+}
+
+pub(super) async fn open_model_budget_window(
+    executor: impl PgExecutor<'_>,
+    id: &str,
+    duration: &str,
+    now: NaiveDateTime,
+    replaces: Option<NaiveDateTime>,
+) -> Result<(), Error> {
+    sqlx::query_file!(
+        "src/spend_log/queries/open_model_budget_window.sql",
+        id,
+        duration,
+        now,
+        replaces
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
 pub(super) async fn cleanup_accounting_deliveries(
     executor: impl PgExecutor<'_>,
     days: i32,

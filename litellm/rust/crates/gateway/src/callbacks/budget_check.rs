@@ -374,7 +374,7 @@ fn budgeted(identity: &Authenticated<NativeRows>) -> Budgeted {
 }
 
 /// Python's `BudgetExceededError` for an over-budget caller, as an abort.
-fn over_budget(fields: Map<String, Value>) -> Abort {
+pub(super) fn over_budget(fields: Map<String, Value>) -> Abort {
     let message = fields
         .get("message")
         .and_then(Value::as_str)

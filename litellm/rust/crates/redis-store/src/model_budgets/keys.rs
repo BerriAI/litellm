@@ -49,7 +49,7 @@ pub struct Counter<'a> {
 }
 
 impl Counter<'_> {
-    pub(super) fn spend(&self) -> String {
+    pub fn spend(&self) -> String {
         self.key(self.scope.into())
     }
 

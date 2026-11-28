@@ -37,6 +37,12 @@ const CURRENT_WINDOW_SPEND: Call = Call {
     operation: Some("find_unique"),
 };
 
+const WRITE_MODEL_BUDGET_WINDOW: Call = Call {
+    call_type: "upsert",
+    table: Some("LiteLLM_BudgetWindowSpend"),
+    operation: Some("upsert"),
+};
+
 const INSERT_SPEND_LOGS: Call = Call {
     call_type: "insert_spend_logs",
     table: Some("LiteLLM_SpendLogs"),
@@ -295,6 +301,74 @@ impl SpendLogRepository {
             .run(WINDOW_SPEND, || async {
                 let mut session = self.database.session(Side::Read).await?;
                 queries::window_spend(session.executor(), owner, owner_id, since).await
+            })
+            .await
+    }
+
+    pub async fn read_model_budget_window(
+        &self,
+        id: &str,
+        duration: &str,
+    ) -> Result<Option<(DateTime<Utc>, f64)>, Error> {
+        self.database
+            .run(CURRENT_WINDOW_SPEND, || async {
+                let mut session = self.database.session(Side::Writer).await?;
+                Ok(
+                    queries::read_model_budget_window(session.executor(), id, duration)
+                        .await?
+                        .map(|(start, spend)| (start.and_utc(), spend)),
+                )
+            })
+            .await
+    }
+
+    pub async fn open_model_budget_window(
+        &self,
+        id: &str,
+        duration: &str,
+        now: DateTime<Utc>,
+        replaces: Option<DateTime<Utc>>,
+    ) -> Result<(), Error> {
+        self.database
+            .run(WRITE_MODEL_BUDGET_WINDOW, || async {
+                let mut session = self.database.session(Side::Writer).await?;
+                queries::open_model_budget_window(
+                    session.executor(),
+                    id,
+                    duration,
+                    now.naive_utc(),
+                    replaces.map(|start| start.naive_utc()),
+                )
+                .await
+            })
+            .await
+    }
+
+    pub async fn charge_model_budget_window(
+        &self,
+        id: &str,
+        duration: &str,
+        start: DateTime<Utc>,
+        spend: f64,
+    ) -> Result<(), Error> {
+        self.database
+            .run(WRITE_MODEL_BUDGET_WINDOW, || async {
+                let mut session = self.database.session(Side::Writer).await?;
+                queries::apply_window(
+                    session.executor(),
+                    &accounting::WindowKey {
+                        entity_type: "model_max_budget",
+                        entity_id: id,
+                        duration,
+                        starts_at: start.naive_utc(),
+                    },
+                    &accounting::WindowCharge {
+                        spend,
+                        earliest_request: None,
+                    },
+                    0.0,
+                )
+                .await
             })
             .await
     }

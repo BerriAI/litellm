@@ -138,13 +138,21 @@ def _identity(database: str, case: Case) -> Identity:
 
 
 @contextmanager
-def _rust(binary: Path, config: Path, environment: dict[str, str]) -> Iterator[tuple[httpx.Client, int]]:
+def _rust(
+    binary: Path, config: Path, environment: dict[str, str], remove_environment: tuple[str, ...] = ()
+) -> Iterator[tuple[httpx.Client, int]]:
     port: Final = allocate_port()
     with (
         config.with_suffix(".rust.log").open("w") as log,
         subprocess.Popen(
             [str(binary)],
-            env={**os.environ, **environment, "HOST": "127.0.0.1", "PORT": str(port), "LITELLM_CONFIG": str(config)},
+            env={
+                **{name: value for name, value in os.environ.items() if name not in remove_environment},
+                **environment,
+                "HOST": "127.0.0.1",
+                "PORT": str(port),
+                "LITELLM_CONFIG": str(config),
+            },
             stdout=log,
             stderr=subprocess.STDOUT,
         ) as process,
@@ -176,10 +184,11 @@ class Proxies:
     database: str
     redis: Redis
     upstream: RecordingServer
+    uses_redis: bool
 
 
 @pytest.fixture(scope="module")
-def proxies(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Proxies]:
+def proxies(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureRequest) -> Iterator[Proxies]:
     binary: Final = Path(
         os.environ.get("LITELLM_PARITY_GATEWAY_BINARY", ROOT / "litellm/rust/target/debug/litellm-gateway")
     )
@@ -187,6 +196,8 @@ def proxies(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Proxies]:
         pytest.skip("Live budget parity requires DATABASE_URL and a built litellm-gateway binary")
     directory: Final = tmp_path_factory.mktemp("affiliation-budget-parity")
     config: Final = directory / "proxy.yaml"
+    uses_redis: Final = getattr(request, "param", True) is True
+    remove_environment: Final = () if uses_redis else tuple(name for name in os.environ if name.startswith("REDIS_"))
     with recording_service() as upstream, private_state(directory, os.environ) as state, httpx.Client() as unused:
         upstream.expected_requests = None
         config.write_text(
@@ -200,12 +211,12 @@ general_settings:
   master_key: {MASTER_KEY}
   disable_budget_reservation: false
 litellm_settings:
-  enable_redis_auth_cache: true
+  enable_redis_auth_cache: {str(uses_redis).lower()}
   budget_rollover: true
 """
         )
         environment: Final = {
-            **state.environment,
+            **{name: value for name, value in state.environment.items() if uses_redis or not name.startswith("REDIS_")},
             "LITELLM_RUST_FIRST": "0",
             "LITELLM_RUST": "0",
             "LITELLM_LOCAL_MODEL_COST_MAP": "True",
@@ -220,12 +231,21 @@ litellm_settings:
         }
         gateway: Final = Gateway(unused, MASTER_KEY, upstream.base_url)
         with (
-            owned_proxy_process(gateway, directory, environment, config=config) as python,
-            _rust(binary, config, environment) as (native, native_pid),
-            Redis(host=environment["REDIS_HOST"], port=int(environment["REDIS_PORT"])) as redis,
+            owned_proxy_process(
+                gateway, directory, environment, config=config, remove_environment=remove_environment
+            ) as python,
+            _rust(binary, config, environment, remove_environment) as (native, native_pid),
+            Redis(host=state.environment["REDIS_HOST"], port=int(state.environment["REDIS_PORT"])) as redis,
         ):
             yield Proxies(
-                python.gateway.client, python.process.pid, native, native_pid, state.database_url, redis, upstream
+                python.gateway.client,
+                python.process.pid,
+                native,
+                native_pid,
+                state.database_url,
+                redis,
+                upstream,
+                uses_redis,
             )
 
 
@@ -341,6 +361,52 @@ def _send(client: httpx.Client, identity: Identity) -> httpx.Response:
         headers={"Authorization": f"Bearer {identity.token}", "anthropic-version": "2023-06-01"},
         json={"model": "metered", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 8},
     )
+
+
+def _model_budget_outcome(
+    client: httpx.Client, proxies: Proxies, maximum: float, expected_spend: float
+) -> tuple[int, int, float, float]:
+    identity: Final = _identity(proxies.database, Case(owner=True, maximum=2.0))
+    hashed: Final = hashlib.sha256(identity.token.encode()).hexdigest()
+    with psycopg.connect(proxies.database) as connection:
+        connection.execute(
+            'UPDATE "LiteLLM_VerificationToken" SET model_max_budget = %s WHERE token = %s',
+            (Jsonb({"met*": {"budget_limit": maximum, "time_period": "1h"}}), hashed),
+        )
+    _provider_response(proxies, identity)
+    counter: Final = f"virtual_key_spend:{hashed}:met*:1h"
+    first: Final = _send(client, identity)
+    assert first.status_code == 200, first.text
+
+    def spend() -> float:
+        if proxies.uses_redis:
+            value: Final = proxies.redis.get(counter)
+            return float(value) if isinstance(value, bytes) else 0.0
+        rows: Final = read_rows(
+            """SELECT spend FROM "LiteLLM_BudgetWindowSpend"
+               WHERE entity_type = 'model_max_budget' AND entity_id = %s AND window_duration = '1h'""",
+            (counter,),
+            database_url=proxies.database,
+        )
+        stored: Final = rows[0]["spend"] if rows else 0
+        assert isinstance(stored, (int, float))
+        return float(stored)
+
+    settled: Final = eventually(spend, lambda value: value == pytest.approx(expected_spend))
+    second: Final = _send(client, identity)
+    assert second.status_code == 422, second.text
+    assert spend() == pytest.approx(settled)
+    persisted: Final = eventually(
+        lambda: identity.persisted(proxies.database), lambda value: value == pytest.approx(expected_spend), seconds=30
+    )
+    return first.status_code, second.status_code, settled, persisted
+
+
+@pytest.mark.parametrize("proxies", [True, False], ids=["redis", "postgres"], indirect=True)
+def test_per_model_glob_charges_a_success_and_refuses_the_next_request(proxies: Proxies, actual_cost: float) -> None:
+    python: Final = _model_budget_outcome(proxies.python, proxies, actual_cost / 2, actual_cost)
+    rust: Final = _model_budget_outcome(proxies.rust, proxies, actual_cost / 2, actual_cost)
+    assert rust == pytest.approx(python)
 
 
 def _outcome(client: httpx.Client, proxies: Proxies, case: Case, actual_cost: float) -> tuple[int, float, float]:

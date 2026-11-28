@@ -76,7 +76,7 @@ fn matches(pattern: &str, name: &str) -> bool {
     let Some((head, rest)) = pattern.split_once('*') else {
         return pattern == name;
     };
-    let (middle, tail) = rest.rsplit_once('*').map_or(("", rest), |parts| parts);
+    let (middle, tail) = rest.rsplit_once('*').unwrap_or(("", rest));
     let Some(mut remaining) = name
         .strip_prefix(head)
         .and_then(|name| name.strip_suffix(tail))
