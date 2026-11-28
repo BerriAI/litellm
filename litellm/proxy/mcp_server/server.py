@@ -358,7 +358,10 @@ def _otel_reset_mcp_trace_carrier(token: object) -> None:
         return
 
 
-def _otel_publish_transport_span_on_scope(scope: Scope) -> None:
+def _otel_publish_transport_span_on_scope(
+    scope: Scope,
+    raw_headers: Mapping[str, str] | None = None,
+) -> None:
     """Record this request's tracing span on its own ASGI scope.
 
     Resolved on the ASGI request task, where the proxy's server span is anchored,
@@ -379,11 +382,9 @@ def _otel_publish_transport_span_on_scope(scope: Scope) -> None:
     an optional dependency; a no-op when otel_v2 is unavailable or no request span is
     anchored."""
     try:
-        from litellm.integrations.otel.plumbing.context import (
-            request_root_span,
-        )
+        from litellm.integrations.otel.logger import anchor_authenticated_request_span
 
-        span: Final = request_root_span()
+        span: Final = anchor_authenticated_request_span(raw_headers)
     except ImportError:
         return
     if span is not None:
@@ -2820,7 +2821,7 @@ if MCP_AVAILABLE:
                 _increment_active_request_session(initialized_session_id)
 
             async def _dispatch() -> None:
-                _otel_publish_transport_span_on_scope(scope)
+                _otel_publish_transport_span_on_scope(scope, raw_headers)
                 _otel_publish_request_destinations_on_scope(scope)
                 auth_user: Final = _set_or_update_auth_context(
                     user_api_key_auth=user_api_key_auth,
@@ -2999,6 +3000,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 raw_headers=raw_headers,
             )
+            _otel_publish_transport_span_on_scope(scope, raw_headers)
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,

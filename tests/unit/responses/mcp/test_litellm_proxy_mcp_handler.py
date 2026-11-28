@@ -1199,6 +1199,35 @@ async def test_execute_tool_calls_propagates_request_tags_to_function_setup(monk
     assert captured["metadata"]["tags"] == ["team-a", "prod"]
 
 
+@pytest.mark.asyncio
+async def test_execute_tool_calls_propagates_caller_session_id_from_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    _setup_proxy_logging(monkeypatch)
+    _setup_mcp_call_environment(monkeypatch)
+    captured: Final[dict[str, object]] = {}
+
+    def fake_function_setup(*_args: object, **kwargs: object) -> tuple[None, None]:
+        captured.update(kwargs)
+        return None, None
+
+    handler_module: Final = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
+
+    tool_name: Final = "deepwiki-read_wiki_structure"
+    await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=None,
+        raw_headers={"x-litellm-session-id": "nested-sess-1"},
+    )
+
+    assert captured["litellm_session_id"] == "nested-sess-1"
+    assert captured["litellm_trace_id"] == "nested-sess-1"
+    metadata: Final = captured["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata["session_id"] == "nested-sess-1"
+    assert metadata["trace_id"] == "nested-sess-1"
+
+
 def test_extract_tool_call_details_reads_anthropic_tool_use_input():
     """
     Regression test (LIT-4517): an Anthropic tool_use block carries its arguments

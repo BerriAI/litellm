@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
+from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
 from opentelemetry.sdk.trace import ReadableSpan
@@ -6,6 +7,7 @@ from opentelemetry.sdk.trace import ReadableSpan
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.emitter import attribute_budget, carried_keys
 from litellm.integrations.otel.logger import OpenTelemetryV2
+from litellm.integrations.otel.mappers.base import AttributeMap
 from litellm.integrations.otel.mappers.langfuse import (
     LANGFUSE_OBSERVATION_INPUT,
     LANGFUSE_OBSERVATION_OUTPUT,
@@ -16,9 +18,9 @@ from litellm.integrations.otel.mappers.langfuse import (
 )
 from litellm.integrations.otel.model.metadata import internal_call_origin
 from litellm.integrations.otel.model.request_io import request_input, response_output, stream_output
-from litellm.integrations.otel.model.trace_controls import caller_trace_controls
+from litellm.integrations.otel.model.trace_controls import caller_trace_controls, trace_controls_from_headers
 from litellm.integrations.otel.model.utils import as_str
-from litellm.integrations.otel.plumbing.context import request_root_span
+from litellm.integrations.otel.plumbing.context import mcp_message_transport_span, request_root_span
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -44,6 +46,17 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
         # as they were.
         return data
 
+    def stamp_request_trace_controls_from_headers(self, headers: Mapping[str, str] | None) -> None:
+        if not headers:
+            return
+        root: Final = request_root_span()
+        if root is None or not root.is_recording():
+            return
+        from litellm.proxy.litellm_pre_call_utils import get_session_id_from_headers
+
+        controls: Final = trace_controls_from_headers(headers, session_id=get_session_id_from_headers(headers))
+        self._stamp_trace_attributes(root, LangfuseMapper.trace_attributes(controls))
+
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         root: Final = request_root_span()
         if root is not None and root.is_recording():
@@ -51,14 +64,47 @@ class LangfuseOpenTelemetryV2(OpenTelemetryV2):
                 caller_trace_controls(kwargs),
                 as_str(kwargs.get("call_type")) if self._derives_trace_name(root, kwargs) else None,
             )
-            room: Final = attribute_budget(root, 0)
-            fits: Final = room is None or len(stamped.keys() - carried_keys(root)) <= room
-            root.set_attributes(
-                stamped
-                if fits
-                else {key: value for key, value in stamped.items() if key not in (LANGFUSE_RELEASE, LANGFUSE_VERSION)}
-            )
+            self._stamp_trace_attributes(root, stamped)
         super().log_pre_api_call(model, messages, kwargs)
+
+    def _emit_mcp_tool_call(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> bool:
+        if not super()._emit_mcp_tool_call(kwargs, start_time, end_time):
+            return False
+        self._stamp_mcp_transport_trace_controls(kwargs)
+        return True
+
+    def _emit_mcp_list_tools(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> bool:
+        if not super()._emit_mcp_list_tools(kwargs, start_time, end_time):
+            return False
+        self._stamp_mcp_transport_trace_controls(kwargs)
+        return True
+
+    def _stamp_mcp_transport_trace_controls(self, kwargs: Mapping[str, object]) -> None:
+        transport: Final = mcp_message_transport_span() or request_root_span()
+        if transport is not None and transport.is_recording():
+            self._stamp_trace_attributes(transport, LangfuseMapper.trace_attributes(caller_trace_controls(kwargs)))
+
+    @staticmethod
+    def _stamp_trace_attributes(span: "Span", stamped: AttributeMap) -> None:
+        if not stamped:
+            return
+        room: Final = attribute_budget(span, 0)
+        fits: Final = room is None or len(stamped.keys() - carried_keys(span)) <= room
+        span.set_attributes(
+            stamped
+            if fits
+            else {key: value for key, value in stamped.items() if key not in (LANGFUSE_RELEASE, LANGFUSE_VERSION)}
+        )
 
     def _derives_trace_name(self, root: "Span", kwargs: Mapping[str, object]) -> bool:
         return (

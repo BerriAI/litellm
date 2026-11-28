@@ -585,10 +585,16 @@ class MCPToolCallSpanData:
     error: SpanError | None
     response_cost: float | None
     identity: RequestIdentity
+    caller_session_id: str | None = None
+    trace: TraceControls = field(default_factory=TraceControls)
 
     @classmethod
     def from_standard_logging_payload(
-        cls, payload: StandardLoggingPayload, capture_content: bool = False
+        cls,
+        payload: StandardLoggingPayload,
+        capture_content: bool = False,
+        trace: TraceControls | None = None,
+        caller_session_id: str | None = None,
     ) -> MCPToolCallSpanData:
         meta: Final = _mcp_tool_call_metadata(cast(Mapping[str, object], payload))
         address, port = _upstream_address_port(as_str(meta.get("mcp_server_resource")) or None)
@@ -609,6 +615,8 @@ class MCPToolCallSpanData:
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
             identity=RequestContext.from_standard_logging_payload(payload).identity,
+            caller_session_id=caller_session_id,
+            trace=trace or TraceControls(),
         )
 
 
@@ -658,10 +666,14 @@ class MCPListToolsSpanData:
     session_id: str | None
     error: SpanError | None
     identity: RequestIdentity
+    trace: TraceControls = field(default_factory=TraceControls)
 
     @classmethod
     def from_standard_logging_payload(
-        cls, payload: StandardLoggingPayload, capture_content: bool = False
+        cls,
+        payload: StandardLoggingPayload,
+        capture_content: bool = False,
+        trace: TraceControls | None = None,
     ) -> MCPListToolsSpanData:
         # The list-tools logging path does not thread an MCP session id into the
         # payload (only the tool-call path stamps ``mcp_tool_call_metadata``), so
@@ -671,6 +683,7 @@ class MCPListToolsSpanData:
             session_id=None,
             error=_parse_error(payload),
             identity=RequestContext.from_standard_logging_payload(payload).identity,
+            trace=trace or TraceControls(),
         )
 
 

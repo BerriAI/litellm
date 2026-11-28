@@ -30,20 +30,59 @@ class TraceControls:
     version: str | None = None
 
 
+def _header_value(headers: Mapping[str, object], name: str) -> str | None:
+    direct: Final = as_str(headers.get(name))
+    if direct:
+        return direct
+    target: Final = name.lower()
+    return next(
+        (text for key, value in headers.items() if key.lower() == target and (text := as_str(value))),
+        None,
+    )
+
+
+def trace_controls_from_headers(
+    headers: Mapping[str, object] | None, *, session_id: str | None = None
+) -> TraceControls:
+    if headers is None:
+        return TraceControls(session_id=session_id or None)
+
+    def from_header(control: str) -> str | None:
+        return _header_value(headers, f"{LANGFUSE_HEADER_PREFIX}{control}")
+
+    return TraceControls(
+        name=from_header("trace_name"),
+        user_id=from_header("trace_user_id"),
+        session_id=from_header("session_id") or session_id or None,
+        release=from_header("trace_release"),
+        version=from_header("trace_version") or from_header("version"),
+    )
+
+
 def caller_trace_controls(kwargs: Mapping[str, object]) -> TraceControls:
     request: Final = as_str_mapping(kwargs.get("litellm_params"))
     if request is None:
         return TraceControls()
     proxy_request: Final = as_str_mapping(request.get("proxy_server_request"))
-    headers: Final = as_str_mapping(proxy_request.get("headers")) if proxy_request is not None else None
     bodies: Final = tuple(
         metadata
         for key in ("metadata", "litellm_metadata")
         if (metadata := as_str_mapping(request.get(key))) is not None
     )
+    sources: Final = (*((proxy_request,) if proxy_request is not None else ()), *bodies)
+    header_maps: Final = tuple(
+        headers for source in sources if (headers := as_str_mapping(source.get("headers"))) is not None
+    )
 
     def scalar(control: str) -> str | None:
-        from_header: Final = as_str(headers.get(f"{LANGFUSE_HEADER_PREFIX}{control}")) if headers is not None else None
+        from_header: Final = next(
+            (
+                value
+                for headers in header_maps
+                if (value := _header_value(headers, f"{LANGFUSE_HEADER_PREFIX}{control}"))
+            ),
+            None,
+        )
         if from_header:
             return from_header
         return next((value for body in bodies if (value := as_str(body.get(control)))), None)

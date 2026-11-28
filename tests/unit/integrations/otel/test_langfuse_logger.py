@@ -750,3 +750,172 @@ def test_release_and_version_never_push_an_attribute_off_a_root_span_at_its_limi
     stamped: Final = dict(exporter.get_finished_spans()[0].attributes or {})
     assert stamped.items() >= {**server, TRACE_NAME_ATTR: "checkout"}.items()
     assert ("langfuse.release" in stamped, "langfuse.version" in stamped) == (room == 2, room == 2)
+
+
+def _mcp_tool_logging_payload(*, call_id: str = "mcp_1", status: str = "success") -> dict[str, object]:
+    return {
+        "call_type": "call_mcp_tool",
+        "status": status,
+        "litellm_call_id": call_id,
+        "metadata": {
+            "mcp_tool_call_metadata": {
+                "name": "echo",
+                "mcp_server_name": "everything",
+                "mcp_session_id": "mcp-proto-sess",
+            },
+        },
+        "hidden_params": {},
+    }
+
+
+def _mcp_list_logging_payload(*, call_id: str = "mcp_list_1") -> dict[str, object]:
+    return {
+        "call_type": "list_mcp_tools",
+        "status": "success",
+        "litellm_call_id": call_id,
+        "metadata": {"spend_logs_metadata": {"mcp_operation": "list_tools"}},
+        "hidden_params": {},
+    }
+
+
+def test_request_started_span_does_not_stamp_unauthenticated_headers() -> None:
+    logger, exporter = _logger()
+    tracer: Final = logger.tracer_provider.get_tracer("server")
+    unauthenticated_headers: Final = {
+        "x-litellm-session-id": "spoofed-sess",
+        "langfuse_session_id": "spoofed-lf-sess",
+        "langfuse_trace_user_id": "spoofed-user",
+        "langfuse_trace_name": "spoofed-trace",
+        "langfuse_trace_release": "spoofed-rel",
+        "langfuse_trace_version": "spoofed-ver",
+    }
+    with tracer.start_as_current_span("POST /{mcp_server_name}/mcp", kind=SpanKind.SERVER):
+        logger.create_litellm_proxy_request_started_span(
+            datetime(2026, 11, 26, tzinfo=timezone.utc), unauthenticated_headers
+        )
+
+    (server_span,) = exporter.get_finished_spans()
+    attrs: Final = dict(server_span.attributes or {})
+    assert set(attrs).isdisjoint({"session.id", "user.id", TRACE_NAME_ATTR, "langfuse.release", "langfuse.version"})
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected_session", "expected_name"),
+    [
+        ({"x-litellm-session-id": "sess-123"}, "sess-123", None),
+        ({"x-litellm-trace-id": "trace-123", "x-litellm-session-id": "sess-123"}, "trace-123", None),
+        ({"x-claude-code-session-id": "claude-sess-1234"}, "claude-sess-1234", None),
+        ({"x-session-id": "opencode-sess-1234"}, "opencode-sess-1234", None),
+        ({"baggage": "session.id=bag-sess-1,user.id=u1"}, "bag-sess-1", None),
+        (
+            {"x-litellm-session-id": "sess-123", "langfuse_session_id": "lf-sess-1", "langfuse_trace_name": "mcp-init"},
+            "lf-sess-1",
+            "mcp-init",
+        ),
+        ({"accept": "application/json"}, None, None),
+    ],
+    ids=[
+        "x-litellm-session-id",
+        "x-litellm-trace-id-wins",
+        "vendor-session-id",
+        "bare-x-session-id",
+        "baggage-session-id",
+        "langfuse-header-wins",
+        "no-session-header",
+    ],
+)
+def test_authenticated_request_stamps_caller_session_and_trace_controls_from_headers(
+    headers: Mapping[str, str], expected_session: str | None, expected_name: str | None
+) -> None:
+    logger, exporter = _logger()
+    tracer: Final = logger.tracer_provider.get_tracer("server")
+    with tracer.start_as_current_span("POST /{mcp_server_name}/mcp", kind=SpanKind.SERVER):
+        logger.create_litellm_proxy_request_started_span(datetime(2026, 11, 26, tzinfo=timezone.utc), headers)
+        logger.stamp_request_trace_controls_from_headers(headers)
+
+    (server_span,) = exporter.get_finished_spans()
+    attrs: Final = dict(server_span.attributes or {})
+    assert attrs.get("session.id") == expected_session
+    assert attrs.get(TRACE_NAME_ATTR) == expected_name
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["success", "failure"])
+def test_mcp_tool_call_and_list_tools_stamp_session_on_client_and_transport_spans(fail: bool) -> None:
+    logger, exporter = _logger()
+    transport: Final = logger.tracer_provider.get_tracer("server").start_span(
+        "POST /{mcp_server_name}/mcp", kind=SpanKind.SERVER
+    )
+    token: Final = otel_context.set_mcp_message_transport_span(transport)
+    try:
+        tool_kwargs: Final[dict[str, object]] = {
+            "standard_logging_object": _mcp_tool_logging_payload(
+                call_id=f"mcp_call_{fail}", status="failure" if fail else "success"
+            ),
+            "litellm_params": {
+                "litellm_session_id": "sess-123",
+                "metadata": {"trace_id": "sess-123", "session_id": "sess-123", "headers": {}, "tags": ["mcp"]},
+            },
+        }
+        hook: Final = logger.async_log_failure_event if fail else logger.async_log_success_event
+        asyncio.run(hook(tool_kwargs, None, None, None))
+    finally:
+        otel_context.reset_mcp_message_transport_span(token)
+        transport.end()
+
+    list_transport: Final = logger.tracer_provider.get_tracer("server").start_span(
+        "POST /{mcp_server_name}/mcp", kind=SpanKind.SERVER
+    )
+    list_token: Final = otel_context.set_mcp_message_transport_span(list_transport)
+    try:
+        list_kwargs: Final[dict[str, object]] = {
+            "standard_logging_object": _mcp_list_logging_payload(call_id=f"mcp_list_{fail}"),
+            "litellm_params": {
+                "metadata": {"headers": {"langfuse_session_id": "lf-list-sess"}, "session_id": "body-ignored"}
+            },
+        }
+        asyncio.run(logger.async_log_success_event(list_kwargs, None, None, None))
+    finally:
+        otel_context.reset_mcp_message_transport_span(list_token)
+        list_transport.end()
+
+    finished: Final = exporter.get_finished_spans()
+    tool_span: Final = next(s for s in finished if s.name == "tools/call echo")
+    list_span: Final = next(s for s in finished if s.name == "tools/list")
+    server_spans: Final = [s for s in finished if s.kind is SpanKind.SERVER]
+
+    tool_attrs: Final = dict(tool_span.attributes or {})
+    assert tool_attrs["session.id"] == "sess-123"
+    assert tool_attrs["gen_ai.conversation.id"] == "sess-123"
+    assert tool_attrs["mcp.session.id"] == "mcp-proto-sess"
+    assert tool_attrs["langfuse.trace.tags"] == ("mcp",)
+
+    list_attrs: Final = dict(list_span.attributes or {})
+    assert list_attrs["session.id"] == "lf-list-sess"
+
+    assert [dict(s.attributes or {}).get("session.id") for s in server_spans] == ["sess-123", "lf-list-sess"]
+
+
+def test_mcp_tool_call_without_caller_session_omits_session_id_on_all_spans() -> None:
+    logger, exporter = _logger()
+    transport: Final = logger.tracer_provider.get_tracer("server").start_span(
+        "POST /{mcp_server_name}/mcp", kind=SpanKind.SERVER
+    )
+    token: Final = otel_context.set_mcp_message_transport_span(transport)
+    try:
+        kwargs: Final[dict[str, object]] = {
+            "standard_logging_object": _mcp_tool_logging_payload(call_id="mcp_no_sess"),
+            "litellm_params": {"metadata": {"headers": {}}},
+        }
+        asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    finally:
+        otel_context.reset_mcp_message_transport_span(token)
+        transport.end()
+
+    finished: Final = exporter.get_finished_spans()
+    tool_span: Final = next(s for s in finished if s.name == "tools/call echo")
+    server_span: Final = next(s for s in finished if s.kind is SpanKind.SERVER)
+
+    assert "session.id" not in (tool_span.attributes or {})
+    assert "gen_ai.conversation.id" not in (tool_span.attributes or {})
+    assert (tool_span.attributes or {})["mcp.session.id"] == "mcp-proto-sess"
+    assert "session.id" not in (server_span.attributes or {})

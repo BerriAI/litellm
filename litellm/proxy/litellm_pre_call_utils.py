@@ -1265,6 +1265,13 @@ def get_chain_id_from_headers(headers: dict[str, str] | None) -> str | None:
     )
 
 
+def get_session_id_from_headers(headers: Mapping[str, str] | None) -> str | None:
+    if not headers:
+        return None
+    normalized: Final = {k.lower(): v for k, v in headers.items()}
+    return get_chain_id_from_headers(normalized) or _session_id_from_baggage(normalized.get("baggage", ""))
+
+
 def _get_anthropic_session_id_from_metadata(metadata: object) -> str | None:
     if not isinstance(metadata, dict):
         return None
