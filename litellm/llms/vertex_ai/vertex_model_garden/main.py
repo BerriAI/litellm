@@ -142,6 +142,13 @@ class VertexAIModelGardenModels(VertexBase):
                 timeout=timeout,
                 encoding=encoding,
                 custom_llm_provider="vertex_ai",
+                # Send the caller's headers (extra_headers included) in a new dict, and keep
+                # the Vertex access token as Authorization, like the partner models route
+                headers={
+                    "Content-Type": "application/json",
+                    **(headers or {}),
+                    "Authorization": f"Bearer {access_token}",
+                },
             )
 
         except (OpenAILikeError, httpx.HTTPStatusError) as e:
