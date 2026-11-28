@@ -820,64 +820,6 @@ def test_sso_key_generate_without_sso_keeps_the_cookie_of_a_live_session_key_own
     assert [cookie.split("=")[0] for cookie in set_cookies] == ["litellm_cp_return_to"], set_cookies
 
 
-def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
-    """
-    Test that _restructure_ui_html_files correctly restructures HTML files.
-    Note: This function is always called now, both in development and non-root Docker environments.
-    """
-    from litellm.proxy import proxy_server
-
-    ui_root = tmp_path / "ui"
-    ui_root.mkdir()
-
-    def write_file(path: Path, content: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
-
-    write_file(ui_root / "home.html", "home")
-    write_file(ui_root / "mcp" / "oauth" / "callback.html", "callback")
-    write_file(ui_root / "existing" / "index.html", "keep")
-    write_file(ui_root / "_next" / "ignore.html", "asset")
-    write_file(ui_root / "litellm-asset-prefix" / "ignore.html", "asset")
-
-    proxy_server._restructure_ui_html_files(str(ui_root))
-
-    assert not (ui_root / "home.html").exists()
-    assert (ui_root / "home" / "index.html").read_text() == "home"
-    assert not (ui_root / "mcp" / "oauth" / "callback.html").exists()
-    assert (ui_root / "mcp" / "oauth" / "callback" / "index.html").read_text() == "callback"
-    assert (ui_root / "existing" / "index.html").read_text() == "keep"
-    assert (ui_root / "_next" / "ignore.html").read_text() == "asset"
-    assert (ui_root / "litellm-asset-prefix" / "ignore.html").read_text() == "asset"
-
-
-def test_ui_extensionless_route_requires_restructure(tmp_path):
-    """
-    Regression for non-root fallback: /ui/login expects login/index.html.
-    Note: Restructuring always happens now, both in development and non-root Docker environments.
-    """
-
-    from litellm.proxy import proxy_server
-
-    ui_root = tmp_path / "ui"
-    ui_root.mkdir()
-    (ui_root / "index.html").write_text("index")
-    (ui_root / "login.html").write_text("login")
-
-    fastapi_app = FastAPI()
-    fastapi_app.mount("/ui", StaticFiles(directory=str(ui_root), html=True), name="ui")
-    client = TestClient(fastapi_app)
-
-    assert client.get("/ui/login.html").status_code == 200
-    assert client.get("/ui/login").status_code == 404
-
-    proxy_server._restructure_ui_html_files(str(ui_root))
-
-    response = client.get("/ui/login")
-    assert response.status_code == 200
-    assert "login" in response.text
-
-
 def test_admin_ui_export_serves_nested_extensionless_routes():
     out_dir = Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
     assert out_dir.is_dir(), f"missing UI export at {out_dir}"
@@ -912,50 +854,6 @@ def test_admin_ui_export_serves_nested_extensionless_routes():
     landed = client.get("/ui/mcp/oauth/callback?code=abc&state=xyz")
     assert landed.status_code == 200
     assert "<html" in landed.text.lower()
-
-
-def test_restructure_always_happens(monkeypatch):
-    """
-    Test that restructuring logic always executes regardless of LITELLM_NON_ROOT setting.
-    In development (is_non_root=False), restructuring happens directly in _experimental/out.
-    In non-root Docker (is_non_root=True), restructuring happens in /var/lib/litellm/ui.
-    """
-    # Test Case 1: is_non_root is True - restructuring happens in /var/lib/litellm/ui
-    monkeypatch.setenv("LITELLM_NON_ROOT", "true")
-
-    runtime_ui_path = "/var/lib/litellm/ui"
-    packaged_ui_path = "/some/packaged/ui/path"
-
-    # Simulate the logic from proxy_server.py
-    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-    if is_non_root:
-        ui_path = runtime_ui_path
-    else:
-        ui_path = packaged_ui_path
-
-    # Restructuring always happens now, regardless of ui_path vs packaged_ui_path
-    should_restructure = True
-
-    assert is_non_root is True
-    assert should_restructure is True
-    assert ui_path == runtime_ui_path
-
-    # Test Case 2: is_non_root is False - restructuring happens directly in packaged_ui_path
-    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
-
-    # Simulate the logic from proxy_server.py
-    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-    if is_non_root:
-        ui_path = runtime_ui_path
-    else:
-        ui_path = packaged_ui_path
-
-    # Restructuring always happens now, even when ui_path == packaged_ui_path
-    should_restructure = True
-
-    assert is_non_root is False
-    assert should_restructure is True
-    assert ui_path == packaged_ui_path
 
 
 def _mock_scheduled_proxy_config() -> MagicMock:
