@@ -16,8 +16,6 @@ from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm import TranscriptionResponse, model_cost
-import litellm
-from litellm import TranscriptionResponse, model_cost
 from litellm.constants import REALTIME_METERED_USAGE_KEY, REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY
 from litellm.cost_calculator import BaseTokenUsageProcessor, RealtimeAPITokenUsageProcessor, ResponsesWebSocketTokenUsageProcessor, _video_input_image_cost, batch_cost_calculator, completion_cost, cost_per_token, handle_realtime_stream_cost_calculation, response_cost_calculator
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
@@ -13692,8 +13690,9 @@ def test_completion_cost_leaves_to_python_a_claude_call_main_prices_another_way(
     reported_cost_applies: bool,
 ) -> None:
     assert _rust_priced(response, tools_params, reported_cost_applies) is None
-def test_a_boolean_video_input_image_count_is_not_billed() -> None:
+@pytest.mark.parametrize("image_count", [True, False])
+def test_a_boolean_video_input_image_count_is_not_billed(image_count: bool) -> None:
     model_info: Final[ModelInfo] = {"input_cost_per_image": 0.01}
-    usage: Final = {"billable_input_image_count": True}
+    usage: Final = {"billable_input_image_count": image_count}
 
     assert _video_input_image_cost(model="m", custom_llm_provider="dashscope", model_info=model_info, usage=usage) == 0
