@@ -629,8 +629,6 @@ async def test_agent_picker_reads_through_worker_with_authenticated_scope(
         "parameters": {
             **expected_scope,
             "team_ids": list(expected_scope["team_ids"]),
-            "filter_team_id": "",
-            "filter_api_key_hash": "",
             "start_ms": 123,
             "end_ms": 456,
             "limit": AGENT_TRACING_AGENT_LIST_LIMIT,
