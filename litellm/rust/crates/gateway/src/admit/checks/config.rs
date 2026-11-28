@@ -118,8 +118,9 @@ fn spelled(config: &Config, key: Box<str>) -> Box<str> {
     config.origins.variable(&key).map_or(key, Box::from)
 }
 
-/// The variables the proxy reads that no config key sets. A variable config.yaml can also set is
-/// judged once, as the key it fills.
+/// Names the environment variables the gateway cannot serve, among those the proxy reads that no config
+/// key sets. A field bound as `field: _` is honored by the gateway, every other set field is unhandled. A
+/// variable config.yaml can also set is judged once, as the key it fills.
 fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<> {
     let Environment {
         litellm_cors_origins: _,
