@@ -645,6 +645,7 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "publicai",
         "ragflow",
         "reducto",
+        "rightnow",
         "s3_vectors",
         "sagemaker_nova",
         "scaleway",

@@ -717,6 +717,7 @@ moonshot_models: Set[str] = set()
 publicai_models: Set[str] = set()
 darkbloom_models: Set[str] = set()
 openinfer_models: Final[Set[str]] = set()
+rightnow_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
 resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
@@ -900,6 +901,7 @@ def _provider_model_sets() -> Mapping[str, set[str]]:  # mutable-ok: live provid
             "publicai": publicai_models,
             "darkbloom": darkbloom_models,
             "openinfer": openinfer_models,
+            "rightnow": rightnow_models,
             "kyma": kyma_models,
             "streamlake": streamlake_models,
             "resetdata": resetdata_models,
@@ -1209,6 +1211,7 @@ def _known_models() -> frozenset[str]:
         | publicai_models
         | darkbloom_models
         | openinfer_models
+        | rightnow_models
         | kyma_models
         | streamlake_models
         | resetdata_models
@@ -1350,6 +1353,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
         "openinfer": openinfer_models,
+        "rightnow": rightnow_models,
         "kyma": kyma_models,
         "streamlake": streamlake_models,
         "resetdata": resetdata_models,

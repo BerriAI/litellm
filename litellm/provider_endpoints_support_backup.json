@@ -5510,6 +5510,23 @@
         "generateContent": true
       }
     },
+    "rightnow": {
+      "display_name": "RightNow (`rightnow`)",
+      "url": "https://docs.litellm.ai/docs/providers/rightnow",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "agentcore": {
       "display_name": "AgentCore (`agentcore`)",
       "url": "https://docs.litellm.ai/docs/providers",
