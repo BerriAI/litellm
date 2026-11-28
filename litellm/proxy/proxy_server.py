@@ -20283,6 +20283,7 @@ async def login(request: Request):
             prisma_client=prisma_client,
             throttle=LoginThrottle.from_request(request, general_settings, redis_usage_cache),
             general_settings=general_settings,
+            audit_route="/login",
         )
     except ProxyException as exc:
         if int(exc.code) != status.HTTP_429_TOO_MANY_REQUESTS:
@@ -20404,6 +20405,7 @@ async def login_v2(request: Request):
             prisma_client=prisma_client,
             throttle=LoginThrottle.from_request(request, general_settings, redis_usage_cache),
             general_settings=general_settings,
+            audit_route="/v2/login",
         )
 
         returned_ui_token_object: Final = create_ui_token_object(
@@ -20478,6 +20480,7 @@ async def login_v3(request: Request):
             prisma_client=prisma_client,
             throttle=LoginThrottle.from_request(request, general_settings, redis_usage_cache),
             general_settings=general_settings,
+            audit_route="/v3/login",
         )
 
         returned_ui_token_object: Final = create_ui_token_object(
