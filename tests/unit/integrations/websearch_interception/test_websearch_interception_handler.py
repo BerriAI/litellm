@@ -177,14 +177,25 @@ async def test_internal_flags_filtered_from_followup_kwargs():
         "max_tokens": 1024,
     }
 
-    # Apply the same filtering logic used in _execute_agentic_loop
+    from litellm.integrations.websearch_interception.handler import (
+        WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY,
+        is_websearch_interception_provider_internal_key,
+    )
+
+    kwargs_with_internal_flags[WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY] = True
+
+    # Apply the same filtering logic used in _execute_anthropic_agentic_plan
     kwargs_for_followup = {
-        k: v for k, v in kwargs_with_internal_flags.items() if not k.startswith("_websearch_interception")
+        k: v
+        for k, v in kwargs_with_internal_flags.items()
+        if not is_websearch_interception_provider_internal_key(k)
     }
 
     # Verify internal flags are filtered out
     assert "_websearch_interception_converted_stream" not in kwargs_for_followup
     assert "_websearch_interception_other_flag" not in kwargs_for_followup
+    # Agentic-loop state must survive follow-up filtering
+    assert kwargs_for_followup[WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY] is True
 
     # Verify regular kwargs are preserved
     assert kwargs_for_followup["temperature"] == 0.7
