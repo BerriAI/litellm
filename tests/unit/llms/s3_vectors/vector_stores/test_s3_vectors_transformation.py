@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 
 from litellm.llms.base_llm.vector_store.transformation import (
     RouterVectorStoreEmbeddingExecutor,
@@ -12,6 +13,7 @@ from litellm.llms.s3_vectors.vector_stores.transformation import (
 )
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import VectorStoreSearchResponse
+from litellm.vector_stores import search as vector_store_search
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 QUERY_VECTOR = [0.1, 0.2, 0.3]
@@ -310,3 +312,43 @@ class TestS3VectorsVectorStoreConfig:
         result = config.map_openai_params(non_default_params, optional_params, False)
 
         assert result["maxResults"] == 5
+
+
+_QUERY_VECTORS_URL = "https://s3vectors.us-west-2.api.aws/QueryVectors"
+
+
+@pytest.mark.parametrize(
+    ("store_params", "metadata", "expected_text"),
+    [
+        pytest.param({}, {"source_text": "ingested chunk"}, "ingested chunk", id="default-field"),
+        pytest.param({"s3_vectors_text_field": "title"}, {"title": "Bus timings"}, "Bus timings", id="configured-field"),
+        pytest.param({}, {"title": "Bus timings"}, "", id="hit-without-text-is-kept"),
+    ],
+)
+def test_search_reads_text_from_the_configured_metadata_field(
+    respx_mock: respx.MockRouter, store_params: dict[str, str], metadata: dict[str, str], expected_text: str
+):
+    """A hit's text comes from `s3_vectors_text_field`, default `source_text`, and a hit without it isn't dropped.
+
+    Indexes built outside `/rag/ingest` keep their text under their own keys; before, every one of their hits was
+    dropped and a search came back empty.
+    """
+    respx_mock.post(_QUERY_VECTORS_URL).mock(
+        return_value=httpx.Response(200, json={"vectors": [{"key": "k1", "distance": 0.25, "metadata": metadata}]})
+    )
+
+    response = vector_store_search(
+        vector_store_id="test-bucket:test-index",
+        query="when does the bus leave?",
+        custom_llm_provider="s3_vectors",
+        aws_region_name="us-west-2",
+        aws_access_key_id="test-key",
+        aws_secret_access_key="test-secret",
+        _direct_vector_store_embedding_executor=_RecordingExecutor(),
+        **store_params,
+    )
+
+    [hit] = response["data"]
+    assert hit["content"] == [{"text": expected_text, "type": "text"}]
+    assert hit["attributes"] == metadata
+    assert hit["score"] == 0.75
