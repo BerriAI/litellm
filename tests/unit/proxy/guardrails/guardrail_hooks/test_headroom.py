@@ -453,6 +453,112 @@ async def test_async_should_run_agentic_loop_returns_true_for_retrieve_call(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name_a, base_a, name_b, base_b",
+    [
+        ("headroom-a", "https://headroom-a.example.com", "headroom-b", "https://headroom-b.example.com"),
+        ("headroom", "https://headroom-a.example.com", "headroom", "https://headroom-b.example.com"),
+        ("headroom-a", "https://headroom.example.com", "headroom-b", "https://headroom.example.com"),
+    ],
+)
+async def test_async_should_run_agentic_loop_declines_retrieve_issued_by_another_guardrail(
+    name_a: str, base_a: str, name_b: str, base_b: str
+):
+    guardrail_a: Final = _make_guardrail(api_base=base_a, guardrail_name=name_a)
+    guardrail_b: Final = _make_guardrail(api_base=base_b, guardrail_name=name_b)
+    issued_hash: Final = "b573993006976af767214fac"
+    inputs: Final = GenericGuardrailAPIInputs(
+        texts=["A" * 5000],
+        structured_messages=ORIGINAL_MESSAGES,
+        tools=[],
+    )
+    request_data: Final[dict] = {"model": "gpt-4o"}
+    mock_response: Final = _make_compress_response(COMPRESSED_MESSAGES_WITH_HASH, ccr_hashes=[issued_hash])
+
+    with patch.object(
+        guardrail_b.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result_b: Final = await guardrail_b.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    tools: Final = result_b.get("tools")
+    assert has_headroom_retrieve_tool(tools)
+    response: Final = _make_openai_response_with_tool_call(
+        tool_name=HEADROOM_RETRIEVE_TOOL_NAME,
+        arguments={"hash": issued_hash, "query": "what was dropped?"},
+    )
+    kwargs: Final = dict(request_data)
+
+    should_run_a: Final = (
+        await guardrail_a.async_should_run_agentic_loop(
+            response=response,
+            model="gpt-4o",
+            messages=[],
+            tools=tools,
+            stream=False,
+            custom_llm_provider="openai",
+            kwargs=kwargs,
+        )
+    )[0]
+    should_run_b: Final = (
+        await guardrail_b.async_should_run_agentic_loop(
+            response=response,
+            model="gpt-4o",
+            messages=[],
+            tools=tools,
+            stream=False,
+            custom_llm_provider="openai",
+            kwargs=kwargs,
+        )
+    )[0]
+
+    assert should_run_a is False, "the first registered guardrail must not claim a hash another guardrail issued"
+    assert should_run_b is True, "the guardrail that issued the hash must claim the retrieve call"
+
+    original_content: Final = "the full uncompressed document"
+    with patch.object(
+        guardrail_b.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response(original_content),
+    ):
+        plan: Final = await guardrail_b.async_build_agentic_loop_plan(
+            tools={
+                "tool_calls": [
+                    {
+                        "id": "call_abc123",
+                        "type": "function",
+                        "name": HEADROOM_RETRIEVE_TOOL_NAME,
+                        "arguments": {"hash": issued_hash, "query": "what was dropped?"},
+                    }
+                ]
+            },
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "What does it say?"}],
+            response=response,
+            anthropic_messages_provider_config=None,
+            anthropic_messages_optional_request_params={},
+            logging_obj=None,
+            stream=False,
+            kwargs=kwargs,
+        )
+
+    assert plan.run_agentic_loop is True
+    follow_up_contents: Final = [
+        message.get("content")
+        for message in plan.request_patch.messages
+        if isinstance(message, dict) and message.get("role") == "tool"
+    ]
+    assert follow_up_contents == [original_content], "the issuing guardrail must retrieve its own hash in the plan"
+
+
+@pytest.mark.asyncio
 async def test_async_should_run_agentic_loop_returns_false_without_retrieve_tool(
     guardrail: HeadroomGuardrail,
 ):
