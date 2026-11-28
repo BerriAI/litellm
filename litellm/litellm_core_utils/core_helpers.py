@@ -1350,7 +1350,7 @@ def _billed_usage_block(response: object) -> object:
     return response.provider_usage if isinstance(response, RerankResponse) else _usage_field(response, "usage")
 
 
-_MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})
+_MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go", "wiro"})
 
 
 def reports_native_messages_cost(custom_llm_provider: object) -> bool:
