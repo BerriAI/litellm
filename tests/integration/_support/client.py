@@ -70,6 +70,37 @@ def until_asserted(check: Callable[[], T], *, seconds: float = 10) -> T:
         time.sleep(0.1)
 
 
+def _chats_until_status(
+    send: Callable[[str], httpx.Response], status: int, seconds: float
+) -> Iterator[tuple[str, httpx.Response]]:
+    deadline: Final = time.monotonic() + seconds
+    while True:
+        text: Final = f"denied {uuid.uuid4().hex}"
+        response: Final = send(text)
+        yield text, response
+        if response.status_code == status:
+            return
+        assert time.monotonic() < deadline, f"State did not converge: {response.status_code} {response.text}"
+        time.sleep(0.1)
+
+
+def chat_until_denied(
+    upstream: httpx.Client,
+    send: Callable[[str], httpx.Response],
+    observation: Callable[[str], dict[str, JsonValue]],
+    status: int,
+    seconds: float = 10,
+) -> httpx.Response:
+    """A revocation reaches a peer proxy in the background, so the chats it serves before then reach the provider.
+    Only those may, and the provider log is cleared for the checks that follow."""
+    chats: Final = tuple(_chats_until_status(send, status, seconds))
+    served: Final = [observation(text) for text, response in chats if response.status_code == 200]
+    logged: Final = JSON_OBJECT.validate_json(upstream.get("/__observations").raise_for_status().content)
+    assert logged["requests"] == served, logged
+    upstream.delete("/__observations").raise_for_status()
+    return chats[-1][1]
+
+
 def held(read: Callable[[], T], satisfied: Callable[[T], bool], *, holding: float, seconds: float = 10) -> T:
     """`eventually`, and then `satisfied` must hold on every read for `holding` more seconds; a miss restarts the hold."""
     deadline: Final = time.monotonic() + seconds
@@ -308,8 +339,10 @@ class Scenario:
 
         eventually(
             lambda: self._deployment_ids_by_worker(name),
-            lambda answers: len({pid for pid, _ in answers}) >= self.gateway.workers
-            and all(identity in model_ids for _, model_ids in answers),
+            lambda answers: (
+                len({pid for pid, _ in answers}) >= self.gateway.workers
+                and all(identity in model_ids for _, model_ids in answers)
+            ),
             seconds=2 * PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
         )
 

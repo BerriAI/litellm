@@ -18,7 +18,14 @@ from redis.client import PubSub
 
 from litellm.proxy.common_utils.cache_invalidation_pubsub import _BULK_EVICTION_WAIT_SECONDS
 from tests.integration._support.budget import case_timeout_seconds
-from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
+from tests.integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    chat_until_denied,
+    eventually,
+    object_value,
+    string_value,
+)
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy_process
 from tests.integration._support.redis_process import owned_redis
@@ -378,34 +385,6 @@ def _user_chat(proxy: Gateway, model: str, key: str, text: str) -> httpx.Respons
     )
 
 
-def _denied_chat(proxy: Gateway, model: str, key: str) -> tuple[str, httpx.Response]:
-    text: Final = f"denied {uuid.uuid4().hex}"
-    return text, _user_chat(proxy, model, key, text)
-
-
-def _until_peer_denies(
-    upstream: httpx.Client,
-    peer: Gateway,
-    model: str,
-    key: str,
-    denied_by_gateway: str,
-    status: int,
-    seconds: float,
-) -> httpx.Response:
-    """The eviction reaches the peer in the background, so polls it admits before then go upstream. Neither denied
-    request may, and the upstream log is cleared for the checks that follow."""
-    denied_by_peer, denied = eventually(
-        lambda: _denied_chat(peer, model, key),
-        lambda sent: sent[1].status_code == status,
-        seconds=seconds,
-    )
-    leaked: Final = _observed(upstream)
-    assert _chat_observation(denied_by_gateway) not in leaked, leaked
-    assert _chat_observation(denied_by_peer) not in leaked, leaked
-    upstream.delete("/__observations").raise_for_status()
-    return denied
-
-
 def _chat_observation(text: str) -> dict[str, JsonValue]:
     return {
         "path": "/v1/chat/completions",
@@ -498,10 +477,11 @@ def test_user_budget_update_propagates_to_gateway_and_peer(gateway: Gateway, pee
 
         shrink: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "max_budget": 0.01})
         assert shrink.status_code == 200, shrink.text
-        gateway_prompt, denied_gateway = _denied_chat(gateway, model, key)
-        _assert_user_budget_refusal(denied_gateway, user_id)
+        _assert_user_budget_refusal(_user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}"), user_id)
+        assert _observed(upstream) == []
         _assert_user_budget_refusal(
-            _until_peer_denies(upstream, peer, model, key, gateway_prompt, status=422, seconds=10), user_id
+            chat_until_denied(upstream, lambda text: _user_chat(peer, model, key, text), _chat_observation, status=422),
+            user_id,
         )
         for proxy in (gateway, peer):
             _assert_user_budget_refusal(_user_chat(proxy, model, key, f"denied {uuid.uuid4().hex}"), user_id)
@@ -561,10 +541,13 @@ def test_user_models_update_with_metadata_propagates_to_gateway_and_peer(gateway
             {"user_id": user_id, "models": ["no-default-models"], "metadata": {"dept": "restricted"}},
         )
         assert narrowed.status_code == 200, narrowed.text
-        gateway_prompt, denied_gateway = _denied_chat(gateway, model, key)
+        denied_gateway: Final = _user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
         assert denied_gateway.status_code == 403, denied_gateway.text
         assert denied_gateway.json() == _user_model_denied_error(model), denied_gateway.text
-        denied_peer: Final = _until_peer_denies(upstream, peer, model, key, gateway_prompt, status=403, seconds=30)
+        assert _observed(upstream) == []
+        denied_peer: Final = chat_until_denied(
+            upstream, lambda text: _user_chat(peer, model, key, text), _chat_observation, status=403, seconds=30
+        )
         assert denied_peer.json() == _user_model_denied_error(model), denied_peer.text
         for proxy in (gateway, peer):
             denied_again: Final = _user_chat(proxy, model, key, f"denied {uuid.uuid4().hex}")
@@ -681,10 +664,13 @@ def test_user_models_update_without_metadata_propagates_to_gateway_and_peer(gate
 
         narrowed: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "models": ["no-default-models"]})
         assert narrowed.status_code == 200, narrowed.text
-        gateway_prompt, denied_gateway = _denied_chat(gateway, model, key)
+        denied_gateway: Final = _user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
         assert denied_gateway.status_code == 403, denied_gateway.text
         assert denied_gateway.json() == _user_model_denied_error(model), denied_gateway.text
-        denied_peer: Final = _until_peer_denies(upstream, peer, model, key, gateway_prompt, status=403, seconds=10)
+        assert _observed(upstream) == []
+        denied_peer: Final = chat_until_denied(
+            upstream, lambda text: _user_chat(peer, model, key, text), _chat_observation, status=403
+        )
         assert denied_peer.json() == _user_model_denied_error(model), denied_peer.text
         for proxy in (gateway, peer):
             refused = _user_chat(proxy, model, key, f"denied {uuid.uuid4().hex}")
