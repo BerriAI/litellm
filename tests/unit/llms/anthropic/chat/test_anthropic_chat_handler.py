@@ -79,6 +79,45 @@ async def test_make_call_passes_logging_obj_to_client_post():
     assert _streamed_text([chunk async for chunk in completion_stream]) == "Hi there"
 
 
+def _text_delta_stream_without_text_key(text: str) -> bytes:
+    events: Final = (
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
+    )
+    return "".join(
+        f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n" for name, payload in events
+    ).encode()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_streaming_content_block_start_omits_text_key():
+    mock_client: Final = AsyncMock()
+    mock_client.post.return_value = httpx.Response(
+        200, stream=httpx.ByteStream(_text_delta_stream_without_text_key("Hello world"))
+    )
+
+    logging_obj: Final = MagicMock()
+    completion_stream, _ = await make_call(
+        client=mock_client,
+        api_base="https://api.anthropic.com/v1/messages",
+        headers={},
+        data="{}",
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        logging_obj=logging_obj,
+        timeout=60.0,
+        json_mode=False,
+    )
+    chunks: Final = [chunk async for chunk in completion_stream]
+    assert _streamed_text(chunks) == "Hello world"
+
+
 _LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
 
 
