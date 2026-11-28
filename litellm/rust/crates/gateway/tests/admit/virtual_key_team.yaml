@@ -77,9 +77,7 @@ requests:
   - name: a key in a team with a budget window
     headers: {authorization: Bearer sk-windowed}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: budget_limits
+    expect: rust
 
   - name: a key in a team with a per-model budget
     headers: {authorization: Bearer sk-per-model}

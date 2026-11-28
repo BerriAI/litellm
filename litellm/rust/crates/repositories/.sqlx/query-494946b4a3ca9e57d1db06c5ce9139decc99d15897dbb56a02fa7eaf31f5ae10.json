@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_UserTable\"\nSET spend = GREATEST(COALESCE(spend, 0) - $3::double precision, 0),\n    budget_reset_at = $2,\n    rollover_credit = CASE WHEN $6::double precision IS NULL THEN rollover_credit ELSE $6 END,\n    updated_at = NOW() AT TIME ZONE 'UTC'\nWHERE user_id = $1 AND budget_reset_at IS NOT DISTINCT FROM $4 AND budget_duration = $5\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamp",
+        "Float8",
+        "Timestamp",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "494946b4a3ca9e57d1db06c5ce9139decc99d15897dbb56a02fa7eaf31f5ae10"
+}

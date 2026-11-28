@@ -13,8 +13,7 @@
 //! or `alerting` goes to Python, and a decision of either fails the call rather than letting it
 //! through unchecked.
 //!
-//! Only the budgets `budgets::counters` plans are checked. A `budget_limits` window, soft budget,
-//! tag, model access group, per-model budget, temporary increase, throttle, budget alert or the
+//! A soft budget, tag, model access group, per-model budget, throttle, budget alert or the
 //! proxy-wide budget is never checked here, since the key column, request or setting that asks
 //! for one sends the call to Python first.
 
@@ -32,7 +31,7 @@ use litellm_callbacks_budgets::{
     PlannedCounter, PyNumber, SpendReader, decide, post_call,
 };
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core::Credential;
+use litellm_gateway_auth_core::{Credential, Named, Team, record::BudgetWindow};
 use litellm_gateway_inference::{CallType, Refusal, record};
 use litellm_model_catalog::CostMap;
 use litellm_redis_store::{
@@ -43,7 +42,7 @@ use litellm_router_core::Router;
 use parking_lot::Mutex;
 use serde_json::{Map, Value};
 
-use super::{Registered, budget_price, budgets, hosted};
+use super::{Registered, budget_price, budgets, hosted, windows};
 use crate::host::{FreeModels, NativeRows};
 
 pub(crate) const NAME: &str = "budget_check";
@@ -131,7 +130,9 @@ enum Entity {
     },
     Project(String),
     Team(String),
+    TeamWindow(String, String),
     Organization(String),
+    UserWindow(String, String),
     User(String),
     /// `_check_team_member_budget`: the member's own budget or its team's default.
     Member {
@@ -169,6 +170,12 @@ impl Entity {
                 max_budget,
                 team_id: Some(team_id),
             },
+            Self::TeamWindow(team_id, budget_duration) => Check::TeamWindow {
+                spend,
+                max_budget,
+                budget_duration,
+                team_id: Some(team_id),
+            },
             Self::Organization(org_id) => Check::Organization {
                 spend,
                 max_budget,
@@ -178,6 +185,12 @@ impl Entity {
                 spend,
                 max_budget,
                 user_id: Some(user_id),
+            },
+            Self::UserWindow(user_id, budget_duration) => Check::UserWindow {
+                spend,
+                max_budget,
+                budget_duration,
+                user_id,
             },
             Self::Member { user_id, team_id } => Check::TeamMember {
                 spend,
@@ -201,6 +214,46 @@ struct Held {
     fallback_spend: f64,
     max_budget: f64,
     entities: Vec<Entity>,
+    window: Option<Window>,
+}
+
+struct Window {
+    start: String,
+    reset_at: Option<String>,
+}
+
+fn held_window(
+    entity: windows::Entity,
+    id: &str,
+    window: &BudgetWindow,
+    now: jiff::Timestamp,
+) -> Option<Held> {
+    let start = windows::start(window, now)?.to_string();
+    let duration = &window.budget_duration;
+    let counter = entity.counter(id, duration);
+    let (check, entity_type) = match entity {
+        windows::Entity::Team => (Entity::TeamWindow(id.to_owned(), duration.clone()), "Team"),
+        windows::Entity::User => (Entity::UserWindow(id.to_owned(), duration.clone()), "User"),
+        windows::Entity::Key => return None,
+    };
+    Some(Held {
+        planned: PlannedCounter {
+            counter_key: counter.key(),
+            max_budget: window.max_budget,
+            fallback_spend: 0.0,
+            entity_type: entity_type.to_owned(),
+            entity_id: format!("{id}:{duration}"),
+            spend_log_entity_id: Some(id.to_owned()),
+        },
+        counter,
+        fallback_spend: 0.0,
+        max_budget: window.max_budget,
+        entities: vec![check],
+        window: Some(Window {
+            start,
+            reset_at: window.reset_at.map(|reset| reset.to_string()),
+        }),
+    })
 }
 
 /// The budgets one request's caller is checked against.
@@ -278,7 +331,7 @@ fn entities(identity: &Authenticated<NativeRows>, counter: &SpendCounter) -> Vec
 
 fn budgeted(identity: &Authenticated<NativeRows>) -> Budgeted {
     let now = jiff::Timestamp::now();
-    let held = budgets::counters(identity, budgets::Settings::default(), now)
+    let mut held: Vec<_> = budgets::counters(identity, budgets::Settings::default(), now)
         .into_iter()
         .filter_map(|planned| {
             let counter = SpendCounter::parse(&planned.counter_key).ok()?;
@@ -288,9 +341,27 @@ fn budgeted(identity: &Authenticated<NativeRows>) -> Budgeted {
                 fallback_spend: planned.fallback_spend,
                 max_budget: planned.max_budget,
                 planned,
+                window: None,
             })
         })
         .collect();
+    let holder = &identity.affiliation.holder;
+    if let Some(Team::Row(team)) = holder.team() {
+        held.extend(
+            team.budget_limits.iter().filter_map(|window| {
+                held_window(windows::Entity::Team, &team.team_id, window, now)
+            }),
+        );
+    }
+    if holder.team().is_none()
+        && let Some(user) = holder.user().and_then(Named::stored)
+    {
+        held.extend(
+            user.budget_limits.iter().filter_map(|window| {
+                held_window(windows::Entity::User, &user.user_id, window, now)
+            }),
+        );
+    }
     Budgeted {
         held,
         reservation: Default::default(),
@@ -403,9 +474,19 @@ impl BudgetCheck {
         if model.is_some_and(|model| self.free.is_free(model)) {
             return Ok(None);
         }
-        let spends = join_all(budgeted.held.iter().map(|held| {
-            self.spend
-                .current(&held.counter, held.fallback_spend, Some(held.max_budget))
+        let spends = join_all(budgeted.held.iter().map(|held| async {
+            match &held.window {
+                Some(window) => {
+                    self.spend
+                        .current_window(&held.counter, &window.start)
+                        .await
+                }
+                None => {
+                    self.spend
+                        .current(&held.counter, held.fallback_spend, Some(held.max_budget))
+                        .await
+                }
+            }
         }))
         .await;
         let mut checks = budgeted
@@ -418,7 +499,13 @@ impl BudgetCheck {
                     .map(move |entity| (entity, spend, held.max_budget))
             })
             .collect::<Vec<_>>();
-        checks.sort_by_key(|&(entity, ..)| entity);
+        checks.sort_by(|(left, ..), (right, ..)| {
+            if std::mem::discriminant(*left) == std::mem::discriminant(*right) {
+                std::cmp::Ordering::Equal
+            } else {
+                left.cmp(right)
+            }
+        });
         if let Some(outcome) = checks.into_iter().find_map(|(entity, spend, max_budget)| {
             verdict(decide(&entity.check(spend, max_budget)))
         }) {
@@ -450,12 +537,23 @@ impl BudgetCheck {
             .iter()
             .zip(spends)
             .filter(|(held, _)| {
-                matches!(
-                    held.counter,
-                    SpendCounter::TeamMember { .. } | SpendCounter::User(_)
+                held.max_budget > 0.0
+                    && (held.window.is_some()
+                        || matches!(
+                            held.counter,
+                            SpendCounter::TeamMember { .. } | SpendCounter::User(_)
+                        ))
+            })
+            .map(|(held, spend)| {
+                (
+                    held.counter.clone(),
+                    held.planned.clone(),
+                    spend,
+                    held.window
+                        .as_ref()
+                        .and_then(|window| window.reset_at.clone()),
                 )
             })
-            .map(|(held, spend)| (held.counter.clone(), held.planned.clone(), spend))
             .collect::<Vec<_>>();
         if pairs.is_empty() {
             return Ok(None);
@@ -463,7 +561,7 @@ impl BudgetCheck {
         let reserve = reserve.clone();
         let held = budgeted.reservation.clone();
         let admission = litellm_call_scope::spawn_in_call(async move {
-            for (counter, _, spend) in &pairs {
+            for (counter, _, spend, _) in &pairs {
                 if *spend > 0.0 {
                     let _ = reserve
                         .budgets
@@ -474,7 +572,7 @@ impl BudgetCheck {
             }
             let observed = pairs
                 .iter()
-                .map(|(_, plan, spend)| BudgetCounterSpend {
+                .map(|(_, plan, spend, _)| BudgetCounterSpend {
                     counter_key: Some(plan.counter_key.clone()),
                     spend: Some(*spend),
                 })
@@ -482,14 +580,14 @@ impl BudgetCheck {
             let plan = BudgetPlan {
                 counters: Some(
                     pairs
-                        .into_iter()
-                        .map(|(_, plan, _)| BudgetPlanCounter {
-                            counter_key: Some(plan.counter_key),
+                        .iter()
+                        .map(|(_, plan, _, _)| BudgetPlanCounter {
+                            counter_key: Some(plan.counter_key.clone()),
                             max_budget: Some(plan.max_budget),
                             fallback_spend: Some(plan.fallback_spend),
-                            entity_type: Some(plan.entity_type),
-                            entity_id: Some(plan.entity_id),
-                            spend_log_entity_id: plan.spend_log_entity_id,
+                            entity_type: Some(plan.entity_type.clone()),
+                            entity_id: Some(plan.entity_id.clone()),
+                            spend_log_entity_id: plan.spend_log_entity_id.clone(),
                         })
                         .collect(),
                 ),
@@ -499,8 +597,16 @@ impl BudgetCheck {
                 status_code: Some(BUDGET_EXCEEDED_STATUS),
                 ..BudgetPlan::default()
             };
-            let admission = reserve.budgets.admit(plan, &observed).await?;
-            if let Admission::Held { reservation } = &admission {
+            let mut admission = reserve.budgets.admit(plan, &observed).await?;
+            if let Admission::Held { reservation } = &mut admission {
+                for entry in reservation.entries.iter_mut().flatten().flatten() {
+                    let Some((_, _, _, reset_at)) = pairs.iter().find(|(_, plan, _, _)| {
+                        entry.counter_key.as_deref() == Some(plan.counter_key.as_str())
+                    }) else {
+                        continue;
+                    };
+                    entry.window_reset_at.clone_from(reset_at);
+                }
                 *held.lock() = Some(Hold {
                     budget: reserve,
                     reservation: Some(reservation.clone()),

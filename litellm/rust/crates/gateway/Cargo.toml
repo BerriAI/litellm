@@ -29,6 +29,7 @@ chrono.workspace = true
 jiff.workspace = true
 litellm-callbacks.workspace = true
 litellm-callbacks-spend-logger.workspace = true
+litellm-callbacks-spend-log.workspace = true
 litellm-coroutine.workspace = true
 litellm-callbacks-budgets.workspace = true
 litellm-spend-log-writer.workspace = true
@@ -87,7 +88,6 @@ serde_yaml_ng = "0.10.0"
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
 litellm-cost = { workspace = true, features = ["test-support"] }
-litellm-callbacks-spend-log.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "test-util"] }
 flate2 = "1.1.10"

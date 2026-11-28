@@ -1,5 +1,6 @@
 pub mod active_teams;
 pub mod auth_cache;
+pub mod budget_reset_lease;
 pub mod cache_invalidation;
 mod codec;
 pub mod config_sync;

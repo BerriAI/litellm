@@ -444,7 +444,17 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             model_cost_map_url => |url: &Option<_>| url.is_some() && !set_by_its_variable(config)
         ]
     )
-    .chain(unknown("litellm_settings.", additional_fields))
+    .chain(other(
+        "litellm_settings.",
+        additional_fields.keys().filter(|key| {
+            key.as_str() != "budget_rollover"
+                || additional_fields
+                    .get(key)
+                    .and_then(Value::as_bool)
+                    .is_none()
+        }),
+        &[],
+    ))
     .map(|key| spelled(config, key))
 }
 

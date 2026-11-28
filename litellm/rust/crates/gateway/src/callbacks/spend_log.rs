@@ -21,7 +21,7 @@ use litellm_config::Environment;
 use litellm_model_catalog::CostMap;
 use litellm_redaction::TokenRedactor;
 use litellm_redis_store::{Remote, spend_counters::SpendCounters};
-use litellm_repositories::{Database, SpendLogRepository};
+use litellm_repositories::{BudgetResetRepository, Database, SpendLogRepository};
 use litellm_router_core::Router;
 use litellm_spend_log_writer::{
     LedgerStore, PgLedgerStore, SpendLogFlusher, SpendLogWriter, WriterSettings,
@@ -85,6 +85,7 @@ pub struct SpendLogs<S: LedgerStore = PgLedgerStore> {
 pub struct SpendLog {
     logs: Arc<SpendLogs>,
     pub(crate) repository: SpendLogRepository,
+    pub(crate) budget_resets: BudgetResetRepository,
     callback: Arc<dyn ErasedCallback>,
     host: Arc<RustSpendLogHost>,
     /// The spend counters the callback charges.
@@ -118,6 +119,7 @@ impl SpendLog {
         Self {
             logs,
             repository,
+            budget_resets: BudgetResetRepository::new(database.clone()),
             callback: Arc::new(callback),
             host: Arc::new(RustSpendLogHost::new(Some(rows.clone()))),
             budgets,

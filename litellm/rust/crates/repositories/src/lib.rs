@@ -49,7 +49,9 @@ pub use access_group::{AccessGroup, AccessGroupRepository};
 pub use agent_identity::AgentIdentityRepository;
 pub use audit_log::{AuditLogRepository, NewAuditLog};
 pub use budget::{Budget, BudgetRepository};
-pub use budget_reset::{BudgetResetRepository, BudgetWindows, WindowAdvance, WindowOwner};
+pub use budget_reset::{
+    BudgetResetRepository, BudgetWindows, LifetimeBudget, ResetEntity, WindowAdvance, WindowOwner,
+};
 pub use config::{ConfigParam, ConfigRepository};
 pub use credential::{Credential, CredentialRepository};
 pub use customer_hierarchy::{

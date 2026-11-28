@@ -168,6 +168,8 @@ pub struct ReservationEntry {
     pub counter_key: Option<String>,
     pub entity_type: Option<String>,
     pub entity_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_reset_at: Option<String>,
     #[serde(with = "crate::scalar::float")]
     pub reserved_cost: Option<f64>,
     #[serde(with = "crate::scalar::float")]

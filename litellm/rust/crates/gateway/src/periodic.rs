@@ -53,12 +53,17 @@ impl PeriodicJob {
     /// `_flush_request_accumulators` on shutdown: stops the schedule, waits out a pass already
     /// running, then runs one last pass.
     pub async fn close(&self) {
+        self.stop().await;
+        (self.pass)().await;
+    }
+
+    /// Stops this schedule and waits for a running pass without running another one.
+    pub async fn stop(&self) {
         let _ = self.stop.send(true);
         let job = self.job.lock().take();
         if let Some(job) = job {
             let _ = job.await;
         }
-        (self.pass)().await;
     }
 }
 

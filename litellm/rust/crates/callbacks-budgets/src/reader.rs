@@ -28,6 +28,14 @@ use litellm_redis_store::{
 /// The spend a counter's row holds, `None` when it has no row or the read failed.
 pub trait RowSpend: Send + Sync {
     fn stored<'a>(&'a self, counter: &'a SpendCounter) -> BoxFuture<'a, Option<f64>>;
+
+    fn window<'a>(
+        &'a self,
+        counter: &'a SpendCounter,
+        _start: &'a str,
+    ) -> BoxFuture<'a, Option<f64>> {
+        self.stored(counter)
+    }
 }
 
 /// Reads a counter's current spend from the store the spend log charges, seeding and repairing it
@@ -64,7 +72,7 @@ impl SpendReader {
     ) -> f64 {
         let current = match self.cached(counter).await {
             Some(current) => current,
-            None => match self.seed(counter).await {
+            None => match self.seed(counter, None).await {
                 Seed::Warm(current) => current,
                 Seed::FromRow { spend, seeded } => seeded.map_or(spend, Number::as_f64),
                 Seed::NoRow => fallback_spend,
@@ -83,6 +91,17 @@ impl SpendReader {
         }
     }
 
+    pub async fn current_window(&self, counter: &SpendCounter, start: &str) -> f64 {
+        match self.cached(counter).await {
+            Some(spend) => spend,
+            None => match self.seed(counter, Some(start)).await {
+                Seed::Warm(current) => current,
+                Seed::FromRow { spend, seeded } => seeded.map_or(spend, Number::as_f64),
+                Seed::NoRow => 0.0,
+            },
+        }
+    }
+
     async fn cached(&self, counter: &SpendCounter) -> Option<f64> {
         let read = self.store.read(counter).await.ok()?;
         read.value().map(Number::as_f64)
@@ -90,16 +109,17 @@ impl SpendReader {
 
     /// `SpendCounterReseed.coalesced`: seeds a cold counter from its row under the counter's seed
     /// lock, so concurrent seeds in this process read the row once.
-    async fn seed(&self, counter: &SpendCounter) -> Seed {
+    async fn seed(&self, counter: &SpendCounter, window_start: Option<&str>) -> Seed {
         let locks = self.store.lock_seeds(std::slice::from_ref(counter)).await;
         if locks.waited()
             && let Some(current) = self.cached(counter).await
         {
             return Seed::Warm(current);
         }
-        let stored = match counter {
-            SpendCounter::EndUser(_) => None,
-            _ => self.rows.stored(counter).await,
+        let stored = match (counter, window_start) {
+            (_, Some(start)) => self.rows.window(counter, start).await,
+            (SpendCounter::EndUser(_), None) => None,
+            (_, None) => self.rows.stored(counter).await,
         };
         match stored {
             Some(spend) => Seed::FromRow {

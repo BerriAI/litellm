@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
 
@@ -87,8 +88,9 @@ def _identity(database: str, case: Case) -> Identity:
         connection.execute(
             """
             INSERT INTO "LiteLLM_UserTable"
-                (user_id, user_role, spend, max_budget, budget_duration, rollover_max_budget, rollover_credit)
-            VALUES (%s, 'internal_user', %s, %s, %s, %s, %s)
+                (user_id, user_role, spend, max_budget, budget_duration, rollover_max_budget, rollover_credit,
+                 budget_reset_at)
+            VALUES (%s, 'internal_user', %s, %s, %s, %s, %s, CASE WHEN %s THEN NOW() + INTERVAL '1 day' END)
             """,
             (
                 identifier,
@@ -97,6 +99,7 @@ def _identity(database: str, case: Case) -> Identity:
                 duration if case.owner else None,
                 ceiling if case.owner else None,
                 credit if case.owner else None,
+                case.owner and case.rollover,
             ),
         )
         if team is not None:
@@ -105,11 +108,12 @@ def _identity(database: str, case: Case) -> Identity:
                 """
                 INSERT INTO "LiteLLM_BudgetTable"
                     (budget_id, max_budget, created_by, updated_by, updated_at, budget_duration,
-                     rollover_max_budget, temp_budget_increase, temp_budget_expiry)
+                     rollover_max_budget, temp_budget_increase, temp_budget_expiry, budget_reset_at)
                 VALUES (%s, %s, 'parity', 'parity', NOW(), %s, %s, %s,
+                        CASE WHEN %s THEN NOW() + INTERVAL '1 day' END,
                         CASE WHEN %s THEN NOW() + INTERVAL '1 day' END)
                 """,
-                (budget, case.maximum, duration, ceiling, 1.0 if case.increase else None, case.increase),
+                (budget, case.maximum, duration, ceiling, 1.0 if case.increase else None, case.increase, case.rollover),
             )
             connection.execute(
                 """
@@ -134,7 +138,7 @@ def _identity(database: str, case: Case) -> Identity:
 
 
 @contextmanager
-def _rust(binary: Path, config: Path, environment: dict[str, str]) -> Iterator[httpx.Client]:
+def _rust(binary: Path, config: Path, environment: dict[str, str]) -> Iterator[tuple[httpx.Client, int]]:
     port: Final = allocate_port()
     with (
         config.with_suffix(".rust.log").open("w") as log,
@@ -157,7 +161,7 @@ def _rust(binary: Path, config: Path, environment: dict[str, str]) -> Iterator[h
 
         try:
             eventually(ready, bool, seconds=30)
-            yield client
+            yield client, process.pid
         finally:
             process.terminate()
             process.wait(timeout=15)
@@ -168,6 +172,7 @@ class Proxies:
     python: httpx.Client
     python_pid: int
     rust: httpx.Client
+    rust_pid: int
     database: str
     redis: Redis
     upstream: RecordingServer
@@ -196,6 +201,7 @@ general_settings:
   disable_budget_reservation: false
 litellm_settings:
   enable_redis_auth_cache: true
+  budget_rollover: true
 """
         )
         environment: Final = {
@@ -207,20 +213,114 @@ litellm_settings:
             "PYTHONPATH": os.pathsep.join(filter(None, (str(ROOT / "tests"), os.environ.get("PYTHONPATH")))),
             "STORE_MODEL_IN_DB": "False",
             "PROXY_BATCH_WRITE_AT": "1",
+            "PROXY_BUDGET_RESCHEDULER_MIN_TIME": "2",
+            "PROXY_BUDGET_RESCHEDULER_MAX_TIME": "2",
             "LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE": "1",
             "SPEND_ROLLUP_LOCK_TIMEOUT_MS": "20000",
         }
         gateway: Final = Gateway(unused, MASTER_KEY, upstream.base_url)
         with (
             owned_proxy_process(gateway, directory, environment, config=config) as python,
-            _rust(binary, config, environment) as native,
+            _rust(binary, config, environment) as (native, native_pid),
             Redis(host=environment["REDIS_HOST"], port=int(environment["REDIS_PORT"])) as redis,
         ):
-            yield Proxies(python.gateway.client, python.process.pid, native, state.database_url, redis, upstream)
+            yield Proxies(
+                python.gateway.client, python.process.pid, native, native_pid, state.database_url, redis, upstream
+            )
 
 
-def _outcome(client: httpx.Client, proxies: Proxies, case: Case, actual_cost: float) -> tuple[int, float, float]:
-    identity: Final = _identity(proxies.database, case)
+@contextmanager
+def _paused_between_sweeps(pid: int, redis: Redis) -> Iterator[None]:
+    process: Final = psutil.Process(pid)
+    lease: Final = "cronjob_lock:reset_budget_job"
+    eventually(lambda: redis.set(lease, '"parity-test"', nx=True, ex=30), bool)
+    try:
+        process.suspend()
+        try:
+            eventually(process.status, lambda status: status == psutil.STATUS_STOPPED)
+            redis.delete(lease)
+            yield
+        finally:
+            process.resume()
+    finally:
+        redis.eval(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+            1,
+            lease,
+            '"parity-test"',
+        )
+
+
+def _window_outcome(
+    proxies: Proxies, client: httpx.Client, ended: datetime, actual_cost: float, owner: bool
+) -> tuple[datetime, datetime, float, float, float]:
+    identity: Final = _identity(proxies.database, Case(owner=owner))
+    old_start: Final = ended - timedelta(hours=1)
+    entity: Final = identity.user if owner else identity.team
+    scope: Final = "user" if owner else "team"
+    assert entity is not None
+    counter: Final = f"spend:user_window:{entity}:1h" if owner else f"spend:team:{entity}:window:1h"
+    windows: Final = Jsonb([{"budget_duration": "1h", "max_budget": 1, "reset_at": ended.isoformat()}])
+    with psycopg.connect(proxies.database) as connection:
+        statement: Final = (
+            'UPDATE "LiteLLM_UserTable" SET budget_limits = %s WHERE user_id = %s'
+            if owner
+            else 'UPDATE "LiteLLM_TeamTable" SET budget_limits = %s WHERE team_id = %s'
+        )
+        connection.execute(statement, (windows, entity))
+        connection.execute(
+            """INSERT INTO "LiteLLM_BudgetWindowSpend"
+                   (entity_type, entity_id, window_duration, window_start, spend, created_at, updated_at)
+               VALUES (%s, %s, '1h', %s, 1.5, NOW(), NOW())""",
+            (scope, entity, old_start.replace(tzinfo=None)),
+        )
+        proxies.redis.set(counter, "1.5")
+
+    def row() -> tuple[datetime, datetime, float, float]:
+        rows: Final = read_rows(
+            """WITH budgets AS (
+                   SELECT user_id AS id, budget_limits, 'user' AS scope FROM "LiteLLM_UserTable"
+                   UNION ALL SELECT team_id, budget_limits, 'team' FROM "LiteLLM_TeamTable"
+               ) SELECT b.budget_limits->0->>'reset_at' AS reset_at,
+                      w.window_start::text AS window_start, w.spend
+               FROM budgets b JOIN "LiteLLM_BudgetWindowSpend" w ON b.id = w.entity_id AND b.scope = w.entity_type
+               WHERE b.id = %s AND b.scope = %s AND w.window_duration = '1h'""",
+            (entity, scope),
+            database_url=proxies.database,
+        )
+        reset_at, window_start, spend = (rows[0][key] for key in ("reset_at", "window_start", "spend"))
+        raw: Final = proxies.redis.get(counter)
+        assert isinstance(reset_at, str) and isinstance(window_start, str)
+        assert isinstance(spend, (int, float)) and isinstance(raw, bytes)
+        return datetime.fromisoformat(reset_at), datetime.fromisoformat(window_start), float(spend), float(raw)
+
+    reset: Final = eventually(row, lambda row: row[0] > ended and row[3] == 0.5)
+    assert reset == (ended + timedelta(hours=1), ended.replace(tzinfo=None), 0.0, 0.5)
+    _provider_response(proxies, identity)
+    response: Final = _send(client, identity)
+    assert response.status_code == 200, response.text
+    result: Final = eventually(row, lambda row: row[2:] == pytest.approx((actual_cost, 0.5 + actual_cost)), seconds=30)
+    assert result[:2] == reset[:2]
+    persisted: Final = eventually(
+        lambda: identity.persisted(proxies.database), lambda value: value == pytest.approx(actual_cost), seconds=30
+    )
+    return (*result, persisted)
+
+
+@pytest.mark.parametrize("owner", [pytest.param(True, id="owner"), pytest.param(False, id="team")])
+def test_standalone_advances_window_and_redis_counter_while_python_is_paused(
+    proxies: Proxies, actual_cost: float, owner: bool
+) -> None:
+    ended: Final = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=2)
+    with _paused_between_sweeps(proxies.rust_pid, proxies.redis):
+        python: Final = _window_outcome(proxies, proxies.python, ended, actual_cost, owner)
+    with _paused_between_sweeps(proxies.python_pid, proxies.redis):
+        rust: Final = _window_outcome(proxies, proxies.rust, ended, actual_cost, owner)
+    assert rust[:2] == python[:2]
+    assert rust[2:] == pytest.approx(python[2:])
+
+
+def _provider_response(proxies: Proxies, identity: Identity) -> None:
     proxies.upstream.default_response = ResponseSpec(
         {
             "id": f"msg_{identity.user}",
@@ -233,12 +333,21 @@ def _outcome(client: httpx.Client, proxies: Proxies, case: Case, actual_cost: fl
             "usage": {"input_tokens": 4, "output_tokens": 2},
         }
     )
-    proxies.redis.set(identity.counter, case.spend)
-    response: Final = client.post(
+
+
+def _send(client: httpx.Client, identity: Identity) -> httpx.Response:
+    return client.post(
         "/v1/messages",
         headers={"Authorization": f"Bearer {identity.token}", "anthropic-version": "2023-06-01"},
         json={"model": "metered", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 8},
     )
+
+
+def _outcome(client: httpx.Client, proxies: Proxies, case: Case, actual_cost: float) -> tuple[int, float, float]:
+    identity: Final = _identity(proxies.database, case)
+    _provider_response(proxies, identity)
+    proxies.redis.set(identity.counter, case.spend)
+    response: Final = _send(client, identity)
     assert response.status_code == case.status, response.text
     expected: Final = case.spend + (actual_cost if case.status == 200 else 0)
 

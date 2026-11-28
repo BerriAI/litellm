@@ -48,7 +48,7 @@ async fn observed(store: &SpendCounters, keys: &[Option<String>]) -> Vec<Option<
 }
 
 /// `release_budget_reservation`: reconcile to nothing spent and finalize. `window_resets` holds
-/// each entry's `window_reset_at`, which the typed record does not carry.
+/// reset timestamps that a caller supplies separately from the reservation.
 pub async fn release(
     budgets: &Budgets,
     host: &Host,

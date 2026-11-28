@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH tier AS (\n    UPDATE \"LiteLLM_BudgetTable\"\n    SET budget_reset_at = $2,\n        budget_reset_count = budget_reset_count + 1,\n        updated_at = NOW() AT TIME ZONE 'UTC'\n    WHERE budget_id = $1 AND budget_reset_at IS NOT DISTINCT FROM $3 AND budget_duration = $4\n      AND NOT EXISTS (SELECT 1 FROM \"LiteLLM_TagTable\" WHERE budget_id = $1)\n      AND NOT EXISTS (SELECT 1 FROM \"LiteLLM_ModelAccessGroupBudgetTable\" WHERE budget_id = $1)\n      AND NOT EXISTS (SELECT 1 FROM \"LiteLLM_CustomerOrganizationTable\" WHERE budget_id = $1)\n      AND NOT EXISTS (SELECT 1 FROM \"LiteLLM_CustomerTeamTable\" WHERE budget_id = $1 OR budget_override_id = $1)\n      AND NOT EXISTS (SELECT 1 FROM \"LiteLLM_CustomerMemberTable\" WHERE budget_id = $1 OR budget_override_id = $1)\n    RETURNING budget_id, max_budget, created_at, budget_reset_count,\n        CASE WHEN ABS(max_budget) < 'Infinity'::double precision AND $5::boolean THEN max_budget END AS cap,\n        CASE WHEN max_budget > 0 AND rollover_max_budget > max_budget\n                   AND rollover_max_budget < 'Infinity'::double precision\n             THEN rollover_max_budget - max_budget END AS credit_room\n), orgs AS (\n    UPDATE \"LiteLLM_OrganizationTable\" AS o\n    SET spend = CASE WHEN tier.cap IS NULL THEN 0 ELSE GREATEST(o.spend - tier.cap, 0) END,\n        updated_at = NOW() AT TIME ZONE 'UTC'\n    FROM tier WHERE o.budget_id = tier.budget_id AND o.spend > 0\n    RETURNING o.organization_id AS id, o.spend\n), members AS (\n    UPDATE \"LiteLLM_TeamMembership\" AS m\n    SET total_spend = GREATEST(m.total_spend, m.spend),\n        rollover_credit = CASE WHEN tier.credit_room IS NOT NULL THEN\n            LEAST(tier.credit_room, GREATEST(0, tier.max_budget\n                + LEAST(tier.credit_room, GREATEST(0, COALESCE(m.rollover_credit, 0))) - m.spend))\n            ELSE m.rollover_credit END,\n        spend = CASE WHEN tier.cap IS NULL THEN 0 ELSE GREATEST(m.spend - tier.cap\n            - LEAST(COALESCE(tier.credit_room, 0), GREATEST(0, COALESCE(m.rollover_credit, 0))), 0) END\n    FROM tier\n    WHERE m.budget_id = tier.budget_id OR (\n        m.budget_id IS NULL AND EXISTS (\n            SELECT 1 FROM \"LiteLLM_TeamTable\" t\n            WHERE t.team_id = m.team_id AND t.metadata->>'team_member_budget_id' = tier.budget_id\n        )\n    )\n    RETURNING m.user_id AS id, m.team_id, m.spend\n), keys AS (\n    UPDATE \"LiteLLM_VerificationToken\" AS k\n    SET spend = CASE WHEN tier.cap IS NULL THEN 0 ELSE GREATEST(k.spend - tier.cap, 0) END,\n        updated_at = NOW() AT TIME ZONE 'UTC'\n    FROM tier WHERE k.budget_id = tier.budget_id AND k.budget_duration IS NULL AND k.spend > 0\n    RETURNING k.token AS id, k.spend\n), projects AS (\n    UPDATE \"LiteLLM_ProjectTable\" AS p\n    SET spend = CASE WHEN tier.cap IS NULL THEN 0 ELSE GREATEST(p.spend - tier.cap, 0) END,\n        updated_at = NOW() AT TIME ZONE 'UTC'\n    FROM tier WHERE p.budget_id = tier.budget_id AND p.spend > 0\n    RETURNING p.project_id AS id, p.spend\n), closing AS (\n    SELECT tier.*,\n        CONCAT(budget_id, ':', to_char(created_at, 'YYYY-MM-DD\"T\"HH24:MI:SS'),\n            CASE WHEN date_trunc('second', created_at) <> created_at THEN to_char(created_at, '.US') END,\n            '+00:00:', budget_reset_count - 1, ':',\n            CASE WHEN $3::timestamp IS NULL THEN 'unset' ELSE CONCAT(\n                to_char($3::timestamp, 'YYYY-MM-DD\"T\"HH24:MI:SS'),\n                CASE WHEN date_trunc('second', $3::timestamp) <> $3::timestamp THEN to_char($3::timestamp, '.US') END,\n                '+00:00') END) AS window\n    FROM tier\n), end_users AS (\n    UPDATE \"LiteLLM_EndUserTable\" AS e\n    SET spend = CASE WHEN closing.cap IS NULL THEN 0 ELSE GREATEST(e.spend - closing.cap, 0) END,\n        spend_reset_window = closing.window\n    FROM closing\n    WHERE COALESCE(e.budget_id, $6::text) = closing.budget_id\n      AND e.spend > 0\n      AND e.spend_reset_window IS DISTINCT FROM closing.window\n    RETURNING e.user_id AS id\n)\nSELECT 'org' AS \"kind!\", id AS \"id!\", NULL::text AS team_id FROM orgs\nUNION ALL SELECT 'member', id, team_id FROM members\nUNION ALL SELECT 'key', id, NULL FROM keys\nUNION ALL SELECT 'project', id, NULL FROM projects\nUNION ALL SELECT 'end_user', id, NULL FROM end_users\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "kind!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "id!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "team_id",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamp",
+        "Timestamp",
+        "Text",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "7e1de2925e1d73ebad7190a56ca3e95298e5cfbc98ed57441d9b64491cf7cb27"
+}

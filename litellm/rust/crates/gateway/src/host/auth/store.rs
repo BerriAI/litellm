@@ -72,6 +72,15 @@ pub enum EndUserRead {
 }
 
 impl AuthStore {
+    pub(crate) async fn invalidate_reset_entry(&self, entry: AuthObject) {
+        if let Err(error) = self.cache.delete(&[entry.key()]).await {
+            tracing::warn!(
+                error = %litellm_error::Report::new(&error),
+                "Committed budget reset entry could not be evicted from the auth cache"
+            );
+        }
+    }
+
     pub(crate) async fn invalidate_accounting_entries(&self, entries: Vec<AccountingCacheEntry>) {
         let keys: Vec<_> = entries
             .into_iter()

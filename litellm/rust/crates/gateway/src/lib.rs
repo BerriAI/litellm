@@ -1,6 +1,7 @@
 mod accounting;
 mod admit;
 mod boot;
+mod budget_reset;
 mod callbacks;
 mod config_sync;
 mod cost_map;

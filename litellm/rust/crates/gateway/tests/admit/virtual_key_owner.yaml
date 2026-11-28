@@ -41,9 +41,7 @@ requests:
   - name: a key whose owner holds a budget window
     headers: {authorization: Bearer sk-windowed}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: budget_limits
+    expect: rust
 
   - name: a key whose owner holds a per-model budget
     headers: {authorization: Bearer sk-per-model}

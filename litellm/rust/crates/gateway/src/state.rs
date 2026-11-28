@@ -194,6 +194,19 @@ impl AppState {
         ))
     }
 
+    /// Only the standalone entry point starts this scheduler.
+    pub fn start_standalone_budget_reset(&self, config: &Config) -> Option<PeriodicJob> {
+        let logs = self.spend_logs.as_ref()?;
+        crate::budget_reset::start(
+            config,
+            &*self.environment,
+            logs.budget_resets.clone(),
+            self.auth_store.clone()?,
+            logs.spend_counters().clone(),
+            self.redis.coordination.clone()?,
+        )
+    }
+
     /// Runs the applier's last pass after all locally queued deliveries are durable.
     pub async fn close_with_accounting(&self, accounting: Option<PeriodicJob>) {
         if let Some(spend_logs) = &self.spend_logs {

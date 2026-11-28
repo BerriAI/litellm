@@ -187,7 +187,7 @@ pub struct Success {
     pub end_user_max_budget: Option<f64>,
     /// A CheckBatchCost costing waits on this request's `BatchAccountingOutcome`.
     pub batch_accounting: bool,
-    /// The `window_reset_at` of each reservation entry, which the typed reservation lacks.
+    /// Reset timestamps supplied separately from the reservation, in entry order.
     pub window_resets: Vec<Option<String>>,
     pub row: RowRequest,
 }

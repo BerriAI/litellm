@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_VerificationToken\"\nSET spend = GREATEST(COALESCE(spend, 0) - $3::double precision, 0),\n    budget_reset_at = $2,\n    updated_at = NOW() AT TIME ZONE 'UTC'\nWHERE token = $1 AND budget_reset_at IS NOT DISTINCT FROM $4 AND budget_duration = $5\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamp",
+        "Float8",
+        "Timestamp",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e2a5c58e80fa452b599e0d1fc883646b372add073977090fbeeca148a965277d"
+}

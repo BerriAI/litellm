@@ -504,7 +504,11 @@ pub async fn settle(
     let mut settled_costs = Vec::new();
     for (index, entry) in entries.iter().enumerate() {
         let Some(entry) = entry else { continue };
-        let window_reset = request.window_resets.get(index).and_then(Option::as_deref);
+        let window_reset = request
+            .window_resets
+            .get(index)
+            .and_then(Option::as_deref)
+            .or(entry.window_reset_at.as_deref());
         if let Some((adjustment, settled_cost)) = held_adjustment(
             index,
             entry,

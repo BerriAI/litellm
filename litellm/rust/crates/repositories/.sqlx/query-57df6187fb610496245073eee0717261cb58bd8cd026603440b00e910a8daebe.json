@@ -1,0 +1,92 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT budget_id AS id, budget_duration AS \"duration!\", budget_reset_at AS reset_at,\n       0.0::double precision AS \"spend!\", max_budget,\n       rollover_max_budget AS rollover_max_budget,\n       NULL::double precision AS rollover_credit\nFROM \"LiteLLM_BudgetTable\"\nWHERE budget_id > $1 AND budget_duration IS NOT NULL\n  AND (budget_reset_at < $2 OR budget_reset_at IS NULL)\nORDER BY budget_id\nLIMIT $3\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "duration!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "budget_duration"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "reset_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "budget_reset_at"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "spend!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "max_budget",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "rollover_max_budget",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "rollover_max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "rollover_credit",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamp",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      null,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "57df6187fb610496245073eee0717261cb58bd8cd026603440b00e910a8daebe"
+}

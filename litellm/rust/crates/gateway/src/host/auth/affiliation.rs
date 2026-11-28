@@ -43,7 +43,7 @@ fn column<T: Default + DeserializeOwned>(
     bag.map_or_else(|| Ok(T::default()), |bag| read_bag(bag).ok_or(field))
 }
 
-pub(super) fn windows(
+pub(crate) fn windows(
     windows: Option<&[BudgetLimitEntry]>,
 ) -> Result<Vec<BudgetWindow>, &'static str> {
     windows
@@ -227,7 +227,7 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         },
         soft_budget,
         budget_duration,
-        budget_limits,
+        budget_limits: _,
         model_max_budget,
         model_spend: _,
         model_id,
@@ -259,7 +259,6 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         max_budget,
         soft_budget,
         budget_duration,
-        budget_limits,
         model_max_budget,
         model_id,
         litellm_model_table,
@@ -394,7 +393,7 @@ pub(crate) fn unserved_user(user: &UserRecord) -> Option<&'static str> {
         rollover_max_budget: _,
         rollover_credit: _,
         budget_duration: _,
-        budget_limits,
+        budget_limits: _,
         model_max_budget,
         model_spend: _,
         allowed_cache_controls,
@@ -409,7 +408,6 @@ pub(crate) fn unserved_user(user: &UserRecord) -> Option<&'static str> {
         tpm_limit,
         rpm_limit,
         max_parallel_requests,
-        budget_limits,
         model_max_budget,
         allowed_cache_controls,
         policies,
@@ -915,12 +913,12 @@ mod tests {
     #[rstest]
     #[case::budget_limits(
         r#"{"budget_limits": [{"budget_duration": "30d", "max_budget": 5.0}]}"#,
-        "budget_limits"
+        None
     )]
-    #[case::model_max_budget(r#"{"model_max_budget": {"claude": 1.0}}"#, "model_max_budget")]
-    fn a_users_budget_policies_are_copied_and_named_unserved(
+    #[case::model_max_budget(r#"{"model_max_budget": {"claude": 1.0}}"#, Some("model_max_budget"))]
+    fn a_users_budget_policies_are_copied_and_only_per_model_is_named_unserved(
         #[case] held: &str,
-        #[case] field: &str,
+        #[case] field: Option<&str>,
     ) {
         let entry = held.replacen(
             '{',
@@ -929,7 +927,7 @@ mod tests {
         );
         let owner = user(&cached_user(&entry)).unwrap().row;
         assert_eq!(owner.model_spend["claude"], 0.5);
-        assert_eq!(unserved_user(&owner), Some(field));
+        assert_eq!(unserved_user(&owner), field);
     }
 
     #[rstest]

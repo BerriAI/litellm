@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_TeamTable\"\nSET spend = GREATEST(COALESCE(spend, 0) - $3::double precision, 0),\n    budget_reset_at = $2,\n    updated_at = NOW() AT TIME ZONE 'UTC'\nWHERE team_id = $1 AND budget_reset_at IS NOT DISTINCT FROM $4 AND budget_duration = $5\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamp",
+        "Float8",
+        "Timestamp",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9d326e07fa816a65eda32fe737e530266e4a1e541d840022e2a23dd8162d44ac"
+}

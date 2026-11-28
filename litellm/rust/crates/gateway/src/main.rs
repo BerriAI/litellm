@@ -114,6 +114,7 @@ async fn standalone(
     let in_flight = InFlight::new();
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
     let accounting = state.start_standalone_accounting();
+    let budget_reset = state.start_standalone_budget_reset(&config);
     let live = Arc::new(Live::new(served(
         state,
         Some(admit),
@@ -132,6 +133,9 @@ async fn standalone(
     )
     .with_graceful_shutdown(shutdown_signal())
     .await;
+    if let Some(budget_reset) = budget_reset {
+        budget_reset.stop().await;
+    }
     closed(poller, &live, accounting).await;
     Ok(served?)
 }

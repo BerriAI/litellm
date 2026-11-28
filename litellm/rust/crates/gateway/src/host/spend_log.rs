@@ -13,23 +13,27 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use futures_util::future::{BoxFuture, join_all};
+use litellm_auth_store::{TeamDatabase, UserDatabase};
 use litellm_callbacks::{HostCall, HostFault, HostReply};
 use litellm_callbacks_budgets::RowSpend;
+use litellm_callbacks_spend_log::AccountingWindow;
 use litellm_callbacks_spend_logger::host::{
     AccountingContext, AfterCharge, AfterWrite, BatchAccounting, EnrichKeyIdentity,
     FailedTrackingAlert, IncrementSearchFreeTier, LoggedCost,
 };
+use litellm_gateway_auth_core::record::BudgetWindow;
 use litellm_redis_store::spend_counters::SpendCounter;
 use litellm_repositories::{
-    Database, EndUserRecord, EndUserRepository, KeyRepository, Organization,
-    OrganizationRepository, Project, ProjectRepository, Side, SignIn, SpendLogOwner,
+    Database, EndUserRecord, EndUserRepository, KeyRepository, ObjectPermissionRepository,
+    Organization, OrganizationRepository, Project, ProjectRepository, Side, SignIn, SpendLogOwner,
     SpendLogRepository, Team, TeamMembership, TeamMembershipRepository, TeamRepository, User,
     UserRepository,
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
-use crate::callbacks::hosted::Answers;
+use super::auth::budget_windows;
+use crate::callbacks::{hosted::Answers, windows};
 
 /// The counter step's host calls, which `litellm-callbacks-budgets` names but does not export.
 const BUDGET_WINDOWS: &str = "budget_windows";
@@ -48,7 +52,20 @@ struct KeyIdentity {
 /// A request that asks one answer of each of its entries.
 #[derive(Deserialize)]
 struct Entities {
-    entities: Vec<serde::de::IgnoredAny>,
+    entities: Vec<WindowEntity>,
+}
+
+#[derive(Deserialize)]
+struct WindowEntity {
+    entity_type: windows::Entity,
+    entity_id: String,
+}
+
+#[derive(Deserialize)]
+struct AccountingRequest {
+    team_id: Option<String>,
+    user_id: Option<String>,
+    charges: bool,
 }
 
 #[derive(Deserialize)]
@@ -97,6 +114,8 @@ pub struct Rows {
     projects: ProjectRepository,
     end_users: EndUserRepository,
     spend_logs: SpendLogRepository,
+    team_auth: TeamDatabase,
+    user_auth: UserDatabase,
 }
 
 impl Rows {
@@ -109,8 +128,37 @@ impl Rows {
             orgs: OrganizationRepository::new(database.clone()),
             projects: ProjectRepository::new(database.clone()),
             end_users: EndUserRepository::new(database.clone()),
+            team_auth: TeamDatabase::new(
+                Arc::new(TeamRepository::new(database.clone())),
+                Arc::new(ObjectPermissionRepository::new(database.clone())),
+            ),
+            user_auth: UserDatabase::new(Arc::new(UserRepository::new(database.clone()))),
             spend_logs: SpendLogRepository::new(database),
         }
+    }
+
+    async fn windows(&self, entity: windows::Entity, id: &str) -> Vec<BudgetWindow> {
+        let entries = match entity {
+            windows::Entity::Team => self
+                .team_auth
+                .team(id, Side::Read)
+                .await
+                .map(|team| team.and_then(|team| team.budget_limits)),
+            windows::Entity::User => self
+                .user_auth
+                .user(id, Side::Read)
+                .await
+                .map(|user| user.and_then(|user| user.budget_limits)),
+            windows::Entity::Key => return Vec::new(),
+        };
+        let entries = match entries {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::warn!(%error, "Budget windows could not be read");
+                return Vec::new();
+            }
+        };
+        budget_windows(entries.as_deref()).unwrap_or_default()
     }
 
     /// The spend `counter`'s row holds, `None` without a row or when the read failed.
@@ -169,6 +217,36 @@ impl Rows {
 impl RowSpend for Rows {
     fn stored<'a>(&'a self, counter: &'a SpendCounter) -> BoxFuture<'a, Option<f64>> {
         Box::pin(self.spend(counter))
+    }
+
+    fn window<'a>(
+        &'a self,
+        counter: &'a SpendCounter,
+        start: &'a str,
+    ) -> BoxFuture<'a, Option<f64>> {
+        Box::pin(async move {
+            let (owner, entity, id, duration) = match counter {
+                SpendCounter::Team {
+                    team_id,
+                    window: Some(window),
+                } => (SpendLogOwner::Team, "team", team_id, window),
+                SpendCounter::UserWindow { user_id, window } => {
+                    (SpendLogOwner::User, "user", user_id, window)
+                }
+                _ => return None,
+            };
+            self.spend_logs
+                .window_seed(
+                    Some(owner),
+                    entity,
+                    id,
+                    Some(duration),
+                    DateTime::parse_from_rfc3339(start).ok()?.to_utc(),
+                )
+                .await
+                .ok()
+                .flatten()
+        })
     }
 }
 
@@ -236,10 +314,63 @@ impl RustSpendLogHost {
                     "project_id": known.project_id,
                 }))
             }
-            AccountingContext::NAME => Ok(json!({})),
+            AccountingContext::NAME => {
+                let asked: AccountingRequest = parsed(request)?;
+                let Some(rows) = self.rows.as_ref().filter(|_| asked.charges) else {
+                    return Ok(json!({}));
+                };
+                let now = jiff::Timestamp::now();
+                let accounting = join_all(
+                    [
+                        (windows::Entity::Team, asked.team_id),
+                        (windows::Entity::User, asked.user_id),
+                    ]
+                    .into_iter()
+                    .filter_map(|(entity, id)| Some((entity, id?)))
+                    .map(|(entity, entity_id)| async move {
+                        rows.windows(entity, &entity_id)
+                            .await
+                            .into_iter()
+                            .filter_map(|window| {
+                                window.reset_at?;
+                                Some(AccountingWindow {
+                                    entity_type: <&str>::from(entity).to_owned(),
+                                    entity_id: entity_id.clone(),
+                                    window_start: windows::start(&window, now)?.to_string(),
+                                    window_duration: window.budget_duration,
+                                    reset_at: None,
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    }),
+                )
+                .await
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+                Ok(json!({ "windows": accounting }))
+            }
             BUDGET_WINDOWS => {
                 let asked: Entities = parsed(request)?;
-                Ok(json!(vec![json!([]); asked.entities.len()]))
+                let now = jiff::Timestamp::now();
+                let windows = join_all(asked.entities.into_iter().map(|entity| async move {
+                    let Some(rows) = &self.rows else {
+                        return Vec::new();
+                    };
+                    rows.windows(entity.entity_type, &entity.entity_id)
+                        .await
+                        .into_iter()
+                        .map(|window| {
+                            let start = windows::start(&window, now).map(|start| start.to_string());
+                            json!({
+                                "budget_duration": window.budget_duration,
+                                "window_start": start,
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                }))
+                .await;
+                Ok(json!(windows))
             }
             STORED_SPEND => {
                 let asked: StoredSpend = parsed(request)?;
