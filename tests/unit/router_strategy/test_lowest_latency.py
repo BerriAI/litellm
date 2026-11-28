@@ -1733,6 +1733,14 @@ async def _log_speech_clip(
         await handler.async_log_success_event(kwargs, clip, 0.0, seconds)
 
 
+def _timeout_kwargs(deployment_id: str, stream: bool) -> dict[str, object]:
+    return {
+        "exception": litellm.Timeout(message="request timed out", model="test", llm_provider="openai"),
+        "litellm_params": {"metadata": {"model_group": MODEL_GROUP}, "model_info": {"id": deployment_id}},
+        "stream": stream,
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
 async def test_speech_clip_the_caller_hung_up_on_counts_its_request_but_not_its_latency(sync_mode: bool) -> None:
@@ -1744,3 +1752,74 @@ async def test_speech_clip_the_caller_hung_up_on_counts_its_request_but_not_its_
     recorded: Final = cache.get_cache(key="tts_map")[DEPLOYMENT_ID]
     assert recorded["latency_normalized"] == [pytest.approx(6.0)]
     assert sum(minute["rpm"] for minute in recorded.values() if isinstance(minute, dict)) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("failed_stream", "earlier_fast_streams"),
+    [(True, True), (False, True), (True, False)],
+    ids=["stream-timeout", "non-stream-timeout", "stream-timeout-before-any-ttft"],
+)
+async def test_timeout_penalty_steers_streaming_selection_away(
+    sync_mode: bool, failed_stream: bool, earlier_fast_streams: bool
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache)
+    start_time: Final = datetime(2026, 1, 1, 12, 0, 0)
+    end_time: Final = start_time + timedelta(seconds=1)
+
+    async def log_stream(deployment_id: str, ttft: float) -> None:
+        kwargs: Final = _streaming_kwargs(deployment_id, start_time, ttft)
+        if sync_mode:
+            handler.log_success_event(kwargs, _chat_response(4), start_time, end_time)
+        else:
+            await handler.async_log_success_event(kwargs, _chat_response(4), start_time, end_time)
+
+    await log_stream(SLOW_TTFT_ID, 0.3)
+    if earlier_fast_streams:
+        await log_stream(FAST_TTFT_ID, 0.1)
+    if sync_mode:
+        handler.log_failure_event(_timeout_kwargs(FAST_TTFT_ID, failed_stream), None, start_time, end_time)
+    else:
+        await handler.async_log_failure_event(_timeout_kwargs(FAST_TTFT_ID, failed_stream), None, start_time, end_time)
+    await log_stream(FAST_TTFT_ID, 0.1)
+
+    picked: Final = handler.get_available_deployments(
+        model_group=MODEL_GROUP, healthy_deployments=STREAMING_DEPLOYMENTS, request_kwargs={"stream": True}
+    )
+    assert picked["model_info"]["id"] == SLOW_TTFT_ID
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+def test_sync_router_timeout_steers_next_selection_away(stream: bool) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP,
+                "litellm_params": {"model": "openai/gpt-4o-mini", "mock_timeout": True, "timeout": 0.001},
+                "model_info": {"id": FAST_TTFT_ID},
+            },
+            {
+                "model_name": MODEL_GROUP,
+                "litellm_params": {"model": "openai/gpt-4o-mini", "mock_response": "hi"},
+                "model_info": {"id": SLOW_TTFT_ID},
+            },
+        ],
+        routing_strategy="latency-based-routing",
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+    router.cache.set_cache(
+        key=f"{MODEL_GROUP}_map",
+        value={
+            FAST_TTFT_ID: {"latency_normalized": [0.1], "time_to_first_token_seconds": [0.1]},
+            SLOW_TTFT_ID: {"latency_normalized": [0.3], "time_to_first_token_seconds": [0.3]},
+        },
+    )
+
+    with pytest.raises(litellm.Timeout):
+        router.completion(model=MODEL_GROUP, messages=[{"role": "user", "content": "hi"}], stream=stream)
+
+    picked: Final = router.get_available_deployment(model=MODEL_GROUP, request_kwargs={"stream": stream})
+    assert picked["model_info"]["id"] == SLOW_TTFT_ID

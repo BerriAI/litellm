@@ -7,7 +7,7 @@ from functools import partial
 from math import ceil, isfinite
 from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import Field
+from pydantic import Field, TypeAdapter
 
 import litellm
 from litellm import ModelResponse, verbose_logger
@@ -16,6 +16,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
     get_parent_otel_span_from_kwargs,
     require_get,
     safe_divide_seconds,
@@ -77,6 +78,19 @@ def _caller_hung_up_on_speech(response_obj: object, metadata: object) -> bool:
         isinstance(response_obj, HttpxBinaryResponseContent)
         and require_get(metadata).get("client_disconnected") is True
     )
+
+
+_STR_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_SAMPLES: Final = TypeAdapter(tuple[object, ...])
+
+
+def _as_mapping(value: object) -> Mapping[str, object]:
+    return _STR_MAPPING.validate_python(value) if isinstance(value, Mapping) else {}
+
+
+def _append_penalty(samples: object, max_size: int) -> Sequence[object]:
+    kept: Final = _SAMPLES.validate_python(samples) if isinstance(samples, list) else ()
+    return [*(kept[1:] if len(kept) >= max_size else kept), 1000.0]
 
 
 class LowestLatencyLoggingHandler(CustomLogger):
@@ -226,6 +240,55 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
             )
 
+    def _with_timeout_penalty(self, deployment: object, stream: bool) -> Mapping[str, object]:
+        """
+        Give a 1000s penalty for failing. Streaming selection ranks by
+        time_to_first_token_seconds, so penalize it too when it is in use.
+        """
+        samples: Final = _as_mapping(deployment)
+        keys: Final = (
+            ("latency_normalized", "time_to_first_token_seconds")
+            if stream or samples.get("time_to_first_token_seconds")
+            else ("latency_normalized",)
+        )
+        max_size: Final = self.routing_args.max_latency_list_size
+        return {**samples, **{key: _append_penalty(samples.get(key), max_size) for key in keys}}
+
+    @with_service_target(ROUTER_USAGE_TARGET)
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
+        try:
+            if not isinstance(kwargs.get("exception", None), litellm.Timeout):
+                return
+            litellm_params: Final = _as_mapping(kwargs.get("litellm_params"))
+            metadata: Final = _as_mapping(litellm_params.get(get_metadata_variable_name_from_kwargs(kwargs)))
+            model_group: Final = metadata.get("model_group", None)
+            id: Final = _as_mapping(litellm_params.get("model_info")).get("id", None)
+            if model_group is None or id is None:
+                return
+
+            latency_key: Final = f"{model_group}_map"
+            request_count_dict: Final = _as_mapping(
+                self.router_cache.get_cache(key=latency_key)  # pyright: ignore[reportUnknownArgumentType]  # DualCache.get_cache is untyped
+            )
+            self.router_cache.set_cache(
+                key=latency_key,
+                value={
+                    **request_count_dict,
+                    str(id): self._with_timeout_penalty(
+                        request_count_dict.get(str(id)), kwargs.get("stream", None) is True
+                    ),
+                },
+                ttl=self.routing_args.ttl,
+            )
+        except Exception as e:  # noqa: BLE001  # same as async_log_failure_event, routing stats are best effort
+            verbose_logger.exception(
+                "litellm.router_strategy.lowest_latency.py::log_failure_event(): Exception occured - %s", e
+            )
+
     @with_service_target(ROUTER_USAGE_TARGET)
     async def async_log_failure_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
@@ -272,16 +335,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if id not in request_count_dict:
                         request_count_dict[id] = {}
 
-                    ## Latency - give 1000s penalty for failing
-                    if (
-                        len(request_count_dict[id].get("latency_normalized", []))
-                        < self.routing_args.max_latency_list_size
-                    ):
-                        request_count_dict[id].setdefault("latency_normalized", []).append(1000.0)
-                    else:
-                        request_count_dict[id]["latency_normalized"] = request_count_dict[id]["latency_normalized"][
-                            1:
-                        ] + [1000.0]
+                    request_count_dict[id] = self._with_timeout_penalty(
+                        request_count_dict[id], kwargs.get("stream", None) is True
+                    )
 
                     await self.router_cache.async_set_cache(
                         key=latency_key,
