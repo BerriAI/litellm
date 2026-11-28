@@ -38,6 +38,7 @@ from claude_code.cli_driver import (
     failure_diagnostic,
     run_claude_models_parallel,
 )
+from claude_code.stream_events import describe_run
 
 
 BEDROCK_INVOKE_MODELS = [
@@ -130,7 +131,8 @@ def test_web_search_bedrock_invoke(compat_result):
             error = (
                 f"[{model}] no `tool_use` block with name=WebSearch observed; "
                 "the proxy may have stripped the WebSearch tool definition from "
-                "the request or the tool_use block from the response"
+                "the request or the tool_use block from the response; "
+                f"model run: {describe_run(outcome.events)}"
             )
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)
