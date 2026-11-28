@@ -3516,7 +3516,79 @@ def test_bedrock_tools_pt_drops_a_malformed_legacy_defs_block_for_claude(legacy_
 
     sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
 
-    assert sent == {"type": "object", "properties": {"name": {"type": "string"}}, "required": []}
+    assert sent == {"type": "object", "properties": {"name": {"type": "string"}}}
+
+
+def test_bedrock_tools_pt_forwards_claude_tool_schemas_without_rewriting_them() -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "calculator",
+                "description": "Evaluate an arithmetic expression.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"expression": {"type": "string"}},
+                    "required": ["expression"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "finish",
+                "description": "Finish.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "no_extra",
+                "description": "No extra props.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            },
+        },
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="bedrock/global.anthropic.claude-opus-5-5")
+
+    assert sent[0]["toolSpec"]["inputSchema"]["json"] == {
+        "type": "object",
+        "properties": {"expression": {"type": "string"}},
+        "required": ["expression"],
+    }
+    assert sent[1]["toolSpec"]["inputSchema"]["json"] == {"type": "object", "properties": {}}
+    assert sent[2]["toolSpec"]["inputSchema"]["json"] == {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+
+
+def test_bedrock_tools_pt_keeps_non_claude_tool_schemas_without_required_or_additional_properties() -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "finish",
+                "description": "Finish.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            },
+        },
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.amazon.nova-micro-v1:0")
+
+    assert sent[0]["toolSpec"]["inputSchema"]["json"] == {"type": "object", "properties": {}}
 
 
 def test_bedrock_tools_pt_sends_strict_claude_tools_with_their_defs() -> None:
