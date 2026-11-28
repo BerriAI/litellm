@@ -1897,3 +1897,11 @@ def test_add_team_callback_rejects_non_string_destination_callback_vars(callback
     with pytest.raises(ValidationError) as exc:
         AddTeamCallback(callback_name="newrelic", callback_vars=callback_vars)
     assert f"{callback_var} must be a string, got {type(value).__name__}" in str(exc.value)
+
+
+@pytest.mark.parametrize("callback_var", ["langfuse_public_key", "langfuse_secret_key"])
+def test_add_team_callback_rejects_null_string_callback_vars(callback_var: str) -> None:
+    callback_vars: Final = cast("dict[str, str]", {callback_var: None})
+    with pytest.raises(ValidationError) as exc:
+        AddTeamCallback(callback_name="langfuse_otel", callback_vars=callback_vars)
+    assert f"{callback_var} must be a string, got NoneType" in str(exc.value)

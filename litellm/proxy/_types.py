@@ -2231,10 +2231,14 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def validate_callback_vars(cls, values):
-        callback_vars: Final = values.get("callback_vars", {})
+        callback_vars: Final = values.get("callback_vars")
+        if not isinstance(callback_vars, Mapping):
+            return values
         for key, value in callback_vars.items():
             if key not in CALLBACK_VAR_NAMES:
                 raise ValueError(f"Invalid callback variable: {key}. Must be one of {set(CALLBACK_VAR_NAMES)}")
+            if value is None:
+                raise ValueError(f"{key} must be a string, got NoneType")
             if key in OTEL_DESTINATION_VARS and not isinstance(value, str):
                 raise ValueError(f"{key} must be a string, got {type(value).__name__}")
             callback_vars[key] = str(value)

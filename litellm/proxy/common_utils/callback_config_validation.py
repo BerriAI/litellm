@@ -405,6 +405,16 @@ def _logging_entry_error(entry: object) -> str | None:
     callback_vars: Final[Mapping[object, object]] = cast(  # cast-ok: Mapping check preserves arbitrary key types
         Mapping[object, object], callback_vars_raw
     )
+    null_var_error: Final = next(
+        (
+            f"{variable_name} must be a string, got NoneType"
+            for variable_name, value in callback_vars.items()
+            if isinstance(variable_name, str) and value is None
+        ),
+        None,
+    )
+    if null_var_error is not None:
+        return null_var_error
     destination_var_error: Final = next(
         (
             f"{variable_name} must be a string, got {type(callback_vars[variable_name]).__name__}"
