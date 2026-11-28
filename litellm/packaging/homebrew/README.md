@@ -16,7 +16,7 @@ The formula builds the published `litellm` sdist with the `cli` extra and resolv
 
 ## Release runbook
 
-The formula can only point at a published artifact, so it activates with the first `litellm` release that ships the `cli` extra (added in [pyproject.toml](../../pyproject.toml)).
+The formula can only point at a published artifact, so it activates with the first `litellm` release that ships the `cli` extra (added in [pyproject.toml](../../../pyproject.toml)).
 
 1. Cut a `litellm` release whose `pyproject.toml` includes the `cli` extra and confirm it is on PyPI.
 2. Fetch the sdist URL and checksum for that version: `curl -fsSL https://pypi.org/pypi/litellm/<version>/json | jq -r '.urls[] | select(.packagetype=="sdist") | "\(.url)\n\(.digests.sha256)"'`
