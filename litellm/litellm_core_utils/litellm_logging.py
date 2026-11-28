@@ -62,6 +62,7 @@ from litellm.constants import (
     KUBERNETES_POD_ROUTING_KEY,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    MAX_RAW_REQUEST_BODY_LOG_CHARS,
     PROVIDER_REQUEST_ID_HEADERS,
     REALTIME_METERED_USAGE_KEY,
     REDACTED_BY_LITELLM,
@@ -2401,7 +2402,10 @@ class Logging(LiteLLMLoggingBaseClass):
                     verbose_logger.debug("\x1b[92m%s\x1b[0m\n", curl_command)
 
     def _get_request_body(self, data: Mapping[str, object]) -> str:
-        return str(data)
+        body: Final = str(data)
+        if len(body) > MAX_RAW_REQUEST_BODY_LOG_CHARS:
+            return f"<{len(body)} chars omitted, over MAX_RAW_REQUEST_BODY_LOG_CHARS={MAX_RAW_REQUEST_BODY_LOG_CHARS}>"
+        return body
 
     def _get_request_curl_command(
         self, api_base: str, headers: dict[str, object] | None, additional_args: dict, data: Mapping[str, object]
