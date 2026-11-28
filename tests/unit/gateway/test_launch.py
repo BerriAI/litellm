@@ -12,10 +12,11 @@ from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from uvicorn.config import Config
 from uvicorn.importer import import_from_string
 from uvicorn.main import main as uvicorn_main
 
-from gateway.launch import GATEWAY_APP, main, pool_database_url, python_server, uvicorn_argv
+from gateway.launch import GATEWAY_APP, main, pool_database_url, python_server, serve_with_reaper, uvicorn_argv
 from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR, PgBouncerError, PgBouncerSettings
 from litellm.proxy.proxy_server import app as proxy_app
@@ -122,6 +123,11 @@ def _minted_iam_token(token: str):
 
 def _uvicorn_params(argv: tuple[str, ...]) -> dict[str, object]:
     return uvicorn_main.make_context("uvicorn", list(argv)).params
+
+
+def _workers_uvicorn_runs(argv: tuple[str, ...]) -> int:
+    flag: Final = cast(int | None, _uvicorn_params(argv)["workers"])
+    return Config(app=GATEWAY_APP, log_config=None, workers=flag).workers
 
 
 class TestUvicornArgv:
@@ -265,6 +271,51 @@ class TestUvicornArgv:
         finally:
             gc.unfreeze()
         assert served is importlib.import_module("gateway.main").app
+
+
+class TestServeWithReaper:
+    @pytest.fixture(autouse=True)
+    def only_the_worker_count_of_the_case(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for name in ("WEB_CONCURRENCY", "UVICORN_WORKERS"):
+            monkeypatch.delenv(name, raising=False)
+
+    @pytest.mark.parametrize(
+        ("argv", "environ"),
+        [
+            pytest.param(("--workers", "2"), {}, id="two workers by flag"),
+            pytest.param((), {"WEB_CONCURRENCY": "3"}, id="three workers by WEB_CONCURRENCY"),
+            pytest.param((), {"UVICORN_WORKERS": "2"}, id="two workers by UVICORN_WORKERS"),
+            pytest.param(("--workers", "1"), {}, id="one worker by flag"),
+            pytest.param((), {}, id="no worker count"),
+            pytest.param(("--workers", "1"), {"WEB_CONCURRENCY": "3"}, id="one worker by flag over WEB_CONCURRENCY"),
+        ],
+    )
+    def test_the_query_engine_reaper_starts_before_uvicorn_exactly_when_uvicorn_runs_several_workers(
+        self, argv: tuple[str, ...], environ: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        for name, value in environ.items():
+            monkeypatch.setenv(name, value)
+        served: Final = uvicorn_argv(argv, {})
+        workers: Final = _workers_uvicorn_runs(served)
+        steps: Final[list[object]] = []
+        serve_with_reaper(served, serve=steps.append, start_reaper=lambda: steps.append("reaper"))
+        assert steps == (["reaper", served] if workers > 1 else [served]), f"uvicorn runs {workers} workers"
+
+    @pytest.mark.parametrize(
+        ("flag", "status", "said"),
+        [
+            pytest.param("--nope", 2, "--nope", id="a bad flag is a usage error"),
+            pytest.param("--help", 0, "--timeout-keep-alive", id="help is printed once and exits cleanly"),
+        ],
+    )
+    def test_uvicorn_still_reports_its_own_arguments_once_when_several_workers_are_asked_for(
+        self, flag: str, status: int, said: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as stopped:
+            serve_with_reaper(uvicorn_argv(("--workers", "2", flag), {}), start_reaper=lambda: None)
+        printed: Final = capsys.readouterr()
+        assert stopped.value.code == status
+        assert (printed.out + printed.err).count(said) == 1
 
 
 class TestPoolDatabaseUrl:
