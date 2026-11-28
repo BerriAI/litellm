@@ -920,6 +920,7 @@ from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
 from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
+from litellm.proxy.management_endpoints.what_if_endpoints import router as what_if_router
 from litellm.proxy.management_endpoints.workflow_management_endpoints import (
     router as workflow_management_router,
 )
@@ -23465,6 +23466,7 @@ app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(subscription_accounts_router)
 app.include_router(prompt_caching_requests_router)
+app.include_router(what_if_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)

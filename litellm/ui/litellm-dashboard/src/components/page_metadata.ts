@@ -45,6 +45,15 @@ export const pageDescriptions: Record<string, ParseKeys> = {
   telemetry: "shell.pageDescriptions.telemetry",
   "logging-and-alerts": "shell.pageDescriptions.loggingAndAlerts",
   "admin-panel": "shell.pageDescriptions.adminPanel",
+  "control-canaries": "shell.pageDescriptions.controlCanaries",
+  "cache-miss": "shell.pageDescriptions.cacheMiss",
+  "plan-lab": "shell.pageDescriptions.planLab",
+  "limit-xray": "shell.pageDescriptions.limitXray",
+  "ghost-trace": "shell.pageDescriptions.ghostTrace",
+  "pr-receipts": "shell.pageDescriptions.prReceipts",
+  "bill-recall": "shell.pageDescriptions.billRecall",
+  "swap-bill": "shell.pageDescriptions.swapBill",
+  "patch-drop": "shell.pageDescriptions.patchDrop",
 };
 
 export interface PageMetadata {

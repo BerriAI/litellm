@@ -26918,6 +26918,194 @@ export interface paths {
         patch: operations["watsonx_proxy_route_watsonx__endpoint__patch"];
         trace?: never;
     };
+    "/what_if/bill_recall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Bill Recall
+         * @description Re-prices every stored team, model and day at today's cost map and returns the days whose logged spend
+         *     is off by more than one percent, with what they were logged at and what they cost at the corrected price.
+         */
+        get: operations["bill_recall_what_if_bill_recall_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/cache_miss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Explain Cache Misses
+         * @description For every turn of every session, say why the prompt cache was or was not read: the client changed
+         *     the prefix, the gateway moved the session to another deployment, or the provider dropped it.
+         */
+        get: operations["explain_cache_misses_what_if_cache_miss_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/canaries/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Control Canaries
+         * @description Fire a real probe at every configured control on every LLM route, using a 5 minute shadow key
+         *     that copies the control from the real key, and report whether the control actually fired.
+         */
+        post: operations["run_control_canaries_what_if_canaries_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/ghost_trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ghost Trace
+         * @description Stitch requests that carry no session id into agent runs: a request continues an earlier one from
+         *     the same key when its messages start with that request's full message list.
+         */
+        get: operations["ghost_trace_what_if_ghost_trace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/limit_xray": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Xray Limits
+         * @description Every budget and rate limit that applies to one key, across the key, its team, its team membership,
+         *     its user and its organization, ordered by which one blocks the next request first.
+         */
+        get: operations["xray_limits_what_if_limit_xray_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/patch_drop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Patch Drop
+         * @description Lists every file the tree at PATCH_DROP_TREE changed since its release tag and checks each local patch
+         *     against the newest LTS tag, the LTS branch and main, by looking for its added lines in the upstream file.
+         */
+        get: operations["patch_drop_what_if_patch_drop_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/plan_lab/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replay Draft Plan
+         * @description Replay the real spend logs of the last ``days`` against a draft plan and report margin per customer.
+         */
+        post: operations["replay_draft_plan_what_if_plan_lab_replay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/pr_receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Pr Receipts
+         * @description Attribute each stitched agent run to the GitHub pull requests its tool calls opened or pushed to,
+         *     and total the spend per pull request.
+         */
+        get: operations["pr_receipts_what_if_pr_receipts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/swap_bill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Swap Bill
+         * @description Prices the stored traffic of every model the cost map marks with a successor at that successor's price,
+         *     per team, and says how many days each team's budget lasts before and after the swap.
+         */
+        get: operations["swap_bill_what_if_swap_bill_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/{mcp_server_name}/authorize": {
         parameters: {
             query?: never;
@@ -30208,6 +30396,21 @@ export interface components {
          * @enum {string}
          */
         BedrockGuardrailOutputScope: "INTERVENTIONS" | "FULL";
+        /** BillRecall */
+        BillRecall: {
+            /** Corrected */
+            corrected: number;
+            /** Days Checked */
+            days_checked: number;
+            /** Delta */
+            delta: number;
+            /** Logged */
+            logged: number;
+            /** Rows */
+            rows: components["schemas"]["RecallRow"][];
+            /** Window Days */
+            window_days: number;
+        };
         /** BillingPeriod */
         BillingPeriod: {
             /**
@@ -31458,6 +31661,17 @@ export interface components {
             /** Api Keys */
             api_keys: components["schemas"]["KeySpendActivityRow"][];
         };
+        /** CacheMissResponse */
+        CacheMissResponse: {
+            /** Turns */
+            turns: components["schemas"]["CacheTurn"][];
+            /** Wasted Usd By Cause */
+            wasted_usd_by_cause: {
+                [key: string]: number;
+            };
+            /** Wasted Usd Per Day */
+            wasted_usd_per_day: number;
+        };
         /** CachePingResponse */
         CachePingResponse: {
             /** Cache Type */
@@ -31632,6 +31846,43 @@ export interface components {
              */
             uncached_input_tokens: number;
         };
+        /** CacheTurn */
+        CacheTurn: {
+            /** Cache Read Tokens */
+            cache_read_tokens: number;
+            /** Changed Text */
+            changed_text?: string | null;
+            /** Key Alias */
+            key_alias: string;
+            /** Missed Tokens */
+            missed_tokens: number;
+            /** Model */
+            model: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Reason */
+            reason: string;
+            /** Request Id */
+            request_id: string;
+            /** Reusable Tokens */
+            reusable_tokens: number;
+            /** Session Id */
+            session_id: string;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "hit" | "client" | "gateway" | "provider" | "first";
+            /** Wasted Usd */
+            wasted_usd: number;
+        };
         /** CacheWriteTokensDetails */
         CacheWriteTokensDetails: {
             /** Ttl 12H Tokens */
@@ -31716,6 +31967,52 @@ export interface components {
             success: string[];
             /** Success And Failure */
             success_and_failure: string[];
+        };
+        /** CanaryCell */
+        CanaryCell: {
+            /** Detail */
+            detail: string;
+            /** Enforced */
+            enforced: boolean;
+            /** Route */
+            route: string;
+            /** Status Code */
+            status_code: number;
+        };
+        /** CanaryRequest */
+        CanaryRequest: {
+            /** Forbidden Model */
+            forbidden_model?: string | null;
+            /** Guardrail Probes */
+            guardrail_probes?: {
+                [key: string]: string;
+            };
+        };
+        /** CanaryResponse */
+        CanaryResponse: {
+            /**
+             * Ran At
+             * Format: date-time
+             */
+            ran_at: string;
+            /** Results */
+            results: components["schemas"]["CanaryResult"][];
+        };
+        /** CanaryResult */
+        CanaryResult: {
+            /** Cells */
+            cells: components["schemas"]["CanaryCell"][];
+            /** Configured */
+            configured: string;
+            /**
+             * Control
+             * @enum {string}
+             */
+            control: "model_access" | "rpm_limit" | "guardrail";
+            /** Key Alias */
+            key_alias: string;
+            /** Probe */
+            probe: string;
         };
         /**
          * CancelEvalResponse
@@ -35507,6 +35804,26 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** DraftPlan */
+        DraftPlan: {
+            /**
+             * Days
+             * @default 30
+             */
+            days: number;
+            /** Fallback Model */
+            fallback_model?: string | null;
+            /** Included Spend */
+            included_spend: number;
+            /** Monthly Price */
+            monthly_price: number;
+            /**
+             * Over Budget
+             * @default block
+             * @enum {string}
+             */
+            over_budget: "block" | "fallback" | "allow";
+        };
         /**
          * Drag
          * @description A drag action.
@@ -36791,6 +37108,53 @@ export interface components {
              */
             team_member_permissions: string[] | null;
         };
+        /** GhostRun */
+        GhostRun: {
+            /** Duration Seconds */
+            duration_seconds: number;
+            /** Key Alias */
+            key_alias: string;
+            /** Models */
+            models: string[];
+            /** Pr Urls */
+            pr_urls: string[];
+            /** Run Id */
+            run_id: string;
+            /** Spend */
+            spend: number;
+            /** Steps */
+            steps: components["schemas"]["GhostStep"][];
+            /** Task */
+            task: string;
+            /** Tool Calls */
+            tool_calls: number;
+            /** Total Tokens */
+            total_tokens: number;
+        };
+        /** GhostStep */
+        GhostStep: {
+            /** Model */
+            model: string;
+            /** Request Id */
+            request_id: string;
+            /** Role */
+            role: string;
+            /** Spend */
+            spend: number;
+            /** Start Time */
+            start_time: string;
+            /** Summary */
+            summary: string;
+        };
+        /** GhostTrace */
+        GhostTrace: {
+            /** Client Session Ids */
+            client_session_ids: number;
+            /** Loose Requests */
+            loose_requests: number;
+            /** Runs */
+            runs: components["schemas"]["GhostRun"][];
+        };
         /** GlobalEndUsersSpend */
         GlobalEndUsersSpend: {
             /** Api Key */
@@ -37845,6 +38209,43 @@ export interface components {
             release_url: string;
             /** Version */
             version: string;
+        };
+        /** LimitLayer */
+        LimitLayer: {
+            /** Change With */
+            change_with: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "budget" | "rpm";
+            /** Limit */
+            limit: number;
+            /** Name */
+            name: string;
+            /** Remaining */
+            remaining: number;
+            /** Requests Left */
+            requests_left: number | null;
+            /** Resets At */
+            resets_at: string | null;
+            /** Scope */
+            scope: string;
+            /** Used */
+            used: number;
+        };
+        /** LimitXray */
+        LimitXray: {
+            /** Avg Request Usd */
+            avg_request_usd: number;
+            /** Key Alias */
+            key_alias: string;
+            /** Key Aliases */
+            key_aliases: string[];
+            /** Layers */
+            layers: components["schemas"]["LimitLayer"][];
+            /** Unlimited */
+            unlimited: string[];
         };
         /** ListAccessGroupsResponse */
         ListAccessGroupsResponse: {
@@ -41333,6 +41734,21 @@ export interface components {
              * @constant
              */
             type: "local";
+        };
+        /** LocalPatch */
+        LocalPatch: {
+            /** Added */
+            added: number;
+            /** First Change */
+            first_change: string;
+            /** Found In */
+            found_in: string | null;
+            /** Path */
+            path: string;
+            /** Removed */
+            removed: number;
+            /** Verdict */
+            verdict: string;
         };
         /**
          * LocalShell
@@ -45027,6 +45443,19 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
+        /** PatchDrop */
+        PatchDrop: {
+            /** Checked Against */
+            checked_against: string[];
+            /** Droppable */
+            droppable: number;
+            /** Installed */
+            installed: string;
+            /** Patches */
+            patches: components["schemas"]["LocalPatch"][];
+            /** Tree */
+            tree: string;
+        };
         /** PatchGuardrailRequest */
         PatchGuardrailRequest: {
             /** Guardrail Info */
@@ -45344,6 +45773,46 @@ export interface components {
             test_messages: {
                 [key: string]: string;
             }[];
+        };
+        /** PlanCustomer */
+        PlanCustomer: {
+            /** Blocked Requests */
+            blocked_requests: number;
+            /** Cost Today */
+            cost_today: number;
+            /** Cost Under Plan */
+            cost_under_plan: number;
+            /** Customer */
+            customer: string;
+            /** Margin */
+            margin: number;
+            /** Requests */
+            requests: number;
+            /** Rerouted Requests */
+            rerouted_requests: number;
+        };
+        /** PlanReplay */
+        PlanReplay: {
+            /** Blocked Requests */
+            blocked_requests: number;
+            /** Cost Today */
+            cost_today: number;
+            /** Cost Under Plan */
+            cost_under_plan: number;
+            /** Customers */
+            customers: components["schemas"]["PlanCustomer"][];
+            /** Customers Losing Money */
+            customers_losing_money: number;
+            /** Margin */
+            margin: number;
+            /** Margin Pct */
+            margin_pct: number;
+            /** Requests Replayed */
+            requests_replayed: number;
+            /** Rerouted Requests */
+            rerouted_requests: number;
+            /** Revenue */
+            revenue: number;
         };
         /**
          * PluginAuthor
@@ -46183,6 +46652,40 @@ export interface components {
              */
             version_status: string;
         };
+        /** PrReceipt */
+        PrReceipt: {
+            /** Agent Minutes */
+            agent_minutes: number;
+            /** Key Aliases */
+            key_aliases: string[];
+            /** Models */
+            models: string[];
+            /** Number */
+            number: number;
+            /** Repo */
+            repo: string;
+            /** Requests */
+            requests: number;
+            /** Runs */
+            runs: string[];
+            /** Spend */
+            spend: number;
+            /** Tool Calls */
+            tool_calls: number;
+            /** Total Tokens */
+            total_tokens: number;
+            /** Url */
+            url: string;
+        };
+        /** PrReceipts */
+        PrReceipts: {
+            /** Receipts */
+            receipts: components["schemas"]["PrReceipt"][];
+            /** Spend With Pr */
+            spend_with_pr: number;
+            /** Spend Without Pr */
+            spend_without_pr: number;
+        };
         /** PriceTier */
         PriceTier: {
             /** Costs */
@@ -46738,6 +47241,31 @@ export interface components {
             generate_summary?: ("auto" | "concise" | "detailed") | null;
             /** Summary */
             summary?: ("auto" | "concise" | "detailed") | null;
+        };
+        /** RecallRow */
+        RecallRow: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Corrected */
+            corrected: number;
+            /** Days */
+            days: number;
+            /** Delta */
+            delta: number;
+            /** First Day */
+            first_day: string;
+            /** Last Day */
+            last_day: string;
+            /** Logged */
+            logged: number;
+            /** Model */
+            model: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Requests */
+            requests: number;
+            /** Team */
+            team: string;
         };
         /** ReferenceExchangeRates */
         ReferenceExchangeRates: {
@@ -51749,6 +52277,55 @@ export interface components {
         SupportedEndpointsResponse: {
             /** Endpoints */
             endpoints: components["schemas"]["SupportedEndpoint"][];
+        };
+        /** SwapBill */
+        SwapBill: {
+            /** After */
+            after: number;
+            /** Now */
+            now: number;
+            /** Rows */
+            rows: components["schemas"]["SwapRow"][];
+            /** Teams */
+            teams: components["schemas"]["SwapTeam"][];
+            /** Window Days */
+            window_days: number;
+        };
+        /** SwapRow */
+        SwapRow: {
+            /** After */
+            after: number;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Delta */
+            delta: number;
+            /** Model */
+            model: string;
+            /** Now */
+            now: number;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Retires */
+            retires: string | null;
+            /** Successor */
+            successor: string;
+            /** Team */
+            team: string;
+        };
+        /** SwapTeam */
+        SwapTeam: {
+            /** After */
+            after: number;
+            /** Budget */
+            budget: number | null;
+            /** Budget Lasts Days After */
+            budget_lasts_days_after: number | null;
+            /** Budget Lasts Days Now */
+            budget_lasts_days_now: number | null;
+            /** Now */
+            now: number;
+            /** Team */
+            team: string;
         };
         /**
          * TagActiveUsersResponse
@@ -96681,6 +97258,290 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bill_recall_what_if_bill_recall_get: {
+        parameters: {
+            query?: {
+                window_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillRecall"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    explain_cache_misses_what_if_cache_miss_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CacheMissResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_control_canaries_what_if_canaries_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CanaryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CanaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ghost_trace_what_if_ghost_trace_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GhostTrace"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    xray_limits_what_if_limit_xray_get: {
+        parameters: {
+            query?: {
+                key_alias?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LimitXray"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_drop_what_if_patch_drop_get: {
+        parameters: {
+            query?: {
+                lts_branch?: string;
+                main_branch?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatchDrop"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replay_draft_plan_what_if_plan_lab_replay_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftPlan"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanReplay"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pr_receipts_what_if_pr_receipts_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrReceipts"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    swap_bill_what_if_swap_bill_get: {
+        parameters: {
+            query?: {
+                window_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SwapBill"];
                 };
             };
             /** @description Validation Error */
