@@ -1,7 +1,6 @@
 "use client";
 
 import { getSkillMetadataColumns } from "@/components/claude_code_plugins/SkillMetadataColumns";
-import type { UserIdentityLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 import { ColumnDef } from "@tanstack/react-table";
 import { Copy, MoreHorizontal, Trash2 } from "lucide-react";
@@ -66,14 +65,12 @@ function PluginRowActions({ plugin, isAdmin, onDeleteClick }: PluginRowActionsPr
 }
 
 interface PluginTableColumnsDeps {
-  users?: UserIdentityLookup;
   isAdmin: boolean;
   onPluginClick: (pluginId: string) => void;
   onDeleteClick: (pluginName: string, displayName: string) => void;
 }
 
 export const getPluginTableColumns = ({
-  users,
   isAdmin,
   onPluginClick,
   onDeleteClick,
@@ -148,7 +145,34 @@ export const getPluginTableColumns = ({
       />
     ),
   },
-  ...getSkillMetadataColumns<SkillHubSkill>(users),
+<<<<<<< HEAD
+  ...getSkillMetadataColumns<SkillHubSkill>(),
+=======
+  {
+    id: "serve_archive",
+    accessorKey: "serve_archive",
+    meta: { title: "Hosted for Desktop", skeleton: "badge" },
+    header: "Hosted for Desktop",
+    size: 150,
+    enableSorting: false,
+    cell: ({ row }) => (
+      <StatusBadge
+        tone={row.original.serve_archive ? "success" : "neutral"}
+        label={row.original.serve_archive ? "Yes" : "No"}
+      />
+    ),
+  },
+  {
+    id: "created_at",
+    accessorKey: "created_at",
+    sortingFn: "datetime",
+    meta: { title: "Created At" },
+    header: ({ column }) => <DataTableSortHeader column={column} title="Created At" />,
+    size: 160,
+    enableSorting: true,
+    cell: ({ row }) => <DateCell value={row.original.created_at} />,
+  },
+>>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
   {
     id: "actions",
     meta: { className: "text-right", headerClassName: "text-right" },

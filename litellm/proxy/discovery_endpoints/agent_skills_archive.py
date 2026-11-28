@@ -24,6 +24,8 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 MAX_ARCHIVE_UNPACKED_BYTES: Final = 50 * 1024 * 1024
 MAX_ARCHIVE_ENTRIES: Final = 1000
+MAX_ARCHIVE_TOTAL_ENTRIES: Final = 20_000
+MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES: Final = 5 * 1024 * 1024
 MAX_SKILL_FILE_BYTES: Final = 10 * 1024 * 1024
 MAX_SKILL_MANIFEST_BYTES: Final = 1024 * 1024
 SKILL_ARCHIVE_ERRORS: Final = (
@@ -63,6 +65,15 @@ _YAML_PAIRS: Final = TypeAdapter(
     tuple[tuple[yaml.Node, yaml.Node], ...], config=ConfigDict(arbitrary_types_allowed=True)
 )
 
+_ZIP_EOCD_SIGNATURE: Final = b"PK\x05\x06"
+_ZIP64_EOCD_SIGNATURE: Final = b"PK\x06\x06"
+_ZIP64_EOCD_LOCATOR_SIGNATURE: Final = b"PK\x06\x07"
+_ZIP_EOCD_FIXED_SIZE: Final = 22
+_ZIP_EOCD_MAX_COMMENT: Final = 0xFFFF
+_ZIP64_EOCD_FIXED_SIZE: Final = 56
+_ZIP64_EOCD_LOCATOR_SIZE: Final = 20
+
+
 
 class _YamlValueNode(Protocol):
     @property
@@ -88,9 +99,79 @@ class SkillArchive:
     manifest_content: bytes
 
 
+def _zip_directory_budget(content: bytes) -> tuple[int, int] | None:
+    if len(content) < _ZIP_EOCD_FIXED_SIZE:
+        return None
+
+    eocd_start: Final = max(0, len(content) - (_ZIP_EOCD_FIXED_SIZE + _ZIP_EOCD_MAX_COMMENT))
+    eocd_offset: Final = content.rfind(_ZIP_EOCD_SIGNATURE, eocd_start)
+    if eocd_offset < 0 or eocd_offset + _ZIP_EOCD_FIXED_SIZE > len(content):
+        return None
+
+    try:
+        _, _, _, _, entries_total, directory_size, _, comment_len = struct.unpack_from("<4sHHHHIIH", content, eocd_offset)
+    except struct.error:
+        return None
+
+    if eocd_offset + _ZIP_EOCD_FIXED_SIZE + comment_len > len(content):
+        return None
+
+    if entries_total != 0xFFFF and directory_size != 0xFFFFFFFF:
+        return entries_total, directory_size
+
+    locator_offset: Final = eocd_offset - _ZIP64_EOCD_LOCATOR_SIZE
+    if locator_offset < 0:
+        return None
+    try:
+        locator_signature, _, zip64_eocd_offset, _ = struct.unpack_from("<4sIQI", content, locator_offset)
+    except struct.error:
+        return None
+    if locator_signature != _ZIP64_EOCD_LOCATOR_SIGNATURE:
+        return None
+    if zip64_eocd_offset + _ZIP64_EOCD_FIXED_SIZE > len(content):
+        return None
+
+    try:
+        (
+            signature,
+            _,
+            _,
+            _,
+            _,
+            _,
+            _,
+            entries_total_zip64,
+            directory_size_zip64,
+            _,
+        ) = struct.unpack_from("<4sQHHIIQQQQ", content, zip64_eocd_offset)
+    except struct.error:
+        return None
+    if signature != _ZIP64_EOCD_SIGNATURE:
+        return None
+    if entries_total_zip64 > 0xFFFFFFFF or directory_size_zip64 > 0xFFFFFFFF:
+        return None
+    return int(entries_total_zip64), int(directory_size_zip64)
+
+
+def within_archive_metadata_budget(content: bytes) -> bool:
+    budget: Final = _zip_directory_budget(content)
+    return (
+        budget is not None
+        and budget[0] <= MAX_ARCHIVE_TOTAL_ENTRIES
+        and budget[1] <= MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES
+    )
+
+
+def within_parsed_entry_budget(uploaded: zipfile.ZipFile) -> bool:
+    """Check the entries actually parsed, since the end-of-directory count is attacker-controlled."""
+    return len(uploaded.filelist) <= MAX_ARCHIVE_TOTAL_ENTRIES
+
+
 def read_skill_archive_members(
     stored_content: bytes, *, for_upload: bool = False, skill_path: str | None = None
 ) -> tuple[tuple[str, bytes, int], ...] | None:
+    if not within_archive_metadata_budget(stored_content):
+        return None
     try:
         with zipfile.ZipFile(io.BytesIO(stored_content)) as uploaded:
             return _flattened_members(uploaded, for_upload=for_upload, skill_path=skill_path)
@@ -179,6 +260,8 @@ def _flattened_members(
 def skill_archive_entries(
     uploaded: zipfile.ZipFile, *, for_upload: bool
 ) -> tuple[tuple[zipfile.ZipInfo, str], ...] | None:
+    if not within_parsed_entry_budget(uploaded):
+        return None
     infos: Final = tuple(info for info in uploaded.infolist() if for_upload or not info.is_dir())
     if not infos or len(infos) > MAX_ARCHIVE_ENTRIES:
         return None

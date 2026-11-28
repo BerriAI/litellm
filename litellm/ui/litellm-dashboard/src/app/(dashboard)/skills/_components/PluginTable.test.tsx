@@ -13,9 +13,16 @@ const mockPlugins: SkillHubSkill[] = [
     version: "1.2.0",
     description: "A skill for testing",
     source: { source: "github", repo: "org/newer-skill" },
+<<<<<<< HEAD
     domain: "development",
     visibility: "public",
     updated_at: "2025-01-15T10:30:00Z",
+=======
+    category: "development",
+    enabled: true,
+    serve_archive: true,
+    created_at: "2025-01-15T10:30:00Z",
+>>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
   },
   {
     id: "plugin-id-older",
@@ -44,6 +51,7 @@ describe("PluginTable", () => {
     vi.clearAllMocks();
   });
 
+<<<<<<< HEAD
   it.each([
     [null, "—"],
     [0, "0"],
@@ -59,10 +67,30 @@ describe("PluginTable", () => {
       "Last updated",
       "Security scan",
       "Downloads",
+=======
+  it("should render every column header", () => {
+    render(<PluginTable {...defaultProps} />);
+    for (const header of [
+      "Skill Name",
+      "Version",
+      "Description",
+      "Category",
+      "Public",
+      "Hosted for Desktop",
+      "Created At",
+>>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
     ]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
     expect(within(screen.getByRole("row", { name: /newer-skill/ })).getAllByText(display)[0]).toBeInTheDocument();
+  });
+
+  it("should show whether each skill is hosted for Claude Desktop", () => {
+    render(<PluginTable {...defaultProps} />);
+    const rows = screen.getAllByRole("row").slice(1);
+    const hostedCell = (row: HTMLElement) => within(row).getAllByRole("cell")[5];
+    expect(hostedCell(rows[0])).toHaveTextContent("Yes");
+    expect(hostedCell(rows[1])).toHaveTextContent("No");
   });
 
   it("should display the empty state when data is empty", () => {
@@ -92,9 +120,16 @@ describe("PluginTable", () => {
 
   it("should show whether the skill is public", () => {
     render(<PluginTable {...defaultProps} />);
+<<<<<<< HEAD
     expect(screen.getByText("Yes")).toBeInTheDocument();
     const privateRow = screen.getByRole("row", { name: /older-skill/ });
     expect(within(privateRow).getAllByText("No")).toHaveLength(2);
+=======
+    const rows = screen.getAllByRole("row").slice(1);
+    const publicCell = (row: HTMLElement) => within(row).getAllByRole("cell")[4];
+    expect(publicCell(rows[0])).toHaveTextContent("Yes");
+    expect(publicCell(rows[1])).toHaveTextContent("No");
+>>>>>>> cf3abb938a (feat(claude-code): host plugin zips for Claude Desktop marketplaces)
   });
 
   it("should delete a skill through the actions menu when admin", async () => {
