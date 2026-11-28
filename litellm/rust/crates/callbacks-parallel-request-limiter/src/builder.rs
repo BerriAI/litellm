@@ -730,8 +730,16 @@ impl Request<'_> {
             (
                 "project_id",
                 [
-                    (PROJECT_ITPM, &metadata.project_model_itpm_limit, &Value::Null),
-                    (PROJECT_OTPM, &metadata.project_model_otpm_limit, &Value::Null),
+                    (
+                        PROJECT_ITPM,
+                        &metadata.project_model_itpm_limit,
+                        &Value::Null,
+                    ),
+                    (
+                        PROJECT_OTPM,
+                        &metadata.project_model_otpm_limit,
+                        &Value::Null,
+                    ),
                 ],
             ),
             (
