@@ -180,7 +180,16 @@ matching the FastAPI server span); only a genuine error sets `ERROR`.
 
 - **Server spans** (one per HTTP route) are created by the
   `opentelemetry-instrumentation-fastapi` package. It stamps `http.*` attributes
-  and extracts inbound `traceparent` headers. This package does **not** create
+  and extracts inbound trace context. Which formats a caller can join a trace
+  with is the operator's choice, set the standard way with `OTEL_PROPAGATORS`:
+  it defaults to `tracecontext,baggage` (W3C `traceparent`), and a caller
+  propagating Zipkin B3 needs `b3` (single header) or `b3multi` (`X-B3-*`)
+  added, e.g. `OTEL_PROPAGATORS=tracecontext,b3multi`. The
+  `opentelemetry-propagator-b3` package ships with the proxy, so naming `b3` or
+  `b3multi` is safe. Naming one that is *not* installed is worse than a typo: OTel
+  raises while loading the propagators, `mount.py` swallows it as a failed
+  instrumentation attempt, and the proxy serves traffic with no server spans at
+  all, saying so only at debug level. This package does **not** create
   server spans. It renames passthrough server spans, sets `litellm.call_id` on
   them, and returns each sampled server span to the client in a `traceresponse`
   response header (`trace_response.py`). A relayed upstream `traceresponse` is
