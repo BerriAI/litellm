@@ -4,9 +4,9 @@
 //! A counter starts from the spend its row holds. Unlike the reservation, a budget of zero or less
 //! is planned too, since the proxy's read-time budget checks refuse a caller at it.
 //!
-//! Accepted difference, while the gateway declines every caller that holds one: no `budget_limits`
-//! window is planned, no counter is planned for a team the key only copies, and a user's or a
-//! member's budget leaves out any rollover credit or temporary increase.
+//! Accepted difference, while the gateway declines every caller that holds a budget other than its
+//! key's own: no `budget_limits` window is planned, no counter is planned for a team the key only
+//! copies, and a user's or a member's budget leaves out any rollover credit or temporary increase.
 
 use litellm_callbacks_budgets::PlannedCounter;
 use litellm_gateway_auth::Authenticated;
