@@ -753,6 +753,8 @@ def _redact_prompt_derived_fields(response: object) -> None:
 
 def _redact_responses_api_output(output_items: Iterable[object]) -> None:
     """Helper to redact ResponsesAPIResponse output items."""
+    if not output_items:
+        return
     for output_item in output_items:
         output_type = stream_item_field(output_item, "type")
         for field in ("text", "result") if output_type == "image_generation_call" else ("text",):
@@ -845,7 +847,9 @@ def _redacted_responses_api_output_item(item: object, redacted_str: str) -> obje
     }
 
 
-def _redact_responses_api_output_dict(output_items: Sequence[object], redacted_str: str) -> Sequence[object]:
+def _redact_responses_api_output_dict(output_items: Sequence[object] | None, redacted_str: str) -> Sequence[object]:
+    if not output_items:
+        return []
     return [_redacted_responses_api_output_item(item, redacted_str) for item in output_items]
 
 
