@@ -24,7 +24,10 @@ use crate::{
     callbacks::parallel_request_limiter,
     db,
     gateway_requests::GatewayRequests,
-    host::{self, NativeRows, auth::AuthStore},
+    host::{
+        self, NativeRows,
+        auth::{AuthStore, JwtIo},
+    },
     license::build_license,
     periodic::{self, PeriodicJob},
 };
@@ -40,6 +43,8 @@ pub struct AppState {
     /// Where a virtual key is read from: the auth cache in front of the proxy's database. `None`
     /// without a database.
     pub auth_store: Option<Arc<AuthStore>>,
+    /// HTTP client and document cache for native JWT verification (JWKS, OIDC discovery).
+    pub jwt_io: Arc<JwtIo>,
     pub entitlements: Arc<Entitlements>,
     /// The proxy's `parallel_request_limiter_v3`, which the inference routes' callback stage runs
     /// and the limit check before the body asks.
@@ -114,12 +119,18 @@ impl AppState {
         let (auth_store, gateway_requests) = connected.unzip();
         let (gateway_requests, gateway_requests_flush) = gateway_requests.unzip();
         let entitlements = Arc::new(build_license(config, environment, resources).await);
+        let jwt_client = resources.core.pool.client(
+            &host::auth::jwt_client_config(&resources.http),
+            litellm_http::ClientVariant::NoRedirect,
+        )?;
+        let jwt_io = Arc::new(JwtIo::new(jwt_client));
         Ok(Self {
             inference,
             redis,
             database,
             database_unread,
             auth_store,
+            jwt_io,
             entitlements,
             key_limiter,
             spend_logs,
@@ -178,6 +189,7 @@ impl AppState {
             config,
             self.auth_store.clone(),
             self.spend_logs.is_some(),
+            Some(self.jwt_io.clone()),
             self.entitlements.is_enterprise(),
             &*self.environment,
         )
@@ -310,6 +322,7 @@ mod tests {
     use litellm_redis_testing::{RedisServer, eventually};
     use rstest::rstest;
     use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
     use crate::host::auth::keys::Held;
@@ -332,6 +345,81 @@ mod tests {
             .unwrap();
 
         assert_eq!(state.key_limiter.window_size(), window_size);
+        state.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_jwks_url_that_redirects_is_not_followed() {
+        let app = axum::Router::new()
+            .route(
+                "/jwks.json",
+                axum::routing::get(|| async {
+                    (
+                        axum::http::StatusCode::FOUND,
+                        [(axum::http::header::LOCATION, "/moved.json")],
+                    )
+                }),
+            )
+            .route(
+                "/moved.json",
+                axum::routing::get(|| async { axum::Json(json!({"keys": []})) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/jwks.json", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let config = Config::from_yaml("model_list: []\n").unwrap();
+        let state = AppState::build(&config, &Environment::default())
+            .await
+            .unwrap();
+
+        let fetched = state.jwt_io.fetch_json(&url).await;
+
+        assert!(fetched.is_err(), "{fetched:?}");
+        state.close().await;
+    }
+
+    /// Serves an empty JWKS over TLS with a certificate no root signed, and answers its URL.
+    async fn self_signed_jwks() -> String {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_owned()]).unwrap();
+        let key = rustls::pki_types::PrivateKeyDer::try_from(signing_key.serialize_der()).unwrap();
+        let tls = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert.der().clone()], key)
+            .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("https://{}/jwks.json", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let Ok(mut stream) = acceptor.accept(stream).await else {
+                    continue;
+                };
+                let _ = stream.read(&mut [0; 1024]).await;
+                let _ = stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 12\r\nconnection: close\r\n\r\n{\"keys\": []}",
+                    )
+                    .await;
+                let _ = stream.shutdown().await;
+            }
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn turning_certificate_verification_off_never_reaches_the_signing_keys() {
+        crate::install_crypto_provider();
+        let url = self_signed_jwks().await;
+        let config =
+            Config::from_yaml("model_list: []\nlitellm_settings:\n  ssl_verify: false\n").unwrap();
+        let state = AppState::build(&config, &Environment::default())
+            .await
+            .unwrap();
+
+        let fetched = state.jwt_io.fetch_json(&url).await;
+
+        assert_eq!(fetched.ok(), Some(None));
         state.close().await;
     }
 

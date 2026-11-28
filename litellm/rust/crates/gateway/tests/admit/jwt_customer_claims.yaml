@@ -1,0 +1,36 @@
+# With a customer claim mapped, Python resolves the customer a verified JWT names after auth, and
+# applies that customer's budgets and models. The native app resolves no customer, so every JWT
+# goes to Python, and the master key, which carries no claims, is still served.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      customer_member_id_jwt_field: customer.member
+
+requests:
+  - name: a JWT naming a customer
+    jwt: {claims: {sub: user-123, customer: {member: member-1}}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: customer_jwt_fields
+
+  - name: a JWT naming no customer
+    jwt: {claims: {sub: user-123}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: customer_jwt_fields
+
+  - name: the master key
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

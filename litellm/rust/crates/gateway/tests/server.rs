@@ -74,6 +74,7 @@ fn without_stores(inference: Inference) -> AppState {
         database: None,
         database_unread: false,
         auth_store: None,
+        jwt_io: Arc::new(litellm_gateway::JwtIo::new(litellm_http::Client::for_test())),
         spend_logs: None,
         entitlements: Arc::new(Entitlements::Community),
         environment: Arc::new(litellm_env::ProcessEnvironment),

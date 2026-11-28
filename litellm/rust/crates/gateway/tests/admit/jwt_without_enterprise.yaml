@@ -1,0 +1,21 @@
+# JWT authentication is an enterprise feature, so without that license the core refuses a JWT the
+# provider signed.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      admin_allowed_routes: [/v1/messages]
+
+requests:
+  - name: a proxy admin JWT
+    jwt: {claims: {scope: litellm_proxy_admin}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: forbidden

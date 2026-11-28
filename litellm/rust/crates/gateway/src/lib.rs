@@ -31,6 +31,7 @@ pub use callbacks::{
 pub use cost_map::CostMapRefresh;
 pub use error::Error;
 pub use gateway_requests::{Category, GatewayRequests};
+pub use host::auth::JwtIo;
 pub use live::{Live, Served};
 pub use periodic::PeriodicJob;
 pub use redis::RedisClients;
