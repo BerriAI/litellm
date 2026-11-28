@@ -1719,7 +1719,14 @@ def test_refused_request_keeps_the_prompt_out_of_the_generation_model_parameters
         attributes: Final = spans[0].attributes
         assert _attribute(attributes, "langfuse.observation.level") == "ERROR"
         assert canary not in str(_attribute(attributes, "langfuse.observation.model.parameters"))
-        assert (canary in str(_attribute(attributes, "langfuse.observation.input"))) == (rejection != "rate_limited")
+        logged_input: Final = str(_attribute(attributes, "langfuse.observation.input"))
+        image_sha256: Final = base64.b64encode(hashlib.sha256(base64.b64decode(canary)).digest()).decode()
+        media_id: Final = image_sha256.replace("+", "-").replace("/", "_")[:22]
+        reference: Final = f"@@@langfuseMedia:type=image/png|id={media_id}|source=base64_data_uri@@@"
+        sent_as_image: Final = endpoint in ("/v1/chat/completions", "/v1/messages", "/v1/responses")
+        logs_the_prompt: Final = rejection != "rate_limited"
+        assert (reference in logged_input) == (logs_the_prompt and sent_as_image), logged_input
+        assert (canary in logged_input) == (logs_the_prompt and not sent_as_image), logged_input
 
 
 def _refused_prompt(shape: str, canary: str) -> tuple[str, dict[str, JsonValue]]:
