@@ -362,6 +362,35 @@ class TestFalAIVideoTransformation:
 
         assert video.usage == {"duration_seconds": 5.0, "video_resolution": "2K"}
 
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "luma/agent/ray/v3.2/text-to-video",
+            "luma/agent/ray/v3.2/image-to-video",
+            "luma/agent/ray/v3.2/reframe",
+            "luma/agent/ray/v3.2/video-to-video",
+        ],
+    )
+    @pytest.mark.parametrize(("seconds", "expected"), [("5", "5s"), (10, "10s"), (5.0, "5s")])
+    def test_map_openai_params_luma_ray_sends_suffixed_duration(self, model: str, seconds: object, expected: str):
+        # fal's Luma Ray v3.2 schema only accepts "5s" | "10s"; a bare "5" fails in the queue.
+        assert self.config.map_openai_params({"seconds": seconds}, model, False)["duration"] == expected
+
+    def test_transform_video_create_response_luma_ray_bills_suffixed_duration(self):
+        response = Mock(spec=httpx.Response)
+        response.json.return_value = {"request_id": "abc"}
+
+        video = self.config.transform_video_create_response(
+            model="luma/agent/ray/v3.2/text-to-video",
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+            request_data={"duration": "5s"},
+        )
+
+        assert video.seconds == "5"
+        assert video.usage == {"duration_seconds": 5.0, "video_resolution": "540p"}
+
     def test_transform_video_create_response_luma_ray_defaults_to_540p(self):
         response = Mock(spec=httpx.Response)
         response.json.return_value = {"request_id": "abc"}
