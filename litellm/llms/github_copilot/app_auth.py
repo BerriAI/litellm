@@ -195,7 +195,7 @@ def _raise_failure(failure: _Failure, now: float) -> NoReturn:
 def _session(config: AppConfig, result: _Token | _Failure, now: float) -> GithubCopilotUserSession:
     if isinstance(result, _Failure):
         _raise_failure(result, now)
-    return GithubCopilotUserSession(token=result.value, api_base=config.api_base, is_app=True)
+    return GithubCopilotUserSession(token=result.value, endpoints=github_host_endpoints(config.host), is_app=True)
 
 
 def _new_client() -> httpx.Client:

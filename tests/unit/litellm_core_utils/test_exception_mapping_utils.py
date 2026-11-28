@@ -32,6 +32,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.github_copilot.authenticator import DEFAULT_GITHUB_CLIENT_ID
+from litellm.llms.github_copilot.github_host import github_host_endpoints
 from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 from litellm.llms.groq.chat.transformation import GroqChatCompletionStreamingHandler
 from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
@@ -3834,8 +3835,10 @@ def test_anthropic_thread_refusals_keep_their_details_on_openai_compatible_legs(
     assert AnthropicExceptionMapping.embedded_error_details(raised.value.message) == {"error_code": error_code}
 
 
-_PER_USER_SESSION: Final = GithubCopilotUserSession(token="ghu-session", api_base="https://api.githubcopilot.com")
-_APP_SESSION: Final = GithubCopilotUserSession(token="ghs-app", api_base="https://api.githubcopilot.com", is_app=True)
+_PER_USER_SESSION: Final = GithubCopilotUserSession(token="ghu-session", endpoints=github_host_endpoints("github.com"))
+_APP_SESSION: Final = GithubCopilotUserSession(
+    token="ghs-app", endpoints=github_host_endpoints("github.com"), is_app=True
+)
 
 
 def _copilot_model_not_supported_message(request_kwargs: dict[str, object]) -> str:
