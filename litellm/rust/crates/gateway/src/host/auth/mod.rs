@@ -1,7 +1,7 @@
 //! The gateway's answers to `gateway-auth-core`'s host steps on the key path, so it authenticates
 //! a virtual key with no Python behind it, the native counterpart of python-bridge's
-//! `PythonAuthHost`. A key's row and its team's are read and shaped by `auth-store`, as the Python
-//! proxy's are, and `store.rs` puts the auth cache in front of them, as `UserApiKeyCache` sits in
+//! `PythonAuthHost`. A key's row, its team's and its project's are read and shaped by
+//! `auth-store`, as the Python proxy's are, and `store.rs` puts the auth cache in front of them, as `UserApiKeyCache` sits in
 //! front of Python's: this process's memory, and the Redis shared with the Python pods when
 //! `enable_redis_auth_cache` attaches it, then the proxy's database on a miss, which fills it.
 //!
@@ -40,15 +40,15 @@ use litellm_gateway_auth_core::{
 use litellm_redis_store::auth_cache::KeyEntry;
 use serde_json::Value;
 
-pub(crate) use affiliation::{unserved, unserved_user};
+pub(crate) use affiliation::{unserved, unserved_project, unserved_user};
 pub(crate) use end_user::end_user;
 pub use key::Key;
 pub(crate) use models::{allowed_models, layers};
 pub use store::AuthStore;
 
 /// The rows the native host hands the core: a key's, and a core record for each thing a caller
-/// belongs to. A key's team and owner are read, and a caller that holds either still goes to
-/// Python at admit. The steps that read the other records decline. `Infallible` is a row this
+/// belongs to. A key's team, owner and project are read, and a caller that holds one still goes
+/// to Python at admit. The steps that read the other records decline. `Infallible` is a row this
 /// host has no record for, so no identity that needs one exists. The end user's record is empty
 /// for a request that names none, and names the end user alone for one whose row holds nothing
 /// the native app would have to apply.
@@ -389,8 +389,14 @@ impl AuthHost for NativeAuthHost {
         declined("object_permission")
     }
 
-    async fn project(&self, _: &str) -> Result<Option<ProjectRecord>, Error> {
-        declined("project")
+    /// A project with no row declines, since a key can name one only once its row is deleted,
+    /// which this host does not judge the key after.
+    async fn project(&self, project_id: &str) -> Result<Option<ProjectRecord>, Error> {
+        let read = self.store("project")?.project(project_id).await;
+        match unless_failed(read, "project")? {
+            Some(project) => affiliation::project(&project).map(Some).or_else(declined),
+            None => declined("project_id"),
+        }
     }
 
     /// The gateway reads each object when the core asks for it, with nothing to warm.
@@ -631,6 +637,23 @@ mod tests {
         held
     }
 
+    const ATLAS: &str = "atlas";
+
+    async fn in_project(project: Columns) -> Held {
+        let held = Held::start().await;
+        held.execute(PARENTS).await;
+        held.insert_named(
+            "LiteLLM_ProjectTable",
+            &merged(
+                json!({"project_id": ATLAS, "created_by": "test", "updated_by": "test"}),
+                project,
+            ),
+        )
+        .await;
+        held.key(VIRTUAL_KEY, json!({"project_id": ATLAS})).await;
+        held
+    }
+
     fn merged(base: Columns, over: Columns) -> Columns {
         let fields = base.as_object().into_iter().chain(over.as_object());
         Columns::Object(
@@ -785,7 +808,6 @@ mod tests {
     #[case::a_team_with_no_row(json!({"team_id": "gone"}))]
     #[case::the_ui_team(json!({"team_id": "litellm-dashboard"}))]
     #[case::agent_id(json!({"agent_id": "agent"}))]
-    #[case::project_id(json!({"project_id": "project"}))]
     #[case::org_id(json!({"organization_id": "org"}))]
     #[case::permissions(json!({"permissions": {"a": true}}))]
     #[case::metadata(json!({"metadata": {"guardrails": ["pii"]}}))]
@@ -1155,6 +1177,105 @@ mod tests {
     }
 
     #[rstest]
+    #[case::team_id(json!({"team_id": "team"}), "team_id")]
+    #[case::models(json!({"models": ["claude"]}), "models")]
+    #[case::blocked(json!({"blocked": true}), "blocked")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_in_a_project_copies_each_plain_column_its_project_holds_and_names_it_unserved(
+        #[case] project: Columns,
+        #[case] column: &str,
+    ) {
+        let held = in_project(project).await;
+
+        let caller = presenting(held.database(), VIRTUAL_KEY).await.unwrap();
+
+        let Some(Named::Stored(project)) = &caller.affiliation.project else {
+            panic!("the key holds no project row");
+        };
+        assert_eq!(unserved_project(project), Some(column));
+    }
+
+    #[rstest]
+    #[case::budget_id(json!({"budget_id": "budget"}))]
+    #[case::metadata(json!({"metadata": {"tags": ["a"]}}))]
+    #[case::model_rpm_limit(json!({"model_rpm_limit": {"claude": 1}}))]
+    #[case::model_tpm_limit(json!({"model_tpm_limit": {"claude": 1}}))]
+    #[case::object_permission_id(json!({"object_permission_id": "permission"}))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_whose_project_holds_what_no_record_field_has_a_type_for_is_not_native(
+        #[case] project: Columns,
+    ) {
+        let held = in_project(project).await;
+
+        let refused = presenting(held.database(), VIRTUAL_KEY).await;
+
+        assert!(
+            matches!(refused, Err(Rejected::NotNative)),
+            "{:?}",
+            refused.err()
+        );
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_project_is_read_from_the_database_again_only_once_it_is_evicted() {
+        let held = in_project(json!({})).await;
+        let cache = keys::memory_cache();
+        let store = Arc::new(AuthStore::new(cache.clone(), held.database()));
+        let gateway = auth(&with_master_key(), Some(store), false);
+
+        let blocked = async || {
+            let caller = bearing(&gateway, VIRTUAL_KEY).await.unwrap();
+            let project = caller.affiliation.project.as_ref();
+            project
+                .and_then(Named::stored)
+                .map(|project| project.blocked)
+        };
+
+        let read = blocked().await;
+        held.execute(
+            r#"UPDATE "LiteLLM_ProjectTable" SET blocked = true WHERE project_id = 'atlas'"#,
+        )
+        .await;
+        let kept = blocked().await;
+        cache
+            .delete_local(&AuthObject::Project(ATLAS.to_owned()).key())
+            .unwrap();
+        let read_again = blocked().await;
+
+        assert_eq!(
+            (read, kept, read_again),
+            (Some(false), Some(false), Some(true))
+        );
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_project_read_from_the_database_is_cached_for_python_with_the_time_it_was_read() {
+        let redis = RedisServer::start().await.unwrap();
+        let held = in_project(json!({})).await;
+        let key = AuthObject::Project(ATLAS.to_owned()).key();
+
+        let authenticated = bearing(&pod(&redis, &held).await, VIRTUAL_KEY).await;
+
+        let cached: Columns =
+            serde_json::from_str(&redis.cli(&["GET", &key]).await.unwrap()).unwrap();
+        let ttl = redis.cli(&["TTL", &key]).await.unwrap();
+        let seconds: i64 = ttl.trim().parse().unwrap();
+        assert!(authenticated.is_ok());
+        assert_eq!(
+            (
+                &cached["project_id"],
+                cached["last_refreshed_at"]
+                    .as_f64()
+                    .is_some_and(|at| at > 0.0),
+                (1..=60).contains(&seconds),
+            ),
+            (&json!(ATLAS), true, true)
+        );
+    }
+
+    #[rstest]
     #[case::alone(json!({"blocked": true}))]
     #[case::of_a_team(json!({"blocked": true, "team_id": "team"}))]
     #[tokio::test(flavor = "multi_thread")]
@@ -1290,7 +1411,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::with_a_project(json!({"project_id": "project"}))]
+    #[case::with_a_soft_budget_cooldown(json!({"soft_budget_cooldown": true}))]
     #[case::with_a_budget(json!({"max_budget": 5.0}))]
     #[case::blocked(json!({"blocked": true}))]
     #[tokio::test(flavor = "multi_thread")]

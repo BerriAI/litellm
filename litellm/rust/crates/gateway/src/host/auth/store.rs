@@ -1,8 +1,8 @@
-//! A virtual key, the team, membership and user a caller belongs to, and the end user a request
-//! names, read through the auth cache like the proxy's `get_key_object` and its siblings: the
-//! cache, then the database on a miss, which caches the row in the shape every pod reads, for every
-//! pod when the cache has the shared Redis attached. Nothing guards that write against an eviction
-//! that lands during the database read.
+//! A virtual key, the team, project, membership and user a caller belongs to, and the end user a
+//! request names, read through the auth cache like the proxy's `get_key_object` and its siblings:
+//! the cache, then the database on a miss, which caches the row in the shape every pod reads, for
+//! every pod when the cache has the shared Redis attached. Nothing guards that write against an
+//! eviction that lands during the database read.
 
 use std::{
     future::Future,
@@ -11,20 +11,20 @@ use std::{
 };
 
 use litellm_auth_store::{
-    AliasMatch, EndUserDatabase, Error, KeyDatabase, TeamDatabase, TeamMembershipDatabase,
-    UserDatabase,
+    AliasMatch, EndUserDatabase, Error, KeyDatabase, ProjectDatabase, TeamDatabase,
+    TeamMembershipDatabase, UserDatabase,
 };
 use litellm_gateway_auth_core::KeyHash;
 use litellm_redis_store::{
     FromValue, IntoValue,
     auth_cache::{
-        AuthCache, AuthObject, EndUserEntry, KeyEntry, RestrictedEndUsers, Settings, TeamEntry,
-        TeamMembershipEntry, TeamMembershipReservation, UserEntry,
+        AuthCache, AuthObject, EndUserEntry, KeyEntry, ProjectEntry, RestrictedEndUsers, Settings,
+        TeamEntry, TeamMembershipEntry, TeamMembershipReservation, UserEntry,
     },
 };
 use litellm_repositories::{
-    Database, EndUserRepository, KeyRepository, ObjectPermissionRepository, Side,
-    TeamMembershipRepository, TeamRepository, UserRepository,
+    Database, EndUserRepository, KeyRepository, ObjectPermissionRepository, ProjectRepository,
+    Side, TeamMembershipRepository, TeamRepository, UserRepository,
 };
 use tokio::sync::Mutex;
 
@@ -40,6 +40,7 @@ pub struct AuthStore {
     cache: Arc<AuthCache>,
     keys: KeyDatabase,
     teams: TeamDatabase,
+    projects: ProjectDatabase,
     memberships: TeamMembershipDatabase,
     users: UserDatabase,
     end_users: EndUserDatabase,
@@ -71,6 +72,7 @@ impl AuthStore {
                 Arc::new(TeamRepository::new(database.clone())),
                 object_permissions,
             ),
+            projects: ProjectDatabase::new(Arc::new(ProjectRepository::new(database.clone()))),
             memberships: TeamMembershipDatabase::new(Arc::new(TeamMembershipRepository::new(
                 database.clone(),
             ))),
@@ -159,6 +161,24 @@ impl AuthStore {
         };
         self.write(&object, team.clone(), None).await;
         Ok(Some(team))
+    }
+
+    /// `get_project_object`: the cached project, else the database's, cached with
+    /// `last_refreshed_at` set to the read time, like `get_project_object`.
+    pub async fn project(&self, project_id: &str) -> Result<Option<ProjectEntry>, Error> {
+        let object = AuthObject::Project(project_id.to_owned());
+        if let Some(project) = self.read(&object).await {
+            return Ok(Some(project));
+        }
+        let Some(project) = self.projects.project(project_id).await? else {
+            return Ok(None);
+        };
+        let project = ProjectEntry {
+            last_refreshed_at: Some(now()),
+            ..project
+        };
+        self.write(&object, project.clone(), None).await;
+        Ok(Some(project))
     }
 
     /// `get_team_object_by_alias`: the team cached under the alias, else the one row the database
