@@ -14929,6 +14929,10 @@
     }
   },
   "logs": {
+    "replication": {
+      "label": "Capture local request log metadata for replication",
+      "description": "Region {{region}}. Pausing capture lets queued metadata and metadata from other regions continue to sync."
+    },
     "common": {
       "errorCodes": {
         "badRequest": "400 - Bad Request",
@@ -15599,6 +15603,7 @@
         "requestId": "Request ID",
         "batchTooltip": "Batch {{batchId}} (row: {{requestId}})",
         "batchCost": "batch cost",
+        "sourceRegion": "Source region: {{region}}",
         "cost": "Cost",
         "sessionTotal": "session total",
         "mcpSpend_one": "incl. {{spend}} from {{count}} MCP",

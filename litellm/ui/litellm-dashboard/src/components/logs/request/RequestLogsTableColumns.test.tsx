@@ -119,6 +119,19 @@ describe("Cost column", () => {
   });
 });
 
+describe("Request ID column", () => {
+  it("shows the source region for an imported request", () => {
+    renderRows([
+      logEntry({ request_id: "req-local", source_region: null }),
+      logEntry({ request_id: "req-imported", source_region: "eu-west" }),
+    ]);
+
+    expect(screen.getByRole("cell", { name: /req-imported/ })).toHaveTextContent("Source region: eu-west");
+    expect(screen.getByRole("cell", { name: /req-local/ })).toHaveTextContent("req-local");
+    expect(screen.getByRole("cell", { name: /req-local/ })).not.toHaveTextContent("Source region");
+  });
+});
+
 describe("Duration column", () => {
   const sessionRow: Partial<LogEntry> = {
     request_id: "req-session-duration",

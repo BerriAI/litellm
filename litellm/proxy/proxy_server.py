@@ -728,6 +728,7 @@ from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
 )
+from litellm.proxy.db.fleet_budget_spend import read_replica_budget_spend
 from litellm.proxy.db.gateway_request_tracking import (
     GatewayRequestAccumulator,
     GatewayRequestRedisBuffer,
@@ -3620,6 +3621,44 @@ def _raise_budget_unverifiable(counter_key: str) -> NoReturn:
 
 
 async def get_current_spend(
+    counter_key: str,
+    fallback_spend: float,
+    max_budget: float | None = None,
+    window_entity_type: str | None = None,
+    window_entity_id: str | None = None,
+    window_duration: str | None = None,
+    window_start: datetime | None = None,
+    fallback_authoritative: bool = False,
+    *,
+    require_authoritative_window: bool = False,
+    recheck_recorded_spend: bool = False,
+    replica_window_start: datetime | None = None,
+) -> float:
+    local_spend: Final = await _get_local_spend(
+        counter_key,
+        fallback_spend,
+        max_budget,
+        window_entity_type,
+        window_entity_id,
+        window_duration,
+        window_start,
+        fallback_authoritative,
+        require_authoritative_window=require_authoritative_window,
+        recheck_recorded_spend=recheck_recorded_spend,
+    )
+    if max_budget is None:
+        return local_spend
+    remote_spend: Final = await read_replica_budget_spend(
+        prisma_client,
+        counter_key,
+        window_entity_type=window_entity_type,
+        window_entity_id=window_entity_id,
+        window_start=window_start or replica_window_start,
+    )
+    return local_spend + remote_spend
+
+
+async def _get_local_spend(
     counter_key: str,
     fallback_spend: float,
     max_budget: float | None = None,

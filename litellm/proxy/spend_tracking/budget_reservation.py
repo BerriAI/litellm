@@ -53,6 +53,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from litellm.proxy.db.fleet_budget_spend import primary_budget_window_start, read_replica_budget_spend
 from litellm.proxy.litellm_pre_call_utils import CURSOR_CHAT_COMPLETIONS_ROUTE, is_chat_completions_body
 from litellm.proxy.spend_tracking.customer_cost_margin import (
     apply_customer_cost_margin_to_estimate,
@@ -116,6 +117,7 @@ class BudgetCounter:
     window_duration: str | None = None
     window_start: datetime | None = None
     reset_at: datetime | None = None
+    replica_window_start: datetime | None = None
 
 
 _BudgetCounter: TypeAlias = BudgetCounter
@@ -511,6 +513,20 @@ async def _native_budget_plan(
         )
     if not reservable:
         return None
+    from litellm.proxy.proxy_server import prisma_client
+
+    remote_spends: Final = await asyncio.gather(
+        *(
+            read_replica_budget_spend(
+                prisma_client,
+                counter.counter_key,
+                window_entity_type=counter.entity_type if counter.window_start is not None else None,
+                window_entity_id=counter.spend_log_entity_id,
+                window_start=counter.window_start or counter.replica_window_start,
+            )
+            for counter in reservable
+        )
+    )
     input_tokens: Final = max((tokens for tokens in input_token_counts.values() if tokens is not None), default=None)
     return await reserve_native(
         {
@@ -537,6 +553,7 @@ async def _native_budget_plan(
         },
         valid_token,
         {counter.counter_key: counter.reset_at.isoformat() for counter in reservable if counter.reset_at is not None},
+        replica_spend={counter.counter_key: spend for counter, spend in zip(reservable, remote_spends, strict=True)},
     )
 
 
@@ -702,6 +719,9 @@ async def _get_budget_counters(
                     fallback_spend=float(valid_token.spend or 0.0),
                     entity_type="Key",
                     entity_id=valid_token.token,
+                    replica_window_start=primary_budget_window_start(
+                        valid_token.budget_duration, valid_token.budget_reset_at
+                    ),
                 )
             )
         counters.extend(
@@ -725,6 +745,9 @@ async def _get_budget_counters(
                     fallback_spend=float(team_object.spend or 0.0),
                     entity_type="Team",
                     entity_id=team_id,
+                    replica_window_start=primary_budget_window_start(
+                        team_object.budget_duration, team_object.budget_reset_at
+                    ),
                 )
             )
         counters.extend(
@@ -764,6 +787,9 @@ async def _get_budget_counters(
                 fallback_spend=float(user_object.spend or 0.0),
                 entity_type="User",
                 entity_id=user_object.user_id,
+                replica_window_start=primary_budget_window_start(
+                    user_object.budget_duration, user_object.budget_reset_at
+                ),
             )
         )
 
@@ -831,15 +857,17 @@ async def _get_end_user_budget_counter(
     source_cache_key: Final = AuthObject.end_user(end_user_id)
     max_budget = _to_float(valid_token.end_user_max_budget)
     fallback_spend = 0.0
+    budget_table: Final = _get_value(end_user_object, "litellm_budget_table")
     if end_user_object is not None:
         fallback_spend = _to_float(_get_value(end_user_object, "spend")) or 0.0
         if max_budget is None:
-            budget_table: Final = _get_value(end_user_object, "litellm_budget_table")
             max_budget = _to_float(_get_value(budget_table, "max_budget"))
 
     if max_budget is None or max_budget <= 0:
         return None
 
+    duration: Final = _get_value(budget_table, "budget_duration")
+    reset_at: Final = _get_value(budget_table, "budget_reset_at")
     return _BudgetCounter(
         counter_key=end_user_counter(end_user_id),
         source_cache_key=source_cache_key,
@@ -847,6 +875,10 @@ async def _get_end_user_budget_counter(
         fallback_spend=fallback_spend,
         entity_type="EndUser",
         entity_id=end_user_id,
+        replica_window_start=primary_budget_window_start(
+            duration if isinstance(duration, str) else None,
+            reset_at if isinstance(reset_at, datetime) else None,
+        ),
     )
 
 

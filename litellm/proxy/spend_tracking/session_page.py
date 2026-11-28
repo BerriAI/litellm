@@ -11,6 +11,11 @@ from typing_extensions import ReadOnly, TypedDict
 MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
 AGENT_CALL_TYPE_SQL: Final = "'asend_message'"
 SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
+REPORTING_SESSION_KEY_EXPR: Final = (
+    "CASE WHEN source_region IS NOT NULL AND NULLIF(session_id, '') IS NULL "
+    'THEN jsonb_build_array(request_id, source_region, "startTime")::text '
+    f"ELSE jsonb_build_array({SESSION_KEY_EXPR})::text END"
+)
 SESSION_REPRESENTATIVE_ORDER_SQL: Final = (
     f"(call_type = {AGENT_CALL_TYPE_SQL}) DESC, "
     f'CASE WHEN call_type = {AGENT_CALL_TYPE_SQL} THEN "endTime" END DESC NULLS LAST, '
@@ -107,13 +112,14 @@ async def read_session_page(
     sort_desc: bool,
     session_cursor: str | None,
     cap: int,
+    include_replicas: bool = False,
 ) -> SessionPage:
     """One page of sessions after ``session_cursor``, or after ``(page - 1) * page_size`` sessions, keeping only those
     whose outcome is ``status`` when given. ``where_clause`` reads ``params`` as ``$1`` onward."""
     cursor: Final = _parse_session_cursor(session_cursor)
     offset: Final = (page - 1) * page_size if cursor is None else 0
     request: Final = _Request(cursor, offset, min(page_size, cap - offset), sort_desc, status, cap)
-    return await _session_page(_sql_reader(db, where_clause, params, request), request)
+    return await _session_page(_sql_reader(db, where_clause, params, request, include_replicas), request)
 
 
 async def _session_page(read: _Reader, request: _Request) -> SessionPage:
@@ -153,7 +159,10 @@ def _sessions_sql(request: _Request, status_index: int) -> str:
     """
 
 
-def _sql_reader(db: _SupportsQueryRaw, where_clause: str, params: Sequence[object], request: _Request) -> _Reader:
+def _sql_reader(
+    db: _SupportsQueryRaw, where_clause: str, params: Sequence[object], request: _Request, include_replicas: bool
+) -> _Reader:
+    session_key_expr: Final = REPORTING_SESSION_KEY_EXPR if include_replicas else SESSION_KEY_EXPR
     status_index: Final = len(params) + 1
     status_args: Final = () if request.status is None else (request.status,)
     cursor_index: Final = status_index + len(status_args)
@@ -173,7 +182,7 @@ def _sql_reader(db: _SupportsQueryRaw, where_clause: str, params: Sequence[objec
         rows: Final = await db.query_raw(
             f"""
             WITH scanned AS (
-                SELECT {SESSION_KEY_EXPR} AS session_key, api_key, "startTime"{outcome_columns}
+                SELECT {session_key_expr} AS session_key, api_key, "startTime"{outcome_columns}
                 FROM "LiteLLM_SpendLogs"
                 WHERE {where_clause}
                 {f'ORDER BY "startTime" DESC LIMIT {size}' if size is not None else ""}

@@ -124,6 +124,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     keeps_budget_reset,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from litellm.proxy.db.fleet_budget_spend import fleet_budget_replication_started, record_fleet_key_budget_reset
 from litellm.proxy.db.master_key_migration import reencrypt_stored_values
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -7293,6 +7294,25 @@ def _advance_one_key_budget_window(window: Mapping[str, object], now: datetime) 
     }
 
 
+async def _reset_lifetime_key_spend(
+    prisma_client: PrismaClient, hashed_api_key: str, reset_to: float
+) -> "LiteLLM_VerificationToken | prisma_models.LiteLLM_VerificationToken | None":
+    if not await fleet_budget_replication_started(prisma_client):
+        return await _prisma_table(VerificationTokenRepository(prisma_client)).update(
+            where={"token": hashed_api_key},
+            data={"spend": reset_to},
+        )
+    async with prisma_client.tx() as tx_ctx:
+        tx: Final = cast("_KeyUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
+        updated_key: Final = await tx.litellm_verificationtoken.update(
+            where={"token": hashed_api_key},
+            data={"spend": reset_to},
+        )
+        if updated_key is not None:
+            await record_fleet_key_budget_reset(tx, hashed_api_key, datetime.now(timezone.utc))
+        return updated_key
+
+
 async def _reset_key_budget_windows(
     prisma_client: PrismaClient,
     hashed_api_key: str,
@@ -7389,10 +7409,7 @@ async def reset_key_spend_fn(
             user_api_key_cache=user_api_key_cache,
         )
 
-        updated_key: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
-            where={"token": hashed_api_key},
-            data={"spend": reset_to},
-        )
+        updated_key: Final = await _reset_lifetime_key_spend(prisma_client, hashed_api_key, reset_to)
 
         if updated_key is None:
             raise HTTPException(

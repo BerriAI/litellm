@@ -9,9 +9,11 @@ import DeletedKeysPage from "@/components/DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "@/components/DeletedTeamsPage/DeletedTeamsPage";
 import AuditLogsPanel from "@/components/logs/audit/AuditLogsPanel";
 import RequestLogsPanel from "@/components/logs/request/RequestLogsPanel";
+import SpendLogReplicationControl from "@/components/logs/request/SpendLogReplicationControl";
 import { PageContent, PageTabs, PageTabsList, PageTabsTrigger, PageTabsContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
 
 type LogsTab = "request logs" | "audit logs" | "deleted keys" | "deleted teams";
 
@@ -60,6 +62,9 @@ export default function LogsPage() {
 
       <PageContent>
         <PageTabsContent value="request logs" keepMounted>
+          {activeTab === "request logs" && isProxyAdminTierRole(userRole) && (
+            <SpendLogReplicationControl readOnly={!isProxyAdminRole(userRole)} />
+          )}
           <RequestLogsPanel
             accessToken={accessToken}
             token={token}

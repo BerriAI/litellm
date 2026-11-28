@@ -55,6 +55,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
     extract_provider_resource_id_from_unified_id,
     is_base64_encoded_unified_id,
 )
+from litellm.models.budget import EndUserBudget
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import (
@@ -137,6 +138,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.proxy.db.fleet_budget_spend import primary_budget_window_start
 from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
     extract_request_tool_names,
@@ -1727,6 +1729,9 @@ async def common_checks(
                 counter_key=user_counter(user_object.user_id),
                 fallback_spend=user_object.spend or 0.0,
                 max_budget=user_budget,
+                replica_window_start=primary_budget_window_start(
+                    user_object.budget_duration, user_object.budget_reset_at
+                ),
             )
             call_info: Final = CallInfo(
                 spend=user_spend,
@@ -2019,7 +2024,7 @@ async def get_default_end_user_budget(
     # Check cache first
     cached_budget: Final = await user_api_key_cache.async_get_cache(
         key=cache_key,
-        model_type=LiteLLM_BudgetTable,
+        model_type=EndUserBudget,
     )
     if cached_budget is not None:
         return cached_budget
@@ -2225,10 +2230,11 @@ async def check_end_user_budget(
     if RouteChecks.is_info_route(route):
         return
 
-    if end_user_obj.litellm_budget_table is None:
+    budget: Final = end_user_obj.litellm_budget_table
+    if budget is None:
         return
 
-    end_user_budget: Final = end_user_obj.litellm_budget_table.max_budget
+    end_user_budget: Final = budget.max_budget
     if end_user_budget is None:
         return
 
@@ -2239,6 +2245,9 @@ async def check_end_user_budget(
         fallback_spend=end_user_obj.spend or 0.0,
         max_budget=end_user_budget,
         fallback_authoritative=True,
+        replica_window_start=primary_budget_window_start(
+            budget.budget_duration, budget.budget_reset_at if isinstance(budget, EndUserBudget) else None
+        ),
     )
     native: Final = _native_budget_decision(
         {
@@ -7088,6 +7097,7 @@ async def virtual_key_max_budget_check(
             counter_key=counter_key,
             fallback_spend=fallback_spend,
             max_budget=valid_token.max_budget,
+            replica_window_start=primary_budget_window_start(valid_token.budget_duration, valid_token.budget_reset_at),
         )
 
         ####################################
@@ -7679,6 +7689,7 @@ async def team_max_budget_check(
             counter_key=team_counter(team_object.team_id),
             fallback_spend=team_object.spend or 0.0,
             max_budget=team_object.max_budget,
+            replica_window_start=primary_budget_window_start(team_object.budget_duration, team_object.budget_reset_at),
         )
 
         if send_percentage_alerts:

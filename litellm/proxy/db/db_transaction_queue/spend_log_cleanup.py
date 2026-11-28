@@ -87,8 +87,8 @@ class StorageProbe:
     """
     What the catalog says about the spend-log tables, read without scanning them.
 
-    `allocated_bytes` is what the files take on disk (heap, indexes and TOAST of LiteLLM_SpendLogs and
-    LiteLLM_SpendLogToolIndex, partitions included). Deleting rows does not shrink it: deleted rows become dead
+    `allocated_bytes` includes heap, indexes and TOAST for local logs, tool index rows and replicas.
+    Deleting rows does not shrink it: deleted rows become dead
     tuples, autovacuum later turns them into free space that new rows reuse, and only VACUUM FULL or pg_repack
     hands the bytes back to the filesystem. Neither dead tuples nor free space are live data, and Postgres
     tracks only the former (`n_dead_tup`, zeroed by vacuum), so the size rule keeps its own count of the
@@ -101,6 +101,7 @@ class StorageProbe:
     dead_rows: int
     inserted_total: int
     deleted_total: int
+    replicas_exist: bool = False
 
     @property
     def stats_are_stale(self) -> bool:
@@ -284,13 +285,19 @@ class _SizeStepState:
 
     logs_deleted: int
     index_deleted: int
+    replicas_deleted: int
     batches_left: int
     stop_reason: StopReason | None
+
+    @property
+    def rows_deleted(self) -> int:
+        return self.logs_deleted + self.index_deleted + self.replicas_deleted
 
     def stopped(self, reason: StopReason) -> "_SizeStepState":
         return _SizeStepState(
             logs_deleted=self.logs_deleted,
             index_deleted=self.index_deleted,
+            replicas_deleted=self.replicas_deleted,
             batches_left=self.batches_left,
             stop_reason=reason,
         )
@@ -355,6 +362,7 @@ class _StorageRow(LiteLLMBaseModel):
     dead_rows: int
     inserted_total: int
     deleted_total: int
+    replicas_exist: bool
 
 
 _STORAGE_ROWS: Final = TypeAdapter(list[_StorageRow])
@@ -381,7 +389,7 @@ class _OffsetRow(LiteLLMBaseModel):
 
 _OFFSET_ROWS: Final = TypeAdapter(list[_OffsetRow])
 
-_SPEND_LOG_TABLES: Final = ("LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex")
+_SPEND_LOG_TABLES: Final = ("LiteLLM_SpendLogs", "LiteLLM_SpendLogToolIndex", "LiteLLM_ReplicatedSpendLogs")
 
 # Partition children are counted with their parent: a partitioned parent has no storage of its own.
 _STORAGE_SQL: Final = """
@@ -389,7 +397,8 @@ _STORAGE_SQL: Final = """
            coalesce(sum(s.n_live_tup), 0)::bigint AS live_rows,
            coalesce(sum(s.n_dead_tup), 0)::bigint AS dead_rows,
            coalesce(sum(s.n_tup_ins), 0)::bigint AS inserted_total,
-           coalesce(sum(s.n_tup_del), 0)::bigint AS deleted_total
+           coalesce(sum(s.n_tup_del), 0)::bigint AS deleted_total,
+           coalesce(bool_or(s.relname = 'LiteLLM_ReplicatedSpendLogs'), false) AS replicas_exist
     FROM pg_stat_user_tables s
     WHERE s.schemaname = current_schema()
       AND (
@@ -637,6 +646,7 @@ class SpendLogCleanup:
             dead_rows=row.dead_rows,
             inserted_total=row.inserted_total,
             deleted_total=row.deleted_total,
+            replicas_exist=row.replicas_exist,
         )
 
     async def _reprobe_after_analyze(
@@ -657,10 +667,11 @@ class SpendLogCleanup:
         if self._clock() >= deadline:
             return None
         timeout_ms: Final = self._timeout_ms(deadline)
+        analyze_sql: Final = f'{_ANALYZE_SQL}, "LiteLLM_ReplicatedSpendLogs"' if stale.replicas_exist else _ANALYZE_SQL
         try:
             async with db_span("analyze", "LiteLLM_SpendLogs"), bounded_tx(prisma_client, timeout_ms) as tx:
                 await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
-                await tx.execute_raw(trusted_sql(_ANALYZE_SQL))
+                await tx.execute_raw(trusted_sql(analyze_sql))
         except Exception as e:  # noqa: BLE001 - a failed ANALYZE skips the size pass, it must not fail the run
             verbose_proxy_logger.warning("Could not ANALYZE the spend-log tables: %s: %s", type(e).__name__, e)
             return None
@@ -708,7 +719,9 @@ class SpendLogCleanup:
         except Exception as e:  # noqa: BLE001  # a lost save costs one re-seed from the catalog, it must not fail the run
             verbose_proxy_logger.warning("Could not save the spend-log size cleanup state: %s: %s", type(e).__name__, e)
 
-    async def _size_step_cutoff(self, prisma_client: PrismaClient, deadline: float, rows: int) -> datetime | None:
+    async def _size_step_cutoff(
+        self, prisma_client: PrismaClient, deadline: float, rows: int, replicas_exist: bool
+    ) -> datetime | None:
         """
         The startTime that puts the `rows` oldest rows behind it.
 
@@ -719,12 +732,16 @@ class SpendLogCleanup:
         if self._clock() >= deadline:
             return None
         timeout_ms: Final = self._timeout_ms(deadline)
+        replica_times: Final = (
+            ' UNION ALL SELECT "startTime" FROM "LiteLLM_ReplicatedSpendLogs"' if replicas_exist else ""
+        )
         async with db_span("size_step_cutoff", "LiteLLM_SpendLogs"), bounded_tx(prisma_client, timeout_ms) as tx:
             await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
             found: Final = _OFFSET_ROWS.validate_python(
                 await tx.query_raw(
                     trusted_sql(
-                        'SELECT "startTime" FROM "LiteLLM_SpendLogs" ORDER BY "startTime" ASC OFFSET $1 LIMIT 1'
+                        f'SELECT "startTime" FROM "LiteLLM_SpendLogs"{replica_times} '
+                        'ORDER BY "startTime" ASC OFFSET $1 LIMIT 1'
                     ),
                     rows,
                 )
@@ -1106,7 +1123,7 @@ class SpendLogCleanup:
         self, prisma_client: PrismaClient, deadline: float
     ) -> tuple[TableCleanupResult, ...]:
         """
-        Prune the spend logs and the tool and guardrail index rows derived from them.
+        Prune local and replicated spend logs and the tool and guardrail index rows.
 
         When the table is range-partitioned, whole expired partitions are dropped
         first because that reclaims disk immediately. Expired rows can still sit in
@@ -1134,18 +1151,28 @@ class SpendLogCleanup:
             verbose_proxy_logger.info("Dropped %d expired spend-log partitions: %s", len(dropped), dropped)
 
         logs_result: Final = await self._delete_old_logs(
-            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=3, now=self._clock())
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=4, now=self._clock())
         )
         verbose_proxy_logger.info("Deleted %s logs", logs_result.rows_deleted)
 
         index_result: Final = await self._delete_old_tool_index_rows(
-            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2, now=self._clock())
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=3, now=self._clock())
         )
         verbose_proxy_logger.info("Deleted %s expired tool index rows", index_result.rows_deleted)
 
-        guardrail_result: Final = await self._delete_old_guardrail_index_rows(prisma_client, cutoff_date, deadline)
+        guardrail_result: Final = await self._delete_old_guardrail_index_rows(
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2, now=self._clock())
+        )
         verbose_proxy_logger.info("Deleted %s expired guardrail index rows", guardrail_result.rows_deleted)
-        return (logs_result, index_result, guardrail_result)
+        replicas_result: Final = await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_date,
+            table_name="LiteLLM_ReplicatedSpendLogs",
+            key_columns=("request_id", "startTime", "source_region"),
+            time_column="startTime",
+            deadline=deadline,
+        )
+        return (logs_result, index_result, guardrail_result, replicas_result)
 
     async def _clean_spend_logs_by_size(
         self, prisma_client: PrismaClient, rule: SizeRule, deadline: float
@@ -1225,7 +1252,7 @@ class SpendLogCleanup:
             return latest[0].estimated_live_bytes > rule.target_bytes
 
         partitions_dropped: Final = await self._drop_oldest_partitions_for_size(
-            prisma_client, deadline, still_over_target
+            prisma_client, deadline, still_over_target, replicas_exist=probe.replicas_exist
         )
         if remeasure_failed[0]:
             verbose_proxy_logger.warning(
@@ -1242,7 +1269,9 @@ class SpendLogCleanup:
         def rows_still_needed(rows_deleted: int) -> int:
             return rows_to_delete - rows_deleted
 
-        results: Final = await self._delete_oldest_rows_for_size(prisma_client, deadline, rows_still_needed)
+        results: Final = await self._delete_oldest_rows_for_size(
+            prisma_client, deadline, rows_still_needed, baseline[0].replicas_exist
+        )
         rows_deleted: Final = sum(result.rows_deleted for result in results)
         remeasured: Final = await self._probe_storage(prisma_client, deadline)
         after: Final = base.after_deleting(
@@ -1264,7 +1293,12 @@ class SpendLogCleanup:
         return report
 
     async def _drop_oldest_partitions_for_size(
-        self, prisma_client: PrismaClient, deadline: float, still_over_target: Callable[[], Awaitable[bool]]
+        self,
+        prisma_client: PrismaClient,
+        deadline: float,
+        still_over_target: Callable[[], Awaitable[bool]],
+        *,
+        replicas_exist: bool,
     ) -> tuple[str, ...]:
         remaining_timeout_ms: Final = self._remaining_timeout_ms(deadline)
         if self._clock() >= deadline or not self._setting("use_spend_logs_partitioning"):
@@ -1272,27 +1306,53 @@ class SpendLogCleanup:
         if not await self.partition_manager.is_partitioned(prisma_client, remaining_timeout_ms):
             return ()
         await self.partition_manager.ensure_partitions(prisma_client, remaining_timeout_ms)
+        now: Final = datetime.now(timezone.utc)
+        oldest_replica: Final = (
+            await self._oldest_replica_for_size(prisma_client, deadline, now) if replicas_exist else now
+        )
+        if oldest_replica is None:
+            return ()
+        # Leave overlapping and newer partitions to the row pass, which orders both tables by age.
         dropped: Final = await self.partition_manager.drop_oldest_partitions_while(
-            prisma_client, datetime.now(timezone.utc), remaining_timeout_ms, still_over_target
+            prisma_client, min(now, oldest_replica), remaining_timeout_ms, still_over_target
         )
         verbose_proxy_logger.info("Dropped %d oldest spend-log partitions for the size rule: %s", len(dropped), dropped)
         return tuple(dropped)
+
+    async def _oldest_replica_for_size(
+        self, prisma_client: PrismaClient, deadline: float, now: datetime
+    ) -> datetime | None:
+        if self._clock() >= deadline:
+            return None
+        timeout_ms: Final = self._timeout_ms(deadline)
+        async with db_span("oldest_replica_for_size", "LiteLLM_SpendLogs"), bounded_tx(prisma_client, timeout_ms) as tx:
+            await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {timeout_ms}"))
+            rows: Final = _OFFSET_ROWS.validate_python(
+                await tx.query_raw(
+                    trusted_sql('SELECT "startTime" FROM "LiteLLM_ReplicatedSpendLogs" ORDER BY "startTime" LIMIT 1')
+                )
+            )
+        if not rows:
+            return now
+        start_time: Final = rows[0].startTime
+        return start_time if start_time.tzinfo is not None else start_time.replace(tzinfo=timezone.utc)
 
     async def _delete_oldest_rows_for_size(
         self,
         prisma_client: PrismaClient,
         deadline: float,
         rows_still_needed: Callable[[int], int],
+        replicas_exist: bool,
     ) -> tuple[TableCleanupResult, ...]:
         state = _SizeStepState(  # rebind-ok: one value threaded through the bounded step loop
-            logs_deleted=0, index_deleted=0, batches_left=self.max_batches, stop_reason=None
+            logs_deleted=0, index_deleted=0, replicas_deleted=0, batches_left=self.max_batches, stop_reason=None
         )
         for _ in range(self.max_batches // SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES + 2):
             if state.stop_reason is not None:
                 break
-            state = await self._run_size_step(prisma_client, deadline, rows_still_needed, state)
+            state = await self._run_size_step(prisma_client, deadline, rows_still_needed, replicas_exist, state)
         final_reason: Final[StopReason] = state.stop_reason or "batch_cap_reached"
-        return (
+        results: Final = (
             TableCleanupResult(
                 table_name="LiteLLM_SpendLogs (size rule)", rows_deleted=state.logs_deleted, stop_reason=final_reason
             ),
@@ -1302,16 +1362,27 @@ class SpendLogCleanup:
                 stop_reason=final_reason,
             ),
         )
+        if not replicas_exist:
+            return results
+        return (
+            *results,
+            TableCleanupResult(
+                table_name="LiteLLM_ReplicatedSpendLogs (size rule)",
+                rows_deleted=state.replicas_deleted,
+                stop_reason=final_reason,
+            ),
+        )
 
     async def _run_size_step(
         self,
         prisma_client: PrismaClient,
         deadline: float,
         rows_still_needed: Callable[[int], int],
+        replicas_exist: bool,
         state: "_SizeStepState",
     ) -> "_SizeStepState":
         """One step: delete the rows still needed, at most SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES batches of the oldest."""
-        needed: Final = rows_still_needed(state.logs_deleted + state.index_deleted)
+        needed: Final = rows_still_needed(state.rows_deleted)
         if needed <= 0:
             return state.stopped("target_reached")
         if self._clock() >= deadline:
@@ -1321,7 +1392,9 @@ class SpendLogCleanup:
         step_cap: Final = min(
             SPEND_LOG_SIZE_CLEANUP_RECHECK_BATCHES, state.batches_left, math.ceil(needed / self.batch_size)
         )
-        cutoff: Final = await self._size_step_cutoff(prisma_client, deadline, step_cap * self.batch_size)
+        cutoff: Final = await self._size_step_cutoff(
+            prisma_client, deadline, step_cap * self.batch_size, replicas_exist
+        )
         if cutoff is None:
             return state.stopped("budget_exhausted")
         logs_result: Final = await self._delete_old_rows_batched(
@@ -1342,17 +1415,33 @@ class SpendLogCleanup:
             deadline=deadline,
             batch_cap=step_cap,
         )
+        replica_result: Final = (
+            await self._delete_old_rows_batched(
+                prisma_client,
+                cutoff,
+                table_name="LiteLLM_ReplicatedSpendLogs",
+                key_columns=("request_id", "startTime", "source_region"),
+                time_column="startTime",
+                deadline=deadline,
+                batch_cap=step_cap,
+            )
+            if replicas_exist
+            else None
+        )
+        replica_rows: Final = replica_result.rows_deleted if replica_result is not None else 0
         advanced: Final = _SizeStepState(
             logs_deleted=state.logs_deleted + logs_result.rows_deleted,
             index_deleted=state.index_deleted + index_result.rows_deleted,
+            replicas_deleted=state.replicas_deleted + replica_rows,
             batches_left=state.batches_left - step_cap,
             stop_reason=None,
         )
-        if rows_still_needed(advanced.logs_deleted + advanced.index_deleted) <= 0:
+        if rows_still_needed(advanced.rows_deleted) <= 0:
             return advanced.stopped("target_reached")
-        if logs_result.stop_reason in ("aborted", "budget_exhausted") or index_result.stop_reason == "aborted":
-            return advanced.stopped(logs_result.stop_reason if logs_result.stop_reason != "exhausted" else "aborted")
-        if logs_result.rows_deleted == 0:
+        for result in (logs_result, index_result, replica_result):
+            if result is not None and result.stop_reason in ("aborted", "budget_exhausted"):
+                return advanced.stopped(result.stop_reason)
+        if logs_result.rows_deleted + replica_rows == 0:
             return advanced.stopped("exhausted")
         return advanced
 

@@ -2,11 +2,12 @@
 
 use std::sync::Arc;
 
-use litellm_redis_store::auth_cache::EndUserEntry;
+use litellm_redis_store::auth_cache::{EndUserBudgetEntry, EndUserEntry};
 use litellm_repositories::{EndUserRecord, EndUserRepository};
 
 use crate::{
-    Error, budget::budget_entry, error::within, object_permission::object_permission_entry,
+    Error, budget::budget_entry, column::time, error::within,
+    object_permission::object_permission_entry,
 };
 
 /// The end user as the database holds it, in the shape the auth cache holds it: the row with its
@@ -65,7 +66,13 @@ fn end_user_entry(end_user: EndUserRecord) -> Result<EndUserEntry, Error> {
         models,
         budget_id,
         litellm_budget_table: litellm_budget_table
-            .map(|budget| budget_entry(budget.0))
+            .map(|budget| {
+                let budget_reset_at = time("budget_reset_at", budget.0.budget_reset_at)?;
+                Ok(EndUserBudgetEntry {
+                    budget: budget_entry(budget.0)?,
+                    budget_reset_at,
+                })
+            })
             .transpose()
             .map_err(within("litellm_budget_table"))?,
         object_permission_id,

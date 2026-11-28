@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final, Literal
 
@@ -5,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.litellm_core_utils.core_helpers import require_attributes
-from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.budget import EndUserBudget, LiteLLM_BudgetTable
 from litellm.proxy.auth.auth_checks import (
     get_default_end_user_budget,
     get_model_access_group_budgets_batch,
@@ -51,4 +52,24 @@ async def test_scalar_readers_reject_windows_instead_of_returning_no_budget(
             if reader == "model_access_group"
             else LiteLLM_BudgetTable(budget_id="budget", max_budget=0)
         )
-        assert result == expected
+        if isinstance(result, LiteLLM_BudgetTable) and isinstance(expected, LiteLLM_BudgetTable):
+            assert result.model_dump() == expected.model_dump()
+        else:
+            assert result == expected
+
+
+async def test_default_end_user_budget_keeps_reset_time_on_cache_hit(rust_auth_stores: RustAuthStores) -> None:
+    reset_at: Final = datetime(2026, 12, 1, tzinfo=timezone.utc)
+    rust_auth_stores.budget.rows["budget"] = {
+        "budget_id": "budget",
+        "max_budget": 10,
+        "budget_duration": "1mo",
+        "budget_reset_at": reset_at.isoformat(),
+    }
+    client: Final = require_attributes(SimpleNamespace(db=SimpleNamespace()), PrismaClient, "db")
+    cache: Final = UserApiKeyCache()
+
+    expected: Final = EndUserBudget(budget_id="budget", max_budget=10, budget_duration="1mo", budget_reset_at=reset_at)
+    assert await get_default_end_user_budget(client, cache, budget_id="budget") == expected
+    del rust_auth_stores.budget.rows["budget"]
+    assert await get_default_end_user_budget(client, cache, budget_id="budget") == expected

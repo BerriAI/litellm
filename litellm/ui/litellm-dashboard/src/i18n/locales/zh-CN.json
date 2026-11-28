@@ -15599,6 +15599,7 @@
         "requestId": "请求 ID",
         "batchTooltip": "批次 {{batchId}}（行：{{requestId}}）",
         "batchCost": "批处理成本",
+        "sourceRegion": "源区域：{{region}}",
         "cost": "成本",
         "sessionTotal": "会话合计",
         "mcpSpend_one": "含来自 {{count}} 个 MCP 的 {{spend}}",

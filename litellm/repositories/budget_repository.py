@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Final, TypeVar
 
 from pydantic import TypeAdapter
 
-from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.budget import EndUserBudget, LiteLLM_BudgetTable
 from litellm.repositories import rust_database
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -32,13 +32,15 @@ class BudgetWithWindows:
     budget_id: str
 
 
-def _budget_for_auth(budget_id: str, found: str | None) -> LiteLLM_BudgetTable | BudgetWithWindows | None:
+def _budget_for_auth(
+    budget_id: str, found: str | None, model: type[LiteLLM_BudgetTable] = LiteLLM_BudgetTable
+) -> LiteLLM_BudgetTable | BudgetWithWindows | None:
     if found is None:
         return None
     row: Final = _BUDGET_ROW.validate_json(found)
     if row.get("budget_limits"):
         return BudgetWithWindows(budget_id=budget_id)
-    return LiteLLM_BudgetTable.model_validate(row)
+    return model.model_validate(row)
 
 
 async def create_budget_row(table: TableActions[_Row], data: Mapping[str, object], actor: str) -> _Row:
@@ -79,7 +81,7 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
         payload: Final = await rust_database.required_repository(RustBudgetRepository).find_end_user_default_budget(
             budget_id
         )
-        return _budget_for_auth(budget_id, payload)
+        return _budget_for_auth(budget_id, payload, EndUserBudget)
 
     async def find_team_member_default(self, budget_id: str) -> LiteLLM_BudgetTable | BudgetWithWindows | None:
         """A team's default per-member budget ``budget_id``."""

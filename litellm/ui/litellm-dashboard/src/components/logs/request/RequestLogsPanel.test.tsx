@@ -127,7 +127,7 @@ const defaultProps = {
   isActive: true,
 };
 
-const row = (requestId: string) => document.querySelector(`[data-row-id="${requestId}"]`);
+const row = (requestId: string) => screen.queryByText(requestId)?.closest("tr") ?? null;
 const lastCall = () => vi.mocked(uiSpendLogsCall).mock.calls.at(-1)?.[0];
 
 const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();

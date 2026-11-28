@@ -1,7 +1,7 @@
 use litellm_python_compat::Value;
 
 use super::{
-    budget::BudgetEntry,
+    budget::EndUserBudgetEntry,
     object_permission::ObjectPermissionEntry,
     record::{Literal, record, required},
 };
@@ -34,7 +34,7 @@ record! {
         default_model: Option<String>,
         models: Vec<String>,
         budget_id: Option<String>,
-        litellm_budget_table: Option<BudgetEntry>,
+        litellm_budget_table: Option<EndUserBudgetEntry>,
         object_permission_id: Option<String>,
         object_permission: Option<ObjectPermissionEntry>,
     }

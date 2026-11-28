@@ -23,7 +23,8 @@ from typing import (
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import TypeAdapter
+from fastapi.params import Depends as Dependency
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 import litellm
@@ -53,11 +54,13 @@ from litellm.proxy.auth.authorization_dependencies import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.openai_error_payload import error_status_code, openai_error_param, openai_error_type
+from litellm.proxy.db.fleet_budget_spend import replicated_budget_entity_id
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_tracked, drop_committed_spend
 from litellm.proxy.spend_tracking.session_page import (
     AGENT_CALL_TYPE_SQL,
     MCP_CALL_TYPES_SQL,
+    REPORTING_SESSION_KEY_EXPR,
     SESSION_KEY_EXPR,
     SESSION_REPRESENTATIVE_ORDER_SQL,
     read_session_page,
@@ -83,7 +86,7 @@ from litellm.proxy.utils import handle_exception_on_proxy, hash_token_if_needed,
 from litellm.redis.stores.spend_counters import key_counter, team_counter
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.spend_logs_repository import SpendLogsRepository
-from litellm.repositories.table_repositories import OrganizationMembershipRepository
+from litellm.repositories.table_repositories import OrganizationMembershipRepository, SpendLogReplicationRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureProvider
 
@@ -100,7 +103,6 @@ router: Final = APIRouter()
 SPEND_LOGS_PAGINATION_COUNT_CAP: Final = 10000
 _DECODED_JSON: Final = TypeAdapter(object)
 
-_SESSION_GROUP_KEY_SQL: Final = f"{SESSION_KEY_EXPR}, api_key"
 _BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_batch', 'retrieve_batch')"
 _SPAN_TYPE_SQL_CONDITIONS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -286,6 +288,70 @@ async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object)
     return await prisma_client.db.query_raw(sql_query, *args)
 
 
+class SpendLogReplicationStatus(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    region: str
+    enabled: bool
+
+
+class SpendLogReplicationUpdate(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool
+
+
+_replication_auth: Final = Dependency(
+    cast("Callable[..., object]", user_api_key_auth)  # cast-ok: ddtrace obscures the wrapped auth dependency signature
+)
+
+
+@router.get("/spend/logs/replication")
+async def get_spend_log_replication(
+    auth: Annotated[UserAPIKeyAuth, _replication_auth],
+) -> SpendLogReplicationStatus | None:
+    """Return the regional request-log capture state, or null before a worker configures it."""
+    from prisma.errors import TableNotFoundError
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if auth.user_role not in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+        raise HTTPException(status_code=403, detail="Proxy admin access required")
+    if prisma_client is None:
+        return None
+    repository: Final = SpendLogReplicationRepository(prisma_client, use_writer=True)
+    try:
+        row: Final = await repository.table.find_unique(where={"id": 1})
+    except TableNotFoundError:
+        return None
+    return None if row is None else SpendLogReplicationStatus(region=row.region, enabled=row.enabled)
+
+
+@router.patch("/spend/logs/replication")
+async def set_spend_log_replication(
+    update: SpendLogReplicationUpdate,
+    auth: Annotated[UserAPIKeyAuth, _replication_auth],
+) -> SpendLogReplicationStatus:
+    """Pause or resume capture of new local request-log metadata."""
+    from prisma.errors import RecordNotFoundError, TableNotFoundError
+
+    from litellm.proxy.proxy_server import prisma_client
+
+    if auth.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Proxy admin access required")
+    worker_missing: Final = "Start a regional replication worker first"
+    if prisma_client is None:
+        raise HTTPException(status_code=409, detail=worker_missing)
+    repository: Final = SpendLogReplicationRepository(prisma_client, use_writer=True)
+    try:
+        row: Final = await repository.table.update(where={"id": 1}, data={"enabled": update.enabled})
+    except (RecordNotFoundError, TableNotFoundError) as error:
+        raise HTTPException(status_code=409, detail=worker_missing) from error
+    if row is None:
+        raise HTTPException(status_code=409, detail=worker_missing)
+    return SpendLogReplicationStatus(region=row.region, enabled=row.enabled)
+
+
 async def _scope_api_keys(
     prisma_client: PrismaClient, *, where_conditions: Mapping[str, object], start: datetime | None, end: datetime | None
 ) -> tuple[str, ...] | None:
@@ -314,6 +380,14 @@ async def _query_spend_logs(prisma_client: PrismaClient, sql_query: str, *args: 
 
 
 _SpendLogIdColumn: TypeAlias = Literal["request_id", "litellm_call_id"]
+_SpendLogReadRelation: TypeAlias = Literal['"LiteLLM_SpendLogs"', '"LiteLLM_SpendLogReporting"']
+
+
+async def _has_spend_log_reporting(prisma_client: PrismaClient) -> bool:
+    rows: Final = await query_raw_within_statement_timeout(
+        prisma_client, """SELECT to_regclass('"LiteLLM_SpendLogReporting"') IS NOT NULL AS reporting_available"""
+    )
+    return bool(rows and rows[0].get("reporting_available") is True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,9 +444,12 @@ async def _query_spend_logs_by_id(
 @dataclass(frozen=True, slots=True)
 class _SpendLogsReader:
     prisma_client: PrismaClient
+    relation: _SpendLogReadRelation = '"LiteLLM_SpendLogs"'
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
-        return await query_raw_within_statement_timeout(self.prisma_client, query, *args)
+        return await query_raw_within_statement_timeout(
+            self.prisma_client, query.replace('"LiteLLM_SpendLogs"', self.relation), *args
+        )
 
 
 class _TeamTable(Protocol):
@@ -2588,19 +2665,30 @@ def _build_spend_log_search_condition(
     start_date: datetime,
     end_date: datetime,
     next_param_index: int,
+    include_replicas: bool = False,
 ) -> _SpendLogSearchCondition:
     """request_id (indexed) matches across all time; the unindexed id columns only inside the window."""
     raw: Final = f"${next_param_index}"
     window_start: Final = f"${next_param_index + 1}"
     window_end: Final = f"${next_param_index + 2}"
+    encoded: Final = replicated_budget_entity_id(search) if include_replicas else search
+    entity_columns: Final = ("team_id", '"user"', "end_user")
+    entities: Final = " OR ".join(f"{column} = {raw}" for column in entity_columns)
+    replica_entities: Final = " OR ".join(f"{column} = ${next_param_index + 3}" for column in entity_columns)
+    entity_match: Final = (
+        f"((source_region IS NULL AND ({entities})) OR (source_region IS NOT NULL AND ({replica_entities})))"
+        if encoded != search
+        else entities
+    )
     sql: Final = (
         f"(request_id = {raw} OR ("
         f"\"startTime\" >= ({window_start}::timestamptz AT TIME ZONE 'UTC') "
         f"AND \"startTime\" <= ({window_end}::timestamptz AT TIME ZONE 'UTC') "
-        f'AND (litellm_call_id = {raw} OR api_key = {raw} OR team_id = {raw} OR "user" = {raw} OR end_user = {raw} '
+        f"AND (litellm_call_id = {raw} OR api_key = {raw} OR {entity_match} "
         f"OR session_id = {raw} OR model_id = {raw})))"
     )
-    return _SpendLogSearchCondition(sql=sql, params=(search, start_date, end_date))
+    params: Final = (search, start_date, end_date)
+    return _SpendLogSearchCondition(sql=sql, params=(*params, encoded) if encoded != search else params)
 
 
 @router.get(
@@ -2794,6 +2882,14 @@ async def ui_view_spend_logs(
 
     try:
         is_admin_view: Final = is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        relation: Final[_SpendLogReadRelation] = (
+            '"LiteLLM_SpendLogReporting"'
+            if is_admin_view and await _has_spend_log_reporting(prisma_client)
+            else '"LiteLLM_SpendLogs"'
+        )
+        include_replicas: Final = relation == '"LiteLLM_SpendLogReporting"'
+        session_key_expr: Final = REPORTING_SESSION_KEY_EXPR if include_replicas else SESSION_KEY_EXPR
+        group_key: Final = f"{session_key_expr}, api_key"
         organization_ids: Final = await _org_admin_organization_ids(
             prisma_client, user_api_key_dict, route=get_request_route(request)
         )
@@ -2983,6 +3079,7 @@ async def ui_view_spend_logs(
                 start_date=start_date_obj,
                 end_date=end_date_obj,
                 next_param_index=p,
+                include_replicas=include_replicas,
             )
             sql_conditions.append(search_condition.sql)
             sql_params.extend(search_condition.params)
@@ -2999,7 +3096,20 @@ async def ui_view_spend_logs(
             ("end_user", "end_user"),
         ]:
             val = where_conditions.get(wc_key)
-            if val is not None and isinstance(val, str):
+            if isinstance(val, str):
+                encoded: str | None = (
+                    replicated_budget_entity_id(val)
+                    if include_replicas and wc_key in {"team_id", "user", "end_user"}
+                    else val
+                )
+                if encoded != val:
+                    sql_conditions.append(
+                        f"((source_region IS NULL AND {sql_col} = ${p}) "
+                        f"OR (source_region IS NOT NULL AND {sql_col} = ${p + 1}))"
+                    )
+                    sql_params.extend((val, encoded))
+                    p += 2
+                    continue
                 sql_conditions.append(f"{sql_col} = ${p}")
                 sql_params.append(val)
                 p += 1
@@ -3031,7 +3141,12 @@ async def ui_view_spend_logs(
             else None
         )
         if scope_api_keys is not None:
-            sql_conditions.append(f"api_key = ANY(${p}::text[])")
+            scoped_keys: Final = f"api_key = ANY(${p}::text[])"
+            sql_conditions.append(
+                f"({scoped_keys} OR source_region IS NOT NULL)"
+                if relation == '"LiteLLM_SpendLogReporting"'
+                else scoped_keys
+            )
             sql_params.append(list(scope_api_keys))
             p += 1  # rebind-ok: advances the file's shared $N placeholder counter
 
@@ -3108,18 +3223,19 @@ async def ui_view_spend_logs(
                 sort_desc=order_direction != "asc",
                 session_cursor=session_cursor,
                 organization_ids=organization_ids,
+                relation=relation,
             )
 
         if status_filter is not None and group_by_session is True and not is_search_lookup:
             session_filter_conditions: Final = " AND ".join(sql_conditions) or "TRUE"
             sql_conditions.append(
-                f"""({_SESSION_GROUP_KEY_SQL}) IN (
+                f"""({group_key}) IN (
                     SELECT session_key, api_key FROM (
-                        SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
-                            {SESSION_KEY_EXPR} AS session_key, api_key, status
-                        FROM "LiteLLM_SpendLogs"
+                        SELECT DISTINCT ON ({group_key})
+                            {session_key_expr} AS session_key, api_key, status
+                        FROM {relation}
                         WHERE {session_filter_conditions}
-                        ORDER BY {_SESSION_GROUP_KEY_SQL}, {SESSION_REPRESENTATIVE_ORDER_SQL}
+                        ORDER BY {group_key}, {SESSION_REPRESENTATIVE_ORDER_SQL}
                     ) AS session_outcomes
                     WHERE COALESCE(status, 'success') = ${p}
                 )"""
@@ -3150,12 +3266,12 @@ async def ui_view_spend_logs(
 
         joined_conditions: Final = " AND ".join(sql_conditions)
         session_grouping: Final = group_by_session is True and not is_search_lookup
-        count_group_clause: Final = f"GROUP BY {_SESSION_GROUP_KEY_SQL}" if session_grouping else ""
+        count_group_clause: Final = f"GROUP BY {group_key}" if session_grouping else ""
         count_query: Final = f"""
             SELECT COUNT(*) AS total_count
             FROM (
                 SELECT 1
-                FROM "LiteLLM_SpendLogs"
+                FROM {relation}
                 WHERE {joined_conditions}
                 {count_group_clause}
                 LIMIT ${p}
@@ -3168,25 +3284,29 @@ async def ui_view_spend_logs(
         total_is_capped: Final = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
         total_records: Final = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
 
+        source_region_column: Final = ", source_region" if include_replicas else ""
+        grouped_sort_tiebreak: Final = f", {group_key}" if include_replicas else ""
+        row_sort_tiebreak: Final = ', request_id, "startTime", source_region' if include_replicas else ""
         sql_query: Final = (
             f"""
                 SELECT * FROM (
-                    SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
-                        {_SPEND_LOG_LIST_COLUMNS}
-                    FROM "LiteLLM_SpendLogs"
+                    SELECT DISTINCT ON ({group_key})
+                        {_SPEND_LOG_LIST_COLUMNS}{source_region_column}
+                    FROM {relation}
                     WHERE {joined_conditions}
-                    ORDER BY {_SESSION_GROUP_KEY_SQL}, {SESSION_REPRESENTATIVE_ORDER_SQL}
+                    ORDER BY {group_key}, {SESSION_REPRESENTATIVE_ORDER_SQL}
                 ) AS session_representatives
-                ORDER BY {exact_request_id_first}{_order_expr} {_sql_dir}{_nulls_clause}, request_id
+                ORDER BY {exact_request_id_first}{_order_expr} {_sql_dir}{_nulls_clause},
+                         request_id{grouped_sort_tiebreak}
                 LIMIT ${p} OFFSET ${p + 1}
             """
             if session_grouping
             else f"""
             SELECT
-                {_SPEND_LOG_LIST_COLUMNS}
-            FROM "LiteLLM_SpendLogs"
+                {_SPEND_LOG_LIST_COLUMNS}{source_region_column}
+            FROM {relation}
             WHERE {joined_conditions}
-            ORDER BY {exact_request_id_first}{_order_expr} {_sql_dir}{_nulls_clause}
+            ORDER BY {exact_request_id_first}{_order_expr} {_sql_dir}{_nulls_clause}{row_sort_tiebreak}
             LIMIT ${p} OFFSET ${p + 1}
         """
         )
@@ -3231,20 +3351,33 @@ async def _fetch_session_representatives(
     sql_params: Sequence[object],
     next_param_index: int,
     session_keys: Sequence[tuple[str, str]],
+    relation: _SpendLogReadRelation = '"LiteLLM_SpendLogs"',
 ) -> list[dict[str, object]]:  # mutable-ok: _build_ui_spend_logs_response writes session counts onto each row
     """Fetch the final agent outcome, or newest non-MCP row, of each ``(session_key, api_key)`` session, in ``session_keys`` order."""
+    include_replicas: Final = relation == '"LiteLLM_SpendLogReporting"'
+    session_key_expr: Final = REPORTING_SESSION_KEY_EXPR if include_replicas else SESSION_KEY_EXPR
+    group_key: Final = f"{session_key_expr}, api_key"
+    reporting_columns: Final = (
+        f", source_region, {session_key_expr} AS reporting_session_key" if include_replicas else ""
+    )
+    # Each reporting key begins with the original session or request ID, which can use the existing indexes.
+    lookup_ids: Final = (
+        f"SELECT value::jsonb ->> 0 FROM unnest(${next_param_index}::text[]) AS keys(value)"
+        if include_replicas
+        else f"${next_param_index}::text[]"
+    )
     # Lets Postgres use the session_id and request_id indexes.
     rep_query: Final = f"""
         SELECT * FROM (
-            SELECT DISTINCT ON ({_SESSION_GROUP_KEY_SQL})
-                {_SPEND_LOG_LIST_COLUMNS}
-            FROM "LiteLLM_SpendLogs"
+            SELECT DISTINCT ON ({group_key})
+                {_SPEND_LOG_LIST_COLUMNS}{reporting_columns}
+            FROM {relation}
             WHERE {where_clause}
-              AND (session_id = ANY(${next_param_index}::text[]) OR request_id = ANY(${next_param_index}::text[]))
-              AND ({_SESSION_GROUP_KEY_SQL}) IN (
+              AND (session_id = ANY({lookup_ids}) OR request_id = ANY({lookup_ids}))
+              AND ({group_key}) IN (
                   SELECT * FROM unnest(${next_param_index}::text[], ${next_param_index + 1}::text[])
               )
-            ORDER BY {_SESSION_GROUP_KEY_SQL}, {SESSION_REPRESENTATIVE_ORDER_SQL}
+            ORDER BY {group_key}, {SESSION_REPRESENTATIVE_ORDER_SQL}
         ) AS session_representatives
     """
     rep_rows: Final[Sequence[dict[str, object]]] = await _query_spend_logs(  # mutable-ok: rows are enriched in place
@@ -3255,7 +3388,13 @@ async def _fetch_session_representatives(
         [api_key for _, api_key in session_keys],
     )
     rep_by_key: Final[Mapping[tuple[str, str], dict[str, object]]] = MappingProxyType(  # mutable-ok: same rows
-        {(str(row["session_id"] or row["request_id"]), str(row["api_key"])): row for row in rep_rows}
+        {
+            (
+                str(row.pop("reporting_session_key") if include_replicas else row["session_id"] or row["request_id"]),
+                str(row["api_key"]),
+            ): row
+            for row in rep_rows
+        }
     )
     return [rep_by_key[key] for key in session_keys if key in rep_by_key]
 
@@ -3271,12 +3410,13 @@ async def _ui_session_grouped_spend_logs(
     sort_desc: bool,
     session_cursor: str | None,
     organization_ids: tuple[str, ...] | None = None,
+    relation: _SpendLogReadRelation = '"LiteLLM_SpendLogs"',
 ) -> Mapping[str, object]:
     """One row per session, keyset-paginated by last activity. ``read_session_page`` picks and counts the sessions,
     and each is shown by its final agent outcome or newest non-MCP row."""
     where_clause: Final = " AND ".join(sql_conditions) if sql_conditions else "TRUE"
     session_page: Final = await read_session_page(
-        _SpendLogsReader(prisma_client),  # pyright: ignore[reportArgumentType]  # rows are the TypedDict the session SQL selects
+        _SpendLogsReader(prisma_client, relation),  # pyright: ignore[reportArgumentType]  # Session row shape.
         where_clause=where_clause,
         params=sql_params,
         status=status_filter,
@@ -3285,6 +3425,7 @@ async def _ui_session_grouped_spend_logs(
         sort_desc=sort_desc,
         session_cursor=session_cursor,
         cap=SPEND_LOGS_PAGINATION_COUNT_CAP,
+        include_replicas=relation == '"LiteLLM_SpendLogReporting"',
     )
     session_keys: Final = tuple((session.key, session.api_key) for session in session_page.sessions)
     data: Final[list[dict[str, object]]] = (  # mutable-ok: _build_ui_spend_logs_response writes onto each row
@@ -3294,6 +3435,7 @@ async def _ui_session_grouped_spend_logs(
             sql_params=sql_params,
             next_param_index=next_param_index,
             session_keys=session_keys,
+            relation=relation,
         )
         if session_keys
         else []

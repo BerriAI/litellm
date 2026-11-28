@@ -63,6 +63,7 @@ fn observed(spends: &[(&str, f64)]) -> Vec<BudgetCounterSpend> {
         .map(|(key, spend)| BudgetCounterSpend {
             counter_key: Some((*key).to_owned()),
             spend: Some(*spend),
+            replica_spend: 0.0,
         })
         .collect()
 }

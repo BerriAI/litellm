@@ -2,6 +2,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Final
 
+from psycopg.sql import SQL, Composed, Identifier
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import LiteralString
 
@@ -52,6 +53,23 @@ _JSON_COLUMNS: Final = frozenset({"metadata", "request_tags", "messages", "respo
 
 class RejectedSpendLogRow(ValueError):
     """A row the raw insert cannot encode, so it is isolated like a row Postgres refuses."""
+
+
+def replicated_spend_log_insert(row: Mapping[str, JsonValue], *, region: str) -> tuple[Composed, str]:
+    fields: Final = (*(column for column in _COLUMNS if column in row), "source_region")
+    columns: Final = SQL(", ").join(Identifier(column) for column in fields)
+    updates: Final = SQL(", ").join(
+        SQL("{column} = EXCLUDED.{column}").format(column=Identifier(column))
+        for column in fields
+        if column not in {"request_id", "created_at", "startTime", "source_region"}
+    )
+    query: Final = SQL(
+        'INSERT INTO "LiteLLM_ReplicatedSpendLogs" AS replica ({columns}) SELECT {columns} '
+        'FROM jsonb_populate_record(NULL::"LiteLLM_ReplicatedSpendLogs", %s::jsonb) '
+        'ON CONFLICT (request_id, "startTime", source_region) DO UPDATE SET {updates} '
+        "WHERE replica.created_at = EXCLUDED.created_at AND replica.updated_at < EXCLUDED.updated_at"
+    ).format(columns=columns, updates=updates)
+    return query, safe_dumps({**row, "source_region": region})
 
 
 def _json_value(column: str, value: object) -> object:

@@ -1542,6 +1542,8 @@ async def test_ui_view_spend_logs_sort_by_model(client, monkeypatch, sort_order,
         return len(base_logs)
 
     async def mock_query_raw(sql_query, *params):
+        if "reporting_available" in sql_query:
+            return [{"reporting_available": False}]
         if "COUNT(*)" in sql_query:
             return [{"total_count": len(base_logs)}]
         assert "model" in sql_query
@@ -1654,6 +1656,8 @@ async def test_ui_view_spend_logs_sort_by_ttft_ms(client, monkeypatch):
         return len(base_logs)
 
     async def mock_query_raw(sql_query, *params):
+        if "reporting_available" in sql_query:
+            return [{"reporting_available": False}]
         if "COUNT(*)" in sql_query:
             return [{"total_count": len(base_logs)}]
         # Endpoint must compute TTFT inline and use NULLS LAST.
@@ -7932,6 +7936,8 @@ def _session_grouped_mock_prisma(
     """Mock prisma dispatching the raw queries the keyset grouped path emits."""
 
     async def mock_query_raw(sql_query: str, *params: object) -> Sequence[Mapping[str, object]]:
+        if "reporting_available" in sql_query:
+            return [{"reporting_available": False}]
         if "rows_read" in sql_query:
             return _session_read_rows(session_page_rows, session_total)
         if "DISTINCT ON" in sql_query:
@@ -7995,6 +8001,8 @@ def _session_grouped_paginating_prisma(sessions: Sequence[tuple[str, str]]) -> M
     """Mock prisma serving the grouped page read out of ``sessions``, honoring the LIMIT and OFFSET it asks for."""
 
     async def mock_query_raw(sql_query: str, *params: object) -> Sequence[Mapping[str, object]]:
+        if "reporting_available" in sql_query:
+            return [{"reporting_available": False}]
         if "DISTINCT ON" in sql_query:
             return [_session_representative_row(f"req-{session_key}", session_key) for session_key in params[-2]]
         if "COALESCE(SUM(spend)" in sql_query:
@@ -8059,7 +8067,7 @@ async def test_ui_view_spend_logs_group_by_session_first_page(client, monkeypatc
         assert data["data"][0]["session_total_count"] == 3
         assert data["data"][1]["session_total_count"] == 1
 
-        emitted = [call.args for call in mock_prisma.db.query_raw.await_args_list]
+        emitted = [call.args for call in mock_prisma.db.query_raw.await_args_list[1:]]
         assert len(emitted) == 3, "one read picks the page and counts it, then the representatives and their totals"
         page_query_sql = emitted[0][0]
         assert "OFFSET" not in page_query_sql
@@ -8109,7 +8117,7 @@ async def test_ui_view_spend_logs_group_by_session_cursor_page(client, monkeypat
         assert data["next_session_cursor"] is None
         assert [row["request_id"] for row in data["data"]] == ["req-2"]
 
-        page_query_call = mock_prisma.db.query_raw.await_args_list[0]
+        page_query_call = mock_prisma.db.query_raw.await_args_list[1]
         page_query_sql = page_query_call.args[0]
         assert "WHERE (last_activity, session_key, api_key) <" in page_query_sql
         assert "OFFSET" not in page_query_sql
@@ -8278,7 +8286,7 @@ async def test_ui_view_spend_logs_group_by_session_page_past_count_cap_is_empty(
         assert past_cap_data["data"] == []
         assert past_cap_data["has_more"] is False
         assert past_cap_data["total"] == cap
-        assert mock_prisma.db.query_raw.await_count == 1, "only the bounded read runs past the capped window"
+        assert mock_prisma.db.query_raw.await_count == 2, "only the view check and bounded read run past the cap"
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -8358,7 +8366,11 @@ async def test_ui_view_spend_logs_group_by_session_offset_for_non_starttime_sort
         assert response.status_code == 200, response.text
         data = response.json()
         assert "next_session_cursor" not in data
-        emitted_sql = [call.args[0] for call in mock_prisma.db.query_raw.await_args_list]
+        emitted_sql = [
+            call.args[0]
+            for call in mock_prisma.db.query_raw.await_args_list
+            if "reporting_available" not in call.args[0]
+        ]
         assert "HAVING" not in " ".join(emitted_sql)
         assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in emitted_sql[1]
         assert "OFFSET" in emitted_sql[1]

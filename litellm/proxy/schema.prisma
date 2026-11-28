@@ -972,6 +972,77 @@ model LiteLLM_SpendLogs {
   @@index([api_key, startTime])
 }
 
+model LiteLLM_SpendLogReplication {
+  id              Int     @id
+  region          String
+  enabled         Boolean @default(true)
+  request_id_hmac_pads Bytes
+}
+
+model LiteLLM_SpendLogOutbox {
+  id  BigInt @id @default(autoincrement())
+  row Json
+}
+
+model LiteLLM_SpendLogPartitionDrop {
+  partition_oid   BigInt    @id
+  filenode        BigInt
+  last_request_id String?
+  last_start_time DateTime?
+}
+
+model LiteLLM_ReplicatedSpendLogs {
+  request_id          String
+  call_type           String
+  api_key             String @default("")
+  spend               Float @default(0)
+  total_tokens        Int @default(0)
+  prompt_tokens       Int @default(0)
+  completion_tokens   Int @default(0)
+  startTime           DateTime
+  endTime             DateTime
+  request_duration_ms Int?
+  completionStartTime DateTime?
+  model               String @default("")
+  model_id            String?
+  model_group         String?
+  custom_llm_provider String?
+  user                String?
+  end_user            String?
+  team_id             String?
+  organization_id     String?
+  status              String?
+  created_at          DateTime
+  updated_at          DateTime
+  source_region       String
+  @@id([request_id, startTime, source_region])
+  @@index([startTime])
+  @@index([api_key, startTime])
+  @@index([end_user, startTime])
+  @@index([team_id, startTime])
+  @@index([user, startTime])
+}
+
+model LiteLLM_FleetKeyBudgetReset {
+  api_key  String   @id
+  reset_at DateTime
+}
+
+model LiteLLM_FleetBudgetSpend {
+  request_id    String
+  startTime     DateTime
+  source_region String?
+  api_key       String?
+  team_id       String?
+  user          String?
+  end_user      String?
+  spend         Float @default(0)
+  created_at    DateTime
+  updated_at    DateTime
+
+  @@id([request_id, startTime])
+}
+
 model LiteLLM_BudgetWindowSpend {
   entity_type     String
   entity_id       String

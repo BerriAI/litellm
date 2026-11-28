@@ -17,8 +17,9 @@ vi.mock("../../networking", () => ({
   sessionSpendLogsCall: vi.fn(),
 }));
 
+const mockUseLogDetails = vi.hoisted(() => vi.fn(() => ({ data: null, isLoading: false })));
 vi.mock("@/app/(dashboard)/hooks/logDetails/useLogDetails", () => ({
-  useLogDetails: () => ({ data: null, isLoading: false }),
+  useLogDetails: mockUseLogDetails,
 }));
 
 const mockUseUserLookup = vi.fn(() => ({ data: undefined }));
@@ -32,7 +33,7 @@ vi.mock("./LogDetailContent", () => ({
 }));
 
 vi.mock("./DrawerHeader", () => ({
-  DrawerHeader: () => null,
+  DrawerHeader: ({ statusLabel }: { statusLabel: string }) => <span>{statusLabel}</span>,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
@@ -101,6 +102,24 @@ const renderSessionDrawer = () => {
 
 const sidebarEventNames = () =>
   screen.queryAllByText(/^(llm-early|llm-late|tool-early|tool-late)$/).map((el) => el.textContent);
+
+it("shows an imported failure without looking up local request content", () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <LogDetailsDrawer
+        open
+        onClose={() => {}}
+        logEntry={makeLog({ request_id: "imported", source_region: "eu", status: "failure" })}
+        accessToken="token"
+        startTime="2026-07-08T10:00:00.000Z"
+      />
+    </QueryClientProvider>,
+  );
+
+  expect(screen.getByText("Failure")).toBeInTheDocument();
+  expect(mockUseLogDetails).toHaveBeenLastCalledWith(undefined, "2026-07-08T10:00:00.000Z", false);
+});
 
 describe("LogDetailsDrawer session sidebar sorting", () => {
   it("defaults to duration order, longest call first across LLM and MCP calls", async () => {

@@ -18,6 +18,7 @@ use crate::{
 pub struct BudgetCounterSpend {
     pub counter_key: Option<String>,
     pub spend: Option<f64>,
+    pub replica_spend: f64,
 }
 
 const EPSILON: f64 = 1e-12;
@@ -133,12 +134,13 @@ fn exceeded(counter: &Counter, current_cost: f64, estimated_cost: Option<f64>) -
     })
 }
 
-fn observed_spend(observed: &[BudgetCounterSpend], counter: &Counter) -> f64 {
+fn observed_spend<'a>(
+    observed: &'a [BudgetCounterSpend],
+    counter: &Counter,
+) -> Option<&'a BudgetCounterSpend> {
     observed
         .iter()
         .find(|spend| spend.counter_key.as_deref() == Some(counter.key()))
-        .and_then(|spend| spend.spend)
-        .unwrap_or(counter.planned.fallback_spend)
 }
 
 fn applies_to(value: Option<f64>, adjustment: f64) -> bool {
@@ -288,7 +290,12 @@ struct Admission<'a> {
 impl Admission<'_> {
     async fn charge(&mut self, counters: &[Counter]) -> Result<(), EngineError> {
         let fits = counters.iter().all(|counter| {
-            observed_spend(self.observed, counter) + self.cost <= counter.planned.max_budget
+            let observed = observed_spend(self.observed, counter);
+            let local = observed
+                .and_then(|reading| reading.spend)
+                .unwrap_or(counter.planned.fallback_spend);
+            let remote = observed.map_or(0.0, |reading| reading.replica_spend);
+            local + remote + self.cost <= counter.planned.max_budget
         });
         let groups: Vec<&[Counter]> = if fits {
             vec![counters]
@@ -327,7 +334,9 @@ impl Admission<'_> {
             if !self.applied.iter().any(|entry| entry.id == id) {
                 continue;
             }
-            let current = total.as_f64() - (charged - self.cost);
+            let remote =
+                observed_spend(self.observed, counter).map_or(0.0, |reading| reading.replica_spend);
+            let current = total.as_f64() + remote - (charged - self.cost);
             if current > counter.planned.max_budget {
                 self.over_budget(counter, id, current).await?;
             }
@@ -628,6 +637,27 @@ mod tests {
 
     const KEY: &str = "spend:key:hashed";
     const TEAM: &str = "spend:team:t1";
+
+    #[rstest]
+    #[tokio::test]
+    async fn replica_spend_blocks_admission_without_charging_the_local_counter() {
+        let store = store(&[(KEY, 7.0)]);
+        let plan = plan(vec![counter(KEY, 10.0, "Key", "hashed")], 1.0);
+        let observed = [BudgetCounterSpend {
+            counter_key: Some(KEY.to_owned()),
+            spend: Some(7.0),
+            replica_spend: 4.0,
+        }];
+
+        let result = reserve(&store, &plan, &observed).await;
+
+        assert!(matches!(
+            result,
+            Err(EngineError::Exceeded(Exceeded { current_cost, max_budget, .. }))
+                if current_cost == 12.0 && max_budget == 10.0
+        ));
+        assert_eq!(value(&store, KEY), Some(7.0));
+    }
 
     #[rstest]
     #[tokio::test]

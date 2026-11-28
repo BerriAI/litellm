@@ -184,26 +184,30 @@ export const getRequestLogsTableColumns = (
     cell: ({ row }) => {
       const log = row.original;
       const batchId = isBatchCallType(log.call_type) ? getBatchIdFromRequestId(log.request_id) : undefined;
-      if (batchId) {
-        return (
-          <div className="flex flex-col">
+      const callId = log.litellm_call_id && log.litellm_call_id !== log.request_id ? log.litellm_call_id : null;
+      return (
+        <div className="flex flex-col">
+          {batchId ? (
             <IdCell
               value={batchId}
               variant="plain"
               copyable
               tooltip={t("logs.request.columns.batchTooltip", { batchId, requestId: log.request_id })}
             />
-            <span className="text-[10px] text-muted-foreground">{t("logs.request.columns.batchCost")}</span>
-          </div>
-        );
-      }
-      const callId = log.litellm_call_id && log.litellm_call_id !== log.request_id ? log.litellm_call_id : null;
-      return (
-        <IdCell
-          value={log.request_id}
-          variant="plain"
-          tooltip={callId ? <RequestIdWithCallIdTooltip requestId={log.request_id} callId={callId} /> : undefined}
-        />
+          ) : (
+            <IdCell
+              value={log.request_id}
+              variant="plain"
+              tooltip={callId ? <RequestIdWithCallIdTooltip requestId={log.request_id} callId={callId} /> : undefined}
+            />
+          )}
+          {batchId && <span className="text-[10px] text-muted-foreground">{t("logs.request.columns.batchCost")}</span>}
+          {log.source_region && (
+            <span className="text-xs text-muted-foreground">
+              {t("logs.request.columns.sourceRegion", { region: log.source_region })}
+            </span>
+          )}
+        </div>
       );
     },
   },

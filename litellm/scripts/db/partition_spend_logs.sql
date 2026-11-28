@@ -206,6 +206,24 @@ EXCEPTION WHEN lock_not_available OR deadlock_detected THEN
         USING ERRCODE = '55P03', HINT = 'Retry when queries against spend log views have stopped.';
 END $$;
 
+DO $$
+BEGIN
+    IF to_regprocedure('litellm_capture_spend_log()') IS NOT NULL THEN
+        DROP TRIGGER IF EXISTS litellm_capture_spend_log_insert ON "LiteLLM_SpendLogs_legacy";
+        DROP TRIGGER IF EXISTS litellm_capture_spend_log_update ON "LiteLLM_SpendLogs_legacy";
+        DROP TRIGGER IF EXISTS litellm_capture_spend_log_delete ON "LiteLLM_SpendLogs_legacy";
+        CREATE TRIGGER litellm_capture_spend_log_insert
+        AFTER INSERT ON "LiteLLM_SpendLogs" REFERENCING NEW TABLE AS changed_spend_logs
+        FOR EACH STATEMENT EXECUTE FUNCTION litellm_capture_spend_log();
+        CREATE TRIGGER litellm_capture_spend_log_update
+        AFTER UPDATE ON "LiteLLM_SpendLogs" REFERENCING NEW TABLE AS changed_spend_logs
+        FOR EACH STATEMENT EXECUTE FUNCTION litellm_capture_spend_log();
+        CREATE TRIGGER litellm_capture_spend_log_delete
+        AFTER DELETE ON "LiteLLM_SpendLogs" REFERENCING OLD TABLE AS changed_spend_logs
+        FOR EACH STATEMENT EXECUTE FUNCTION litellm_capture_spend_log();
+    END IF;
+END $$;
+
 COMMIT;
 
 -- Backfill (optional). Rows route to the correct partition automatically.
@@ -219,8 +237,14 @@ COMMIT;
 -- cleanup job creates has to scan them first. Set oldest_day above before
 -- running the swap so every backfilled day has its own partition.
 --
+-- Suppress replication for the backfill transaction. The local fleet
+-- budget ledger still records these rows as locally accounted spend.
+--
+--   BEGIN;
+--   SET LOCAL litellm.spend_log_replica = 'on';
 --   INSERT INTO "LiteLLM_SpendLogs"
 --   SELECT * FROM "LiteLLM_SpendLogs_legacy"
 --   WHERE "startTime" >= now() - interval '30 days';
+--   COMMIT;
 --
 --   DROP TABLE "LiteLLM_SpendLogs_legacy";

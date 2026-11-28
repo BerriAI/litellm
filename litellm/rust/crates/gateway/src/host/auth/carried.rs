@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 use litellm_config::LitellmRole;
 use litellm_python_compat::{Value, datetime::IsoDateTime};
 use litellm_redis_store::auth_cache::{
-    Bag, BudgetEntry, Lists, ModelRegion, ModelTableEntry, ObjectPermissionEntry,
+    Bag, BudgetEntry, EndUserBudgetEntry, Lists, ModelRegion, ModelTableEntry,
+    ObjectPermissionEntry,
 };
 
 /// The name of the first of `fields` that holds something.
@@ -51,7 +52,8 @@ carried_when_held!(
     ModelRegion,
     ObjectPermissionEntry,
     ModelTableEntry,
-    BudgetEntry
+    BudgetEntry,
+    EndUserBudgetEntry
 );
 
 impl<T> Carried for Vec<T> {

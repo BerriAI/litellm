@@ -2,7 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import LogsPage from "./page";
-import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
+import { jsonResponse as fetchResponse, renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 
 const { useAuthorizedMock, useOrganizationsMock } = vi.hoisted(() => ({
   useAuthorizedMock: vi.fn(),
@@ -58,7 +58,10 @@ describe("LogsPage network access by role", () => {
     testQueryClient.clear();
     vi.clearAllMocks();
     useOrganizationsMock.mockReturnValue({ data: [] });
-    fetchMock.mockImplementation(async (url: string) => {
+    fetchMock.mockImplementation(async (url: string | Request) => {
+      if (url instanceof Request && new URL(url.url).pathname === "/spend/logs/replication") {
+        return fetchResponse(null);
+      }
       if (String(url).includes("/audit")) {
         return jsonResponse(emptyAuditLogs);
       }
@@ -68,6 +71,41 @@ describe("LogsPage network access by role", () => {
       return jsonResponse({ keys: [], total_count: 0 });
     });
     vi.stubGlobal("fetch", fetchMock);
+  });
+
+  it("pauses capture with the regional admin's chosen value", async () => {
+    const updates: unknown[] = [];
+    let enabled = true;
+    fetchMock.mockImplementation(async (request: string | Request) => {
+      if (typeof request === "string") return jsonResponse({ keys: [], teams: [], total_count: 0 });
+      if (request.method === "PATCH") {
+        const body: { enabled: boolean } = await request.json();
+        updates.push(body);
+        enabled = body.enabled;
+      }
+      return fetchResponse({ region: "us-east", enabled });
+    });
+    const user = userEvent.setup();
+    renderAs("Admin");
+    const label = "Capture local request log metadata for replication";
+
+    await user.click(await screen.findByRole("switch", { name: label, checked: true }));
+
+    expect(await screen.findByRole("switch", { name: label, checked: false })).toBeVisible();
+    expect(updates).toEqual([{ enabled: false }]);
+  });
+
+  it("shows capture status as read-only to an admin viewer", async () => {
+    fetchMock.mockImplementation(async (request: string | Request) =>
+      typeof request === "string"
+        ? jsonResponse({ keys: [], teams: [], total_count: 0 })
+        : fetchResponse({ region: "us-east", enabled: true }),
+    );
+    renderAs("Admin Viewer");
+
+    expect(
+      await screen.findByRole("switch", { name: "Capture local request log metadata for replication", checked: true }),
+    ).toHaveAttribute("aria-disabled", "true");
   });
 
   it("fires neither the audit nor the deleted-teams request for an internal user", async () => {
@@ -83,6 +121,7 @@ describe("LogsPage network access by role", () => {
 
     expect(requestedUrls().filter((url) => url.includes("/audit"))).toEqual([]);
     expect(requestedUrls().filter((url) => url.includes("/v2/team/list"))).toEqual([]);
+    expect(fetchMock.mock.calls.filter(([url]) => url instanceof Request)).toEqual([]);
   });
 
   it("fetches the deleted teams an org admin is entitled to, and still no audit logs", async () => {
