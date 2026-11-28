@@ -23458,3 +23458,44 @@ def test_the_debug_registry_dump_hides_the_credentials_of_a_servers_profiles(sec
     )
 
     assert secret not in json.dumps(_redacted_registry_dump({"tickets": server}))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        pytest.param("ok", None, id="token-minted"),
+        pytest.param("misconfigured", "misconfigured", id="token-rejected"),
+        pytest.param("upstream_unavailable", "upstream_unavailable", id="token-endpoint-down"),
+    ],
+)
+async def test_a_profile_token_failure_reports_none_or_the_cred_error_tag(
+    outcome: str, expected: str | None
+) -> None:
+    from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
+    from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
+    from litellm.proxy.mcp_server.outbound_credentials.types import CredError
+
+    class _Provider:
+        async def resolve_credentials(self, subject: object, server: object) -> object:
+            if outcome == "ok":
+                return Ok(StaticHeaderAuth("Bearer minted"))
+            if outcome == "upstream_unavailable":
+                return Error(CredError.of_upstream_unavailable("down"))
+            return Error(CredError.of_misconfigured("no"))
+
+    server: Final = MCPServer(
+        server_id="ops",
+        name="ops",
+        url="https://upstream.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="client_credentials",
+        client_id="client",
+        client_secret="secret",
+        token_url="https://issuer.example/token",
+    )
+
+    failure: Final = await MCPServerManager(cred_provider=_Provider()).profile_token_failure(server, None)
+
+    assert failure == expected
