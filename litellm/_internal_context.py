@@ -41,6 +41,8 @@ _mirrored_call: Final[ContextVar[bool]] = ContextVar("mirrored_call", default=Fa
 
 _resent_on: Final[ContextVar[Callable[[Exception], bool] | None]] = ContextVar("resent_on", default=None)
 
+_nested_tool_call_failure: Final[ContextVar[bool]] = ContextVar("nested_tool_call_failure", default=False)
+
 _request_parent_otel_span: Final[ContextVar[Span | None]] = ContextVar("request_parent_otel_span", default=None)
 
 
@@ -167,6 +169,19 @@ def is_resent_failure(error: Exception) -> bool:
     return rejection is not None and rejection(error)
 
 
+@contextmanager
+def nested_tool_call_failure() -> Generator[None]:
+    token: Final = _nested_tool_call_failure.set(True)
+    try:
+        yield
+    finally:
+        _restore(_nested_tool_call_failure, token)
+
+
+def reporting_nested_tool_call_failure() -> bool:
+    return _nested_tool_call_failure.get()
+
+
 def set_request_parent_otel_span(span: Span) -> None:
     """Anchor the proxy request's OTEL span for datastore service spans that no call site passes a parent to.
     Never reset: it dies with the request task and rides the tasks it spawns, like ``request.state``."""
@@ -175,6 +190,15 @@ def set_request_parent_otel_span(span: Span) -> None:
 
 def current_request_parent_otel_span() -> Span | None:
     return _request_parent_otel_span.get()
+
+
+@contextmanager
+def without_request_parent_otel_span() -> Generator[None]:
+    token: Final = _request_parent_otel_span.set(None)
+    try:
+        yield
+    finally:
+        _restore(_request_parent_otel_span, token)
 
 
 @contextmanager

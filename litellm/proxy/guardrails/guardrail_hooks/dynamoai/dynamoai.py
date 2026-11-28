@@ -8,7 +8,7 @@
 import os
 from collections.abc import AsyncGenerator, AsyncIterable, Mapping
 from datetime import datetime
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -22,13 +22,15 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.proxy.guardrails.guardrail_hooks.dynamoai import (
     DynamoAIProcessedResult,
     DynamoAIRequest,
     DynamoAIResponse,
 )
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus, LLMResponseTypes, ModelResponseStream
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.dynamoai import DynamoAIGuardrailConfigModel
 
 GUARDRAIL_NAME: Final = "dynamoai"
 
@@ -380,7 +382,7 @@ class DynamoAIGuardrails(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ):
@@ -448,7 +450,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[ModelResponseStream],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Passes the entire stream to the guardrail
@@ -461,7 +463,7 @@ class DynamoAIGuardrails(CustomGuardrail):
             yield item
 
     @staticmethod
-    def get_config_model() -> type[GuardrailConfigModel] | None:
+    def get_config_model() -> "type[DynamoAIGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.dynamoai import (
             DynamoAIGuardrailConfigModel,
         )

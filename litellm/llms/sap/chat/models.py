@@ -33,7 +33,7 @@ class CacheControl(LiteLLMBaseModel):
     @model_serializer(mode="wrap")
     def _serialize(
         self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
-    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+    ) -> dict[str, object]:  # mutable-ok: pydantic serializer contract requires bare dict return
         fields: Final = _serialized_fields(_SERIALIZED.validate_python(handler(self)))
         serialized: Final = {k: v for k, v in fields.items() if k != "ttl" or v is not None}
         return serialized
@@ -47,7 +47,7 @@ class TextContent(LiteLLMBaseModel):
     @model_serializer(mode="wrap")
     def _serialize(
         self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
-    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+    ) -> dict[str, object]:  # mutable-ok: pydantic serializer contract requires bare dict return
         fields: Final = _serialized_fields(_SERIALIZED.validate_python(handler(self)))
         serialized: Final = {k: v for k, v in fields.items() if k != "cache_control" or v is not None}
         return serialized
@@ -66,7 +66,7 @@ class ImageContent(LiteLLMBaseModel):
     @model_serializer(mode="wrap")
     def _serialize(
         self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
-    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+    ) -> dict[str, object]:  # mutable-ok: pydantic serializer contract requires bare dict return
         fields: Final = _serialized_fields(_SERIALIZED.validate_python(handler(self)))
         serialized: Final = {k: v for k, v in fields.items() if k != "cache_control" or v is not None}
         return serialized
@@ -89,7 +89,7 @@ class FunctionTool(LiteLLMBaseModel):
 
     @field_validator("parameters", mode="before")
     @classmethod
-    def ensure_object_type(cls, v: dict) -> dict:
+    def ensure_object_type(cls, v: dict) -> dict[str, object]:
         """Ensure parameters has type='object' as required by SAP Orchestration Service."""
         if not v:
             return {"type": "object", "properties": {}}

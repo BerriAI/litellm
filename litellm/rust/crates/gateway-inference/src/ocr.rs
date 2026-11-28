@@ -8,21 +8,23 @@ use litellm_inference_ocr::{
     types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput},
 };
 use litellm_llms::base_llm::ocr::transformation::decode_request_value;
-use litellm_llms_types::formats::ocr::OcrDocument;
+use litellm_llms_types::formats::{chat_completions::ChatCompletionsUsage, ocr::OcrDocument};
 use litellm_router_core::{Attempt, Op};
 use serde_json::{Map, Value};
 
 use crate::{
-    Error,
+    Checked, Error,
     error::ErrorFormat,
     hooks::CallType,
     model_restamp::ReportedModel,
+    record::Recorder,
     request::{InferenceBody, Upload},
-    routing::{self, Host, RouteAttempt},
-    serve::{self, Call, Endpoint},
+    routing::{self, Host, Prompt, RouteAttempt},
+    serve::{self, Endpoint},
+    stream_event::Counts,
 };
 
-pub(crate) async fn create<H: Host>(call: Call<H>, body: Result<InferenceBody, Error>) -> Response {
+pub(crate) async fn create<H: Host>(Checked { call, body }: Checked<H, InferenceBody>) -> Response {
     let (body, upload) = match body {
         Ok(InferenceBody { fields, upload }) => (Ok(fields), upload),
         Err(error) => (Err(error), None),
@@ -86,13 +88,36 @@ impl Endpoint for OcrAttempt<'_> {
     const PATH: &'static str = "/ocr";
     const ERRORS: ErrorFormat = ErrorFormat::OpenAi;
 
-    fn render(outcome: Value, _reported: ReportedModel<'_>) -> Result<Response, Error> {
-        Ok(Json(outcome).into_response())
+    /// OCR counts pages, not tokens.
+    fn usage(_counts: Counts) -> Option<ChatCompletionsUsage> {
+        None
+    }
+
+    /// The `id` an OCR answer names, as Python's `get_spend_logs_id` reads `response_obj["id"]`.
+    fn response_id(output: &Self::Output) -> Option<String> {
+        output.get("id").and_then(Value::as_str).map(str::to_owned)
+    }
+
+    /// OCR never streams.
+    fn stream_response_id(_data: &str) -> Option<String> {
+        None
+    }
+
+    fn streamed(_: &Map<String, Value>) -> bool {
+        false
+    }
+
+    fn render(output: Value, _reported: ReportedModel<'_>) -> Result<Response, Error> {
+        Ok(Json(output).into_response())
     }
 }
 
 impl RouteAttempt for OcrAttempt<'_> {
-    type Outcome = Value;
+    type Output = Value;
+
+    fn prompt(&self) -> Option<Prompt<'_>> {
+        None
+    }
 
     async fn run(&self, attempt: &Attempt) -> Result<Value, Error> {
         let deployment = &attempt.deployment;
@@ -112,18 +137,40 @@ impl RouteAttempt for OcrAttempt<'_> {
             OcrConnectionInputs {
                 api_key: deployment.params.api_key.clone(),
                 api_base: deployment.params.api_base.clone(),
-                timeout: routing::timeout(attempt, false),
+                timeout: routing::timeout(
+                    deployment,
+                    attempt.timeout,
+                    <Self as Endpoint>::streamed(&self.options),
+                    None,
+                ),
                 ..Default::default()
             },
         )?;
-        let response = self.route.execute(call, &(), None).await?;
+        let response = self.route.execute(call, &Recorder, None).await?;
         Ok(match response.provider_native_response {
             Some(native) => Value::Object(native),
             None => response.into_json(),
         })
     }
 
-    fn total_tokens(outcome: &Value) -> u64 {
-        routing::total_tokens(outcome.get("usage"))
+    /// Nothing: Python's router reads no `usage` off an OCR response.
+    fn counts(_output: &Value) -> Option<Counts> {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde_json::json;
+
+    use super::*;
+
+    #[rstest]
+    #[case::no_stream_flag(json!({"model": "ocr"}))]
+    #[case::a_stream_flag(json!({"model": "ocr", "stream": true}))]
+    fn an_ocr_call_always_runs_under_the_unary_timeout(#[case] body: Value) {
+        let body: Map<String, Value> = serde_json::from_value(body).unwrap();
+        assert!(!<OcrAttempt<'_> as Endpoint>::streamed(&body));
     }
 }

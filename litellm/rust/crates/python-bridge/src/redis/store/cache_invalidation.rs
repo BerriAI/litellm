@@ -12,7 +12,10 @@ use pyo3::prelude::*;
 use tokio::task::AbortHandle;
 
 use super::{PyNumber, auth_cache::NativeAuthCache, spend_counters::NativeSpendCounters};
-use crate::{execution::run_async_value, redis::client::NativeRedisClient};
+use crate::{
+    execution::run_async_value,
+    redis::{client::NativeRedisClient, events::RedisCall},
+};
 
 const HOST_MODULE: &str = "litellm.rust_bridge.host.cache_invalidation";
 
@@ -65,18 +68,21 @@ impl NativeCacheInvalidation {
     #[pyo3(signature = (cache_key, new_value = None, ttl = None))]
     fn publish(
         &self,
+        py: Python<'_>,
         cache_key: String,
         new_value: Option<PyNumber>,
         ttl: Option<PyNumber>,
-    ) -> bool {
-        self.channel.publish(&match new_value {
+    ) -> PyResult<bool> {
+        let call = RedisCall::caller(py, None)?;
+        let invalidation = match new_value {
             Some(value) => Invalidation::Set {
                 cache_key,
                 value: value.0,
                 ttl: ttl.map(|ttl| ttl.0),
             },
             None => Invalidation::Evict(cache_key),
-        })
+        };
+        Ok(self.channel.publish_tagged(&invalidation, call.tag()))
     }
 
     fn broadcast_evictions<'py>(
@@ -85,8 +91,9 @@ impl NativeCacheInvalidation {
         cache_keys: Vec<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let channel = self.channel.clone();
+        let call = RedisCall::caller(py, None)?;
         run_async_value(py, async move {
-            channel.broadcast_evictions(&cache_keys).await;
+            call.scope(channel.broadcast_evictions(&cache_keys)).await;
             Ok(())
         })
     }
@@ -102,7 +109,7 @@ impl NativeCacheInvalidation {
         let apply_python = self.apply_python.clone();
         let python_caches = self.python_caches.clone();
         let context = self.context.clone();
-        let task = self.channel.runtime().spawn(async move {
+        let task = litellm_call_scope::spawn_detached_on(self.channel.runtime(), async move {
             while let Some(invalidation) = messages.next().await {
                 cache_invalidation::apply(&invalidation, &auth_cache, &spend_counters);
                 let apply_python = apply_python.clone();

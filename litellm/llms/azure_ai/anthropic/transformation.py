@@ -147,8 +147,8 @@ class AzureAnthropicConfig(AnthropicConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict[str, object],
     ) -> dict[str, object]:
         """

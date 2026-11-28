@@ -262,6 +262,12 @@ impl RouterUsage {
         Ok(self.usage.memory().flush()?)
     }
 
+    /// Drops everything this process holds in memory, the refresh throttle's read history
+    /// included, and leaves Redis alone.
+    pub fn flush_local(&self) -> Result<(), Error> {
+        self.usage.flush_local()
+    }
+
     /// The memory tier keyed as Python's `InMemoryCache` was, for the fuzz probe that reads
     /// in-memory router state.
     pub fn snapshot(&self) -> Result<Vec<(String, Number)>, Error> {

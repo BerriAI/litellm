@@ -17,7 +17,6 @@ import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
 import { normalizeGuardrailEntries, readMetaString, sortSessionLogs, SessionLogSortMode } from "./utils";
-import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
@@ -31,8 +30,6 @@ export interface LogDetailsDrawerProps {
   onSelectLog?: (log: LogEntry) => void;
   startTime?: string;
 }
-
-const SIDEBAR_WIDTH_PX = 224;
 
 // Session logs are fetched page-by-page from the paginated backend and
 // accumulated so the drawer can show the whole session. page_size is the
@@ -52,13 +49,11 @@ interface TraceEventRowProps {
   onClick: () => void;
 }
 
-const TRACE_EVENT_ICON_CLASS = "text-muted-foreground shrink-0";
-
 function TraceEventIcon({ callType, isAutoRouted }: { callType: string; isAutoRouted: boolean }) {
-  if (MCP_CALL_TYPES.includes(callType)) return <Wrench size={12} className={TRACE_EVENT_ICON_CLASS} />;
-  if (AGENT_CALL_TYPES.includes(callType)) return <Bot size={12} className={TRACE_EVENT_ICON_CLASS} />;
-  if (isAutoRouted) return <AutoRouterIcon size={12} className={TRACE_EVENT_ICON_CLASS} />;
-  return <Sparkles size={12} className={TRACE_EVENT_ICON_CLASS} />;
+  if (MCP_CALL_TYPES.includes(callType)) return <Wrench size={12} className="text-muted-foreground shrink-0" />;
+  if (AGENT_CALL_TYPES.includes(callType)) return <Bot size={12} className="text-muted-foreground shrink-0" />;
+  if (isAutoRouted) return <AutoRouterIcon size={12} className="text-muted-foreground shrink-0" />;
+  return <Sparkles size={12} className="text-muted-foreground shrink-0" />;
 }
 
 function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
@@ -312,15 +307,14 @@ export function LogDetailsDrawer({
       <SheetContent
         side="right"
         showCloseButton={false}
-        className="gap-0 overflow-hidden p-0 data-[side=right]:sm:max-w-none"
-        style={{ width: DRAWER_WIDTH }}
+        className="gap-0 overflow-hidden p-0 data-[side=right]:w-[60%] data-[side=right]:sm:max-w-none"
       >
         <SheetTitle className="sr-only">
           {logEntry?.request_id
             ? t("logs.detail.drawer.titleWithId", { id: logEntry.request_id })
             : t("logs.detail.drawer.title")}
         </SheetTitle>
-        <div style={{ height: "100%" }} className="flex relative">
+        <div className="flex relative h-full">
           {!isSidebarCollapsed && (
             <SidebarToggle
               isCollapsed={false}
@@ -329,7 +323,7 @@ export function LogDetailsDrawer({
             />
           )}
           {!isSidebarCollapsed && (
-            <div className="border-r border-border bg-muted flex flex-col" style={{ width: SIDEBAR_WIDTH_PX }}>
+            <div className="border-r border-border bg-muted flex w-56 flex-col">
               <div className="pl-12 pr-3 py-2 border-b border-border bg-card">
                 <div className="flex items-start justify-between gap-2">
                   <div>

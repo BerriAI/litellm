@@ -239,10 +239,11 @@ class _PrismaEngine(Protocol):
 
 
 class _PrismaClient(Protocol):
-    _Prisma__engine: _PrismaEngine
-
     @property
     def _engine(self) -> _PrismaEngine: ...
+
+    @_engine.setter
+    def _engine(self, engine: _PrismaEngine) -> None: ...
 
 
 class _PrismaDrainTracker:
@@ -503,7 +504,7 @@ class PrismaWrapper:
 
     @staticmethod
     def _write_engine(prisma_client: _PrismaClient, engine: _PrismaEngine) -> None:
-        prisma_client._Prisma__engine = engine
+        prisma_client._engine = engine
 
     def _instrument_prisma_client(self, prisma_client: "Prisma | _PrismaClient") -> _PrismaDrainTracker | None:
         from prisma.errors import ClientNotConnectedError

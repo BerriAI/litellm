@@ -61,7 +61,7 @@ impl Pki {
         let ca_path = directory.path().join("ca.pem");
         std::fs::write(&ca_path, ca.pem()).unwrap();
         let config = rustls::ServerConfig::builder_with_provider(Arc::new(
-            rustls::crypto::ring::default_provider(),
+            rustls::crypto::aws_lc_rs::default_provider(),
         ))
         .with_safe_default_protocol_versions()
         .unwrap()

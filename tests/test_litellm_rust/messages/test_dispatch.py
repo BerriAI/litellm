@@ -300,6 +300,16 @@ def test_only_claude_bedrock_messages_routes_reach_the_messages_target(model: st
     assert result is (native_result if target is Target.MESSAGES else python_result)
 
 
+@pytest.mark.parametrize("model", ["openai/gpt-6.2-sol", "azure/gpt-6.1-sol"])
+def test_count_tokens_routes_a_native_deferred_tools_deployment_the_way_its_messages_call_goes(
+    model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+
+    assert dispatch.messages_target(model, None, {"deferred_tools": "native"}, None) is Target.RESPONSES
+    assert dispatch.messages_target(model, None, None, None) is Target.CHAT_COMPLETIONS
+
+
 DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
 CLASSIFIER_SETTINGS: Final = {"safeguards_classifier_model": "gpt-oss-120b"}
 

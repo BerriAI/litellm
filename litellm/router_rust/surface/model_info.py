@@ -659,10 +659,6 @@ class HostModelInfo:
                 return get_bedrock_base_model(str(step["model_id"]))
             case "discovered":
                 return wire.to_wire(dict(self._core_get_discovered_model_info(wire.from_wire(step["id"]), model)))  # pyright: ignore[reportArgumentType]  # the deployment's id, as configured
-            case "log":
-                log: Final = verbose_router_logger.error if step["level"] == "error" else verbose_router_logger.debug
-                log("%s", step["message"])
-                return None
             case other:
                 raise ValueError(f"router-core asked an unknown model-info lookup {other!r}")
 

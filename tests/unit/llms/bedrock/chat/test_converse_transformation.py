@@ -1037,13 +1037,14 @@ def test_openai_gpt5_converse_rejects_effort_level_disabled_in_model_map(
         model=model, custom_llm_provider="bedrock_converse", key="supports_minimal_reasoning_effort"
     )
 
-    with pytest.raises(litellm.utils.UnsupportedParamsError, match="minimal"):
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="minimal") as raised:
         config.map_openai_params(
             non_default_params={"reasoning_effort": "minimal"},
             optional_params={},
             model=model,
             drop_params=False,
         )
+    assert "`drop_params: true` under `litellm_settings`" in str(raised.value)
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         optional_params: Final = config.map_openai_params(
@@ -10096,6 +10097,7 @@ def test_map_openai_params_raises_unsupported_params_when_drop_params_false(monk
                 drop_params=False,
             )
         assert "does not support temperature=1.0" in str(exc_info.value)
+        assert "`drop_params: true` under `litellm_settings`" in str(exc_info.value)
 
 
 def test_map_openai_params_retains_sampling_params_for_supported_models():

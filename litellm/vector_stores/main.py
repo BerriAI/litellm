@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import request_timeout
+from litellm.litellm_core_utils.call_kwargs import http_client_of, logging_obj_of
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
@@ -210,7 +211,7 @@ def create(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreCreateResponse | Coroutine[object, object, VectorStoreCreateResponse]:
     """
     Create a vector store.
@@ -227,8 +228,8 @@ def create(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acreate", False) is True
 
         # get llm provider logic
@@ -271,7 +272,7 @@ def create(
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={
@@ -289,12 +290,12 @@ def create(
             vector_store_provider_config=vector_store_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
         return response
@@ -577,7 +578,7 @@ def search(
     router: "Router | None" = None,
     *,
     query_image: VectorStoreSearchQueryImage | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreSearchResponse | Coroutine[object, object, VectorStoreSearchResponse]:
     """
     Search a vector store for relevant chunks based on a query and file attributes filter.
@@ -601,8 +602,8 @@ def search(
         raise ValueError("Configure fallbacks on a registered vector store, not on an SDK request")
     local_vars: Final = dict(_items_without_key(locals(), "embedding_executor"))
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("asearch", False) is True
         # pull credentials from registry if available
         if litellm.vector_store_registry is not None and vector_store_id is not None:
@@ -667,7 +668,7 @@ def search(
         sent_extra_body: Final = as_str_mapping(extra_body)
 
         # Pre Call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=api_type,
             optional_params={
@@ -690,7 +691,7 @@ def search(
             vector_store_provider_config=vector_store_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             embedding_executor=embedding_executor,
             extra_headers=extra_headers,
             extra_body=extra_body
@@ -698,7 +699,7 @@ def search(
             else dict(_items_without_key(sent_extra_body, "query_image")),
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
         return response
@@ -772,7 +773,7 @@ def retrieve(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreCreateResponse | Coroutine[object, object, VectorStoreCreateResponse]:
     """
     Retrieve a vector store.
@@ -785,8 +786,8 @@ def retrieve(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aretrieve", False) is True
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -812,7 +813,7 @@ def retrieve(
         if vector_store_provider_config is None:
             raise ValueError(f"Vector store retrieve is not supported for {custom_llm_provider}")
 
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={"vector_store_id": vector_store_id},
@@ -825,12 +826,12 @@ def retrieve(
             vector_store_provider_config=vector_store_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
         return response
@@ -913,7 +914,7 @@ def list(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> object | Coroutine[object, object, object]:
     """
     List vector stores.
@@ -929,8 +930,8 @@ def list(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("alist", False) is True
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -956,7 +957,7 @@ def list(
         if vector_store_provider_config is None:
             raise ValueError(f"Vector store list is not supported for {custom_llm_provider}")
 
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={
@@ -977,12 +978,12 @@ def list(
             vector_store_provider_config=vector_store_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
         return response
@@ -1065,7 +1066,7 @@ def update(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreCreateResponse | Coroutine[object, object, VectorStoreCreateResponse]:
     """
     Update a vector store.
@@ -1081,8 +1082,8 @@ def update(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aupdate", False) is True
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -1114,7 +1115,7 @@ def update(
             VectorStoreRequestUtils.get_requested_vector_store_create_optional_param(local_vars)
         )
 
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={
@@ -1132,12 +1133,12 @@ def update(
             vector_store_provider_config=vector_store_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
         return response
@@ -1211,7 +1212,7 @@ def delete(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> object | Coroutine[object, object, object]:
     """
     Delete a vector store.
@@ -1224,8 +1225,8 @@ def delete(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("adelete", False) is True
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -1251,7 +1252,7 @@ def delete(
         if vector_store_provider_config is None:
             raise ValueError(f"Vector store delete is not supported for {custom_llm_provider}")
 
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={"vector_store_id": vector_store_id},
@@ -1264,12 +1265,12 @@ def delete(
             vector_store_provider_config=vector_store_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
         )
 
         return response

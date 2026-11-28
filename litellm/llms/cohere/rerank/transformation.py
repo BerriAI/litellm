@@ -30,7 +30,7 @@ class CohereRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
     ) -> str:
         if api_base:
             return ensure_api_route(api_base, "v1/rerank")
@@ -48,7 +48,7 @@ class CohereRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: dict[str, object] | None,
         model: str,
         drop_params: bool,
         query: str,
@@ -82,7 +82,7 @@ class CohereRerankConfig(BaseRerankConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
         if api_key is None:
@@ -111,7 +111,7 @@ class CohereRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: dict,
         headers: dict[str, object],
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> dict[str, object]:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for Cohere rerank")
@@ -135,9 +135,9 @@ class CohereRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: dict[str, object] = {},
+        optional_params: dict[str, object] = {},
+        litellm_params: dict[str, object] = {},
     ) -> RerankResponse:
         """
         Transform Cohere rerank response

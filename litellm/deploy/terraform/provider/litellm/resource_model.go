@@ -119,6 +119,7 @@ func resourceLiteLLMModel() *schema.Resource {
 			"mode": {
 				Type:     schema.TypeString,
 				Optional: true,
+				Computed: true,
 				ValidateFunc: validation.StringInSlice([]string{
 					"completion",
 					"embedding",

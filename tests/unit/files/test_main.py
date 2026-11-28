@@ -1,14 +1,19 @@
-from collections.abc import Awaitable, Callable
+import asyncio
+import time
+from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+import openai
 import pytest
 import respx
 from pydantic import ValidationError
 
 import litellm
+from litellm.constants import JITTER
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.openai import OpenAIFileObject
 
@@ -243,3 +248,225 @@ async def test_openai_file_operations_roundtrip(respx_mock: respx.MockRouter, mo
     assert delete_route.call_count == 1
     assert deleted.id == "file-abc123"
     assert deleted.deleted is True
+
+
+async def _create_file(sync_mode: bool, upload: Mapping[str, object]) -> OpenAIFileObject:
+    if sync_mode:
+        return litellm.create_file(**upload)
+    return await litellm.acreate_file(**upload)
+
+
+def _upload(custom_llm_provider: str, api_base: str, **overrides: object) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "file": ("batch.jsonl", b'{"custom_id": "1"}\n', "application/jsonl"),
+            "purpose": "batch",
+            "custom_llm_provider": custom_llm_provider,
+            "api_key": "sk-test",
+            "api_base": api_base,
+            "api_version": "2025-04-01-preview",
+            **overrides,
+        }
+    )
+
+
+def _created_file() -> httpx.Response:
+    return httpx.Response(200, json={**_FINE_TUNE_FILE_JSON, "purpose": "batch"})
+
+
+def _resend_at_once(**_: object) -> float:
+    return 0.0
+
+
+@pytest.fixture
+def resend_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "calculate_retry_after", _resend_at_once)
+
+
+_ANSWERS_A_RESEND_CANNOT_DUPLICATE: Final = (
+    pytest.param(lambda: httpx.Response(429, json={"error": {"message": "slow down"}}), id="429"),
+    pytest.param(lambda: httpx.Response(503, json={"error": {"message": "overloaded"}}), id="503"),
+    pytest.param(
+        lambda: httpx.Response(504, headers={"x-should-retry": "true"}, json={"error": {"message": "send it again"}}),
+        id="504-should-retry",
+    ),
+    pytest.param(lambda: httpx.ConnectError("connection refused"), id="connect-error"),
+    pytest.param(lambda: httpx.ConnectTimeout("no connection in time"), id="connect-timeout"),
+    pytest.param(lambda: httpx.ProxyError("the egress proxy refused the connection"), id="proxy-error"),
+    pytest.param(lambda: httpx.WriteTimeout("the body was not written in time"), id="write-timeout"),
+    pytest.param(lambda: httpx.WriteError("the connection reset while the body was sent"), id="write-error"),
+    pytest.param(lambda: httpx.LocalProtocolError("the request could not be sent"), id="local-protocol-error"),
+    pytest.param(lambda: httpx.UnsupportedProtocol("the URL scheme is not supported"), id="unsupported-protocol"),
+)
+
+_ANSWERS_AFTER_THE_PROVIDER_MAY_HAVE_CREATED_IT: Final = (
+    pytest.param(lambda: httpx.ReadTimeout("no answer in time"), openai.APITimeoutError, id="read-timeout"),
+    pytest.param(
+        lambda: httpx.RemoteProtocolError("connection dropped mid-answer"),
+        openai.APIConnectionError,
+        id="remote-protocol-error",
+    ),
+    pytest.param(
+        lambda: httpx.Response(503, headers={"x-should-retry": "false"}, json={"error": {"message": "do not resend"}}),
+        openai.APIStatusError,
+        id="503-should-not-retry",
+    ),
+    pytest.param(
+        lambda: httpx.Response(504, json={"error": {"message": "the gateway gave up waiting"}}),
+        openai.APIStatusError,
+        id="504",
+    ),
+)
+
+
+@pytest.mark.usefixtures("resend_at_once")
+@pytest.mark.parametrize("first_answer", _ANSWERS_A_RESEND_CANNOT_DUPLICATE)
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_file_upload_is_resent_when_a_resend_cannot_create_a_duplicate(
+    first_answer: Callable[[], httpx.Response | Exception],
+    custom_llm_provider: str,
+    sync_mode: bool,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.upload.test"
+    upload_route: Final = respx_mock.post(url__startswith=api_base).mock(side_effect=[first_answer(), _created_file()])
+
+    created: Final = await _create_file(sync_mode, _upload(custom_llm_provider, api_base))
+
+    assert upload_route.call_count == 2
+    assert created.id == _FINE_TUNE_FILE_JSON["id"]
+
+
+@pytest.mark.usefixtures("resend_at_once")
+@pytest.mark.parametrize("first_answer, expected_error", _ANSWERS_AFTER_THE_PROVIDER_MAY_HAVE_CREATED_IT)
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_file_upload_is_sent_once_when_the_provider_may_have_created_it(
+    first_answer: Callable[[], httpx.Response | Exception],
+    expected_error: type[Exception],
+    custom_llm_provider: str,
+    sync_mode: bool,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.upload.test"
+    upload_route: Final = respx_mock.post(url__startswith=api_base).mock(side_effect=[first_answer(), _created_file()])
+
+    with pytest.raises(expected_error):
+        await _create_file(sync_mode, _upload(custom_llm_provider, api_base))
+
+    assert upload_route.call_count == 1
+
+
+@pytest.mark.usefixtures("resend_at_once")
+@pytest.mark.parametrize("max_retries, expected_posts", [(0, 1), (1, 2), (None, 3)])
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_rate_limited_file_upload_is_resent_up_to_the_callers_max_retries(
+    max_retries: int | None,
+    expected_posts: int,
+    custom_llm_provider: str,
+    sync_mode: bool,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.upload.test"
+    upload_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        return_value=httpx.Response(429, json={"error": {"message": "slow down"}})
+    )
+    explicit_max_retries: Final = {} if max_retries is None else {"max_retries": max_retries}
+
+    with pytest.raises(openai.RateLimitError):
+        await _create_file(
+            sync_mode,
+            _upload(custom_llm_provider, api_base, extra_headers={"x-request-tag": "kept"}, **explicit_max_retries),
+        )
+
+    assert upload_route.call_count == expected_posts
+    assert [call.request.headers["x-stainless-retry-count"] for call in upload_route.calls] == [
+        str(retries_taken) for retries_taken in range(expected_posts)
+    ]
+    assert {call.request.headers["x-request-tag"] for call in upload_route.calls} == {"kept"}
+
+
+@pytest.mark.usefixtures("resend_at_once")
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_resent_file_upload_carries_only_the_retry_count_the_caller_set(
+    custom_llm_provider: str, sync_mode: bool, request: pytest.FixtureRequest, respx_mock: respx.MockRouter
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.upload.test"
+    upload_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        return_value=httpx.Response(429, json={"error": {"message": "slow down"}})
+    )
+
+    with pytest.raises(openai.RateLimitError):
+        await _create_file(
+            sync_mode, _upload(custom_llm_provider, api_base, extra_headers={"X-Stainless-Retry-Count": "7"})
+        )
+
+    assert upload_route.call_count == 3
+    assert {tuple(call.request.headers.get_list("x-stainless-retry-count")) for call in upload_route.calls} == {
+        ("7",)
+    }
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_file_upload_is_never_sent_without_headers_the_caller_passed_as_a_list(
+    sync_mode: bool, request: pytest.FixtureRequest, respx_mock: respx.MockRouter
+):
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.upload.test"
+    upload_route: Final = respx_mock.post(url__startswith=api_base).mock(return_value=_created_file())
+
+    with pytest.raises(TypeError):
+        await _create_file(sync_mode, _upload("openai", api_base, extra_headers=[["x-request-tag", "kept"]]))
+
+    assert upload_route.call_count == 0
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_a_rate_limited_file_upload_waits_the_providers_retry_after_before_the_resend(
+    sync_mode: bool, request: pytest.FixtureRequest, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = f"https://{request.node.callspec.id.lower()}.upload.test"
+    upload_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        side_effect=[
+            httpx.Response(429, headers={"retry-after": "2"}, json={"error": {"message": "slow down"}}),
+            _created_file(),
+        ]
+    )
+    sync_sleep: Final = MagicMock()
+    async_sleep: Final = AsyncMock()
+    monkeypatch.setattr(time, "sleep", sync_sleep)
+    monkeypatch.setattr(asyncio, "sleep", async_sleep)
+
+    await _create_file(sync_mode, _upload("openai", api_base))
+
+    waits: Final = tuple(call.args[0] for call in (*sync_sleep.call_args_list, *async_sleep.call_args_list))
+    assert upload_route.call_count == 2
+    assert any(2 <= wait <= 2 + JITTER for wait in waits), waits
+
+
+@pytest.mark.parametrize(
+    "litellm_call_id, expected",
+    [(None, "generated-call-id"), (123, "123")],
+    ids=["explicit-none-gets-a-generated-id", "non-string-is-stringified"],
+)
+def test_file_retrieve_gives_its_own_logging_object_a_string_call_id(
+    monkeypatch: pytest.MonkeyPatch, litellm_call_id: int | None, expected: str
+) -> None:
+    from litellm.files import main as files_main
+
+    retrieve_file: Final = MagicMock(return_value="SENTINEL")
+    monkeypatch.setattr(files_main.base_llm_http_handler, "retrieve_file", retrieve_file)
+    monkeypatch.setattr(files_main.uuid_module, "uuid4", lambda: "generated-call-id")
+
+    files_main.file_retrieve.__wrapped__(
+        file_id="file-abc123", custom_llm_provider="anthropic", api_key="sk-test", litellm_call_id=litellm_call_id
+    )
+
+    assert retrieve_file.call_args.kwargs["logging_obj"].litellm_call_id == expected

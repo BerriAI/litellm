@@ -26,9 +26,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObj,
     )
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import (
-        GuardrailConfigModel,
-    )
+    from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import VigilGuardGuardrailConfigModel
 
 
 _ANALYZE_ENDPOINT: Final = "/v1/guard/analyze"
@@ -137,7 +135,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         self.timeout = _DEFAULT_VIGIL_TIMEOUT if timeout is None else httpx.Timeout(timeout, connect=min(timeout, 5.0))
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[VigilGuardGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
             VigilGuardGuardrailConfigModel,
         )
@@ -155,7 +153,7 @@ class VigilGuardGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:

@@ -2,7 +2,7 @@ import json
 import re
 from collections.abc import Collection, Mapping
 from types import MappingProxyType, UnionType
-from typing import Annotated, Any, Final, Literal, Protocol, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Literal, Protocol, TypeAlias, Union, get_args, get_origin
 
 import orjson
 from fastapi import HTTPException, Request, UploadFile, status
@@ -118,6 +118,17 @@ def _is_form_content_type(content_type: str) -> bool:
     the auth-time pre-read and the handler's read seeing different payloads.
     """
     return _normalize_media_type(content_type) in _FORM_CONTENT_TYPES
+
+
+RequestBodyKind: TypeAlias = Literal["binary", "form", "json"]
+
+
+def request_body_kind(content_type: str) -> RequestBodyKind:
+    """How the proxy parses a request body with this ``Content-Type``: binary bodies as bytes, forms with
+    ``request.form()``, and anything else, a missing type included, as JSON."""
+    if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
+        return "binary"
+    return "form" if _is_form_content_type(content_type) else "json"
 
 
 def is_json_content_type(content_type: str) -> bool:
@@ -251,7 +262,7 @@ def is_otlp_trace_request(request: HTTPConnection) -> bool:
     return request.scope.get("method") == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
 
 
-def _parse_form_metadata(raw_metadata: str) -> object:
+def parse_form_metadata(raw_metadata: str) -> object:
     """The JSON body path rejects a lone surrogate escape (``"\\ud800"``) with a
     400 because no provider or database can encode it. ``json.loads`` accepts
     the escape, so the multipart ``metadata`` field gets the same check."""
@@ -322,14 +333,15 @@ async def read_request_body(request: Request | None) -> dict:
         _request_headers: Final[Mapping[str, object]] = safe_get_request_headers(request=request)
         content_type: Final = _request_headers.get("content-type", "")
 
-        if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
+        kind: Final = request_body_kind(content_type)
+        if kind == "binary":
             binary_body: Final = await _receive_body(request)
             parsed_body = _parse_binary_body(binary_body)
-        elif _is_form_content_type(content_type):
+        elif kind == "form":
             form_body: Final[dict[str, object]] = dict(await _read_form_data(request))
             raw_metadata: Final = form_body.get("metadata")
             parsed_body = (
-                {**form_body, "metadata": _parse_form_metadata(raw_metadata)}
+                {**form_body, "metadata": parse_form_metadata(raw_metadata)}
                 if isinstance(raw_metadata, str)
                 else form_body
             )
@@ -840,7 +852,7 @@ def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
     return [tag for tag in combined_tags if isinstance(tag, str)]
 
 
-def populate_request_with_path_params(request_data: dict, request: Request) -> dict:
+def populate_request_with_path_params(request_data: dict[str, object], request: Request) -> dict[str, object]:
     """
     Copy FastAPI path params and query params into the request payload so downstream checks
     (e.g. vector store RBAC, organization RBAC) see them the same way as body params.

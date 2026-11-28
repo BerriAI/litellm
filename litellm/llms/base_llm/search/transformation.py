@@ -193,11 +193,11 @@ class BaseSearchConfig:
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         Override in provider-specific implementations.
@@ -230,8 +230,8 @@ class BaseSearchConfig:
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] | None = None,
+        optional_params: dict[str, object],
+        data: dict[str, object] | list[dict] | None = None,
         **kwargs: object,
     ) -> str:
         """
@@ -257,7 +257,7 @@ class BaseSearchConfig:
     def transform_search_request(
         self,
         query: str | list[str],
-        optional_params: dict,
+        optional_params: dict[str, object],
         **kwargs: object,
     ) -> dict | list[dict]:
         """

@@ -442,6 +442,9 @@ class AzureAIStudioConfig(OpenAIConfig):
                 optional_params=optional_params,
                 model=model,
                 drop_params=drop_params,
+                reasoning_drop_logger=reasoning_drop_logger,
+                declared_reasoning_efforts=declared_reasoning_efforts,
+                allowed_openai_params=allowed_openai_params,
             ),
             **foundry_effort,
         }

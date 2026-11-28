@@ -87,7 +87,7 @@ class AmazonTitanImageGenerationConfig:
     def map_openai_params(
         cls,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
     ):
         image_generation_config: Final[dict[str, object]] = {}
         for k, v in non_default_params.items():

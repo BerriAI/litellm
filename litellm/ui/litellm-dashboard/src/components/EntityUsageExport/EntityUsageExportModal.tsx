@@ -1,4 +1,3 @@
-import type { ParseKeys } from "i18next";
 import { Loader2 } from "lucide-react";
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -10,18 +9,9 @@ import { toast } from "@/lib/toast";
 import ExportFormatSelector from "./ExportFormatSelector";
 import ExportSummary from "./ExportSummary";
 import ExportTypeSelector from "./ExportTypeSelector";
-import type { EntityType, EntityUsageExportModalProps, ExportType, UsageExportFormat } from "./types";
+import type { EntityUsageExportModalProps, ExportType, UsageExportFormat } from "./types";
 import { buildUsageReportHtml, parseUsageReportRows, printUsageReport } from "./usageReport";
-import { downloadBlob, exportFilename, exportBasename } from "./utils";
-
-const ENTITY_LABEL_KEYS: Record<EntityType, ParseKeys> = {
-  user: "usage.export.modal.entities.user",
-  team: "usage.export.modal.entities.team",
-  tag: "usage.export.modal.entities.tag",
-  organization: "usage.export.modal.entities.organization",
-  customer: "usage.export.modal.entities.customer",
-  agent: "usage.export.modal.entities.agent",
-};
+import { downloadBlob, exportBasename, exportFilename } from "./utils";
 
 const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   isOpen,
@@ -33,13 +23,13 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   customTitle,
   canIncludeMetadata,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [exportFormat, setExportFormat] = useState<UsageExportFormat>("csv");
   const [exportType, setExportType] = useState<ExportType>("daily");
   const [includeMetadata, setIncludeMetadata] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
-  const entityLabel = t(ENTITY_LABEL_KEYS[entityType]);
+  const entityLabel = t(`usage.entityLabels.title.${entityType}`);
   const modalTitle = customTitle || t("usage.export.modal.title", { entity: entityLabel });
 
   const handleExport = async () => {
@@ -56,6 +46,7 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
           dateRange,
           selectedFilters,
           generatedAt: new Date(),
+          language: i18n.language,
           t,
         };
         printUsageReport(buildUsageReportHtml(report), t("usage.export.report.frameTitle"), report.title);

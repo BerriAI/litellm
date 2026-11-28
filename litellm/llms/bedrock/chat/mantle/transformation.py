@@ -92,10 +92,10 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         # Strip the "mantle/" routing prefix to get the real model ID
         model_id: Final = model.replace("mantle/", "", 1)
 
@@ -119,8 +119,8 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict[str, object],
     ) -> dict:
         return self.transform_request(

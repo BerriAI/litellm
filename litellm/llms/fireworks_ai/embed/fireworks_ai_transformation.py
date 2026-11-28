@@ -20,7 +20,9 @@ class FireworksAIEmbeddingConfig:
             return ["dimensions"]
         return []
 
-    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict, model: str):
+    def map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object], model: str
+    ):
         """
         No transformation is applied - fireworks ai is openai compatible
         """

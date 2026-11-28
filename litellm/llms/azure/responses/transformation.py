@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import AZURE_DEFAULT_RESPONSES_API_VERSION
+from litellm.litellm_core_utils.core_helpers import dict_from_pairs
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_within,
 )
@@ -200,12 +201,12 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if "tools" in response_api_optional_request_params and isinstance(
             response_api_optional_request_params["tools"], list
         ):
-            new_tools: Final[list[dict[str, object]]] = []
+            new_tools: Final[list[object]] = []
             for tool in response_api_optional_request_params["tools"]:
                 if isinstance(tool, dict) and "function" in tool:
-                    new_tool: dict[str, Any] = deepcopy(tool)
+                    new_tool: dict[object, object] = deepcopy(tool)
                     function_data = new_tool.pop("function")
-                    new_tool.update(function_data)
+                    new_tool.update(dict_from_pairs(function_data))
                     new_tools.append(new_tool)
                 else:
                     new_tools.append(tool)
@@ -285,7 +286,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_websocket_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Azure Responses WebSocket endpoint is at /openai/v1/responses with no

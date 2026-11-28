@@ -6,6 +6,7 @@ Covers:
 - extract_request_tool_names: OpenAI chat, responses, Anthropic, generate_content, MCP
 """
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -119,6 +120,13 @@ class TestExtractRequestToolNames:
             "hidden_fn",
         ]
 
+    def test_anthropic_mcp_servers_count_under_their_name(self):
+        data: Final = {
+            "mcp_servers": [{"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}],
+            "tools": [{"type": "mcp_toolset", "mcp_server_name": "deepwiki"}, {"name": "lookup"}],
+        }
+        assert extract_request_tool_names("/v1/messages", data) == ["lookup", "deepwiki"]
+
     def test_generate_content_tools(self):
         data = {
             "tools": [
@@ -227,6 +235,23 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "run_sql" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_mcp_server_outside_the_allowlist_raises_on_messages_route(self):
+        token: Final = _token(metadata={"allowed_tools": ["lookup"]})
+        body: Final = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "mcp_servers": [{"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}],
+        }
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/messages",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "deepwiki" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
     async def test_disallowed_custom_tool_raises_on_responses_route(self):

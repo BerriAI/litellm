@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_TeamTable\"\nSET members_with_roles = COALESCE(\n        (SELECT jsonb_agg(entry.member ORDER BY entry.position)\n         FROM jsonb_array_elements(members_with_roles) WITH ORDINALITY AS entry(member, position)\n         WHERE entry.member ->> 'user_id' IS DISTINCT FROM $2),\n        '[]'::jsonb\n    ),\n    updated_at = NOW() AT TIME ZONE 'UTC'\nWHERE team_id = $1\n  AND jsonb_typeof(members_with_roles) = 'array'\nRETURNING members_with_roles AS \"members_with_roles!: RawJson\"\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "members_with_roles!: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "members_with_roles"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "857dfc3a221bd0be3d29de28f0c912fb40fc5c3a8f20df2a8fea89190af35070"
+}

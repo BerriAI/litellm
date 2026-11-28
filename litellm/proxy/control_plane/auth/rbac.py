@@ -14,6 +14,7 @@ class Scope(str, Enum):
     DATAPLANES_WRITE = "dataplanes:write"
     USAGE_READ = "usage:read"
     FLEET_READ = "fleet:read"
+    FLEET_WRITE = "fleet:write"
     PROXY_READ = "proxy:read"
     PROXY_WRITE = "proxy:write"
     AUDIT_READ = "audit:read"

@@ -132,11 +132,11 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     def transform_create_file_request(

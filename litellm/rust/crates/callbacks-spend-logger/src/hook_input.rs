@@ -201,6 +201,7 @@ pub struct Failure {
     pub enrich: bool,
     /// The failure is one the proxy writes rows for (error logs on, a trackable route).
     pub track: bool,
+    pub nested_tool_call: bool,
     pub window_resets: Vec<Option<String>>,
     /// The final attempt's row, then one per billed retry attempt, in `billed_retry_attempts`
     /// order.

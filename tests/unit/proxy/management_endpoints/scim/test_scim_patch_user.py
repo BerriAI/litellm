@@ -165,9 +165,8 @@ async def test_patch_user_manages_group_memberships():
 
     assert mock_add_fn.called
     assert mock_del_fn.called
-    # Check that the database update was called with the correct teams
     call_args = mock_db.litellm_usertable.update.call_args
-    assert "new-team" in call_args[1]["data"]["teams"]
+    assert "teams" not in call_args[1]["data"]
     assert result == mock_scim_user
 
 
@@ -673,7 +672,7 @@ def _team_rows(team_ids: Sequence[str]) -> list[MagicMock]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "record_teams,requested_teams,teams_with_rows,expected_teams,expected_added,expected_removed",
+    "record_teams,requested_teams,teams_with_rows,expected_teams,expected_added,expected_removed,expected_detached",
     [
         pytest.param(
             [],
@@ -681,6 +680,7 @@ def _team_rows(team_ids: Sequence[str]) -> list[MagicMock]:
             ["team-real"],
             ("team-real",),
             ["team-real"],
+            [],
             [],
             id="an_add_with_no_team_row_is_left_out_and_the_real_team_is_written",
         ),
@@ -691,6 +691,7 @@ def _team_rows(team_ids: Sequence[str]) -> list[MagicMock]:
             ("team-real",),
             None,
             None,
+            ["team-gone"],
             id="a_remove_with_no_team_row_makes_no_roster_write_and_is_dropped_from_the_record",
         ),
         pytest.param(
@@ -700,6 +701,7 @@ def _team_rows(team_ids: Sequence[str]) -> list[MagicMock]:
             ("team-real",),
             None,
             None,
+            [],
             id="an_add_with_no_team_row_makes_no_roster_write_and_keeps_the_record_teams",
         ),
     ],
@@ -711,10 +713,18 @@ async def test_sync_requested_teams_leaves_out_groups_with_no_team_row(
     expected_teams: tuple[str, ...],
     expected_added: list[str] | None,
     expected_removed: list[str] | None,
+    expected_detached: list[str],
 ):
     mock_client: Final = MagicMock()
     mock_client.writer_db = mock_client.db
     mock_client.db.litellm_teamtable.find_many = AsyncMock(return_value=_team_rows(teams_with_rows))
+    tx: Final = MagicMock()
+    tx.query_raw = AsyncMock(return_value=[])
+    tx.execute_raw = AsyncMock(return_value=1)
+    tx_context: Final = MagicMock()
+    tx_context.__aenter__ = AsyncMock(return_value=tx)
+    tx_context.__aexit__ = AsyncMock(return_value=False)
+    mock_client.tx = MagicMock(return_value=tx_context)
     mock_patch_team_membership: Final = AsyncMock()
 
     with patch(
@@ -729,6 +739,9 @@ async def test_sync_requested_teams_leaves_out_groups_with_no_team_row(
         )
 
     assert teams == expected_teams
+    assert [(call.args[1], call.args[2]) for call in tx.execute_raw.await_args_list] == [
+        (team, ["user-groups"]) for team in expected_detached
+    ]
     if expected_added is None:
         mock_patch_team_membership.assert_not_called()
         return
@@ -864,7 +877,7 @@ async def test_patch_user_ignores_a_group_with_no_team_named_like_the_scim_admin
 
     update_data: Final = mock_client.db.litellm_usertable.update.call_args.kwargs["data"]
     assert update_data["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
-    assert update_data["teams"] == []
+    assert "teams" not in update_data
 
 
 @pytest.mark.asyncio
@@ -908,7 +921,7 @@ async def test_patch_user_deactivates_and_blocks_keys_when_a_group_has_no_team()
     update_data: Final = mock_db.litellm_usertable.update.call_args.kwargs["data"]
     metadata: Final = TypeAdapter(dict[str, object]).validate_json(update_data["metadata"])
     assert metadata["scim_active"] is False
-    assert update_data["teams"] == []
+    assert "teams" not in update_data
     mock_patch_team_membership.assert_not_called()
     mock_block_keys.assert_awaited_once_with(user_id="user-leaver", blocked=True)
 

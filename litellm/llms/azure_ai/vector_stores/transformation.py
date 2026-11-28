@@ -7,7 +7,7 @@ import httpx
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, require_attributes
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.vector_store.transformation import (
@@ -102,8 +102,8 @@ class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM
         }
 
     def validate_environment(
-        self, headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
-    ) -> dict[str, str]:
+        self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         basic_headers: Final = self.base_validate_azure_environment(headers, litellm_params)
         basic_headers.update({"Content-Type": "application/json"})
         return basic_headers
@@ -221,7 +221,9 @@ class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM
         }
         """
         try:
-            response_json: Final[_AzureSearchResponse] = response.json()
+            response_json: Final = require_attributes(
+                _DECODED_JSON.validate_python(response.json()), _AzureSearchResponse, "get"
+            )
 
             # Extract results from Azure AI Search API response
             results: Final = response_json.get("value", [])

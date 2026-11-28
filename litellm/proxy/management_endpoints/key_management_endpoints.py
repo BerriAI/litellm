@@ -1130,16 +1130,37 @@ def _configured_default_allowed_routes() -> tuple[str, ...] | None:
     return string_routes if len(string_routes) == len(routes) else None
 
 
+_TEAM_SERVICE_ACCOUNT_DEFAULT_EXTRA_ROUTES: Final = frozenset(
+    {
+        "/key/spend/report",
+        "/key/info",
+        "/key/health",
+        "/model/info",
+        "/v1/model/info",
+        "/v2/model/info",
+        "/model_group/info",
+    }
+)
+
+
 def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object) -> tuple[str, ...] | None:
     configured_routes: Final = _configured_default_allowed_routes()
-    if configured_routes is None or _creates_team_service_account(request):
+    if configured_routes is None:
         return None
     if "key_type" not in request.model_fields_set or request.key_type is None:
-        return None if key_routes else configured_routes
+        return None if key_routes or _creates_team_service_account(request) else configured_routes
     match request.key_type:
         case LiteLLMKeyType.LLM_API:
             llm_api_routes: Final = _KEY_TYPE_PRESET_ROUTES[LiteLLMKeyType.LLM_API]
-            return configured_routes if all(route in configured_routes for route in llm_api_routes) else None
+            if not all(route in configured_routes for route in llm_api_routes):
+                return None
+            if _creates_team_service_account(request):
+                return tuple(
+                    route
+                    for route in configured_routes
+                    if route in llm_api_routes or route in _TEAM_SERVICE_ACCOUNT_DEFAULT_EXTRA_ROUTES
+                )
+            return configured_routes
         case _:
             return None
 
@@ -5657,7 +5678,7 @@ async def generate_key_helper_fn(
     key_alias: str | None = None,
     allowed_cache_controls: list | None = [],
     permissions: Mapping[str, object] | None = {},
-    model_max_budget: dict | None = {},
+    model_max_budget: dict[str, object] | None = {},
     budget_fallbacks: Mapping[str, object] | None = None,
     model_rpm_limit: Mapping[str, object] | None = None,
     model_tpm_limit: Mapping[str, object] | None = None,
@@ -6095,7 +6116,7 @@ async def delete_verification_tokens(
     """
     from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj
 
-    failed_tokens: list = []
+    failed_tokens: list[object] = []
     try:
         if prisma_client:
             hashed_tokens: Final[list[str]] = [hash_token_if_needed(token=key) for key in tokens]
@@ -6342,8 +6363,10 @@ async def reencrypt_credentials_for_aes_migration(
 
     encryption_key: Final = os.environ.get(SALT_KEY_ENV_VAR, new_master_key)
     try:
-        models: list | None = cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
-            "list[object]", await _prisma_table(ModelRepository(prisma_client)).find_many()
+        models: list[object] | None = (
+            cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
+                "list[object]", await _prisma_table(ModelRepository(prisma_client)).find_many()
+            )
         )
     except Exception:
         models = None
@@ -8748,19 +8771,18 @@ async def _can_user_query_key_info(
     Helper to check if the user has access to the key's info
     """
     if (
-        (
-            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-        )
-        or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key)
-        or (key_info.user_id and key_info.user_id == user_api_key_dict.user_id)
-        or await TeamMemberPermissionChecks.user_belongs_to_keys_team(
-            user_api_key_dict=user_api_key_dict,
-            existing_key_row=key_info,
-        )
-    ):
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ) or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key):
         return True
-    return False
+    if user_api_key_dict.is_team_service_account:
+        return False
+    if key_info.user_id and key_info.user_id == user_api_key_dict.user_id:
+        return True
+    return await TeamMemberPermissionChecks.user_belongs_to_keys_team(
+        user_api_key_dict=user_api_key_dict,
+        existing_key_row=key_info,
+    )
 
 
 async def test_key_logging(

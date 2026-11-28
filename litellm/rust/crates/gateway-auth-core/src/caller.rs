@@ -7,7 +7,7 @@ use std::convert::Infallible;
 use litellm_config::LitellmRole;
 
 use crate::{
-    KeyHash, Rows,
+    Affiliation, KeyHash, Rows,
     authn::key::KeyRecord,
     identity::key::{KeyContext, KeyIdentity},
     outcome::Identity,
@@ -31,12 +31,20 @@ impl StoredKey for Infallible {
     }
 }
 
-/// Who a request is served for: the master key, or a virtual key with the rows read about who
-/// holds it.
+/// Who a request is served for: what it presented, what that belongs to, and the end user the
+/// request names, which any credential can carry.
 #[derive(Clone, Debug, PartialEq)]
-pub enum Caller<R: Rows> {
+pub struct Caller<R: Rows> {
+    pub credential: Credential<R>,
+    pub affiliation: Affiliation<R>,
+    pub end_user: R::EndUser,
+}
+
+/// What a caller presented and the core verified.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Credential<R: Rows> {
     MasterKey,
-    Key(Box<KeyContext<R>>),
+    Key { key: R::Key },
 }
 
 /// An identity the core authenticated that no host serves a request for.
@@ -57,8 +65,21 @@ impl<R: Rows> TryFrom<Identity<R>> for Caller<R> {
 
     fn try_from(identity: Identity<R>) -> Result<Self, NotACaller> {
         match identity {
-            Identity::Key(KeyIdentity::MasterKey { .. }) => Ok(Self::MasterKey),
-            Identity::Key(KeyIdentity::VirtualKey(context)) => Ok(Self::Key(context)),
+            Identity::Key(KeyIdentity::MasterKey { end_user, .. }) => {
+                Ok(Self::master_key(end_user))
+            }
+            Identity::Key(KeyIdentity::VirtualKey(context)) => {
+                let KeyContext {
+                    key,
+                    affiliation,
+                    end_user,
+                } = *context;
+                Ok(Self {
+                    credential: Credential::Key { key },
+                    affiliation,
+                    end_user,
+                })
+            }
             Identity::Key(KeyIdentity::NoMasterKey { .. }) => Err(NotACaller::NoMasterKey),
             Identity::Key(KeyIdentity::UserAuthRoute) => Err(NotACaller::UserAuthRoute),
             Identity::Key(KeyIdentity::CachedAdmin { .. }) => Err(NotACaller::CachedAdmin),
@@ -69,15 +90,26 @@ impl<R: Rows> TryFrom<Identity<R>> for Caller<R> {
     }
 }
 
+impl<R: Rows> Caller<R> {
+    /// The master key belongs to nothing, and can still name an end user.
+    pub fn master_key(end_user: R::EndUser) -> Self {
+        Self {
+            credential: Credential::MasterKey,
+            affiliation: Affiliation::nobody(),
+            end_user,
+        }
+    }
+}
+
 impl<R: Rows<Key: StoredKey>> Caller<R> {
     /// The hash a key's row is stored under, which is the key's id wherever a host counts, caches
     /// or logs by it. Never the hash of the token the request presented, since a key a JWT maps
     /// to presents none. The key path refuses a key whose row has none, so only the master key,
     /// which has no row, has none.
     pub fn hash(&self) -> Option<&KeyHash> {
-        match self {
-            Self::MasterKey => None,
-            Self::Key(context) => context.key.record().token.as_ref(),
+        match &self.credential {
+            Credential::MasterKey => None,
+            Credential::Key { key } => key.record().token.as_ref(),
         }
     }
 
@@ -86,10 +118,10 @@ impl<R: Rows<Key: StoredKey>> Caller<R> {
     // TODO: read the key owner's `user_role` once the key path returns it beside the owner's row,
     // as `UserAPIKeyAuth.user_role` is the owner's
     pub fn role(&self) -> LitellmRole {
-        match self {
-            Self::MasterKey => LitellmRole::ProxyAdmin,
-            Self::Key(context) if context.key.record().is_proxy_admin => LitellmRole::ProxyAdmin,
-            Self::Key(_) => LitellmRole::InternalUser,
+        match &self.credential {
+            Credential::MasterKey => LitellmRole::ProxyAdmin,
+            Credential::Key { key } if key.record().is_proxy_admin => LitellmRole::ProxyAdmin,
+            Credential::Key { .. } => LitellmRole::InternalUser,
         }
     }
 }
@@ -103,10 +135,7 @@ mod tests {
     use crate::{
         Token,
         authn::jwt::{KeyOrigin, MappedJwt},
-        identity::{
-            jwt::{JwtIdentity, JwtRows},
-            key::TeamGrant,
-        },
+        identity::jwt::JwtIdentity,
     };
 
     #[derive(Clone, Debug, PartialEq)]
@@ -134,10 +163,8 @@ mod tests {
     fn key(record: KeyRecord) -> Box<KeyContext<Stored>> {
         Box::new(KeyContext {
             key: record,
+            affiliation: Affiliation::nobody(),
             end_user: "end-user".to_owned(),
-            owner: None,
-            team: TeamGrant::NoTeam,
-            project: None,
         })
     }
 
@@ -173,7 +200,8 @@ mod tests {
             end_user_id: None,
             agent_id: None,
             managed_agent: None,
-            rows: JwtRows::default(),
+            affiliation: Affiliation::nobody(),
+            end_user: None,
         }))
     }
 
@@ -195,7 +223,7 @@ mod tests {
     }
 
     #[rstest]
-    fn the_master_key_is_an_admin_with_no_row() {
+    fn the_master_key_is_an_admin_with_no_row_that_keeps_the_requests_end_user() {
         let master = Identity::<Stored>::Key(KeyIdentity::MasterKey {
             hash: Token::new("sk-master").hash(),
             end_user: "end-user".to_owned(),
@@ -204,8 +232,18 @@ mod tests {
         let caller = Caller::try_from(master).unwrap();
 
         assert_eq!(
-            (caller.hash(), caller.role()),
-            (None, LitellmRole::ProxyAdmin)
+            (
+                caller.hash(),
+                caller.role(),
+                &caller.affiliation,
+                caller.end_user.as_str()
+            ),
+            (
+                None,
+                LitellmRole::ProxyAdmin,
+                &Affiliation::nobody(),
+                "end-user"
+            )
         );
     }
 

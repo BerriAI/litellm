@@ -1,13 +1,14 @@
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::{
-    Extension, Json,
+    Json,
     response::{AppendHeaders, IntoResponse, Response},
 };
-use litellm_gateway_auth_core::authz::Denied;
+use litellm_gateway_auth_core::AuthzDenial;
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use litellm_llms_types::formats::messages::MessagesErrorType;
 use litellm_python_compat::{Value as PyValue, repr::repr};
+use litellm_router_core::FailureKind;
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -19,7 +20,7 @@ use crate::{
 pub enum Error {
     /// The auth core found a model list of the caller's that does not reach the model.
     #[error("operation is not permitted")]
-    ModelAccess(#[from] Denied),
+    ModelAccess(#[from] AuthzDenial),
     #[error("invalid request body")]
     InvalidBody(#[from] BodyError),
     #[error(
@@ -40,6 +41,12 @@ pub enum Error {
     Callback(litellm_error::Source),
     #[error("request body exceeds the size limit")]
     BodyTooLarge,
+    /// The request body check refused the body, as Python's authentication refuses it.
+    #[error("Authentication Error, {0}")]
+    BodyRejected(litellm_gateway_auth_core::body::Rejection),
+    /// The host could not read a stored credential the body names, so the body is not checked.
+    #[error("could not read the stored credentials the request body names")]
+    Credentials(#[source] litellm_gateway_auth_core::Error),
     #[error("unexpected HTTP host operation")]
     Internal,
 }
@@ -117,13 +124,10 @@ impl IntoResponse for Error {
 pub struct Ended {
     pub error: Box<Error>,
     pub routing: Option<Routing>,
-}
-
-impl Ended {
-    /// What the routing headers layer reads off the response.
-    pub(crate) fn routing(&self) -> Option<Extension<Routing>> {
-        self.routing.clone().map(Extension)
-    }
+    /// The deployment whose attempt raised `error`, which names its timeout as Python's
+    /// `failure.timeout` does. It differs from `routing` when a retry that took over a failed
+    /// stream raised the error, since the call keeps the routing of the stream that failed.
+    pub raised_on: Option<String>,
 }
 
 impl<E: Into<Error>> From<E> for Ended {
@@ -131,6 +135,7 @@ impl<E: Into<Error>> From<E> for Ended {
         Self {
             error: Box::new(error.into()),
             routing: None,
+            raised_on: None,
         }
     }
 }
@@ -145,10 +150,10 @@ pub(crate) enum ErrorFormat {
 impl Ended {
     pub(crate) fn response(self, format: ErrorFormat, request_id: Option<&str>) -> Response {
         match format {
-            ErrorFormat::OpenAi => (self.routing(), *self.error).into_response(),
+            ErrorFormat::OpenAi => (*self.error).into_response(),
             ErrorFormat::Anthropic => (
                 self.error.status(),
-                self.routing(),
+                AppendHeaders(self.error.retry_after()),
                 Json(self.error.body(request_id)),
             )
                 .into_response(),
@@ -181,11 +186,44 @@ impl Error {
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
             Self::NoDeployments(_) => StatusCode::TOO_MANY_REQUESTS,
-            Self::Internal | Self::Callback(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::BodyRejected(_) => StatusCode::UNAUTHORIZED,
+            Self::Internal | Self::Callback(_) | Self::Credentials(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             Self::Ocr(error) => ocr_status(error),
             Self::Route(error) => route_status(error),
             Self::Routing(error) => routing_status(error),
             Self::Refused(refusal) => refusal.status,
+        }
+    }
+
+    /// Whether the proxy raises this error inside the route's handler, where its response carries
+    /// the proxy's error headers. A model the caller may not reach and a body that cannot be read
+    /// are refused before the handler runs.
+    pub(crate) fn in_handler(&self) -> bool {
+        !matches!(
+            self,
+            Self::ModelAccess(_) | Self::InvalidBody(_) | Self::BodyTooLarge
+        )
+    }
+
+    pub(crate) fn raised_by_provider(&self) -> bool {
+        matches!(self, Self::Route(_) | Self::Ocr(_))
+    }
+
+    /// The provider's response headers on the error, empty for an error no provider responded.
+    pub(crate) fn provider_headers(&self) -> Vec<(String, String)> {
+        match self {
+            Self::Route(error) => error.upstream_headers().to_vec(),
+            Self::Ocr(error) => error
+                .upstream_response()
+                .into_iter()
+                .flat_map(|(_, _, headers)| headers.iter())
+                .filter_map(|(name, value)| {
+                    Some((name.as_str().to_owned(), value.to_str().ok()?.to_owned()))
+                })
+                .collect(),
+            _ => Vec::new(),
         }
     }
 
@@ -198,8 +236,19 @@ impl Error {
                 body,
             )
                 .into_response(),
-            other => (other.status(), body).into_response(),
+            other => (other.status(), AppendHeaders(other.retry_after()), body).into_response(),
         }
+    }
+
+    /// `retry-after` in whole seconds on a refusal the router made itself, as it refuses a
+    /// deployment past its declared rate limits.
+    pub(crate) fn retry_after(&self) -> Option<(HeaderName, HeaderValue)> {
+        let Self::Routing(error) = self else {
+            return None;
+        };
+        let after = error.refused()?.resets_in;
+        let seconds = after.as_secs() + u64::from(after.subsec_nanos() > 0);
+        Some((RETRY_AFTER, HeaderValue::from(seconds)))
     }
 
     /// A refusal names its own `type` and `code` when the proxy's exception does.
@@ -223,6 +272,11 @@ impl Error {
     /// The Anthropic error envelope Python's `AnthropicExceptionMapping` builds: an upstream
     /// body already in that shape passes through, any other has its message extracted.
     pub fn body(&self, request_id: Option<&str>) -> Value {
+        if let Self::Refused(refusal) = self
+            && refusal.at_authentication
+        {
+            return Value::Object(with_request_id(proxy_envelope(refusal), request_id));
+        }
         let raw = match self {
             Self::Route(error) if let Some((_, body)) = error.upstream_response() => {
                 body.to_owned()
@@ -248,7 +302,8 @@ impl Error {
     fn message(&self) -> String {
         match self {
             Self::Refused(refusal) => refusal.message.clone(),
-            Self::ModelAccess(_) => self.to_string(),
+            Self::ModelAccess(_) | Self::BodyRejected(_) => self.to_string(),
+            Self::Routing(error) if let Some(refused) = rate_limit_refusal(error) => refused,
             Self::InvalidBody(_)
             | Self::UnknownModel { .. }
             | Self::Route(_)
@@ -257,9 +312,18 @@ impl Error {
             | Self::Routing(_)
             | Self::Callback(_)
             | Self::BodyTooLarge
+            | Self::Credentials(_)
             | Self::Internal => litellm_error::Report::new(self).to_string(),
         }
     }
+}
+
+/// The message Python's proxy answers a pre-call check's `RateLimitError` with.
+fn rate_limit_refusal(error: &litellm_router_core::Error) -> Option<String> {
+    error.refused()?;
+    let failure = error.attempt()?;
+    let detail = failure.detail.as_deref()?;
+    (failure.kind == FailureKind::RateLimit).then(|| format!("litellm.{}: {detail}", failure.kind))
 }
 
 fn route_status(error: &InferenceError) -> StatusCode {
@@ -268,6 +332,9 @@ fn route_status(error: &InferenceError) -> StatusCode {
     }
     if let Some((status, _)) = error.upstream_response() {
         return StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    }
+    if error.timeout().is_some() {
+        return StatusCode::REQUEST_TIMEOUT;
     }
     if error.is_missing_credential() {
         return StatusCode::UNAUTHORIZED;
@@ -300,6 +367,60 @@ fn ocr_status(error: &OcrError) -> StatusCode {
         .http_status_code()
         .and_then(|status| StatusCode::from_u16(status).ok())
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// `anthropic_error_content` for an exception the proxy raises while it authenticates: its type
+/// by the proxy's own status map, and its `litellm_error_type` when it names one neither map
+/// gives the status.
+fn proxy_envelope(refusal: &Refusal) -> Map<String, Value> {
+    let status = refusal.status.as_u16();
+    let kind = proxy_error_type(status);
+    let litellm_error_type = refusal
+        .kind
+        .as_deref()
+        .filter(|named| *named != kind && *named != openai_error_type(status))
+        .map(|named| ("litellm_error_type".to_owned(), Value::from(named)));
+    let error = [
+        ("type".to_owned(), Value::from(kind)),
+        ("message".to_owned(), Value::from(refusal.message.as_str())),
+    ]
+    .into_iter()
+    .chain(litellm_error_type)
+    .collect();
+    Map::from_iter([
+        ("type".to_owned(), Value::from("error")),
+        ("error".to_owned(), Value::Object(error)),
+    ])
+}
+
+/// `proxy_error_type`: `ANTHROPIC_ERROR_TYPE_MAP` and the proxy's own additions, then any other
+/// client error as an invalid request.
+fn proxy_error_type(status: u16) -> &'static str {
+    match status {
+        400 => "invalid_request_error",
+        401 => "authentication_error",
+        402 => "billing_error",
+        403 => "permission_error",
+        404 => "not_found_error",
+        409 => "conflict_error",
+        413 => "request_too_large",
+        429 => "rate_limit_error",
+        504 => "timeout_error",
+        529 => "overloaded_error",
+        _ if status != 408 && (400..500).contains(&status) => "invalid_request_error",
+        _ => "api_error",
+    }
+}
+
+/// `openai_error_type_for_status`.
+fn openai_error_type(status: u16) -> &'static str {
+    match status {
+        401 => "authentication_error",
+        403 => "permission_error",
+        429 => "rate_limit_error",
+        ..500 => "invalid_request_error",
+        _ => "internal_server_error",
+    }
 }
 
 fn envelope(status: StatusCode, message: &str) -> Map<String, Value> {
@@ -345,6 +466,91 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    const BUDGET: &str = "Budget has been exceeded! Key=hash Current cost: 0.0, Max budget: 1e-06";
+
+    fn budget_refusal(at_authentication: bool) -> Error {
+        Error::Refused(Refusal {
+            kind: Some("budget_exceeded".to_owned()),
+            code: Some("422".to_owned()),
+            at_authentication,
+            ..Refusal::new(StatusCode::UNPROCESSABLE_ENTITY, BUDGET)
+        })
+    }
+
+    #[rstest]
+    #[case::at_authentication(
+        true,
+        None,
+        r#"{"type":"error","error":{"type":"invalid_request_error","message":"Budget has been exceeded! Key=hash Current cost: 0.0, Max budget: 1e-06","litellm_error_type":"budget_exceeded"}}"#
+    )]
+    #[case::at_authentication_with_a_request_id(
+        true,
+        Some("req-1"),
+        r#"{"type":"error","error":{"type":"invalid_request_error","message":"Budget has been exceeded! Key=hash Current cost: 0.0, Max budget: 1e-06","litellm_error_type":"budget_exceeded"},"request_id":"req-1"}"#
+    )]
+    #[case::in_the_handler(
+        false,
+        None,
+        r#"{"type":"error","error":{"type":"api_error","message":"Budget has been exceeded! Key=hash Current cost: 0.0, Max budget: 1e-06"}}"#
+    )]
+    fn a_refusal_raised_while_authenticating_is_rendered_by_the_proxys_exception_handler(
+        #[case] at_authentication: bool,
+        #[case] request_id: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            budget_refusal(at_authentication)
+                .body(request_id)
+                .to_string(),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::billing(402, None, "billing_error", None)]
+    #[case::conflict(409, None, "conflict_error", None)]
+    #[case::timeout(504, None, "timeout_error", None)]
+    #[case::request_timeout(408, None, "api_error", None)]
+    #[case::unprocessable(422, None, "invalid_request_error", None)]
+    #[case::server(503, None, "api_error", None)]
+    #[case::a_kind_the_status_gives(
+        401,
+        Some("authentication_error"),
+        "authentication_error",
+        None
+    )]
+    #[case::an_openai_kind_the_status_gives(
+        422,
+        Some("invalid_request_error"),
+        "invalid_request_error",
+        None
+    )]
+    #[case::its_own_kind(401, Some("auth_error"), "authentication_error", Some("auth_error"))]
+    fn an_authentication_refusal_takes_the_proxys_type_and_names_its_own(
+        #[case] status: u16,
+        #[case] kind: Option<&str>,
+        #[case] expected_type: &str,
+        #[case] litellm_error_type: Option<&str>,
+    ) {
+        let refused = Error::Refused(Refusal {
+            kind: kind.map(str::to_owned),
+            at_authentication: true,
+            ..Refusal::new(StatusCode::from_u16(status).unwrap(), "no")
+        });
+
+        let body = refused.body(None);
+
+        assert_eq!(
+            (
+                body["error"]["type"].as_str(),
+                body["error"]
+                    .get("litellm_error_type")
+                    .and_then(Value::as_str)
+            ),
+            (Some(expected_type), litellm_error_type)
+        );
+    }
 
     fn upstream(status: u16, body: &str) -> Error {
         Error::Route(litellm_http::Error::upstream(status, body.into()).into())

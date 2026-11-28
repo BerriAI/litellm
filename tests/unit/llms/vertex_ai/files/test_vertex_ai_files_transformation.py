@@ -3,9 +3,12 @@ Tests for VertexAIFilesConfig transformation methods (Issues 5-7).
 Includes tests for Vertex AI batch output transformation to OpenAI format.
 """
 
+import base64
+import io
 import json
 import re
 import urllib.parse
+import wave
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
@@ -563,6 +566,69 @@ class TestVertexBatchOutputTransformation:
         assert "message" in choice
         assert "content" in choice["message"]
         assert "Hello! How can I help you today?" in choice["message"]["content"]
+
+    @pytest.mark.parametrize(
+        ("request_body", "keeps_wav"),
+        [
+            (
+                {
+                    "generationConfig": {
+                        "responseModalities": ["AUDIO"],
+                        "responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}},
+                    }
+                },
+                True,
+            ),
+            ({"generationConfig": {"responseModalities": ["AUDIO"]}}, False),
+            (
+                {
+                    "generationConfig": None,
+                    "generation_config": {
+                        "response_modalities": ["AUDIO"],
+                        "response_format": {"audio": {"mime_type": "AUDIO_WAV"}},
+                    },
+                },
+                True,
+            ),
+            (None, False),
+        ],
+        ids=["wav-asked", "no-mime-type", "wav-asked-under-snake-case-beside-null", "null-request"],
+    )
+    def test_tts_batch_output_audio_follows_the_mime_type_its_request_named(
+        self, config: VertexAIFilesConfig, request_body: Mapping[str, object] | None, keeps_wav: bool
+    ) -> None:
+        frames: Final = bytes(range(256)) * 8
+        wav: Final = io.BytesIO()
+        with wave.open(wav, "wb") as writer:
+            writer.setnchannels(1)
+            writer.setsampwidth(2)
+            writer.setframerate(24000)
+            writer.writeframes(frames)
+        wav_base64: Final = base64.b64encode(wav.getvalue()).decode()
+        vertex_output: Final = {
+            "status": "",
+            "processed_time": "2026-11-17T08:00:00.000000+00:00",
+            "request": request_body,
+            "response": {
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [{"inlineData": {"mimeType": "audio/wav", "data": wav_base64}}],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "modelVersion": "gemini-3.8-flash-tts",
+                "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 10, "totalTokenCount": 13},
+            },
+        }
+
+        transformed: Final = config._try_transform_vertex_batch_output_to_openai(json.dumps(vertex_output).encode())
+        result: Final = json.loads(transformed)
+
+        audio_data: Final = result["response"]["body"]["choices"][0]["message"]["audio"]["data"]
+        assert base64.b64decode(audio_data) == (wav.getvalue() if keeps_wav else frames)
 
     def test_transform_error_vertex_batch_output(self, config):
         """Test transformation of an error Vertex AI batch output"""

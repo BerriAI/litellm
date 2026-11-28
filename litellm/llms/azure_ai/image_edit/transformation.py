@@ -24,6 +24,9 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
     with image files and prompt.
     """
 
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseImageEditConfig contract
+        return [param for param in super().get_supported_openai_params(model) if param != "markup"]
+
     def validate_environment(
         self,
         headers: dict[str, object],

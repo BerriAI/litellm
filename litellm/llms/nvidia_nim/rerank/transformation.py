@@ -121,7 +121,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: dict[str, object] | None,
         model: str,
         drop_params: bool,
         query: str,
@@ -192,7 +192,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: dict,
         headers: dict[str, object],
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> dict[str, object]:
         """
         Transform request to Nvidia NIM format.
@@ -275,8 +275,8 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        optional_params: dict[str, object] = {},
+        litellm_params: dict[str, object] = {},
     ) -> RerankResponse:
         """
         Transform Nvidia NIM rerank response to LiteLLM format.

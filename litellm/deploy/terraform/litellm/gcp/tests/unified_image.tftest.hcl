@@ -108,3 +108,20 @@ run "image_overrides_the_composed_uri_everywhere" {
     error_message = "A full image URI must win over image_registry + image_tag for every workload."
   }
 }
+
+run "message_logging_opt_out_creates_proxy_config" {
+  command = plan
+
+  variables {
+    turn_off_message_logging = true
+  }
+
+  assert {
+    condition = (
+      yamldecode(google_storage_bucket_object.proxy_config[0].content).litellm_settings.turn_off_message_logging &&
+      length([for volume in google_cloud_run_v2_service.gateway[0].template[0].volumes : volume if volume.name == "proxy-config"]) == 1 &&
+      length([for volume in google_cloud_run_v2_service.backend[0].template[0].volumes : volume if volume.name == "proxy-config"]) == 1
+    )
+    error_message = "The opt-out must create a proxy config that redacts messages and mount it in both Cloud Run services."
+  }
+}

@@ -134,6 +134,11 @@ CONNECTION_NAMES: Final = (
     "openai_identity_provider_id",
     "openai_service_account_id",
     "openai_identity_token_file",
+    "oauth_client_credentials",
+    "oauth_token_url",
+    "oauth_client_id",
+    "oauth_client_secret",
+    "oauth_scope",
 )
 
 OPTION_NAMES: Final = (
@@ -189,6 +194,7 @@ OPTION_NAMES: Final = (
     "quality_router_default_model",
     "caching",
     "cache",
+    "allowed_response_cache_overrides",
     "ttl",
     "enable_prompt_caching",
     "caching_groups",

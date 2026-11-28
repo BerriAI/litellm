@@ -944,7 +944,7 @@ class AmazonDeepSeekR1StreamDecoder(AWSEventStreamDecoder):
             sync_stream=sync_stream,
         )
 
-    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict[str, object]:
+    def _chunk_parser(self, chunk_data: dict[str, object]) -> GChunk | ModelResponseStream | dict[str, object]:
         return self.deepseek_model_response_iterator.chunk_parser(chunk=chunk_data)
 
 

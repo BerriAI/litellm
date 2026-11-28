@@ -9,10 +9,10 @@ use litellm_callbacks::{
 };
 use litellm_callbacks_parallel_request_limiter::{
     Backend, CapSettings, Ctx, Descriptor, Engine, EnqueuedReservation, EnqueuedScope,
-    EstimateRequest, IoReservation, LimiterState, Op, Outcome, ParallelRequestLimiter, PolicyFacts,
-    REQUEST_KEYS, Response, Scoped, ScopedInputs, Settings, SlotAcquisition, SocketClose, Stash,
-    TokenRateLimitType, Unverifiable, WindowIdentity, input_and_output_tokens, process_monotonic,
-    tokens_for_request,
+    EstimateRequest, IoReservation, LimiterState, LoggedCall, Op, Outcome, ParallelRequestLimiter,
+    PolicyFacts, REQUEST_KEYS, Response, Scoped, ScopedInputs, Settings, SlotAcquisition,
+    SocketClose, Stash, TokenRateLimitType, Unverifiable, WindowIdentity, input_and_output_tokens,
+    process_monotonic, tokens_for_request,
 };
 use litellm_callbacks_python::RustCallback;
 use litellm_host_python::{
@@ -856,7 +856,7 @@ impl NativeParallelRequestLimiter {
 
     /// Settle a logging callback's failure: release the request's slot and refund its
     /// reservation, or settle it at the partial usage a failed stream recovered.
-    #[pyo3(signature = (state, kwargs, resolved, rate_limit_type, /, request = None, turn = false))]
+    #[pyo3(signature = (state, kwargs, resolved, rate_limit_type, /, request = None, turn = false, provider_billed = false))]
     #[allow(clippy::too_many_arguments)]
     fn log_failure<'py>(
         &self,
@@ -867,8 +867,12 @@ impl NativeParallelRequestLimiter {
         rate_limit_type: &str,
         request: Option<PyRef<'py, NativeRequestRedis>>,
         turn: bool,
+        provider_billed: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let call = logged::logged_call(kwargs, None)?;
+        let call = LoggedCall {
+            provider_billed,
+            ..logged::logged_call(kwargs, None)?
+        };
         let resolved = logged::resolved(resolved)?;
         let kind = TokenRateLimitType::from_setting(&Value::String(rate_limit_type.to_owned()));
         let state = state.map(|state| Arc::clone(&state.0));
@@ -890,14 +894,19 @@ impl NativeParallelRequestLimiter {
     }
 
     /// Release what a request rejected after admission still holds, from its request data.
+    #[pyo3(signature = (state, request_data, rate_limit_type, provider_billed = false))]
     fn log_post_call_failure<'py>(
         &self,
         py: Python<'py>,
         state: PyRef<'py, NativeParallelRequestLimiterState>,
         request_data: &Bound<'py, PyAny>,
         rate_limit_type: &str,
+        provider_billed: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let call = logged::logged_call(request_data, None)?;
+        let call = LoggedCall {
+            provider_billed,
+            ..logged::logged_call(request_data, None)?
+        };
         let kind = TokenRateLimitType::from_setting(&Value::String(rate_limit_type.to_owned()));
         let state = Arc::clone(&state.0);
         let limiter = Arc::clone(&self.limiter);

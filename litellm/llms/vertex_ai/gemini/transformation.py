@@ -330,7 +330,7 @@ def _message_fields(raw: object) -> Mapping[object, object] | None:
     return dumped if isinstance(dumped, dict) else None
 
 
-def _openai_messages_may_need_sync_media_fetch(
+def openai_messages_may_need_sync_media_fetch(
     messages: Sequence[object],
     custom_llm_provider: str = "vertex_ai",
     model: str | None = None,
@@ -373,7 +373,7 @@ def _openai_messages_may_need_sync_media_fetch(
     return False
 
 
-_openai_messages_may_need_sync_gcs_metadata_fetch: Final = _openai_messages_may_need_sync_media_fetch
+_openai_messages_may_need_sync_gcs_metadata_fetch: Final = openai_messages_may_need_sync_media_fetch
 
 
 def _get_gcs_object_content_type(
@@ -1526,7 +1526,7 @@ def transform_request_body(
     model: str,
     optional_params: dict,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     cached_content: str | None,
 ) -> RequestBody:
     """
@@ -1663,10 +1663,10 @@ def sync_transform_request_body(
     client: HTTPHandler | None,
     timeout: float | httpx.Timeout | None,
     extra_headers: Mapping[str, str] | None,
-    optional_params: dict,
+    optional_params: dict[str, object],
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
@@ -1700,6 +1700,7 @@ def sync_transform_request_body(
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
         drop_params=drops_unsupported_params(request_settings.get("drop_params")),
+        litellm_params=request_settings,
     )
 
     return _with_default_output_budget(
@@ -1803,10 +1804,10 @@ async def async_transform_request_body(
     client: AsyncHTTPHandler | None,
     timeout: float | httpx.Timeout | None,
     extra_headers: Mapping[str, str] | None,
-    optional_params: dict,
+    optional_params: dict[str, object],
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     vertex_project: str | None,
     vertex_location: str | None,
     vertex_auth_header: str | None,
@@ -1840,6 +1841,7 @@ async def async_transform_request_body(
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
         drop_params=drops_unsupported_params(request_settings.get("drop_params")),
+        litellm_params=request_settings,
     )
 
     inlined_messages: Final = await async_inline_remote_media(
@@ -1857,7 +1859,7 @@ async def async_transform_request_body(
     )
     request_body: Final[RequestBody] = (
         await asyncify(transform)()
-        if _openai_messages_may_need_sync_media_fetch(inlined_messages, custom_llm_provider, model)
+        if openai_messages_may_need_sync_media_fetch(inlined_messages, custom_llm_provider, model)
         else transform()
     )
     return _with_default_output_budget(

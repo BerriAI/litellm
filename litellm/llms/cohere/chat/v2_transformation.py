@@ -376,7 +376,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
@@ -416,10 +416,10 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "stream":
                 optional_params["stream"] = value

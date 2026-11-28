@@ -1,23 +1,30 @@
 import dataclasses
-from collections.abc import Callable
-from typing import Final
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timezone
+from typing import Final, cast
 
 import pytest
 from fastapi import Request
 from starlette.datastructures import URL
 
+import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LiteLLM_JWTAuth,
+    LiteLLM_TeamTableCachedObj,
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth import core
+from litellm.proxy.auth.auth_utils import is_authentication_failure
+from litellm.proxy.auth.host.facts import EndUserRow
 from litellm.proxy.auth.host.python import PythonAuthHost
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.caching.dual_cache import DualCache
+from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustDenial, RustPlan
 
 JWT: Final = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsifQ.eyJzdWIiOiJ1In0.c2ln"
@@ -73,7 +80,7 @@ def test_jwt_auth_is_on_only_for_the_boolean_true(enable_jwt_auth: object, expec
 
 
 @pytest.mark.asyncio
-async def test_a_host_failure_the_core_cannot_skip_propagates_unchanged(
+async def test_a_host_failure_the_core_cannot_skip_propagates_as_a_failed_authentication(
     monkeypatch: pytest.MonkeyPatch, auth_host: Callable[..., PythonAuthHost]
 ) -> None:
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://idp.example/jwks")
@@ -90,8 +97,9 @@ async def test_a_host_failure_the_core_cannot_skip_propagates_unchanged(
     failing: Final = dataclasses.replace(auth_host(), jwks_cache=_Unreadable())
     token: Final = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsifQ.eyJzdWIiOiJ1In0.c2ln"
 
-    with pytest.raises(ConnectionError, match="cache down"):
+    with pytest.raises(ConnectionError, match="cache down") as raised:
         await core.drive(RustAuth.verify_jwt(token, 0.0, settings), failing)
+    assert is_authentication_failure(raised.value)
 
 
 @pytest.mark.parametrize(
@@ -228,3 +236,155 @@ async def test_a_wrong_key_without_a_database_is_an_outage_only_when_one_is_conf
     with pytest.raises(ProxyException) as denied:
         _ = await _authenticate("Bearer sk-not-the-master-key")
     assert (denied.value.code, denied.value.type) == (code, error_type), denied.value.message
+
+
+@pytest.mark.parametrize(
+    ("key_from_db", "expected_failed_authentication"),
+    [
+        pytest.param(None, True, id="db_key_lookup_before_authentication"),
+        pytest.param(
+            UserAPIKeyAuth(api_key="sk-team-key", team_id="team-1"),
+            False,
+            id="team_lookup_after_authentication",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_host_failure_marks_failed_authentication_only_before_the_key_authenticates(
+    auth_host: Callable[..., PythonAuthHost],
+    key_from_db: UserAPIKeyAuth | None,
+    expected_failed_authentication: bool,
+) -> None:
+    token: Final = "sk-team-key"
+    settings: Final = RustAuthSettings(
+        {},
+        None,
+        core.HostFacts(master_key="sk-master", premium=False, has_db=True, db_configured=True),
+    )
+
+    class _FailingHost(PythonAuthHost):
+        async def db_key(self, hash: str, end_user: EndUserRow) -> UserAPIKeyAuth | None:
+            if key_from_db is None:
+                raise ConnectionError("db down")
+            return key_from_db
+
+        async def key_team(self, team_id: str) -> LiteLLM_TeamTableCachedObj | None:
+            raise ConnectionError("db down")
+
+    base: Final = auth_host(api_key=token)
+    host: Final = _FailingHost(
+        route=base.route,
+        parent_otel_span=base.parent_otel_span,
+        http=base.http,
+        prisma_client=base.prisma_client,
+        user_api_key_cache=base.user_api_key_cache,
+        jwks_cache=base.jwks_cache,
+        proxy_logging_obj=base.proxy_logging_obj,
+        llm_router=base.llm_router,
+        llm_model_list=base.llm_model_list,
+        model_max_budget_limiter=base.model_max_budget_limiter,
+        litellm_proxy_admin_name=base.litellm_proxy_admin_name,
+        litellm_jwtauth=base.litellm_jwtauth,
+        agent_lookup=base.agent_lookup,
+        http_handler=base.http_handler,
+        shared_fetches=base.shared_fetches,
+        api_key=base.api_key,
+    )
+
+    with pytest.raises(ConnectionError, match="db down") as raised:
+        await core.drive(
+            RustAuth.authenticate_key(core.request(token, "/chat/completions", "POST"), token, settings),
+            host,
+        )
+    assert is_authentication_failure(raised.value) is expected_failed_authentication
+
+
+class _Rows:
+    def __init__(self) -> None:
+        self.written: tuple[dict[str, object], ...] = ()
+
+    async def update_database(self, **kwargs: object) -> None:
+        self.written = (*self.written, kwargs)
+
+
+async def _raise_from_custom_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
+    raise ValueError("user not allowed")
+
+
+async def _expired_custom_auth_token(request: Request, api_key: str) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key="custom-caller", expires=datetime(2020, 1, 1, tzinfo=timezone.utc))
+
+
+@pytest.mark.parametrize(
+    ("api_key", "headers", "general_settings", "custom_auth", "premium", "rows"),
+    [
+        pytest.param("", (), {}, None, False, 0, id="no_key"),
+        pytest.param("Bearer sk-not-the-master-key", (), {}, None, False, 0, id="wrong_key_without_a_database"),
+        pytest.param(
+            "Bearer sk-the-master-key",
+            (),
+            {"allowed_routes": ["/embeddings"]},
+            None,
+            False,
+            0,
+            id="route_outside_the_proxy_allowed_routes",
+        ),
+        pytest.param("Bearer sk-anything", (), {}, _raise_from_custom_auth, False, 0, id="custom_auth_raises"),
+        pytest.param("Bearer sk-anything", (), {}, _expired_custom_auth_token, False, 0, id="custom_auth_expired"),
+        pytest.param(f"Bearer {JWT}", (), {"enable_jwt_auth": True}, None, False, 0, id="jwt_without_a_license"),
+        pytest.param(
+            "Bearer opaque-oauth2-token",
+            (),
+            {"enable_oauth2_auth": True},
+            None,
+            True,
+            0,
+            id="oauth2_introspection_not_configured",
+        ),
+        pytest.param(
+            "Bearer sk-the-master-key",
+            ((b"x-litellm-impersonate-user", b"u1"), (b"x-litellm-impersonate-encoding", b"rot13")),
+            {},
+            None,
+            False,
+            1,
+            id="master_key_refused_after_authenticating",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_refusal_writes_a_spend_row_only_once_the_credential_authenticated(
+    monkeypatch: pytest.MonkeyPatch,
+    api_key: str,
+    headers: tuple[tuple[bytes, bytes], ...],
+    general_settings: dict[str, object],
+    custom_auth: Callable[[Request, str], Awaitable[UserAPIKeyAuth]] | None,
+    premium: bool,
+    rows: int,
+) -> None:
+    written: Final = _Rows()
+    monkeypatch.delenv("OAUTH_TOKEN_INFO_ENDPOINT", raising=False)
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: cast(DBSpendUpdateWriter, written))])
+    monkeypatch.setattr(litellm, "enable_post_custom_auth_checks", True, raising=False)
+    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+    monkeypatch.setattr(proxy_server, "premium_user", premium)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "database_url_configured", False)
+    monkeypatch.setattr(proxy_server, "user_custom_auth", custom_auth)
+    monkeypatch.setattr(proxy_server, "master_key", "sk-the-master-key")
+    request: Final = Request(
+        scope={"type": "http", "headers": list(headers), "method": "POST", "path": "/chat/completions"}
+    )
+    request._url = URL(url="/chat/completions")
+
+    with pytest.raises(ProxyException):
+        await user_api_key_auth(
+            request=request,
+            api_key=api_key,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            custom_litellm_key_header=None,
+        )
+    assert len(written.written) == rows

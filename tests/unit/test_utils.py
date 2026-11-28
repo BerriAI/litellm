@@ -1133,6 +1133,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "input_cost_per_token_above_128k_tokens": {"type": "number"},
             "input_cost_per_audio_token_batches": {"type": "number"},
             "input_cost_per_image_token_batches": {"type": "number"},
+            "input_cost_per_image_token_priority": {"type": "number"},
             "input_cost_per_token_batches": {"type": "number"},
             "input_cost_per_video_token_batches": {"type": "number"},
             "input_cost_per_token_cache_hit": {"type": "number"},
@@ -1193,6 +1194,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_billable_unit": {"type": "number"},
             "output_cost_per_image_token": {"type": "number"},
             "output_cost_per_image_token_batches": {"type": "number"},
+            "output_cost_per_image_token_flex": {"type": "number"},
             "output_cost_per_image_token_priority": {"type": "number"},
             "output_cost_per_video_token": {"type": "number"},
             "output_cost_per_pixel": {"type": "number"},
@@ -1329,6 +1331,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             },
             "bedrock_converse_supports_strict_tools": {"type": "boolean"},
             "supports_regex_lookaround": {"type": "boolean"},
+            "supports_all_json_schema_keywords": {"type": "boolean"},
             "tpm": {"type": "number"},
             "supported_endpoints": {
                 "type": "array",
@@ -1527,6 +1530,7 @@ def test_cost_map_schema_accepts_vertex_modality_and_context_tiers() -> None:
         "input_cost_per_audio_token_above_200k_tokens_batches": 8e-6,
         "output_cost_per_image_token_priority": 9e-6,
         "output_cost_per_image_token_batches": 10e-6,
+        "output_cost_per_image_token_flex": 11e-6,
     }
 
     assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-vertex-tier-model": row})
@@ -13272,3 +13276,18 @@ async def test_post_deployment_failure_reaches_the_legacy_hook_and_keeps_the_rea
     assert type(recorder.failures[0]) is type(raised.value)
     assert recorder.failures[0] is not raised.value
     assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])
+
+
+def test_changing_a_keyed_get_model_info_result_leaves_later_lookups_alone() -> None:
+    litellm.get_model_info.cache_clear()
+    try:
+        shared_before: Final = litellm.get_model_info("gpt-4o", custom_llm_provider="openai")["max_input_tokens"]
+        keyed: Final = cast(
+            dict[str, object], litellm.get_model_info("gpt-4o", custom_llm_provider="openai", api_key="caller-key")
+        )
+        keyed["max_input_tokens"] = -1
+        shared_after: Final = litellm.get_model_info("gpt-4o", custom_llm_provider="openai")["max_input_tokens"]
+    finally:
+        litellm.get_model_info.cache_clear()
+
+    assert shared_after == shared_before

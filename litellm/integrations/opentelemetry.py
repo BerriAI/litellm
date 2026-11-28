@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     from opentelemetry._logs import Logger as _OTelLogger
     from opentelemetry.metrics import Meter as _Meter
     from opentelemetry.sdk.resources import Resource as _Resource
+    from opentelemetry.sdk.trace import SpanProcessor as _SpanProcessor
     from opentelemetry.sdk.trace import TracerProvider as _SDKTracerProvider
     from opentelemetry.sdk.trace.export import SpanExporter as _SpanExporter
     from opentelemetry.trace import Context as _Context
@@ -1044,7 +1045,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     async def async_post_call_failure_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
@@ -1170,7 +1171,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ):
@@ -3256,7 +3257,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         self,
         dynamic_headers: Mapping[str, str] | None = None,
         config_override: OpenTelemetryConfig | None = None,
-    ):
+    ) -> "_SpanProcessor":
         from opentelemetry.sdk.trace.export import (
             BatchSpanProcessor,
             ConsoleSpanExporter,

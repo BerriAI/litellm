@@ -3,7 +3,7 @@ use litellm_host::interceptors::{RetriedRequest, RetryReason};
 use litellm_http::request::{header_value, with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{
-        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message, MessageContent,
+        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message,
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{
@@ -18,7 +18,7 @@ use litellm_secret_value::SecretValue;
 use serde_json::{Map, Value, json};
 
 use super::{
-    handler::shape_anthropic_messages_request,
+    handler::{shape_anthropic_messages_request_keeping_tool_use_ids, with_sanitized_tool_use_ids},
     thinking::{drop_unsupported_effort, translate_thinking},
 };
 use crate::anthropic::{
@@ -34,11 +34,14 @@ use crate::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
         ANTHROPIC_BASE_URL_ENV, OauthHandling, OauthToken,
         anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
-        existing_betas, get_api_key, get_auth_header, has_advisor_tool, has_anthropic_credential,
+        drop_advisor_blocks, drop_non_string_system_texts, drop_non_string_user_texts,
+        drop_raw_advisor_blocks, drop_raw_non_string_user_texts, existing_betas, get_api_key,
+        get_auth_header, has_advisor_tool, has_anthropic_credential,
         is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
-        is_claude_strict_tools_rejection, is_tool_search_used, map_messages, merge_beta_headers,
-        minted_oauth_environment, optionally_handle_anthropic_oauth,
-        requires_native_compaction_beta, strip_advisor_blocks,
+        is_anthropic_tool_use_id_pattern_error, is_claude_strict_tools_rejection,
+        is_tool_search_used, map_messages, map_messages_rejecting_emptied, merge_beta_headers,
+        messages_with_renamed_tool_use_ids, minted_oauth_environment,
+        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
         strip_raw_encrypted_reasoning_blocks, strip_raw_unsigned_thinking_blocks,
         strip_thinking_blocks_from_anthropic_messages_request, strip_unsigned_thinking_blocks,
@@ -142,7 +145,7 @@ impl MessagesDialect for AnthropicMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
+        shape_anthropic_messages_request_keeping_tool_use_ids(request, options)
     }
 
     fn tool_custom_field(&self, model: &str) -> ToolCustomField {
@@ -169,7 +172,11 @@ impl MessagesDialect for AnthropicMessagesConfig {
         if !serves_anthropic_api_versions(url) {
             return Ok(request);
         }
-        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
+        drop_sampling_params_removed_by_requested_version(
+            with_sanitized_tool_use_ids(request),
+            headers,
+            drop_params,
+        )
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -275,6 +282,11 @@ pub fn should_retry_anthropic_messages_on_http_error(
     if status != 400 {
         return false;
     }
+    if is_anthropic_tool_use_id_pattern_error(error_text)
+        && messages_with_renamed_tool_use_ids(request_body).is_some()
+    {
+        return true;
+    }
     let drops_rejected_strict_tools = context.drops_unsupported_params
         && is_claude_strict_tools_rejection(status, error_text)
         && tools_without_strict(request_body.get("tools")).is_some();
@@ -284,7 +296,10 @@ pub fn should_retry_anthropic_messages_on_http_error(
     let caller_asked_for_this_error =
         anthropic_request_errors_on_thinking_binding_mismatch(request_body)
             && is_anthropic_thinking_binding_mismatch_error(error_text);
-    !caller_asked_for_this_error && is_anthropic_invalid_thinking_block_error(error_text)
+    !caller_asked_for_this_error
+        && is_anthropic_invalid_thinking_block_error(error_text)
+        && strip_thinking_blocks_from_anthropic_messages_request(request_body.clone())
+            != *request_body
 }
 
 pub fn transform_anthropic_messages_request_on_http_error(
@@ -299,6 +314,12 @@ pub fn transform_anthropic_messages_request_on_http_error(
     } else {
         request_body
     };
+    let renamed_messages = (status == 400 && is_anthropic_tool_use_id_pattern_error(error_text))
+        .then(|| messages_with_renamed_tool_use_ids(&body))
+        .flatten();
+    if let (Some(renamed_messages), Value::Object(fields)) = (renamed_messages, &mut body) {
+        fields.insert("messages".to_owned(), Value::Array(renamed_messages));
+    }
     let without_strict = if is_claude_strict_tools_rejection(status, error_text) {
         tools_without_strict(body.get("tools"))
     } else {
@@ -389,21 +410,34 @@ pub(crate) fn transform_messages_request(
         .context_management
         .clone()
         .map(map_openai_context_management_to_anthropic);
+    let request = if context.drops_unsupported_params {
+        MessagesRequest {
+            params: MessagesOptionalParams {
+                system: request.params.system.and_then(drop_non_string_system_texts),
+                ..request.params
+            },
+            ..request
+        }
+    } else {
+        request
+    };
+    let messages = if context.drops_unsupported_params {
+        map_messages_rejecting_emptied(
+            request.messages,
+            drop_non_string_user_texts,
+            drop_raw_non_string_user_texts,
+        )?
+    } else {
+        request.messages
+    };
     let messages = if has_advisor_tool(request.params.tools.as_deref())
         || continues_message_thread(&request.params)
     {
-        request.messages
-    } else {
-        map_messages(
-            request.messages,
-            strip_advisor_blocks,
-            strip_raw_advisor_blocks,
-        )
-    };
-    let messages = if context.drops_unsupported_params {
-        drop_non_string_tool_result_texts(messages)
-    } else {
         messages
+    } else if context.drops_unsupported_params {
+        map_messages(messages, drop_advisor_blocks, drop_raw_advisor_blocks)
+    } else {
+        map_messages(messages, strip_advisor_blocks, strip_raw_advisor_blocks)
     };
     let messages = map_messages(
         messages,
@@ -451,62 +485,6 @@ fn without_unstructured_output_format(
         },
         ..request
     }
-}
-
-fn is_python_str(value: &Value) -> bool {
-    match value {
-        Value::String(text) => {
-            litellm_host::raw_json::decode(text).is_none_or(|raw| raw.starts_with('"'))
-        }
-        _ => false,
-    }
-}
-
-fn is_non_string_text(part: &Value) -> bool {
-    part.get("type").and_then(Value::as_str) == Some("text")
-        && part.get("text").is_some_and(|text| !is_python_str(text))
-}
-
-fn without_non_string_texts(content: &mut Value) {
-    if let Value::Array(parts) = content {
-        parts.retain(|part| !is_non_string_text(part));
-    }
-}
-
-fn drop_non_string_tool_result_texts(
-    messages: Vec<Recognized<Message>>,
-) -> Vec<Recognized<Message>> {
-    messages
-        .into_iter()
-        .map(|message| match message {
-            Recognized::Known(mut message) => {
-                if message.role == "user"
-                    && let MessageContent::Blocks(blocks) = &mut message.content
-                {
-                    blocks
-                        .iter_mut()
-                        .filter(|block| block.is_type(ContentBlockType::ToolResult))
-                        .filter_map(|block| block.content.as_mut())
-                        .for_each(without_non_string_texts);
-                }
-                Recognized::Known(message)
-            }
-            Recognized::Unrecognized(mut message) => {
-                if message.get("role").and_then(Value::as_str) == Some("user")
-                    && let Some(Value::Array(blocks)) = message.get_mut("content")
-                {
-                    blocks
-                        .iter_mut()
-                        .filter(|block| {
-                            block.get("type").and_then(Value::as_str) == Some("tool_result")
-                        })
-                        .filter_map(|block| block.get_mut("content"))
-                        .for_each(without_non_string_texts);
-                }
-                Recognized::Unrecognized(message)
-            }
-        })
-        .collect()
 }
 
 pub(crate) fn update_headers_with_anthropic_beta(
@@ -997,6 +975,84 @@ mod tests {
         MessagesModelCapabilities::default()
     }
 
+    fn transformed_messages(
+        messages: Value,
+        drops_unsupported_params: bool,
+    ) -> Result<Value, Error> {
+        ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(
+                request(json!({"messages": messages})),
+                &MessagesTransformContext {
+                    drops_unsupported_params,
+                    ..MessagesTransformContext::with_lookup(unmapped(), false, &no_env)
+                },
+            )
+            .map(|transformed| serde_json::to_value(transformed).unwrap()["messages"].clone())
+    }
+
+    fn user_text(text: Value) -> Value {
+        json!({"type": "text", "text": text})
+    }
+
+    #[rstest]
+    #[case::null_text(json!(null))]
+    #[case::numeric_text(json!(5))]
+    fn a_user_s_non_string_text_is_sent_as_is_without_drop_params(#[case] text: Value) {
+        let messages =
+            json!([{"role": "user", "content": [user_text(text), user_text(json!("hi"))]}]);
+        assert_eq!(
+            transformed_messages(messages.clone(), false).unwrap(),
+            messages
+        );
+    }
+
+    #[rstest]
+    #[case::null_text(
+        json!([{"role": "user", "content": [user_text(json!(null)), user_text(json!("hi"))]}]),
+        json!([{"role": "user", "content": [user_text(json!("hi"))]}])
+    )]
+    #[case::numeric_text(
+        json!([{"role": "user", "content": [user_text(json!(5)), user_text(json!("hi"))]}]),
+        json!([{"role": "user", "content": [user_text(json!("hi"))]}])
+    )]
+    #[case::tool_result_part(
+        json!([{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+            user_text(json!(null)), user_text(json!("ok"))
+        ]}]}]),
+        json!([{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+            user_text(json!("ok"))
+        ]}]}])
+    )]
+    #[case::emptied_user_message(
+        json!([
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "user", "content": [user_text(json!(null)), user_text(json!(5))]}
+        ]),
+        json!([{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi"}])
+    )]
+    fn drop_params_drops_a_user_s_non_string_text(
+        #[case] messages: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(transformed_messages(messages, true).unwrap(), expected);
+    }
+
+    #[rstest]
+    fn drop_params_that_leaves_no_message_is_a_request_error() {
+        let dropped = transformed_messages(
+            json!([
+                {"role": "user", "content": [user_text(json!(null))]},
+                {"role": "user", "content": [user_text(json!(5))]}
+            ]),
+            true,
+        );
+        assert!(matches!(
+            dropped,
+            Err(Error::InvalidRequest(crate::ErrorDetail::EmptiedMessages))
+        ));
+    }
+
     #[fixture]
     fn sampling_removed() -> MessagesModelCapabilities {
         MessagesModelCapabilities {
@@ -1180,67 +1236,67 @@ mod tests {
     #[case::temperature(
         sampling_removed(),
         json!({"temperature": 0.3}),
-        "claude does not support temperature=0.3. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=0.3. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::temperature_just_below_one(
         sampling_removed(),
         json!({"temperature": 0.99}),
-        "claude does not support temperature=0.99. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=0.99. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::whole_number_temperature_keeps_its_decimal(
         sampling_removed(),
         json!({"temperature": 2.0}),
-        "claude does not support temperature=2.0. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=2.0. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_p(
         sampling_removed(),
         json!({"top_p": 0.9}),
-        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_k(
         sampling_removed(),
         json!({"top_k": 5}),
-        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_k_next_to_unit_temperature(
         sampling_removed(),
         json!({"temperature": 1.0, "top_k": 5}),
-        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_k=5. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::temperature_ahead_of_top_k(
         sampling_removed(),
         json!({"temperature": 0.5, "top_k": 5}),
-        "claude does not support temperature=0.5. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=0.5. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_p_ahead_of_top_k(
         sampling_removed(),
         json!({"top_p": 0.9, "top_k": 5}),
-        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_p=0.9. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::speed(
         unmapped(),
         json!({"speed": "fast"}),
-        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::integer_temperature_keeps_no_decimal(
         sampling_removed(),
         json!({"temperature": 0}),
-        "claude does not support temperature=0. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=0. Only temperature=1 is supported. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::integer_top_p(
         sampling_removed(),
         json!({"top_p": 1}),
-        "claude does not support top_p=1. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_p=1. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::non_string_speed_is_reprd(
         unmapped(),
         json!({"speed": 2}),
-        "claude does not support speed=2. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support speed=2. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::speed_ahead_of_sampling_params(
         sampling_removed(),
         json!({"speed": "fast", "temperature": 0.5}),
-        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support speed='fast'. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     fn removed_params_are_rejected_without_drop_params(
         #[case] capabilities: MessagesModelCapabilities,
@@ -1289,6 +1345,55 @@ mod tests {
     }
 
     #[rstest]
+    #[case::other_model_on_a_custom_host_keeps(
+        "kimi-k2",
+        "http://127.0.0.1:8000/v1/messages",
+        "functions.Bash:0"
+    )]
+    #[case::claude_named_model_on_a_custom_host_keeps(
+        "claude-sonnet-4-5",
+        "http://127.0.0.1:8000/v1/messages",
+        "functions.Bash:0"
+    )]
+    #[case::other_model_on_anthropics_api_rewrites("kimi-k2", ANTHROPIC_URL, "functions_Bash_0")]
+    #[case::other_model_on_foundry_rewrites(
+        "my-sonnet",
+        "https://example.services.ai.azure.com/anthropic/v1/messages",
+        "functions_Bash_0"
+    )]
+    fn tool_use_ids_are_rewritten_only_for_upstreams_that_enforce_anthropics_id_pattern(
+        #[case] model: &str,
+        #[case] url: &str,
+        #[case] id: &str,
+    ) {
+        let shaped = ANTHROPIC_MESSAGES_CONFIG
+            .shape_request(
+                request(json!({"model": model, "messages": [
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": "Note.", "id": 5},
+                        {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}
+                    ]}
+                ]})),
+                MessagesShapeOptions::default(),
+            )
+            .unwrap();
+        let sent = ANTHROPIC_MESSAGES_CONFIG
+            .request_body(shaped, &headers(&[]), url, false)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(sent).unwrap()["messages"],
+            json!([
+                {"role": "assistant", "content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {}}]},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Note.", "id": 5},
+                    {"type": "tool_result", "tool_use_id": id, "content": "ok"}
+                ]}
+            ])
+        );
+    }
+
+    #[rstest]
     #[case::sdk_1(&[("anthropic-version", "2023-06-01")])]
     #[case::default_version(&[])]
     #[case::day_before(&[("anthropic-version", "2026-10-20")])]
@@ -1308,22 +1413,22 @@ mod tests {
     #[case::unit_temperature(
         "2026-10-21",
         json!({"temperature": 1.0}),
-        "claude does not support temperature=1.0. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=1.0. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_k(
         "2026-10-21",
         json!({"top_k": 40}),
-        "claude does not support top_k=40. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_k=40. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::top_p_ahead_of_top_k(
         "2026-10-21",
         json!({"top_p": 0.9, "top_k": 40}),
-        "claude does not support top_p=0.9. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support top_p=0.9. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     #[case::later_dated_version(
         "2027-01-01",
         json!({"temperature": 0.3}),
-        "claude does not support temperature=0.3. anthropic-version 2027-01-01 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+        "claude does not support temperature=0.3. anthropic-version 2027-01-01 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )]
     fn sampling_params_are_rejected_under_an_api_version_that_removed_them(
         #[case] version: &str,
@@ -1516,6 +1621,66 @@ mod tests {
                 false
             ),
             Ok(body(merged(tools, json!({"messages": stripped}))))
+        );
+    }
+
+    fn web_search_use() -> Value {
+        json!({"type": "server_tool_use", "id": "srvtoolu_ws", "name": "web_search", "input": {"query": "pools"}})
+    }
+
+    #[rstest]
+    #[case::list_id_kept_without_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}]),
+        false,
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}])
+    )]
+    #[case::list_id_dropped_under_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}]),
+        true,
+        json!([])
+    )]
+    #[case::unmatched_result_kept_without_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
+        false,
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}])
+    )]
+    #[case::unmatched_result_dropped_under_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
+        true,
+        json!([])
+    )]
+    fn advisor_history_left_unpaired_is_dropped_only_under_drop_params(
+        #[case] unpaired: Value,
+        #[case] drops_unsupported_params: bool,
+        #[case] kept: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        let context = MessagesTransformContext {
+            drops_unsupported_params,
+            ..MessagesTransformContext::with_lookup(unmapped, false, &no_env)
+        };
+        let content = [
+            vec![json!({"type": "server_tool_use", "id": "srvtoolu_1", "name": "advisor", "input": {}})],
+            unpaired.as_array().unwrap().clone(),
+            vec![web_search_use(), json!({"type": "text", "text": "Done."})],
+        ]
+        .concat();
+        let history = json!([
+            {"role": "user", "content": "Build a worker pool."},
+            {"role": "assistant", "content": content}
+        ]);
+        let transformed = ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request(json!({"messages": history})), &context)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(transformed).unwrap()["messages"][1]["content"],
+            json!(
+                [
+                    kept.as_array().unwrap().clone(),
+                    vec![web_search_use(), json!({"type": "text", "text": "Done."})]
+                ]
+                .concat()
+            )
         );
     }
 

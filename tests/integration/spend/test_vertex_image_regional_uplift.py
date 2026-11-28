@@ -407,7 +407,31 @@ def test_stream_flag_on_image_generation_prices_the_regional_uplift(gateway: Gat
     with wire_server(_scripted()) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire, location={"vertex_location": _REGION})
         _, response = _generate(gateway, model, extra={"stream": True})
-        _assert_image_response(response, _REGIONAL_TOKEN_COST)
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/event-stream"), response.headers
+        event, data, *rest = response.text.split("\n")
+        assert (event, rest) == ("event: image_generation.completed", ["", ""]), response.text
+        completed: Final = _JSON_OBJECT.validate_json(data.removeprefix("data: "))
+        assert isinstance(completed.pop("created_at"), int), response.text
+        assert completed == {
+            "type": "image_generation.completed",
+            "usage": {
+                "total_tokens": 1302,
+                "input_tokens": 12,
+                "input_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 12,
+                    "cached_tokens": 0,
+                    "cached_tokens_details": None,
+                },
+                "output_tokens": 1290,
+                "output_tokens_details": {},
+            },
+            "b64_json": _PNG_B64,
+        }, response.text
+        assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(_REGIONAL_TOKEN_COST), (
+            response.headers
+        )
         _assert_upstream_image_calls(wire)
 
 

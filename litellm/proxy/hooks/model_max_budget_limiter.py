@@ -41,7 +41,11 @@ from litellm.proxy.hooks.model_budget_shared_windows import (
     SharedWindow,
     SharedWindows,
 )
-from litellm.router_strategy.budget_limiter import RouterBudgetLimiting, budget_window_seconds
+from litellm.router_strategy.budget_limiter import (
+    RouterBudgetLimiting,
+    budget_window_seconds,
+    cost_left_after_failed_attempts,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import BudgetConfig, LiteLLMRealtimeStreamLoggingObject, LlmProviders, StandardLoggingPayload
 
@@ -1268,7 +1272,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
         parent_otel_span: Span | None = None,
     ) -> list[dict[str, object]]:
         return healthy_deployments
@@ -1301,7 +1305,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if model is None:
             return
 
-        response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
+        response_cost: Final = cost_left_after_failed_attempts(kwargs, standard_logging_payload.get("response_cost", 0))
         key_model_max_budget: Final = _metadata.get("user_api_key_model_max_budget")
         team_member_user_id: Final = _metadata_string_value(
             payload_metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped

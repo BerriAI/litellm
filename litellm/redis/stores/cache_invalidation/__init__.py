@@ -55,6 +55,9 @@ class CacheInvalidation:
     def __init__(self, handle: CacheInvalidationHandle) -> None:
         self._handle: Final = handle
 
+    def flush_local(self) -> None:
+        """Holds nothing in memory, so there is nothing to drop."""
+
     @property
     def channel(self) -> str:
         return self._handle.channel

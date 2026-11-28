@@ -582,8 +582,8 @@ async def _increment_with_rollback(
 @with_service_target(ROUTER_USAGE_TARGET)
 def io_token_pre_call_check(
     usage: RouterUsage,
-    deployment: dict,
-) -> dict | None:
+    deployment: dict[str, object],
+) -> dict[str, object] | None:
     itpm_limit, otpm_limit = get_deployment_io_token_limits(deployment)
     if itpm_limit is None and otpm_limit is None:
         return deployment

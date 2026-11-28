@@ -180,6 +180,11 @@ impl RouterSessionPins {
     fn replace_local(&self, key: &str, value: Value, ttl: Duration) -> Result<(), Error> {
         Ok(self.pins.memory().refresh(key, value, ttl)?)
     }
+
+    /// Drops everything this process holds in memory and leaves Redis alone.
+    pub fn flush_local(&self) -> Result<(), Error> {
+        Ok(self.pins.memory().flush()?)
+    }
 }
 
 /// `json.dumps(pin)`, the TTL, then `json.dumps(eligible)` and `"1"` for legacy ids, each only when

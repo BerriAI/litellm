@@ -558,7 +558,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     def map_response_format_to_databricks_tool(
         self,
         model: str,
-        value: dict | None,
+        value: dict[str, object] | None,
         optional_params: dict,
         tool_is_forced: bool,
     ) -> DatabricksTool | None:
@@ -949,7 +949,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,

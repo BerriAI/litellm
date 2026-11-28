@@ -172,7 +172,6 @@ function CloseMobileSidebarOnNavigation({ navigationKey }: { navigationKey: stri
 const CUSTOMER_PORTAL_SEGMENTS = new Set(["customers", "apps", "app-groups"]);
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
-  const { t } = useTranslation();
   const { accessToken } = useAuth();
   const { mode, setMode } = usePluginMode();
   const pathname = usePathname();

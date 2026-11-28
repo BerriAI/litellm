@@ -2,12 +2,12 @@
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
-import HomePage from "./_components/HomePage";
+import HomeLanding from "./_components/HomeLanding";
 
 export default function HomeRoutePage() {
   const { isLoading, isAuthorized } = useAuthorized();
   if (isLoading || !isAuthorized) {
     return <LoadingScreen />;
   }
-  return <HomePage />;
+  return <HomeLanding />;
 }

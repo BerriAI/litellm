@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import Final
 
 from litellm._logging import WarningLogger, verbose_logger
@@ -125,9 +125,17 @@ class ChatGPTConfig(OpenAIConfig):
         drop_params: bool,
         *,
         reasoning_drop_logger: WarningLogger = verbose_logger,
+        declared_reasoning_efforts: Collection[str] | None = None,
+        allowed_openai_params: Collection[str] = (),
     ) -> dict[str, object]:
         optional_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params, reasoning_drop_logger=reasoning_drop_logger
+            non_default_params,
+            optional_params,
+            model,
+            drop_params,
+            reasoning_drop_logger=reasoning_drop_logger,
+            declared_reasoning_efforts=declared_reasoning_efforts,
+            allowed_openai_params=allowed_openai_params,
         )
         optional_params.setdefault("stream", False)
         return optional_params

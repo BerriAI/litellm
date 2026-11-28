@@ -275,7 +275,7 @@ def _raise_environment_reference_denied(denial: _EnvironmentReferenceDenied | No
             )
 
 
-async def update_team(*args, **kwargs):
+async def update_team(*args, **kwargs: object):
     """
     Backward-compatible shim for tests/legacy call sites that patch this symbol.
     Team model management now uses team_model_add/team_model_delete directly.
@@ -3989,7 +3989,7 @@ async def get_auto_router_classifier_default_prompt(
     )
 
 
-def deduplicate_litellm_router_models(models: list[dict]) -> list[dict]:
+def deduplicate_litellm_router_models(models: list[dict]) -> list[dict[str, object]]:
     """
     Deduplicate models based on their model_info.id field.
     Returns a list of unique models keeping only the first occurrence of each model ID.

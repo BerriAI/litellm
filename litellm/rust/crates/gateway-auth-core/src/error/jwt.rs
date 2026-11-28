@@ -237,18 +237,8 @@ pub enum ClaimDenial {
 #[error("Authentication Error, invalid credentials")]
 pub(crate) struct InvalidCredentials;
 
-/// The client half of `ModelAccessDeniedHTTPException`, which never names the models that are allowed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error(
-    "The requested model '{model}' is not available for this API key, or the model name is invalid. Check the models \
-     available to you and try again."
-)]
-pub struct ModelAccessDenied<'a> {
-    pub model: &'a str,
-}
-
 /// Each model denial's message is the internal half of `ModelAccessDeniedHTTPException`, and
-/// `ModelAccessDenied` its client half.
+/// [`ModelAccessDenied`](super::ModelAccessDenied) its client half.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum RbacDenial {
     /// `enforce_rbac` is on and the token maps to no role.
@@ -360,6 +350,36 @@ pub enum TeamDenial {
     NoMemberTeamHasModel { model: String },
     #[error("User is not a member of any team. Add the user to a team via the LiteLLM UI or API.")]
     NotTeamMember,
+}
+
+impl JwtDenial {
+    /// A token that fails verification, `custom_validate` or its key mapping never authenticated, and
+    /// neither did a user deactivated via SCIM. The rest refuse a caller whose token did.
+    pub(crate) fn failed_authentication(&self) -> bool {
+        match self {
+            Self::Verify(_)
+            | Self::CustomValidate
+            | Self::CustomValidateUnavailable
+            | Self::ManagedIssuerUntrusted
+            | Self::UserDeactivated { .. }
+            | Self::ManagedAgentNeedsDirectJwt
+            | Self::MappingClaimMissing { .. }
+            | Self::NoMapping { .. }
+            | Self::MappingNeedsDb { .. }
+            | Self::NoEligibleKey
+            | Self::MappingRaceVanished { .. } => true,
+            Self::Claim(_)
+            | Self::Rbac(_)
+            | Self::Team(_)
+            | Self::ManagedRouteNotAllowed
+            | Self::AgentIdentity(_)
+            | Self::UnregisteredAgent { .. }
+            | Self::GrantingTeamRouteNotAllowed
+            | Self::EmailDomainNotAllowed { .. }
+            | Self::UserNotFound { .. }
+            | Self::NoObjectId => false,
+        }
+    }
 }
 
 fn or_unset(value: Option<&str>) -> &str {

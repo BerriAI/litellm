@@ -172,6 +172,32 @@ async fn an_abandoned_usage_prefetch_still_backfills_memory_and_holds_the_thrott
     assert_eq!(trips.seen().len(), trips_after_prefetch);
 }
 
+#[rstest]
+#[tokio::test]
+async fn flushing_memory_forgets_the_refresh_throttle_so_the_next_read_goes_to_redis(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+) {
+    let deployment = RedisDeployment::start(topology).await.unwrap();
+    let raw = connect(&deployment);
+    let store = RouterUsage::new(Some(remote(connect(&deployment))), POLICY);
+    let [rpm, _] = deployment_usage();
+    let counters = [rpm.counter.clone()];
+
+    let before = store.get_many(&counters).await.unwrap();
+    raw.send(commands::incr_by_float(
+        rpm.key,
+        Amount::Float(6.0),
+        Some(Expiry::Refresh(COUNTER_TTL)),
+    ))
+    .await
+    .unwrap();
+    store.flush_local().unwrap();
+    let after_flush = store.get_many(&counters).await.unwrap();
+
+    assert_eq!(before, vec![None]);
+    assert_eq!(after_flush, vec![Some(Number::Int(6))]);
+}
+
 // main's `_take` releases a prefetch that does not cover the pick taking it, so the counters it
 // reserved are due again and the next read of them goes to Redis
 #[rstest]

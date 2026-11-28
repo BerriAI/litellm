@@ -13,6 +13,7 @@ from litellm._logging import verbose_proxy_logger, verbose_proxy_stdout_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_expected_client_error
+from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
 from litellm.proxy._types import (
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
@@ -30,6 +31,7 @@ from litellm.proxy.auth.auth_utils import (  # noqa: F401  # legacy module expor
 )
 from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
+from litellm.proxy.common_utils.customer_budget_headers import customer_budget_headers
 from litellm.proxy.common_utils.openai_error_payload import openai_error_param
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
@@ -48,7 +50,7 @@ else:
     Span = Any
 
 
-def _as_proxy_exception(e: Exception) -> ProxyException:
+def _as_proxy_exception(e: Exception, general_settings: Mapping[str, object] = EMPTY_MAPPING) -> ProxyException:
     """Convert an authentication failure into the ProxyException the client receives."""
     if isinstance(e, litellm.BudgetExceededError):
         return ProxyException(
@@ -56,6 +58,7 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
             type=ProxyErrorTypes.budget_exceeded,
             param=None,
             code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
+            headers=dict(customer_budget_headers(getattr(e, "customer_hierarchy", None), general_settings)),
         )
     if isinstance(e, ModelAccessDeniedHTTPException):
         return ModelAccessDeniedProxyException(
@@ -122,6 +125,22 @@ def _with_client_context(
 def _metadata_bucket(request_data: Mapping[str, object], key: str) -> Mapping[str, object]:
     metadata: Final = request_data.get(key)
     return metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
+
+
+def _with_redaction_headers(request_data: Mapping[str, object], request: Request) -> Mapping[str, object]:
+    """Auth gate rejections are raised before `add_litellm_data_to_request` records the request
+    headers, so a caller's redaction header would otherwise never reach the failure log."""
+    if "headers" not in request.scope:
+        return request_data
+    redaction_headers: Final = {
+        name: value for name in MESSAGE_REDACTION_ENABLE_HEADERS if (value := request.headers.get(name))
+    }
+    if not redaction_headers:
+        return request_data
+    key: Final = "litellm_metadata" if "litellm_metadata" in request_data else "metadata"
+    base: Final = as_str_mapping(request_data.get(key)) or EMPTY_MAPPING
+    known: Final = as_str_mapping(base.get("headers")) or EMPTY_MAPPING
+    return {**request_data, key: {**base, "headers": {**known, **redaction_headers}}}
 
 
 def _with_spend_logs_metadata(
@@ -195,6 +214,7 @@ class UserAPIKeyAuthExceptionHandler:
             - Original Exception in all other cases
         """
         from litellm.proxy.proxy_server import (
+            current_general_settings,
             general_settings,
             proxy_logging_obj,
         )
@@ -287,7 +307,11 @@ class UserAPIKeyAuthExceptionHandler:
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
                 request_data=_with_spend_logs_metadata(
-                    _with_client_context(request_context, requester_ip, user_agent),
+                    dict(
+                        _with_redaction_headers(
+                            _with_client_context(request_context, requester_ip, user_agent), request
+                        )
+                    ),
                     normalize_request_route(route),
                     _get_spend_logs_metadata(request),
                 ),
@@ -301,7 +325,9 @@ class UserAPIKeyAuthExceptionHandler:
             if transformed_exception is not None:
                 e = transformed_exception
 
-            final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key)
+            final_exception: Final = mark_invalid_virtual_key_error(
+                _as_proxy_exception(e, current_general_settings()), is_invalid_virtual_key
+            )
             # If a quiet-logged malformed-key transform yields non-401, escalate to ERROR
             if is_quiet_log and str(final_exception.code) != str(status.HTTP_401_UNAUTHORIZED):
                 verbose_proxy_logger.error(
