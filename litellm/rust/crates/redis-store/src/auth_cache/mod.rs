@@ -15,7 +15,7 @@ pub use self::types::{
     Bag, BudgetEntry, BudgetFullEntry, BudgetLimitEntry, Dict, EndUserEntry, ExcludedIfNone, Ints,
     KeyEntry, Lists, MemberEntry, MemberRole, ModelAliases, ModelRegion, ModelTableEntry,
     ObjectPermissionEntry, OrganizationEntry, OrganizationMembershipEntry, ProjectEntry,
-    RestrictedEndUsers, Settings, TagEntry, TeamEntry, TeamMembershipEntry,
+    RestrictedEndUsers, Settings, TagEntry, TagNames, TeamEntry, TeamMembershipEntry,
     TeamMembershipReservation, UserEntry,
 };
 use crate::{

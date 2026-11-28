@@ -1,8 +1,8 @@
-//! Tag entries round-trip through Redis in the bytes the Python proxy writes.
+//! Tag entries and the tag names round-trip through Redis in the bytes the Python proxy writes.
 
 mod support;
 
-use litellm_redis_store::auth_cache::{AuthObject, TagEntry};
+use litellm_redis_store::auth_cache::{AuthObject, TagEntry, TagNames};
 use litellm_redis_testing::Topology;
 use rstest::rstest;
 
@@ -64,4 +64,27 @@ async fn null_models_and_spend_are_normalized_when_a_tag_entry_is_read(
     .await;
 
     assert_eq!(written.as_deref(), Some(PLAIN_ENTRY));
+}
+
+#[rstest]
+#[case::every_name(
+    r#"["limited", "plain"]"#,
+    TagNames::Listed(vec!["limited".to_owned(), "plain".to_owned()])
+)]
+#[case::more_names_than_python_holds(r#""__tag_registry_overflow__""#, TagNames::Unusable)]
+#[tokio::test]
+async fn the_tag_names_python_wrote_are_read_typed_and_written_back_in_the_same_bytes(
+    #[values(Topology::Standalone, Topology::Cluster)] topology: Topology,
+    #[case] entry: &str,
+    #[case] names: TagNames,
+) {
+    let (read, written) = round_trip::<TagNames>(
+        topology,
+        AuthObject::TagRegistry,
+        AuthObject::Tag("rewritten".to_owned()),
+        entry,
+    )
+    .await;
+
+    assert_eq!((read, written.as_deref()), (names, Some(entry)));
 }

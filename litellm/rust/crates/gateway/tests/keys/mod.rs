@@ -4,41 +4,34 @@
 // Shared across test targets; each target uses a different subset.
 #![allow(dead_code)]
 
-use std::{
-    str::FromStr,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::{str::FromStr, sync::Arc};
 
-use litellm_db::{Endpoint, Observer, PoolLimits, Pools, QueryEvent, SslMode};
+use litellm_db::{Call, Endpoint, Observer, PoolLimits, Pools, QueryEvent, SslMode};
 use litellm_db_testing::MigratedPostgres;
 use litellm_gateway_auth_core::Token;
 use litellm_redis_store::auth_cache::{AuthCache, Settings};
 use litellm_repositories::Database;
 use litellm_secret_value::SecretValue;
+use parking_lot::Mutex;
 use serde_json::{Value, json};
 use sqlx::postgres::PgConnectOptions;
 
 /// The table columns of a key generated with no parameters, as `/key/generate` stores it.
 const PLAIN: &str = include_str!("plain.json");
 
-/// How many times the key view was read.
+/// Every query that ran to its end, as its repository names it.
 #[derive(Default)]
-struct KeyReads(AtomicUsize);
+struct Queries(Mutex<Vec<Call>>);
 
-impl Observer for KeyReads {
+impl Observer for Queries {
     fn record(&self, event: QueryEvent) {
-        if event.call.table == Some("combined_view") {
-            self.0.fetch_add(1, Ordering::SeqCst);
-        }
+        self.0.lock().push(event.call);
     }
 }
 
 pub struct Held {
     postgres: MigratedPostgres,
-    reads: Arc<KeyReads>,
+    queries: Arc<Queries>,
 }
 
 impl Held {
@@ -46,7 +39,7 @@ impl Held {
     pub async fn start() -> Self {
         Self {
             postgres: MigratedPostgres::start().await.unwrap(),
-            reads: Arc::default(),
+            queries: Arc::default(),
         }
     }
 
@@ -142,12 +135,23 @@ impl Held {
 
     /// What the gateway's auth store and its repositories run their queries on this database with.
     pub fn database(&self) -> Database {
-        connected(self.postgres.url(), self.reads.clone())
+        connected(self.postgres.url(), self.queries.clone())
     }
 
     /// How many times the key view was read through [`Self::database`].
     pub fn key_reads(&self) -> usize {
-        self.reads.0.load(Ordering::SeqCst)
+        self.count(|call| call.table == Some("combined_view"))
+    }
+
+    /// How many queries a repository names `call_type` ran to their end through
+    /// [`Self::database`].
+    pub fn queries(&self, call_type: &str) -> usize {
+        self.count(|call| call.call_type == call_type)
+    }
+
+    fn count(&self, counted: impl Fn(&Call) -> bool) -> usize {
+        let queries = self.queries.0.lock();
+        queries.iter().filter(|call| counted(call)).count()
     }
 }
 
@@ -160,11 +164,11 @@ pub fn memory_cache() -> Arc<AuthCache> {
 pub fn unreachable() -> Database {
     connected(
         "postgres://postgres:postgres@127.0.0.1:1/postgres",
-        Arc::<KeyReads>::default(),
+        Arc::<Queries>::default(),
     )
 }
 
-fn connected(url: &str, events: Arc<KeyReads>) -> Database {
+fn connected(url: &str, events: Arc<Queries>) -> Database {
     let options = PgConnectOptions::from_str(url).unwrap();
     let endpoint = Endpoint {
         host: options.get_host().to_owned(),

@@ -1,17 +1,18 @@
-//! A virtual key, the team, project, membership and user a caller belongs to, and the end user a
-//! request names, read through the auth cache like the proxy's `get_key_object` and its siblings:
+//! A virtual key, the team, project, membership and user a caller belongs to, and the end user and
+//! tags a request names, read through the auth cache like the proxy's `get_key_object` and its siblings:
 //! the cache, then the database on a miss, which caches the row in the shape every pod reads, for
 //! every pod when the cache has the shared Redis attached. Nothing guards that write against an
 //! eviction that lands during the database read.
 
 use std::{
+    collections::BTreeMap,
     future::Future,
     sync::Arc,
     time::{Duration, SystemTime},
 };
 
 use litellm_auth_store::{
-    AliasMatch, EndUserDatabase, Error, KeyDatabase, ProjectDatabase, TeamDatabase,
+    AliasMatch, EndUserDatabase, Error, KeyDatabase, ProjectDatabase, TagDatabase, TeamDatabase,
     TeamMembershipDatabase, UserDatabase,
 };
 use litellm_gateway_auth_core::KeyHash;
@@ -19,19 +20,21 @@ use litellm_redis_store::{
     FromValue, IntoValue,
     auth_cache::{
         AuthCache, AuthObject, EndUserEntry, KeyEntry, ProjectEntry, RestrictedEndUsers, Settings,
-        TeamEntry, TeamMembershipEntry, TeamMembershipReservation, UserEntry,
+        TagEntry, TagNames, TeamEntry, TeamMembershipEntry, TeamMembershipReservation, UserEntry,
     },
 };
 use litellm_repositories::{
     Database, EndUserRepository, KeyRepository, ObjectPermissionRepository, ProjectRepository,
-    Side, TeamMembershipRepository, TeamRepository, UserRepository,
+    Side, TagRepository, TeamMembershipRepository, TeamRepository, UserRepository,
 };
 use tokio::sync::Mutex;
 
 /// `END_USER_RESTRICTED_REGISTRY_MAX_SIZE`.
 const RESTRICTED_IDS_MAX: usize = 5000;
 /// `REGISTRY_ERROR_NEGATIVE_CACHE_TTL`.
-const RESTRICTED_IDS_ERROR_TTL: Duration = Duration::from_secs(30);
+const REGISTRY_ERROR_TTL: Duration = Duration::from_secs(30);
+/// `TAG_REGISTRY_MAX_SIZE`.
+const TAG_NAMES_MAX: usize = 5000;
 /// How long `bounded_db_lookup` gives an auth read, the default of
 /// `PROXY_DB_LOOKUP_DEADLINE_SECONDS`, a variable the gateway does not read yet.
 const LOOKUP_DEADLINE: Duration = Duration::from_secs(10);
@@ -44,8 +47,11 @@ pub struct AuthStore {
     memberships: TeamMembershipDatabase,
     users: UserDatabase,
     end_users: EndUserDatabase,
+    tags: TagDatabase,
     /// Lets one request at a time load the restricted end-user ids (`_END_USER_REGISTRY_LOAD_LOCK`).
     restricted_ids_loading: Mutex<()>,
+    /// Lets one request at a time load the tag names (`_TAG_REGISTRY_LOAD_LOCK`).
+    tag_names_loading: Mutex<()>,
     lookup_deadline: Duration,
 }
 
@@ -55,6 +61,14 @@ pub enum EndUserRead {
     /// No row, or a row that restricts nothing.
     NoRow,
     /// The database did not give the row.
+    Unread,
+}
+
+/// What the store read of the tags a request names.
+pub enum TagsRead {
+    /// The row of every name that has one, under its name.
+    Rows(BTreeMap<String, TagEntry>),
+    /// The database did not give the rows the cache lacks, which is not the same as no rows.
     Unread,
 }
 
@@ -77,8 +91,10 @@ impl AuthStore {
                 database.clone(),
             ))),
             users: UserDatabase::new(Arc::new(UserRepository::new(database.clone()))),
-            end_users: EndUserDatabase::new(Arc::new(EndUserRepository::new(database))),
+            end_users: EndUserDatabase::new(Arc::new(EndUserRepository::new(database.clone()))),
+            tags: TagDatabase::new(Arc::new(TagRepository::new(database))),
             restricted_ids_loading: Mutex::new(()),
+            tag_names_loading: Mutex::new(()),
             lookup_deadline: LOOKUP_DEADLINE,
         }
     }
@@ -299,11 +315,79 @@ impl AuthStore {
                 Some(ids)
             }
             None => {
-                let ttl = Some(RESTRICTED_IDS_ERROR_TTL);
+                let ttl = Some(REGISTRY_ERROR_TTL);
                 self.write(&object, RestrictedEndUsers::Overflow, ttl).await;
                 None
             }
         }
+    }
+
+    /// `read_tag_objects_batch`: the cached row of each of `names`, and for the names the cache
+    /// lacks the database's rows, read in one query and cached.
+    ///
+    /// A name the tag names leave out has no row, so a request that names such a tag costs no
+    /// database read. A name with no row is never cached, as Python caches none.
+    pub async fn tags(&self, names: &[String]) -> TagsRead {
+        let mut rows = BTreeMap::new();
+        let mut missed = Vec::new();
+        for name in names {
+            match self.read::<TagEntry>(&AuthObject::Tag(name.clone())).await {
+                Some(tag) => {
+                    rows.insert(name.clone(), tag);
+                }
+                None => missed.push(name.clone()),
+            }
+        }
+        if missed.is_empty() {
+            return TagsRead::Rows(rows);
+        }
+        let unread: Vec<String> = match self.tag_names().await {
+            TagNames::Listed(listed) => missed
+                .into_iter()
+                .filter(|name| listed.contains(name))
+                .collect(),
+            TagNames::Unusable => missed,
+        };
+        let Some(read) = self.bounded("tag", self.tags.tags(&unread)).await else {
+            return TagsRead::Unread;
+        };
+        for tag in read {
+            self.write(&AuthObject::Tag(tag.tag_name.clone()), tag.clone(), None)
+                .await;
+            rows.insert(tag.tag_name.clone(), tag);
+        }
+        TagsRead::Rows(rows)
+    }
+
+    /// `_load_tag_registry`: the name of every tag that has a row, cached whole and loaded by one
+    /// request at a time. Unusable when there are more than the cache holds or the database did
+    /// not list them in time, which the cache remembers too, so every tag is read by its name
+    /// until that expires.
+    async fn tag_names(&self) -> TagNames {
+        let object = AuthObject::TagRegistry;
+        let cached = async || self.read::<TagNames>(&object).await;
+        if let Some(names) = cached().await {
+            return names;
+        }
+        let _loading = match self.tag_names_loading.try_lock() {
+            Ok(loading) => loading,
+            Err(_) => {
+                let loading = self.tag_names_loading.lock().await;
+                if let Some(names) = cached().await {
+                    return names;
+                }
+                loading
+            }
+        };
+        let limit = i64::try_from(TAG_NAMES_MAX + 1).unwrap_or(i64::MAX);
+        let listing = self.tags.names(limit);
+        let (names, ttl) = match self.bounded("tag_registry", listing).await {
+            Some(names) if names.len() > TAG_NAMES_MAX => (TagNames::Unusable, None),
+            Some(names) => (TagNames::Listed(names), None),
+            None => (TagNames::Unusable, Some(REGISTRY_ERROR_TTL)),
+        };
+        self.write(&object, names.clone(), ttl).await;
+        names
     }
 
     /// `bounded_db_lookup`: `read`, or `None` when it fails or does not answer within the
@@ -564,5 +648,227 @@ mod tests {
             (from_database, cached),
             (Some("user-1".to_owned()), Some("user-1".to_owned()))
         );
+    }
+
+    mod tags {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        use super::*;
+
+        const TAG_ROWS: &str = r#"INSERT INTO "LiteLLM_TagTable" (tag_name, spend) VALUES
+            ('tagged', 3), ('tagged-too', 4)"#;
+        const A_LATER_TAG: &str =
+            r#"INSERT INTO "LiteLLM_TagTable" (tag_name, spend) VALUES ('tagged-later', 5)"#;
+        const AS_MANY_TAGS_AS_THE_CACHE_HOLDS: &str = r#"INSERT INTO "LiteLLM_TagTable" (tag_name, spend)
+            SELECT 'many-' || n, 0 FROM generate_series(1, 4998) n"#;
+        const NO_TAG_ROWS: &str = r#"DELETE FROM "LiteLLM_TagTable""#;
+        /// What the tag repository names the query that lists the tag names, and the one that reads
+        /// rows by name.
+        const LISTING: &str = "find_many";
+        const BATCH: &str = "get_tag_objects_batch";
+
+        fn over(cache: Arc<AuthCache>, database: Database) -> AuthStore {
+            AuthStore::new(cache, database).with_lookup_deadline(Duration::from_millis(500))
+        }
+
+        async fn tagged() -> (AuthStore, Held) {
+            let held = Held::start().await;
+            held.execute(TAG_ROWS).await;
+            (over(keys::memory_cache(), held.database()), held)
+        }
+
+        /// The store of [`tagged`] over a cache whose clock reads the seconds the counter holds.
+        async fn tagged_at() -> (AuthStore, Held, Arc<AtomicU64>) {
+            let held = Held::start().await;
+            held.execute(TAG_ROWS).await;
+            let seconds = Arc::new(AtomicU64::new(0));
+            let now = seconds.clone();
+            let cache = AuthCache::with_clock(
+                None,
+                Settings::default(),
+                Arc::new(move || Duration::from_secs(now.load(Ordering::SeqCst))),
+            );
+            (over(Arc::new(cache), held.database()), held, seconds)
+        }
+
+        /// The spend of each row `store` reads for `names`, or an error when the database did not
+        /// give the rows.
+        async fn tag_spends(store: &AuthStore, names: &[&str]) -> Result<Vec<(String, f64)>, ()> {
+            let names: Vec<String> = names.iter().map(|&name| name.to_owned()).collect();
+            match store.tags(&names).await {
+                TagsRead::Rows(rows) => Ok(rows
+                    .into_iter()
+                    .map(|(name, tag)| (name, tag.spend))
+                    .collect()),
+                TagsRead::Unread => Err(()),
+            }
+        }
+
+        fn tag_rows(spends: &[(&str, f64)]) -> Result<Vec<(String, f64)>, ()> {
+            Ok(spends
+                .iter()
+                .map(|&(name, spend)| (name.to_owned(), spend))
+                .collect())
+        }
+
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread")]
+        async fn the_names_the_cache_lacks_are_read_in_one_query_and_a_name_with_no_row_in_none() {
+            let (store, held) = tagged().await;
+
+            let read = tag_spends(&store, &["tagged", "untagged", "tagged-too"]).await;
+            let of_no_row = tag_spends(&store, &["untagged"]).await;
+
+            assert_eq!(
+                (read, of_no_row, held.queries(LISTING), held.queries(BATCH)),
+                (
+                    tag_rows(&[("tagged", 3.0), ("tagged-too", 4.0)]),
+                    tag_rows(&[]),
+                    1,
+                    1
+                )
+            );
+        }
+
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_request_that_names_no_tag_reads_nothing() {
+            let (store, held) = tagged().await;
+
+            assert_eq!(
+                (tag_spends(&store, &[]).await, held.queries(LISTING)),
+                (tag_rows(&[]), 0)
+            );
+        }
+
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_row_and_the_tag_names_are_cached_once_read() {
+            let (store, held) = tagged().await;
+
+            let from_database = tag_spends(&store, &["tagged"]).await;
+            held.execute(NO_TAG_ROWS).await;
+            held.execute(A_LATER_TAG).await;
+
+            assert_eq!(
+                (
+                    from_database,
+                    tag_spends(&store, &["tagged", "tagged-later"]).await,
+                    held.queries(LISTING),
+                    held.queries(BATCH)
+                ),
+                (
+                    tag_rows(&[("tagged", 3.0)]),
+                    tag_rows(&[("tagged", 3.0)]),
+                    1,
+                    1
+                )
+            );
+        }
+
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread")]
+        async fn requests_that_arrive_together_list_the_tag_names_once() {
+            let (store, held) = tagged().await;
+
+            let read = tokio::join!(
+                tag_spends(&store, &["tagged"]),
+                tag_spends(&store, &["tagged-too"]),
+                tag_spends(&store, &["untagged"])
+            );
+
+            assert_eq!(
+                (read, held.queries(LISTING)),
+                (
+                    (
+                        tag_rows(&[("tagged", 3.0)]),
+                        tag_rows(&[("tagged-too", 4.0)]),
+                        tag_rows(&[])
+                    ),
+                    1
+                )
+            );
+        }
+
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread")]
+        async fn as_many_tag_names_as_the_cache_holds_still_spare_the_others_a_read() {
+            let (store, held) = tagged().await;
+            held.execute(AS_MANY_TAGS_AS_THE_CACHE_HOLDS).await;
+
+            assert_eq!(
+                (
+                    tag_spends(&store, &["tagged"]).await,
+                    tag_spends(&store, &["untagged"]).await,
+                    held.queries(BATCH)
+                ),
+                (tag_rows(&[("tagged", 3.0)]), tag_rows(&[]), 1)
+            );
+        }
+
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread")]
+        async fn more_tag_names_than_the_cache_holds_read_every_name_and_are_not_listed_again() {
+            let (store, held, seconds) = tagged_at().await;
+            held.execute(AS_MANY_TAGS_AS_THE_CACHE_HOLDS).await;
+            held.execute(A_LATER_TAG).await;
+
+            let by_name = tag_spends(&store, &["tagged", "untagged"]).await;
+            held.execute(NO_TAG_ROWS).await;
+            seconds.store(31, Ordering::SeqCst);
+
+            assert_eq!(
+                (
+                    by_name,
+                    tag_spends(&store, &["untagged"]).await,
+                    held.queries(LISTING),
+                    held.queries(BATCH)
+                ),
+                (tag_rows(&[("tagged", 3.0)]), tag_rows(&[]), 1, 2)
+            );
+        }
+
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_database_that_fails_is_unread_tags_and_never_missing_ones() {
+            let store = over(keys::memory_cache(), keys::unreachable());
+
+            assert_eq!(tag_spends(&store, &["tagged"]).await, Err(()));
+        }
+
+        #[rstest]
+        #[tokio::test(flavor = "multi_thread")]
+        async fn tag_names_that_were_not_listed_in_time_are_listed_again_only_after_thirty_seconds()
+        {
+            let (store, held, seconds) = tagged_at().await;
+            let stalled = held.locking("LiteLLM_TagTable").await;
+
+            let while_stalled = tag_spends(&store, &["tagged"]).await;
+            stalled.rollback().await.unwrap();
+            seconds.store(29, Ordering::SeqCst);
+            let by_name = tag_spends(&store, &["tagged"]).await;
+            let listings_within_thirty_seconds = held.queries(LISTING);
+            seconds.store(31, Ordering::SeqCst);
+            let after = tag_spends(&store, &["untagged"]).await;
+
+            assert_eq!(
+                (
+                    while_stalled,
+                    by_name,
+                    listings_within_thirty_seconds,
+                    after,
+                    held.queries(LISTING),
+                    held.queries(BATCH)
+                ),
+                (
+                    Err(()),
+                    tag_rows(&[("tagged", 3.0)]),
+                    0,
+                    tag_rows(&[]),
+                    1,
+                    1
+                )
+            );
+        }
     }
 }
