@@ -18730,11 +18730,9 @@ async def test_llm_classifier_call_caps_the_output_tokens_bedrock_reserves(
         if deployment_cap is not None
         else 8192
         if reasoning_effort == "high"
-        else None
+        else litellm.model_cost["anthropic.claude-haiku-5-5"]["max_output_tokens"]
     )
     assert sent["inferenceConfig"].get("maxTokens") == expected_cap
-    if expected_cap is None:
-        assert "maxTokens" not in sent["inferenceConfig"]
     if reasoning_effort is not None:
         assert sent["additionalModelRequestFields"]["thinking"]["budget_tokens"] == 4096
 
