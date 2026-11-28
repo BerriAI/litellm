@@ -244,6 +244,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPServer,
     MCPServerEventsConfig,
     parse_pinned_tools,
+    resolve_configured_oauth2_flow,
 )
 from litellm.types.utils import CallTypes
 
@@ -2114,42 +2115,6 @@ class MCPServerManager:
         return None
 
     @staticmethod
-    def _resolve_oauth2_flow(
-        *,
-        auth_type: MCPAuthType | None,
-        oauth2_flow: str | None,
-        token_url: str | None,
-        authorization_url: str | None,
-        client_id: str | None,
-        client_secret: str | None,
-    ) -> Literal["client_credentials", "authorization_code"] | None:
-        """Infer oauth2_flow from field shape when the value is omitted.
-
-        SECURITY-SENSITIVE: this is the shape-inference engine both request-time security
-        helpers delegate to, so it is what decides M2M-vs-interactive for an unstamped row.
-        Always access it through ``effective_oauth2_flow`` (boolean/enum decisions) or
-        ``resolve_oauth2_flow_for_request`` (the egress object backstop), which are the single
-        choke points for request-time resolution; do not call it directly from security sites
-        and do not weaken its M2M-shape branch without accounting for those callers. DB rows
-        are stamped at write time and by the startup backfill, config servers must declare
-        oauth2_flow (validated at load), and both builds read the value verbatim via
-        ``_explicit_oauth2_flow``. Delete this whole request-time layer only once the backstop
-        warning stays silent in production.
-        """
-        if oauth2_flow in ("client_credentials", "authorization_code"):
-            return cast(Literal["client_credentials", "authorization_code"], oauth2_flow)
-        if oauth2_flow:
-            # Ignore unknown/untyped values and continue legacy inference.
-            return None
-        if auth_type != MCPAuth.oauth2:
-            return None
-        if authorization_url:
-            return None
-        if token_url and client_id and client_secret:
-            return "client_credentials"
-        return None
-
-    @staticmethod
     def effective_oauth2_flow(server: "MCPServer") -> Literal["client_credentials", "authorization_code"] | None:
         """The oauth2_flow a security decision must use for ``server`` this request.
 
@@ -2160,7 +2125,7 @@ class MCPServerManager:
         resolution) goes through this one helper rather than reading the bare
         ``has_client_credentials`` column, which is unreliable for null rows.
         """
-        return MCPServerManager._resolve_oauth2_flow(
+        return resolve_configured_oauth2_flow(
             auth_type=server.auth_type,
             oauth2_flow=server.oauth2_flow,
             token_url=server.token_url,
@@ -3602,6 +3567,7 @@ class MCPServerManager:
             oauth_passthrough=bool(getattr(mcp_server, "oauth_passthrough", False)),
             dcr_bridge=getattr(mcp_server, "dcr_bridge", None),
             per_server_oauth_discovery=bool(getattr(mcp_server, "per_server_oauth_discovery", False)),
+            oauth_identity_binding=mcp_server.oauth_identity_binding,
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_display_name", None)),
@@ -8056,6 +8022,7 @@ class MCPServerManager:
             oauth2_flow=server.oauth2_flow,
             dcr_bridge=server.dcr_bridge,
             per_server_oauth_discovery=server.per_server_oauth_discovery,
+            oauth_identity_binding=server.oauth_identity_binding,
             token_exchange_endpoint=server.token_exchange_endpoint,
             audience=server.audience,
             subject_token_type=server.subject_token_type,
@@ -8182,6 +8149,7 @@ class MCPServerManager:
             oauth_passthrough=getattr(server, "oauth_passthrough", False),
             dcr_bridge=server.dcr_bridge,
             per_server_oauth_discovery=server.per_server_oauth_discovery,
+            oauth_identity_binding=server.oauth_identity_binding,
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,

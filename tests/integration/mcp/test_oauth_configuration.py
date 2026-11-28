@@ -11,8 +11,8 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
-from integration._support.client import Gateway, Scenario, eventually
-from integration._support.database import read_rows
+from integration._support.client import Gateway, Scenario, eventually, until_asserted
+from integration._support.database import read_rows, write_rows
 from integration._support.mcp import McpPeer, call_tool, mcp_peer, register_mcp, tool_names
 from integration._support.oauth_server import oauth_server
 from integration._support.process import owned_proxy
@@ -565,3 +565,96 @@ def test_same_url_oauth_credentials_and_revocation_are_isolated_by_user_and_serv
                 )
                 assert changed.status_code == 200, changed.text
                 assert changed.json()["has_credential"] is (transition == "expire"), changed.text
+
+
+def test_identity_binding_round_trips_and_validates_partial_updates(gateway: Gateway) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        binding: Final = {"mode": "enforce", "issuer": auth.issuer, "audiences": ["integration"]}
+        server_id: Final = register_mcp(
+            scenario,
+            peer,
+            "bound" + uuid.uuid4().hex[:10],
+            auth_type="oauth2",
+            authorization_url=auth.issuer + "/authorize",
+            token_url=auth.issuer + "/token",
+            oauth_identity_binding=binding,
+        )
+        path: Final = f"/v1/mcp/server/{server_id}"
+        saved: Final = until_asserted(lambda: gateway.get(path))
+        configured: Final = saved.get("oauth_identity_binding")
+        assert isinstance(configured, dict) and all(configured.get(key) == value for key, value in binding.items())
+        listed: Final = gateway.request("GET", "/v1/mcp/server")
+        assert listed.status_code == 200, listed.text
+        assert (
+            next(row for row in listed.json() if row["server_id"] == server_id)["oauth_identity_binding"] == configured
+        )
+        viewer: Final = scenario.key(object_permission={"mcp_servers": [server_id]})
+        detail: Final = gateway.request("GET", path, key=viewer)
+        assert detail.status_code == 200 and detail.json().get("oauth_identity_binding") is None
+        unrelated: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": server_id, "instructions": "read"})
+        assert unrelated.status_code == 202, unrelated.text
+        assert _response_object(unrelated)["oauth_identity_binding"] == configured
+        invalid: Final = gateway.request(
+            "PUT", "/v1/mcp/server", {"server_id": server_id, "oauth2_flow": "client_credentials"}
+        )
+        assert invalid.status_code == 400, invalid.text
+        assert gateway.get(path)["oauth_identity_binding"] == configured
+        cleared: Final = gateway.request(
+            "PUT", "/v1/mcp/server", {"server_id": server_id, "oauth_identity_binding": None}
+        )
+        assert cleared.status_code == 202, cleared.text
+        after_clear: Final = _response_object(cleared)
+        assert after_clear["oauth_identity_binding"] is None
+        assert after_clear["updated_by"] == saved["created_by"] and after_clear["updated_by"]
+        assert after_clear["updated_at"] != saved["updated_at"]
+        eventually(lambda: gateway.get(path), lambda row: row["oauth_identity_binding"] is None)
+        with ThreadPoolExecutor(max_workers=2) as editors:
+            enable: Final = editors.submit(
+                gateway.request, "PUT", "/v1/mcp/server", {"server_id": server_id, "oauth_identity_binding": binding}
+            )
+            delegate: Final = editors.submit(
+                gateway.request, "PUT", "/v1/mcp/server", {"server_id": server_id, "delegate_auth_to_upstream": True}
+            )
+            assert sorted((enable.result().status_code, delegate.result().status_code)) == [202, 400]
+        eventually(
+            lambda: gateway.get(path),
+            lambda row: (row["oauth_identity_binding"] == configured) != row["delegate_auth_to_upstream"],
+        )
+
+
+def test_incompatible_binding_is_rejected_before_create_commits(gateway: Gateway) -> None:
+    with mcp_peer() as peer, oauth_server() as auth:
+        server_id: Final = str(uuid.uuid4())
+        created: Final = gateway.request(
+            "POST",
+            "/v1/mcp/server",
+            {
+                **peer.registration(),
+                "server_id": server_id,
+                "server_name": "bound" + uuid.uuid4().hex[:10],
+                "auth_type": "oauth2",
+                "oauth2_flow": "client_credentials",
+                "oauth_identity_binding": {"mode": "audit", "issuer": auth.issuer, "audiences": ["integration"]},
+            },
+        )
+        assert created.status_code == 400, created.text
+        assert gateway.request("GET", f"/v1/mcp/server/{server_id}").status_code == 404
+
+
+def test_identity_binding_uses_the_effective_flow_on_an_unstamped_record(gateway: Gateway) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, gateway.scenario() as scenario:
+        server_id: Final = register_mcp(
+            scenario,
+            peer,
+            "legacy" + uuid.uuid4().hex[:10],
+            auth_type="oauth2",
+            token_url=auth.issuer + "/token",
+            credentials={"client_id": "integration", "client_secret": "test"},
+        )
+        write_rows('UPDATE "LiteLLM_MCPServerTable" SET oauth2_flow=NULL WHERE server_id=%s', (server_id,))
+        binding: Final = {"issuer": auth.issuer, "audiences": ["integration"]}
+        for mode, status in (("enforce", 400), ("disabled", 202)):
+            changed: Final = gateway.request(
+                "PUT", "/v1/mcp/server", {"server_id": server_id, "oauth_identity_binding": {**binding, "mode": mode}}
+            )
+            assert changed.status_code == status, changed.text

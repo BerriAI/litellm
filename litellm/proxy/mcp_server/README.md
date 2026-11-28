@@ -30,3 +30,10 @@ mcp_servers:
 The downstream MCP client must advertise the requested form or URL capability during initialization. Use the gateway's legacy SSE endpoint (`/mcp/sse`) for the verified interactive form and URL relay path. The current Streamable HTTP endpoint (`/mcp`) can lose initialization state before a tool call, so even a client that advertised support receives an explicit elicitation error instead of an input request. Successful interactive relay over Streamable HTTP is not currently verified. Stateless calls and LLM tool bridges with no downstream MCP client also receive explicit errors
 
 The relay wait uses the upstream server's existing `timeout` setting, or `LITELLM_MCP_CLIENT_TIMEOUT` (60 seconds by default). The enclosing tool call also retains its existing timeout. Unsupported modes, disconnects and relay failures return errors, never a fabricated user decline. Actual user accept, decline and cancel responses are preserved; cancellation stops the relay
+
+
+## OAuth identity binding on API-managed servers
+
+A proxy admin can set `oauth_identity_binding` when creating or updating a gateway-managed per-user OAuth2 server with `POST` or `PUT /v1/mcp/server`. The field accepts the same settings as `mcp_servers` in YAML. The PUT response confirms the saved value. Admin list and detail responses include the policy. In deployments with a database read replica, the detail GET reflects the edit after the reader catches up. Gateway credential checks use the authoritative policy. Omitting the field on an update keeps the current policy. Sending `null` clears it.
+
+Enabling `enforce` or changing the enforced identity check requires users with credentials from the previous policy to sign in again. Switching to `audit` lets connected users continue and logs identity-check failures during sign-in and refresh.

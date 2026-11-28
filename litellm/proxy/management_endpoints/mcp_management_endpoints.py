@@ -160,6 +160,7 @@ if MCP_AVAILABLE:
             return _ToolNameValidationResult()
 
     from litellm.proxy._types import (
+        AdminNewMCPServerRequest,
         LiteLLM_MCPServerTable,
         LiteLLM_ObjectPermissionTable,
         LitellmUserRoles,
@@ -371,7 +372,7 @@ if MCP_AVAILABLE:
         The create payload carries the plaintext credentials, so the M2M-vs-interactive
         decision is reliable here in a way it is not at read time (credentials are
         encrypted at rest and redacted in responses). The client_credentials shape
-        mirrors the legacy inference in MCPServerManager._resolve_oauth2_flow; every
+        mirrors the legacy inference in resolve_configured_oauth2_flow; every
         other oauth2 configuration is the authorization_code grant, including
         delegate_auth_to_upstream, where the client runs that grant upstream.
         """
@@ -821,6 +822,7 @@ if MCP_AVAILABLE:
         sanitized.env = {}
         sanitized.command = None
         sanitized.args = []
+        sanitized.oauth_identity_binding = None
         sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
@@ -869,6 +871,7 @@ if MCP_AVAILABLE:
         sanitized.teams = []
         sanitized.env_vars = None
 
+        sanitized.oauth_identity_binding = None
         sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
@@ -2027,7 +2030,7 @@ if MCP_AVAILABLE:
     )
     @management_endpoint_wrapper
     async def add_mcp_server(
-        payload: NewMCPServerRequest,
+        payload: AdminNewMCPServerRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         litellm_changed_by: str | None = Header(
             None,
@@ -2091,6 +2094,8 @@ if MCP_AVAILABLE:
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_proxy_logger.exception("Error creating mcp server: %s", e)
             raise HTTPException(
@@ -2738,15 +2743,10 @@ if MCP_AVAILABLE:
     ):
         """Persist the OAuth2 access token obtained by the calling user."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        await _authorize_and_fetch_mcp_server(prisma_client, user_api_key_dict, server_id)
-        from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # keep manager import lazy
-            global_mcp_server_manager as _manager,
+        server: Final = await _authorize_and_fetch_mcp_server(
+            prisma_client, user_api_key_dict, server_id, use_writer=True
         )
-
-        # This endpoint accepts an opaque token with no upstream identity validation, so it must be
-        # closed for identity-bound servers or it becomes a bypass of the token-relay binding check.
-        registry_server: Final = _manager.get_mcp_server_by_id(server_id)
-        binding: Final = registry_server.oauth_identity_binding if registry_server else None
+        binding: Final = server.oauth_identity_binding
         if binding is not None and binding.mode == "enforce":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -2969,6 +2969,8 @@ if MCP_AVAILABLE:
         prisma_client: "PrismaClient",
         user_api_key_dict: UserAPIKeyAuth,
         server_id: str,
+        *,
+        use_writer: bool = False,
     ) -> LiteLLM_MCPServerTable:
         """Resolve the MCP server a caller may manage their own per-user state for.
 
@@ -2981,7 +2983,7 @@ if MCP_AVAILABLE:
         """
         catalog: Final[TargetCatalog] = MCPServerTargetCatalog(
             manager=global_mcp_server_manager,
-            db_lookup=lambda sid: get_mcp_server(prisma_client, sid),
+            db_lookup=lambda sid: get_mcp_server(prisma_client, sid, use_writer=use_writer),
         )
         authorized: Final = await catalog.resolve(
             server_id,

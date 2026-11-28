@@ -27812,6 +27812,143 @@ export interface components {
             /** Tools */
             tools: string[];
         };
+        /** AdminNewMCPServerRequest */
+        AdminNewMCPServerRequest: {
+            /** Alias */
+            alias?: string | null;
+            /**
+             * Allow All Keys
+             * @default false
+             */
+            allow_all_keys: boolean;
+            /** Allowed Tools */
+            allowed_tools?: string[] | null;
+            /**
+             * Approval Status
+             * @description Server-managed: set by the endpoint; caller values are overridden.
+             */
+            approval_status?: string | null;
+            /** Args */
+            args?: string[];
+            /** Audience */
+            audience?: string | null;
+            /** Auth Type */
+            auth_type?: ("none" | "api_key" | "bearer_token" | "basic" | "authorization" | "oauth2" | "aws_sigv4" | "token" | "oauth2_token_exchange" | "oauth2_id_jag" | "true_passthrough" | "oauth_delegate") | null;
+            /** Authorization Url */
+            authorization_url?: string | null;
+            /**
+             * Available On Public Internet
+             * @default true
+             */
+            available_on_public_internet: boolean;
+            /** Byok Api Key Help Url */
+            byok_api_key_help_url?: string | null;
+            /** Byok Description */
+            byok_description?: string[];
+            /** Command */
+            command?: string | null;
+            credentials?: components["schemas"]["MCPCredentials"] | null;
+            /** Dcr Bridge */
+            dcr_bridge?: boolean | null;
+            /**
+             * Delegate Auth To Upstream
+             * @default false
+             */
+            delegate_auth_to_upstream: boolean;
+            /** Description */
+            description?: string | null;
+            /** Env */
+            env?: {
+                [key: string]: string;
+            };
+            /** Env Vars */
+            env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
+            /** Extra Headers */
+            extra_headers?: string[] | null;
+            /** Instructions */
+            instructions?: string | null;
+            /**
+             * Is Byok
+             * @default false
+             */
+            is_byok: boolean;
+            /** Issuer */
+            issuer?: string | null;
+            /** Max Concurrent Requests */
+            max_concurrent_requests?: number | null;
+            /** Mcp Access Groups */
+            mcp_access_groups?: string[];
+            /** Mcp Info */
+            mcp_info?: {
+                [key: string]: unknown;
+            } | null;
+            /** Oauth2 Flow */
+            oauth2_flow?: ("client_credentials" | "authorization_code") | null;
+            oauth_identity_binding?: components["schemas"]["MCPOAuthIdentityBinding"] | null;
+            /**
+             * Oauth Passthrough
+             * @default false
+             */
+            oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
+            /** Registration Url */
+            registration_url?: string | null;
+            /** Rpm */
+            rpm?: number | null;
+            /** Server Id */
+            server_id?: string | null;
+            /** Server Name */
+            server_name?: string | null;
+            /** Source Url */
+            source_url?: string | null;
+            /** Spec Path */
+            spec_path?: string | null;
+            /** Static Headers */
+            static_headers?: {
+                [key: string]: string;
+            } | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
+            /**
+             * Submitted At
+             * @description Server-managed: set by the endpoint; caller values are overridden.
+             */
+            submitted_at?: string | null;
+            /**
+             * Submitted By
+             * @description Server-managed: set by the endpoint; caller values are overridden.
+             */
+            submitted_by?: string | null;
+            /** Timeout */
+            timeout?: number | null;
+            /** Token Exchange Endpoint */
+            token_exchange_endpoint?: string | null;
+            /** Token Exchange Profile */
+            token_exchange_profile?: string | null;
+            /** Token Url */
+            token_url?: string | null;
+            /** Tool Name To Description */
+            tool_name_to_description?: {
+                [key: string]: string;
+            } | null;
+            /** Tool Name To Display Name */
+            tool_name_to_display_name?: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Transport
+             * @default sse
+             * @enum {string}
+             */
+            transport: "sse" | "http" | "stdio";
+            /** Url */
+            url?: string | null;
+        };
         /**
          * AgentCapabilities
          * @description Defines optional capabilities supported by an agent.
@@ -38559,6 +38696,7 @@ export interface components {
             } | null;
             /** Oauth2 Flow */
             oauth2_flow?: ("client_credentials" | "authorization_code") | null;
+            oauth_identity_binding?: components["schemas"]["MCPOAuthIdentityBinding"] | null;
             /**
              * Oauth Passthrough
              * @default false
@@ -41709,6 +41847,47 @@ export interface components {
             terminated_sessions: number;
             /** Worker Pid */
             worker_pid: number;
+        };
+        /**
+         * MCPOAuthIdentityBinding
+         * @description Per-server policy binding stored per-user OAuth credentials to the authenticated LiteLLM caller.
+         *
+         *     When enabled for an interactive oauth2 server, the token relay validates the upstream OIDC
+         *     ``id_token`` (signature via the pinned issuer's JWKS, issuer, audience, expiry, nonce) and compares its
+         *     principal claim to the LiteLLM caller's trusted identity before the token is returned, stored,
+         *     or cached. ``audit`` logs mismatches without changing behavior; ``enforce`` fails closed with
+         *     403 ``oauth_principal_mismatch`` and disables the direct ``oauth-user-credential`` POST, which
+         *     would otherwise bypass validation with an arbitrary opaque token.
+         */
+        MCPOAuthIdentityBinding: {
+            /** Audiences */
+            audiences: string[];
+            /**
+             * Caller Field
+             * @default user_email
+             * @enum {string}
+             */
+            caller_field: "user_email" | "user_id";
+            /** Issuer */
+            issuer: string;
+            /** Jwks Url */
+            jwks_url?: string | null;
+            /**
+             * Mode
+             * @default disabled
+             * @enum {string}
+             */
+            mode: "disabled" | "audit" | "enforce";
+            /**
+             * Principal Claim
+             * @default email
+             */
+            principal_claim: string;
+            /**
+             * Require Email Verified
+             * @default true
+             */
+            require_email_verified: boolean;
         };
         /**
          * MCPOAuthUserCredentialRequest
@@ -54309,6 +54488,7 @@ export interface components {
             } | null;
             /** Oauth2 Flow */
             oauth2_flow?: ("client_credentials" | "authorization_code") | null;
+            oauth_identity_binding?: components["schemas"]["MCPOAuthIdentityBinding"] | null;
             /**
              * Oauth Passthrough
              * @default false
@@ -90264,7 +90444,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["NewMCPServerRequest"];
+                "application/json": components["schemas"]["AdminNewMCPServerRequest"];
             };
         };
         responses: {

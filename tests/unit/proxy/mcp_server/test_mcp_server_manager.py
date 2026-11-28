@@ -101,6 +101,7 @@ from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
 from litellm.types.mcp_server.mcp_server_manager import (
+    MCPOAuthIdentityBinding,
     MCPOAuthMetadata,
     MCPServer,
     MCPServerEventsConfig,
@@ -23432,3 +23433,28 @@ def test_a_yaml_server_with_an_unreadable_events_block_loads_with_events_off() -
     from litellm.proxy.mcp_server.mcp_server_manager import _stored_events_config
 
     assert _stored_events_config({"enabled": True, "allowed_events": []}) is None
+
+
+@pytest.mark.asyncio
+async def test_registry_preserves_the_saved_identity_binding_for_oauth_and_management_reads() -> None:
+    policy: Final = MCPOAuthIdentityBinding(
+        mode="enforce",
+        issuer="https://issuer.example",
+        audiences=["gateway"],
+        principal_claim="sub",
+        caller_field="user_id",
+    )
+    manager: Final = MCPServerManager()
+    row: Final = LiteLLM_MCPServerTable.model_validate(
+        {
+            "server_id": "bound",
+            "transport": "http",
+            "auth_type": "oauth2",
+            "authorization_url": "https://issuer.example/authorize",
+            "token_url": "https://issuer.example/token",
+            "oauth_identity_binding": policy.model_dump(),
+        }
+    )
+    server: Final = await manager.build_mcp_server_from_table(row)
+    assert server.oauth_identity_binding == policy
+    assert manager.build_mcp_server_table(server).oauth_identity_binding == policy

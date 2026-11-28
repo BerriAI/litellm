@@ -18,6 +18,7 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.mcp import MCPAuthType, MCPCredentials, MCPTransportType
 from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
+    MCPOAuthIdentityBinding,
     MCPServerEventsConfig,
     PinnedMCPTool,
     parse_pinned_tools,
@@ -109,6 +110,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
     per_server_oauth_discovery: bool = False
+    oauth_identity_binding: MCPOAuthIdentityBinding | None = None
     is_byok: bool = False
     byok_description: list[str] = Field(default_factory=list)
     byok_api_key_help_url: str | None = None
@@ -128,9 +130,9 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     reviewed_at: datetime | None = None
     review_notes: str | None = None
 
-    @field_validator("events", mode="before")
+    @field_validator("events", "oauth_identity_binding", mode="before")
     @classmethod
-    def decode_stored_events(cls, value: object) -> object:
+    def decode_stored_config(cls, value: object) -> object:
         return json.loads(value) if isinstance(value, str) and value else value
 
     @field_validator("pinned_tools", mode="before")

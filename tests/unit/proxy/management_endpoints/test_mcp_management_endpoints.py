@@ -47,7 +47,7 @@ from litellm.proxy.mcp_server.mcp_server_manager import MCPServerConfig, MCPServ
 from litellm.proxy.utils import ProxyLogging
 from litellm.rust_bridge._native import RustOrganizationRepository, RustTeamRepository, RustUserRepository
 from litellm.types.mcp import MCPAuth, MCPCredentials
-from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
+from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer, PinnedMCPTool
 from tests.unit.proxy.rust_auth_stores import FakeUserStore, RustAuthStores
 
 
@@ -5844,7 +5844,7 @@ async def test_store_mcp_oauth_user_credential_blocked_when_identity_binding_enf
         ),
         patch(  # test-quality-ok: mirrors the existing store-credential tests in this file
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            new=AsyncMock(return_value=generate_mock_mcp_server_db_record(server_id=server_id)),
+            new=AsyncMock(return_value=None),
         ),
         patch(  # test-quality-ok: mirrors the existing store-credential tests in this file
             "litellm.proxy.management_endpoints.mcp_management_endpoints.user_api_key_has_admin_view",
@@ -6602,12 +6602,13 @@ def test_sanitize_virtual_key_drops_all_env_vars():
     assert server.env_vars[0].value == "super-secret"
 
 
-def test_sanitize_virtual_key_clears_token_exchange_endpoint_and_audience():
+def test_sanitize_virtual_key_clears_oauth_settings():
     """Virtual-key callers must not receive the token-exchange IdP endpoint or audience,
     matching how token_url is scrubbed for the same view."""
     import litellm.proxy.management_endpoints.mcp_management_endpoints as mgmt
 
     server = generate_mock_mcp_server_db_record()
+    server.oauth_identity_binding = MCPOAuthIdentityBinding(issuer="https://idp", audiences=["gateway"])
     server.token_url = "https://idp/token"
     server.token_exchange_endpoint = "https://idp/token-exchange"
     server.audience = "https://upstream/api"
@@ -6616,6 +6617,7 @@ def test_sanitize_virtual_key_clears_token_exchange_endpoint_and_audience():
 
     sanitized = mgmt._sanitize_mcp_server_for_virtual_key(server)
 
+    assert sanitized.oauth_identity_binding is None
     assert sanitized.token_url is None
     assert sanitized.token_exchange_endpoint is None
     assert sanitized.audience is None
