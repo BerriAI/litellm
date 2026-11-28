@@ -3645,7 +3645,9 @@ async def test_a_transcription_guardrail_refuses_gemini_audio_it_cannot_screen(m
     await streaming.client_ack_messages()
 
     frames: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
-    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent"]
+    # the explicit response.create hands the floor to the model (a bare turnComplete), then the text item
+    assert [next(iter(frame)) for frame in frames] == ["setup", "clientContent", "clientContent"]
+    assert frames[1] == {"clientContent": {"turnComplete": True}}
     refusals: Final = [
         event["error"]["event_id"]
         for event in _events_sent_to_client(streaming)
