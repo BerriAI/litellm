@@ -130,6 +130,14 @@ class GenericGuardrailAPIConfigModel(
 ):
     """Configuration parameters for the Generic Guardrail API guardrail"""
 
+    api_base: str | None = Field(
+        default=None,
+        description="Base URL of the guardrail endpoint to call (e.g. http://llm-guard:8000/analyze). Required when creating the guardrail: without it there is nowhere to send the request.",
+    )
+    api_key: str | None = Field(
+        default=None,
+        description="API key sent to the guardrail endpoint. Optional; omit it when the endpoint does not authenticate the caller.",
+    )
     optional_params: GenericGuardrailAPIOptionalParams | None = Field(
         default_factory=GenericGuardrailAPIOptionalParams,
         description="Optional parameters for the Generic Guardrail API guardrail",
