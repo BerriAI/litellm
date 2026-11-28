@@ -3,6 +3,7 @@ import type { ParseKeys } from "i18next";
 // Define the available test modes
 export const TEST_MODES: readonly { value: string; labelKey: ParseKeys }[] = [
   { value: "chat", labelKey: "addModel.addModelModes.chat" },
+  { value: "responses", labelKey: "addModel.addModelModes.responses" },
   { value: "completion", labelKey: "addModel.addModelModes.completion" },
   { value: "embedding", labelKey: "addModel.addModelModes.embedding" },
   { value: "audio_speech", labelKey: "addModel.addModelModes.audioSpeech" },

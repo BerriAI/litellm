@@ -18200,6 +18200,7 @@
     },
     "addModelModes": {
       "chat": "Chat - /chat/completions",
+      "responses": "Responses - /v1/responses",
       "completion": "Completion - /completions",
       "embedding": "Embedding - /embeddings",
       "audioSpeech": "Audio Speech - /audio/speech",
