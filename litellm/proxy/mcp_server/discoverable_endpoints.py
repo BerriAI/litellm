@@ -923,6 +923,21 @@ def _dcr_bridge_relays_client_registration(mcp_server: MCPServer) -> bool:
     )
 
 
+async def _dcr_bridge_relay_upstream_issuer(mcp_server: MCPServer) -> str | None:
+    """Advertise the upstream issuer only when the client can register and use its token directly."""
+    if not mcp_server.is_true_passthrough:
+        return None
+    resolved: Final = await _server_with_oauth_endpoints(mcp_server, _register_flow_needed_endpoint)
+    if not _register_relays_bridge_client(resolved):
+        return None
+    metadata: Final = resolved.authorization_server_metadata
+    if not resolved.issuer or metadata is None or metadata.get("issuer") != resolved.issuer:
+        return None
+    if metadata.get("registration_endpoint") != resolved.effective_registration_url:
+        return None
+    return resolved.issuer
+
+
 def _register_relays_bridge_client(mcp_server: MCPServer) -> bool:
     """Creating a shared client changes callback routing and identity binding, so it requires opt-in.
     Already configured or persisted clients retain their existing gateway-callback flow.
@@ -3109,8 +3124,9 @@ async def _build_oauth_protected_resource_response(
         resource_url = f"{request_base_url}/mcp"
 
     if mcp_server is not None and mcp_server_name and mcp_server.is_dcr_bridge:
+        upstream_issuer: Final = await _dcr_bridge_relay_upstream_issuer(mcp_server)
         return {
-            "authorization_servers": [f"{request_base_url}/{mcp_server_name}"],
+            "authorization_servers": [upstream_issuer or f"{request_base_url}/{mcp_server_name}"],
             "resource": resource_url,
             "scopes_supported": (mcp_server.scopes if mcp_server.scopes else []),
         }
