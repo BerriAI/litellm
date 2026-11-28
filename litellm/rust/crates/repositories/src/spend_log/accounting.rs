@@ -6,6 +6,9 @@ use chrono::{DateTime, NaiveDateTime};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
+#[path = "accounting_rollups.rs"]
+pub(super) mod rollups;
+
 /// The order in which Python's accounting writer takes entity row locks.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum Entity {
@@ -63,6 +66,8 @@ struct Metadata {
     accounting_model_access_groups: Vec<String>,
     accounting_windows: Vec<Window>,
     user_api_key_customer_usage: Option<String>,
+    #[serde(flatten)]
+    rollup: rollups::Metadata,
 }
 
 #[derive(Deserialize)]
@@ -96,6 +101,8 @@ pub(super) struct Payload {
     metadata: Metadata,
     #[serde(deserialize_with = "structured")]
     request_tags: Vec<String>,
+    #[serde(flatten)]
+    rollup: rollups::Fields,
     #[serde(skip)]
     customer_fallback: Customer,
 }

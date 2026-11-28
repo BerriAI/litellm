@@ -11,7 +11,73 @@ use sqlx::{PgExecutor, types::Json};
 use litellm_db::Error;
 
 use super::SpendLogOwner;
+use super::accounting::rollups::DailyTable;
 use super::accounting::{Entity, WindowCharge, WindowKey};
+
+pub(super) async fn set_accounting_lock_timeout(
+    executor: impl PgExecutor<'_>,
+    setting: &str,
+) -> Result<(), Error> {
+    sqlx::query_file!(
+        "src/spend_log/queries/set_accounting_lock_timeout.sql",
+        setting
+    )
+    .fetch_one(executor)
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn apply_daily_spend(
+    executor: impl PgExecutor<'_>,
+    table: DailyTable,
+    rows: &Value,
+) -> Result<(), Error> {
+    macro_rules! apply {
+        ($file:literal) => {
+            sqlx::query_file!($file, rows).execute(executor).await?
+        };
+    }
+    match table {
+        DailyTable::Agent => apply!("src/spend_log/queries/apply_accounting_daily_agent.sql"),
+        DailyTable::CustomerMember => {
+            apply!("src/spend_log/queries/apply_accounting_daily_customer_member.sql")
+        }
+        DailyTable::EndUser => apply!("src/spend_log/queries/apply_accounting_daily_end_user.sql"),
+        DailyTable::Organization => {
+            apply!("src/spend_log/queries/apply_accounting_daily_organization.sql")
+        }
+        DailyTable::Tag => apply!("src/spend_log/queries/apply_accounting_daily_tag.sql"),
+        DailyTable::Team => apply!("src/spend_log/queries/apply_accounting_daily_team.sql"),
+        DailyTable::User => apply!("src/spend_log/queries/apply_accounting_daily_user.sql"),
+    };
+    Ok(())
+}
+
+pub(super) async fn apply_model_usage(
+    executor: impl PgExecutor<'_>,
+    rows: &Value,
+) -> Result<(), Error> {
+    sqlx::query_file!(
+        "src/spend_log/queries/apply_accounting_model_usage.sql",
+        rows
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn apply_guardrail_usage(
+    executor: impl PgExecutor<'_>,
+    rows: &Value,
+) -> Result<(), Error> {
+    sqlx::query_file!(
+        "src/spend_log/queries/apply_accounting_guardrail_usage.sql",
+        rows
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
 
 pub(super) async fn lock_teams(executor: impl PgExecutor<'_>, ids: &[String]) -> Result<(), Error> {
     sqlx::query_file!("src/spend_log/queries/lock_accounting_teams.sql", ids)
@@ -105,12 +171,16 @@ pub(super) async fn apply_window(
     Ok(())
 }
 
-#[derive(Serialize)]
 pub(super) struct ClaimedDelivery {
     pub(super) delivery_id: String,
     pub(super) attempts: i32,
-    #[serde(skip)]
     pub(super) accounting_payload: Value,
+}
+
+#[derive(Serialize)]
+pub(super) struct DeliveryAttempt {
+    pub(super) delivery_id: String,
+    pub(super) attempts: i32,
 }
 
 pub(super) async fn claim_deliveries(
@@ -159,16 +229,17 @@ pub(super) async fn record_retry(
     claimed: &Value,
     error: &str,
     park: bool,
-) -> Result<(), Error> {
-    sqlx::query_file!(
+) -> Result<usize, Error> {
+    let updated = sqlx::query_file!(
         "src/spend_log/queries/retry_accounting_deliveries.sql",
         claimed,
         error,
         park
     )
     .execute(executor)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected();
+    Ok(usize::try_from(updated).unwrap_or(usize::MAX))
 }
 
 pub(super) async fn current_window_spend(
@@ -283,7 +354,8 @@ mod tests {
     use sqlx::{PgPool, Postgres, Transaction};
 
     use super::{
-        SpendLogOwner, claim_deliveries, mark_applied, park_undecodable, record_retry, window_spend,
+        DeliveryAttempt, SpendLogOwner, claim_deliveries, mark_applied, park_undecodable,
+        record_retry, window_spend,
     };
     use crate::test_support::database_pool;
 
@@ -455,7 +527,17 @@ mod tests {
                 park_undecodable(&mut *tx, std::slice::from_ref(&id)).await?;
             }
             Some(error) => {
-                record_retry(&mut *tx, &json!(claims), error, expected_state == "parked").await?;
+                let attempt = DeliveryAttempt {
+                    delivery_id: id.clone(),
+                    attempts: claims[0].attempts,
+                };
+                record_retry(
+                    &mut *tx,
+                    &json!([attempt]),
+                    error,
+                    expected_state == "parked",
+                )
+                .await?;
             }
         }
 

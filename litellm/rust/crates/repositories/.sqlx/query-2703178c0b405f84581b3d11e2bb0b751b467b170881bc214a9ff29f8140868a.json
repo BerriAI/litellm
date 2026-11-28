@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_DailyModelUsage\" AS stored (date, model_group, model, custom_llm_provider, task_type, spend, prompt_tokens, completion_tokens, request_count, successful_requests, failed_requests, total_response_time_ms, timed_requests, updated_at)\nSELECT date, model_group, model, custom_llm_provider, task_type, spend, prompt_tokens, completion_tokens, request_count, successful_requests, failed_requests, total_response_time_ms, timed_requests, (NOW() AT TIME ZONE 'UTC')\nFROM jsonb_to_recordset($1::jsonb) AS input(\n    date text,\n    model_group text,\n    model text,\n    custom_llm_provider text,\n    task_type text,\n    spend double precision,\n    prompt_tokens bigint,\n    completion_tokens bigint,\n    request_count bigint,\n    successful_requests bigint,\n    failed_requests bigint,\n    total_response_time_ms bigint,\n    timed_requests bigint\n)\nORDER BY date COLLATE \"C\", model_group COLLATE \"C\", model COLLATE \"C\", custom_llm_provider COLLATE \"C\", task_type COLLATE \"C\"\nON CONFLICT (date, model_group, model, custom_llm_provider, task_type) DO UPDATE SET\n    spend = stored.spend + EXCLUDED.spend,\n    prompt_tokens = stored.prompt_tokens + EXCLUDED.prompt_tokens,\n    completion_tokens = stored.completion_tokens + EXCLUDED.completion_tokens,\n    request_count = stored.request_count + EXCLUDED.request_count,\n    successful_requests = stored.successful_requests + EXCLUDED.successful_requests,\n    failed_requests = stored.failed_requests + EXCLUDED.failed_requests,\n    total_response_time_ms = stored.total_response_time_ms + EXCLUDED.total_response_time_ms,\n    timed_requests = stored.timed_requests + EXCLUDED.timed_requests,\n    updated_at = EXCLUDED.updated_at\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2703178c0b405f84581b3d11e2bb0b751b467b170881bc214a9ff29f8140868a"
+}

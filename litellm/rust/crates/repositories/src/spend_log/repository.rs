@@ -10,15 +10,16 @@
 //! that a pre-ledger cost row already charged loses its delivery again, and only the logs whose
 //! delivery this commit accepted are written, all inside one transaction with its own deadline.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 
 use chrono::{DateTime, Utc};
 use litellm_db::Call;
-use litellm_db::{Error, Statements};
+use litellm_db::{Error, ErrorKind, Statements};
 use serde::Serialize;
 use serde_json::{Value, value::RawValue};
 use sqlx::{PgConnection, types::Json};
 
+use super::accounting::rollups::Rollups;
 use super::accounting::{self, EntityCharges, Payload};
 use super::queries;
 use super::record::{SpendLogDelivery, SpendLogRecord, SpendLogWrite};
@@ -41,6 +42,28 @@ const INSERT_SPEND_LOGS: Call = Call {
     table: Some("LiteLLM_SpendLogs"),
     operation: None,
 };
+
+const APPLY_ACCOUNTING: Call = Call {
+    call_type: "apply_accounting_deliveries",
+    table: Some("LiteLLM_SpendLogDelivery"),
+    operation: None,
+};
+
+const RETRY_ACCOUNTING: Call = Call {
+    call_type: "retry_accounting_deliveries",
+    table: Some("LiteLLM_SpendLogDelivery"),
+    operation: None,
+};
+
+const ACCOUNTING_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Progress of one fresh or retry accounting batch.
+#[derive(Default)]
+pub struct AccountingBatch {
+    pub applied: usize,
+    pub parked: usize,
+    pub failed: usize,
+}
 
 /// Whose spend a window sum adds up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +92,31 @@ async fn apply_affiliation(
         transaction
             .with(Side::Writer, async |executor| {
                 queries::update_entities(executor, entity, &charges).await
+            })
+            .await?;
+    }
+    let rollups = Rollups::project(payloads)?;
+    for (table, rows) in rollups.daily() {
+        let rows = json(&rows.collect::<Vec<_>>())?;
+        transaction
+            .with(Side::Writer, async |executor| {
+                queries::apply_daily_spend(executor, table, &rows).await
+            })
+            .await?;
+    }
+    if let Some(rows) = rollups.models() {
+        let rows = json(&rows)?;
+        transaction
+            .with(Side::Writer, async |executor| {
+                queries::apply_model_usage(executor, &rows).await
+            })
+            .await?;
+    }
+    if let Some(rows) = rollups.guardrails() {
+        let rows = json(&rows)?;
+        transaction
+            .with(Side::Writer, async |executor| {
+                queries::apply_guardrail_usage(executor, &rows).await
             })
             .await?;
     }
@@ -103,6 +151,108 @@ pub struct SpendLogRepository {
 impl SpendLogRepository {
     pub fn new(database: Database) -> Self {
         Self { database }
+    }
+
+    /// Claims one batch, applies its projections and marks it applied in the same writer transaction.
+    pub async fn apply_accounting_batch(
+        &self,
+        limit: i32,
+        retry: bool,
+        lock_timeout_ms: u64,
+    ) -> Result<AccountingBatch, Error> {
+        let lock_timeout = format!("{}ms", lock_timeout_ms.max(1));
+        let claimed = Mutex::new(Vec::new());
+        let result = self
+            .database
+            .run(APPLY_ACCOUNTING, || async {
+                claimed.lock().expect("accounting claims lock").clear();
+                tokio::time::timeout(
+                    ACCOUNTING_TIMEOUT,
+                    self.database.transaction(async |transaction| {
+                        let rows = transaction
+                            .with(Side::Writer, async |executor| {
+                                queries::claim_deliveries(
+                                    executor,
+                                    if retry { 1 } else { limit.max(1) },
+                                    retry,
+                                )
+                                .await
+                            })
+                            .await?;
+                        let mut undecodable = Vec::new();
+                        let mut ids = Vec::new();
+                        let mut payloads = Vec::new();
+                        let mut attempts = Vec::new();
+                        for row in rows {
+                            match Payload::decode(row.accounting_payload) {
+                                Ok(payload) => {
+                                    ids.push(row.delivery_id.clone());
+                                    attempts.push(queries::DeliveryAttempt {
+                                        delivery_id: row.delivery_id,
+                                        attempts: row.attempts,
+                                    });
+                                    payloads.push(payload);
+                                }
+                                Err(_) => undecodable.push(row.delivery_id),
+                            }
+                        }
+                        if !undecodable.is_empty() {
+                            transaction
+                                .with(Side::Writer, async |executor| {
+                                    queries::park_undecodable(executor, &undecodable).await
+                                })
+                                .await?;
+                        }
+                        if !payloads.is_empty() {
+                            *claimed.lock().expect("accounting claims lock") = attempts;
+                            transaction
+                                .with(Side::Writer, async |executor| {
+                                    queries::set_accounting_lock_timeout(executor, &lock_timeout)
+                                        .await
+                                })
+                                .await?;
+                            apply_affiliation(transaction, &payloads).await?;
+                            transaction
+                                .with(Side::Writer, async |executor| {
+                                    queries::mark_applied(executor, &ids).await
+                                })
+                                .await?;
+                        }
+                        Ok(AccountingBatch {
+                            applied: ids.len(),
+                            parked: undecodable.len(),
+                            failed: 0,
+                        })
+                    }),
+                )
+                .await
+                .map_err(|_| Error::TransactionTimedOut)?
+            })
+            .await;
+        let claimed = claimed.into_inner().expect("accounting claims lock");
+        let error = match result {
+            Ok(batch) => return Ok(batch),
+            Err(error) if claimed.is_empty() => return Err(error),
+            Err(error) => error,
+        };
+        let park = claimed.len() == 1
+            && claimed[0].attempts >= 4
+            && (error.kind() == ErrorKind::DataRejected
+                || matches!(error, Error::Query(sqlx::Error::Encode(_))));
+        let error_name: &str = error.kind().into();
+        let attempts = json(&claimed)?;
+        let updated = self
+            .database
+            .run(RETRY_ACCOUNTING, || async {
+                let mut session = self.database.session(Side::Writer).await?;
+                queries::record_retry(session.executor(), &attempts, error_name, park).await
+            })
+            .await?;
+        Ok(AccountingBatch {
+            applied: 0,
+            parked: if park { updated } else { 0 },
+            failed: claimed.len(),
+        })
     }
 
     /// The total spend `owner_id` logged at or after `since`, zero when it logged none.
@@ -358,8 +508,22 @@ mod tests {
         let delivery = |cost, start: &str| {
             Payload::decode(json!({
                 "spend": cost, "startTime": start,
+                "request_id": "accounting-request",
+                "call_type": "acompletion",
+                "api_key": "accounting-key",
+                "model": "accounting-model",
+                "model_group": "accounting-group",
+                "custom_llm_provider": "openai",
+                "user": "accounting-owner",
+                "team_id": "accounting-team",
+                "end_user": "accounting-end-user",
+                "agent_id": "accounting-agent",
+                "request_tags": ["task:classification", "accounting-tag"],
+                "status": "success",
+                "prompt_tokens": 8,
                 "metadata": {
-                    "accounting_entities": {"user": "accounting-owner", "team_id": "accounting-team"},
+                    "accounting_entities": {"user": "accounting-owner", "team_id": "accounting-team", "organization_id": "accounting-org", "customer_org_id": "accounting-customer-org"},
+                    "guardrail_information": [{"guardrail_id": "accounting-guardrail", "guardrail_usage": {"calls": 2}}],
                     "accounting_windows": [{
                         "entity_type": "team", "entity_id": "accounting-team",
                         "window_duration": "1d", "window_start": "2026-11-01T00:00:00Z",
@@ -389,6 +553,37 @@ mod tests {
             WHERE owner.user_id = 'accounting-owner' AND team.team_id = 'accounting-team'
         "#).fetch_one(&mut *tx).await?;
         assert_eq!(spend, (13.0, 5.0, 5.0, 5.0, 11.0));
+        #[expect(clippy::disallowed_methods, reason = "Fixture assertions are outside the compile-checked query set")]
+        let daily = sqlx::query_as::<_, (f64, f64, f64, f64, f64, f64, f64)>(r#"
+            SELECT
+                (SELECT spend FROM "LiteLLM_DailyUserSpend" WHERE user_id = 'accounting-owner'),
+                (SELECT spend FROM "LiteLLM_DailyTeamSpend" WHERE team_id = 'accounting-team'),
+                (SELECT spend FROM "LiteLLM_DailyEndUserSpend" WHERE end_user_id = 'accounting-end-user'),
+                (SELECT spend FROM "LiteLLM_DailyAgentSpend" WHERE agent_id = 'accounting-agent'),
+                (SELECT spend FROM "LiteLLM_DailyOrganizationSpend" WHERE organization_id = 'accounting-org'),
+                (SELECT spend FROM "LiteLLM_DailyCustomerMemberSpend" WHERE customer_org_id = 'accounting-customer-org'),
+                (SELECT spend FROM "LiteLLM_DailyTagSpend" WHERE tag = 'accounting-tag')
+        "#).fetch_one(&mut *tx).await?;
+        assert_eq!(daily, (5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0));
+        #[expect(clippy::disallowed_methods, reason = "Fixture assertions are outside the compile-checked query set")]
+        let model = sqlx::query_as::<_, (f64, i64, i64)>(r#"
+            SELECT spend, prompt_tokens, successful_requests
+            FROM "LiteLLM_DailyModelUsage" WHERE model = 'accounting-model' AND task_type = 'classification'
+        "#).fetch_one(&mut *tx).await?;
+        assert_eq!(model, (5.0, 16, 2));
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Fixture assertions are outside the compile-checked query set"
+        )]
+        let guardrail = sqlx::query_as::<_, (i64, f64, i64)>(
+            r#"
+            SELECT units, cost, untracked_units FROM "LiteLLM_DailyGuardrailUsageUnits"
+            WHERE guardrail_id = 'accounting-guardrail' AND usage_unit = 'calls'
+        "#,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        assert_eq!(guardrail, (4, 0.0, 4));
         Ok(())
     }
 

@@ -19,6 +19,7 @@ macro_rules_attribute.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 serde_with.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 strum.workspace = true
 tokio = { workspace = true, features = ["rt", "time"] }
