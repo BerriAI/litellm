@@ -90,6 +90,7 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None = None,
     ) -> dict[str, str]:
         return {
+            **headers,
             "Authorization": f"Bearer {get_voyage_api_key(api_key)}",
         }
 
