@@ -4824,6 +4824,99 @@ def test_check_team_key_model_specific_limits_team_model_tpm_overallocation():
     )
 
 
+def _io_team_table(limit: str, tpm_limit: int | None = None) -> LiteLLM_TeamTableCachedObj:
+    return LiteLLM_TeamTableCachedObj(
+        team_id="io-team",
+        tpm_limit=tpm_limit,
+        max_budget=100.0,
+        spend=0.0,
+        models=[],
+        blocked=False,
+        members_with_roles=[],
+        metadata={limit: {"gpt-4": 1000}},
+    )
+
+
+def _io_team_key(limit: str, value: object) -> LiteLLM_VerificationToken:
+    return LiteLLM_VerificationToken(token="io-existing", team_id="io-team", metadata={limit: {"gpt-4": value}})
+
+
+@pytest.mark.parametrize(("limit", "label"), [("model_itpm_limit", "ITPM"), ("model_otpm_limit", "OTPM")])
+def test_a_key_io_limit_over_the_team_io_limit_left_unallocated_is_refused(limit: str, label: str):
+    with pytest.raises(HTTPException) as refused:
+        check_team_key_model_specific_limits(
+            keys=[_io_team_key(limit, 700)],
+            team_table=_io_team_table(limit),
+            data=GenerateKeyRequest(metadata={limit: {"gpt-4": 400}}),
+        )
+
+    assert refused.value.status_code == 400
+    assert f"Allocated {label} limit=700 + Key {label} limit=400 is greater than team {label} limit=1000" in str(
+        refused.value.detail
+    )
+
+
+@pytest.mark.parametrize(("limit", "label"), [("model_itpm_limit", "ITPM"), ("model_otpm_limit", "OTPM")])
+def test_a_key_io_limit_within_the_team_io_limit_but_over_the_team_tpm_limit_is_refused(limit: str, label: str):
+    with pytest.raises(HTTPException) as refused:
+        check_team_key_model_specific_limits(
+            keys=[_io_team_key(limit, 700)],
+            team_table=_io_team_table(limit, tpm_limit=800),
+            data=GenerateKeyRequest(metadata={limit: {"gpt-4": 200}}),
+        )
+
+    assert refused.value.status_code == 400
+    assert f"Allocated {label} limit=700 + Key {label} limit=200 is greater than team TPM limit=800" in str(
+        refused.value.detail
+    )
+
+
+@pytest.mark.parametrize(("limit", "label"), [("model_itpm_limit", "ITPM"), ("model_otpm_limit", "OTPM")])
+def test_a_key_io_limit_within_the_team_tpm_limit_but_over_the_team_io_limit_is_refused(limit: str, label: str):
+    with pytest.raises(HTTPException) as refused:
+        check_team_key_model_specific_limits(
+            keys=[_io_team_key(limit, 700)],
+            team_table=_io_team_table(limit, tpm_limit=100000),
+            data=GenerateKeyRequest(metadata={limit: {"gpt-4": 400}}),
+        )
+
+    assert f"is greater than team {label} limit=1000" in str(refused.value.detail)
+
+
+@pytest.mark.parametrize("limit", ["model_itpm_limit", "model_otpm_limit"])
+def test_a_key_io_limit_the_team_can_fit_is_accepted(limit: str):  # test-quality-ok: accepting means not raising
+    check_team_key_model_specific_limits(
+        keys=[_io_team_key(limit, 700), _io_team_key(limit, "not a number")],
+        team_table=_io_team_table(limit, tpm_limit=1000),
+        data=GenerateKeyRequest(metadata={limit: {"gpt-4": 300}}),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limit_type", "refused"), [("guaranteed_throughput", True), (None, False)], ids=["guaranteed", "default"]
+)
+async def test_only_a_guaranteed_throughput_key_has_its_io_limits_checked_against_the_team(
+    limit_type: Literal["guaranteed_throughput"] | None, refused: bool
+):
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[_io_team_key("model_otpm_limit", 700)]
+    )
+    check: Final = _check_team_key_limits(
+        team_table=_io_team_table("model_otpm_limit"),
+        data=GenerateKeyRequest(tpm_limit_type=limit_type, metadata={"model_otpm_limit": {"gpt-4": 400}}),
+        prisma_client=prisma_client,
+    )
+
+    if refused:
+        with pytest.raises(HTTPException) as exc:
+            await check
+        assert "greater than team OTPM limit=1000" in str(exc.value.detail)
+    else:
+        await check
+
+
 @pytest.mark.asyncio
 async def test_generate_key_with_object_permission():
     """
