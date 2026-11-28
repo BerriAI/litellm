@@ -109,3 +109,37 @@ async def test_a_white_space_config_that_is_not_a_mapping_is_rejected_before_any
 
     assert "private-setting" not in str(raised.value)
     assert not start_upload.called
+
+
+@pytest.mark.asyncio
+async def test_a_named_credential_oidc_key_is_sent_as_the_secret_it_points_to(
+    monkeypatch: pytest.MonkeyPatch, start_upload: respx.Route
+):
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setenv("GEMINI_RAG_TOKEN", "resolved-gemini-key")
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="gemini-rag",
+                credential_info={},
+                credential_values={"api_key": "oidc/env/GEMINI_RAG_TOKEN", "api_base": _API_BASE},
+            )
+        ],
+    )
+    ingestion: Final = GeminiRAGIngestion(
+        ingest_options={
+            "vector_store": {
+                "custom_llm_provider": "gemini",
+                "vector_store_id": _STORE,
+                "litellm_credential_name": "gemini-rag",
+            },
+        }
+    )
+
+    stored: Final = await _store_notes(ingestion)
+
+    assert stored == (_STORE, _DOCUMENT)
+    assert start_upload.calls.last.request.headers["x-goog-api-key"] == "resolved-gemini-key"

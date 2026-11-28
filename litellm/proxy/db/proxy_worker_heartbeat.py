@@ -22,6 +22,7 @@ from typing_extensions import LiteralString, ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import APSCHEDULER_MISFIRE_GRACE_TIME
+from litellm.integrations.otel.runtime import traced_background_job
 from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
@@ -104,7 +105,7 @@ class ProxyWorkerHeartbeat:
             return
         await self.beat()
         scheduler.add_job(
-            self.beat,
+            traced_background_job("worker_heartbeat", self.beat),
             "interval",
             seconds=self.interval_seconds,
             id="proxy_worker_heartbeat_job",

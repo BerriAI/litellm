@@ -35,9 +35,10 @@ FileDeleteProvider = Literal[
 ]
 FileListProvider = Literal["openai", "azure", "litellm_proxy", "manus", "anthropic", "mistral", "xai"]
 import litellm
-from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
 from litellm.files.types import FileContentProvider, FileContentStreamingResult, FileRetrieveProvider
+from litellm.litellm_core_utils.call_kwargs import logging_obj_of
+from litellm.litellm_core_utils.core_helpers import float_of, require_attributes
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.common_utils import get_azure_credentials
@@ -47,7 +48,6 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
 from litellm.llms.openai.openai import FileDeleted, FileObject, OpenAIFilesAPI
-from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
 from litellm.llms.xai.batches.handler import XAIBatchesHandler
 from litellm.llms.xai.batches.transformation import is_xai_batch_results_id
 from litellm.types.llms.openai import (
@@ -85,6 +85,16 @@ def _should_sdk_support_streaming(
     return custom_llm_provider in FILE_CONTENT_STREAMING_PROVIDERS
 
 
+def _openai_client_of(value: object) -> OpenAI | AsyncOpenAI | None:
+    if value is None or isinstance(value, (OpenAI, AsyncOpenAI)):
+        return value
+    return require_attributes(value, OpenAI, "files")
+
+
+def _sdk_client_of(value: object) -> OpenAI | AsyncOpenAI | HTTPHandler | AsyncHTTPHandler | None:
+    return value if isinstance(value, (HTTPHandler, AsyncHTTPHandler)) else _openai_client_of(value)
+
+
 def _file_content_logging_obj(kwargs: dict[str, object], _is_async: bool) -> LiteLLMLoggingObj:
     logging_obj: Final = kwargs.get("litellm_logging_obj")
     if isinstance(logging_obj, LiteLLMLoggingObj):
@@ -102,7 +112,6 @@ def _file_content_logging_obj(kwargs: dict[str, object], _is_async: bool) -> Lit
 
 openai_files_instance: Final = OpenAIFilesAPI()
 azure_files_instance: Final = AzureOpenAIFilesAPI()
-vertex_ai_files_instance: Final = VertexAIFilesHandler()
 bedrock_files_instance: Final = BedrockFilesHandler()
 xai_batch_results_instance: Final = XAIBatchesHandler()
 #################################################
@@ -116,7 +125,7 @@ async def acreate_file(
     custom_llm_provider: FileCreateProvider = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> OpenAIFileObject:
     """
     Async: Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
@@ -161,7 +170,7 @@ def create_file(
     custom_llm_provider: FileCreateProvider | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> OpenAIFileObject | Coroutine[object, None, OpenAIFileObject]:
     """
     Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
@@ -207,7 +216,7 @@ def create_file(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)
+            timeout = float_of(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -306,7 +315,7 @@ async def afile_retrieve(
     custom_llm_provider: FileRetrieveProvider = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> OpenAIFileObject:
     """
     Async: Get file contents
@@ -347,7 +356,7 @@ def file_retrieve(
     custom_llm_provider: FileRetrieveProvider = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> FileObject:
     """
     Returns the contents of the specified file.
@@ -368,7 +377,7 @@ def file_retrieve(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)
+            timeout = float_of(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -424,7 +433,8 @@ def file_retrieve(
                 litellm_params_dict["api_key"] = optional_params.api_key
                 litellm_params_dict["api_base"] = optional_params.api_base
 
-                logging_obj = kwargs.get("litellm_logging_obj")
+                raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
+                logging_obj = None if raw_logging_obj is None else logging_obj_of(raw_logging_obj)
                 if logging_obj is None:
                     from litellm.litellm_core_utils.litellm_logging import (
                         Logging as LiteLLMLoggingObj,
@@ -436,7 +446,7 @@ def file_retrieve(
                         stream=False,
                         call_type="afile_retrieve" if _is_async else "file_retrieve",
                         start_time=time.time(),
-                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
+                        litellm_call_id=str(kwargs.get("litellm_call_id") or uuid_module.uuid4()),
                         function_id=str(kwargs.get("id") or ""),
                     )
 
@@ -480,7 +490,7 @@ async def afile_delete(
     custom_llm_provider: FileDeleteProvider = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Coroutine[object, object, FileObject]:
     """
     Async: Delete file
@@ -524,7 +534,7 @@ def file_delete(
     custom_llm_provider: FileDeleteProvider | str = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> FileDeleted:
     """
     Delete file
@@ -552,7 +562,7 @@ def file_delete(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)
+            timeout = float_of(timeout)
         elif timeout is None:
             timeout = 600.0
         _is_async: Final = kwargs.pop("is_async", False) is True
@@ -586,7 +596,7 @@ def file_delete(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 file_id=file_id,
-                client=client,
+                client=_openai_client_of(client),
                 litellm_params=litellm_params_dict,
             )
         else:
@@ -599,7 +609,8 @@ def file_delete(
                 litellm_params_dict["api_key"] = optional_params.api_key
                 litellm_params_dict["api_base"] = optional_params.api_base
 
-                logging_obj = kwargs.get("litellm_logging_obj")
+                raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
+                logging_obj = None if raw_logging_obj is None else logging_obj_of(raw_logging_obj)
                 if logging_obj is None:
                     from litellm.litellm_core_utils.litellm_logging import (
                         Logging as LiteLLMLoggingObj,
@@ -611,7 +622,7 @@ def file_delete(
                         stream=False,
                         call_type="afile_delete" if _is_async else "file_delete",
                         start_time=time.time(),
-                        litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
+                        litellm_call_id=str(kwargs.get("litellm_call_id") or uuid_module.uuid4()),
                         function_id=str(kwargs.get("id") or ""),
                     )
 
@@ -653,7 +664,7 @@ async def afile_list(
     purpose: str | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     """
     Async: List files
@@ -694,7 +705,7 @@ def file_list(
     purpose: str | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     """
     List files
@@ -715,7 +726,7 @@ def file_list(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)
+            timeout = float_of(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -731,7 +742,8 @@ def file_list(
             litellm_params_dict["api_key"] = optional_params.api_key
             litellm_params_dict["api_base"] = optional_params.api_base
 
-            logging_obj = kwargs.get("litellm_logging_obj")
+            raw_logging_obj: Final = kwargs.get("litellm_logging_obj")
+            logging_obj = None if raw_logging_obj is None else logging_obj_of(raw_logging_obj)
             if logging_obj is None:
                 from litellm.litellm_core_utils.litellm_logging import (
                     Logging as LiteLLMLoggingObj,
@@ -743,7 +755,7 @@ def file_list(
                     stream=False,
                     call_type="afile_list" if _is_async else "file_list",
                     start_time=time.time(),
-                    litellm_call_id=kwargs.get("litellm_call_id", str(uuid_module.uuid4())),
+                    litellm_call_id=str(kwargs.get("litellm_call_id") or uuid_module.uuid4()),
                     function_id=str(kwargs.get("id", "")),
                 )
 
@@ -814,7 +826,7 @@ async def afile_content(
     extra_body: dict[str, str] | None = None,
     chunk_size: int = 1024 * 1024,
     stream: bool = False,
-    **kwargs,
+    **kwargs: object,
 ) -> HttpxBinaryResponseContent | FileContentStreamingResult:
     """
     Async: Get file contents
@@ -862,7 +874,7 @@ def file_content(
     extra_body: dict[str, str] | None = None,
     chunk_size: int = 1024 * 1024,
     stream: bool = False,
-    **kwargs,
+    **kwargs: object,
 ) -> (
     HttpxBinaryResponseContent
     | FileContentStreamingResult
@@ -896,7 +908,7 @@ def file_content(
             read_timeout: Final = timeout.read or 600
             timeout = read_timeout  # default 10 min timeout
         elif timeout is not None and not isinstance(timeout, httpx.Timeout):
-            timeout = float(timeout)
+            timeout = float_of(timeout)
         elif timeout is None:
             timeout = 600.0
 
@@ -923,7 +935,7 @@ def file_content(
                 timeout=timeout,
                 logging_obj=_file_content_logging_obj(kwargs, _is_async),
                 _is_async=_is_async,
-                client=client,
+                client=_sdk_client_of(client),
             )
 
         if custom_llm_provider == LlmProviders.XAI.value and is_xai_batch_results_id(file_id):
@@ -983,28 +995,7 @@ def file_content(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 file_content_request=_file_content_request,
-                client=client,
-                litellm_params=litellm_params_dict,
-            )
-        elif custom_llm_provider == "vertex_ai":
-            api_base: Final = optional_params.api_base or ""
-            vertex_ai_project: Final = (
-                optional_params.vertex_project or litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT")
-            )
-            vertex_ai_location: Final = (
-                optional_params.vertex_location or litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
-            )
-            vertex_credentials: Final = optional_params.vertex_credentials or get_secret_str("VERTEXAI_CREDENTIALS")
-
-            response = vertex_ai_files_instance.file_content(
-                _is_async=_is_async,
-                file_content_request=_file_content_request,
-                api_base=api_base,
-                vertex_credentials=vertex_credentials,
-                vertex_project=vertex_ai_project,
-                vertex_location=vertex_ai_location,
-                timeout=timeout,
-                max_retries=optional_params.max_retries,
+                client=_openai_client_of(client),
                 litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "bedrock":
@@ -1041,7 +1032,7 @@ def file_content_streaming(
     extra_headers: dict[str, str] | None,
     chunk_size: int,
     optional_params: GenericLiteLLMParams,
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     timeout: float | httpx.Timeout,
     logging_obj: LiteLLMLoggingObj,
     _is_async: bool,

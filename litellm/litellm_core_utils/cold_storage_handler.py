@@ -27,7 +27,7 @@ class ColdStorageHandler:
     async def get_proxy_server_request_from_cold_storage_with_object_key(
         self,
         object_key: str,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Get the proxy server request from cold storage using the object key directly.
 

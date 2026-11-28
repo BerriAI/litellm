@@ -5,7 +5,7 @@ This file contains the transformation logic for the Gemini realtime API.
 import json
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required, TypedDict
@@ -16,6 +16,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.realtime.transcription_protocol import new_event_id
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeSessionUpdateRejection
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
@@ -39,6 +40,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeEventTypes,
     OpenAIRealtimeFunctionCallArgumentsDone,
     OpenAIRealtimeOutputItemDone,
+    OpenAIRealtimeOutputVideoDelta,
     OpenAIRealtimeResponseAudioDone,
     OpenAIRealtimeResponseContentPartAdded,
     OpenAIRealtimeResponseDelta,
@@ -56,6 +58,7 @@ from litellm.types.llms.vertex_ai import (
     GeminiResponseModalities,
     HttpxBlobType,
     HttpxContentType,
+    HttpxPartType,
 )
 from litellm.types.realtime import (
     ALL_DELTA_TYPES,
@@ -70,15 +73,18 @@ from ..common_utils import encode_unserializable_types, get_api_key_from_env
 
 MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Final[dict[str, OpenAIRealtimeEventTypes | ResponsesAPIStreamEvents]] = {
     "setupComplete": OpenAIRealtimeEventTypes.SESSION_CREATED,
-    "serverContent.generationComplete": OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE,
     "serverContent.turnComplete": OpenAIRealtimeEventTypes.RESPONSE_DONE,
     "serverContent.interrupted": OpenAIRealtimeEventTypes.RESPONSE_DONE,
+    "serverContent.generationComplete": OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE,
     "toolCall": ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
 }
 
 # Keys the main transform loop handles; siblings like ``usageMetadata`` are skipped.
-_KNOWN_GEMINI_TOP_LEVEL_KEYS: Final[set] = {map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT}
+_KNOWN_GEMINI_TOP_LEVEL_KEYS: Final[set[str]] = {
+    map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT
+}
 _GEMINI_LIVE_RESPONSE_MODALITIES: Final = frozenset({"TEXT", "AUDIO"})
+_GEMINI_LIVE_AVATAR_RESPONSE_MODALITIES: Final = _GEMINI_LIVE_RESPONSE_MODALITIES | {"VIDEO"}
 
 
 OPENAI_STOCK_REALTIME_VOICES: Final[frozenset[str]] = frozenset(
@@ -120,6 +126,11 @@ GEMINI_LIVE_DOCUMENTED_VOICES: Final[frozenset[str]] = frozenset(
         "zubenelgenubi",
     }
 )
+
+_AVATAR_CONFIG_KEYS: Final[Mapping[str, str]] = {
+    "avatar": "avatarName",
+    "avatar_video_bitrate_bps": "videoBitrateBps",
+}
 
 
 def _is_undocumented_live_voice(voice: object) -> bool:
@@ -200,6 +211,7 @@ def _base64_decoded_byte_count(data: str) -> int:
 
 
 _JSON_ARRAY: Final = TypeAdapter(tuple[object, ...])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _chat_completion_tool(tool: object) -> dict[str, object]:
@@ -224,14 +236,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self._tool_call_id_to_name: OrderedDict[str, str] = OrderedDict()
         # Gemini Live sometimes emits usageMetadata in a standalone frame between
         # turns; buffer it here so the next response.done carries the token counts.
-        self._pending_usage_metadata: dict | None = None
+        self._pending_usage_metadata: dict[str, object] | None = None
+        self._cancelled_response_id: str | None = None
+        self._closed_output_item_id: str | None = None
         self._unbilled_input_audio_bytes: int = 0
         self._manual_activity_open: bool = False
 
-    def is_setup_message(self, msg_obj: dict) -> bool:
+    def is_setup_message(self, msg_obj: Mapping[str, object]) -> bool:
         return "setup" in msg_obj
 
-    def is_content_message(self, msg_obj: dict) -> bool:
+    def is_content_message(self, msg_obj: Mapping[str, object]) -> bool:
         return any(k in msg_obj for k in ("realtimeInput", "clientContent", "toolResponse"))
 
     def _include_function_response_id(self) -> bool:
@@ -241,6 +255,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def _rejects_vad_tuning_with_detection_off(self) -> bool:
         """Google AI Studio closes the socket (1007) on padding or silence tuning next to ``disabled: true``."""
         return True
+
+    def _supports_avatars(self) -> bool:
+        return False
+
+    def setup_must_complete_before_content(self, setup_message: Mapping[str, object]) -> bool:
+        """An avatar setup takes seconds, and Vertex answers content sent before
+        setupComplete with "Session is not set up yet" instead of queueing it."""
+        return "avatarConfig" in (as_str_mapping(setup_message.get("setup")) or {})
 
     def _rejects_undocumented_voices(self, model: str) -> bool:
         """Google AI Studio closes the socket (1007) on an unknown voice only for its native-audio Live models."""
@@ -274,7 +296,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         return usage_dict
 
-    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
+    def validate_environment(self, headers: dict[str, str], model: str, api_key: str | None = None) -> dict[str, str]:
         return headers
 
     def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
@@ -312,7 +334,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if "parts" in model_turn:
             parts: Final = model_turn["parts"]
             if len(parts) != 1:
-                verbose_logger.warning("Realtime: Expected 1 part, got %s for Gemini model turn event.", len(parts))
+                verbose_logger.debug("Realtime: Expected 1 part, got %s for Gemini model turn event.", len(parts))
             part: Final = parts[0]
             if "text" in part:
                 return OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA
@@ -365,6 +387,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         activity_end: Final[BidiGenerateContentRealtimeInput] = {"activityEnd": {}}
         return (json.dumps({"realtimeInput": activity_end}),)
 
+    def client_event_starts_response(self, client_event: Mapping[str, object]) -> bool:
+        match client_event.get("type"):
+            case "conversation.item.create":
+                item: Final = as_str_mapping(client_event.get("item"))
+                return item is not None and item.get("type") != "function_call_output"
+            case "response.create" | "input_audio_buffer.commit" | "input_audio_buffer.end":
+                return self._manual_activity_open
+            case _:
+                return False
+
     def _handle_input_audio_buffer_commit_or_end(self, session_configuration_request: str | None) -> list[str]:
         """Map OpenAI buffer commit/end to Gemini Live turn-boundary signals."""
         if self._manual_turn_detection_enabled(session_configuration_request):
@@ -411,6 +443,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             "input_audio_transcription",
             "turn_detection",
             "voice",
+            "avatar",
+            "avatar_video_bitrate_bps",
         ]
 
     def map_openai_params(self, optional_params: dict, non_default_params: dict, *, model: str) -> dict:
@@ -452,7 +486,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     optional_params["generationConfig"]["speechConfig"] = speech_config
         if len(optional_params["generationConfig"]) == 0:
             optional_params.pop("generationConfig")
-        return optional_params
+        session: Final = cast(object, non_default_params)  # cast-ok: the inherited signature takes an untyped dict
+        avatar_config: Final = self._avatar_config(as_str_mapping(session) or {})
+        return {**optional_params, "avatarConfig": dict(avatar_config)} if avatar_config else optional_params
+
+    def _avatar_config(self, session: Mapping[str, object]) -> Mapping[str, object]:
+        if not self._supports_avatars():
+            return {}
+        return {_AVATAR_CONFIG_KEYS[key]: session[key] for key in _AVATAR_CONFIG_KEYS if session.get(key)}
 
     def _realtime_input_config(self, turn_detection: object) -> BidiGenerateContentRealtimeInputConfig | None:
         if turn_detection is None:
@@ -473,7 +514,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return BidiGenerateContentRealtimeInputConfig(automaticActivityDetection=transformed_audio_activity_config)
 
     @staticmethod
-    def _extract_turn_detection(session: dict) -> dict | None:
+    def _extract_turn_detection(session: dict[str, object]) -> dict[str, object] | None:
         """Extract turn_detection from a session.update payload.
 
         Handles both the flat beta shape (``session.turn_detection``) and the
@@ -494,7 +535,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return None
 
     @staticmethod
-    def _normalize_session_payload_for_mapping(session: dict) -> dict:
+    def _normalize_session_payload_for_mapping(session: dict[str, object]) -> dict[str, object]:
         """Normalize GA-remapped session fields back to their beta keys.
 
         ``map_openai_params`` only recognises the flat OpenAI-beta key names
@@ -562,8 +603,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return tuple(str(modality).upper() for modality in _JSON_ARRAY.validate_python(value))
 
     @staticmethod
-    def _unsupported_response_modalities(model: str, requested: tuple[str, ...]) -> tuple[str, ...]:
-        unknown: Final = tuple(modality for modality in requested if modality not in _GEMINI_LIVE_RESPONSE_MODALITIES)
+    def _unsupported_response_modalities(
+        model: str, requested: tuple[str, ...], *, avatar_video: bool = False
+    ) -> tuple[str, ...]:
+        producible: Final = (
+            _GEMINI_LIVE_AVATAR_RESPONSE_MODALITIES if avatar_video else _GEMINI_LIVE_RESPONSE_MODALITIES
+        )
+        unknown: Final = tuple(modality for modality in requested if modality not in producible)
         if unknown:
             return unknown
         if GeminiRealtimeConfig._is_audio_only_live_model(model) and frozenset(requested) == frozenset(("TEXT",)):
@@ -587,13 +633,31 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 ),
                 param="session",
             )
-        return self._modality_rejection(model, session) or self._voice_rejection(model, session)
+        return (
+            self._avatar_rejection(session)
+            or self._modality_rejection(model, session)
+            or self._voice_rejection(model, session)
+        )
 
-    @staticmethod
-    def _modality_rejection(model: str, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
+    def _avatar_rejection(self, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
+        param: Final = next((key for key in _AVATAR_CONFIG_KEYS if session.get(key)), None)
+        if param is None or self._supports_avatars():
+            return None
+        return RealtimeSessionUpdateRejection(
+            code="invalid_value",
+            message=(
+                f"Invalid value for 'session.{param}': Gemini Live avatars are only served through Vertex AI, "
+                "so use a vertex_ai/ model. Set drop_params to drop it instead"
+            ),
+            param=f"session.{param}",
+        )
+
+    def _modality_rejection(self, model: str, session: Mapping[str, object]) -> RealtimeSessionUpdateRejection | None:
         param: Final = "output_modalities" if "output_modalities" in session else "modalities"
         unsupported: Final = GeminiRealtimeConfig._unsupported_response_modalities(
-            model, GeminiRealtimeConfig._requested_response_modalities(session.get(param))
+            model,
+            GeminiRealtimeConfig._requested_response_modalities(session.get(param)),
+            avatar_video=self._supports_avatars() and bool(session.get("avatar")),
         )
         if not unsupported:
             return None
@@ -623,26 +687,33 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
 
     @staticmethod
-    def _coerce_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
+    def _coerce_response_modalities(
+        model: str, modalities: Sequence[object], *, avatar_video: bool = False
+    ) -> tuple[str, ...]:
         """Drop modalities Gemini Live cannot produce at all, swap the ones this
         model cannot (TEXT to AUDIO for audio-only models, AUDIO to TEXT for
         text-only ones such as transcribe-live), then keep a single modality
         because Gemini Live rejects a setup naming two."""
         return GeminiRealtimeConfig._single_response_modality(
             GeminiRealtimeConfig._swap_unsupported_response_modalities(
-                model, GeminiRealtimeConfig._known_response_modalities(model, modalities)
+                model, GeminiRealtimeConfig._known_response_modalities(model, modalities, avatar_video=avatar_video)
             )
         )
 
     @staticmethod
-    def _known_response_modalities(model: str, modalities: Sequence[object]) -> tuple[str, ...]:
+    def _known_response_modalities(
+        model: str, modalities: Sequence[object], *, avatar_video: bool = False
+    ) -> tuple[str, ...]:
         normalized: Final = tuple(str(modality).upper() for modality in modalities)
-        known: Final = tuple(modality for modality in normalized if modality in _GEMINI_LIVE_RESPONSE_MODALITIES)
+        producible: Final = (
+            _GEMINI_LIVE_AVATAR_RESPONSE_MODALITIES if avatar_video else _GEMINI_LIVE_RESPONSE_MODALITIES
+        )
+        known: Final = tuple(modality for modality in normalized if modality in producible)
         if len(known) < len(normalized):
             verbose_logger.warning(
                 "Gemini Live: %s only produces TEXT or AUDIO; ignoring the requested %s",
                 model,
-                ", ".join(modality for modality in normalized if modality not in _GEMINI_LIVE_RESPONSE_MODALITIES),
+                ", ".join(modality for modality in normalized if modality not in producible),
             )
         return known or (GeminiRealtimeConfig._default_response_modality(model),)
 
@@ -676,8 +747,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if isinstance(generation_config, dict):
             modalities: Final = generation_config.get("responseModalities")
             if isinstance(modalities, list):
+                avatar_config: Final = as_str_mapping(setup.get("avatarConfig")) or {}
                 generation_config["responseModalities"] = GeminiRealtimeConfig._coerce_response_modalities(
-                    model, modalities
+                    model, modalities, avatar_video="avatarName" in avatar_config
                 )
         return setup
 
@@ -1016,7 +1088,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 for part in message["modelTurn"]["parts"]:
                     if "text" in part:
                         delta += part["text"]
-                    elif "inlineData" in part:
+                    elif "inlineData" in part and self._video_mime_type(part) is None:
                         delta += part["inlineData"].get("data", "")
         except Exception as e:
             raise ValueError(f"Error transforming content delta events: {e}, got message: {message}")
@@ -1030,6 +1102,45 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             response_id=response_id,
             delta=delta,
         )
+
+    @staticmethod
+    def _video_mime_type(part: HttpxPartType) -> str | None:
+        inline_data: Final = part.get("inlineData")
+        mime_type: Final = inline_data.get("mimeType") if inline_data else None
+        return mime_type if mime_type is not None and mime_type.startswith("video/") else None
+
+    @staticmethod
+    def _model_turn_parts(server_content: BidiGenerateContentServerContent) -> Sequence[HttpxPartType]:
+        return server_content["modelTurn"].get("parts", []) if "modelTurn" in server_content else []
+
+    def _video_delta(
+        self, part: HttpxPartType, output_item_id: str | None, response_id: str | None
+    ) -> OpenAIRealtimeOutputVideoDelta | None:
+        mime_type: Final = self._video_mime_type(part)
+        if mime_type is None:
+            return None
+        inline_data: Final = part.get("inlineData")
+        return {
+            "type": "response.output_video.delta",
+            "event_id": new_event_id(),
+            "response_id": response_id,
+            "item_id": output_item_id,
+            "output_index": 0,
+            "content_index": 0,
+            "mime_type": mime_type,
+            "delta": inline_data.get("data", "") if inline_data else "",
+        }
+
+    def transform_video_delta_events(
+        self,
+        parts: Sequence[HttpxPartType],
+        output_item_id: str | None,
+        response_id: str | None,
+    ) -> Sequence[OpenAIRealtimeOutputVideoDelta]:
+        """Each video/* inlineData part (a fragmented MP4 chunk) becomes one
+        response.output_video.delta; the audio and item done events close the item."""
+        deltas: Final = (self._video_delta(part, output_item_id, response_id) for part in parts)
+        return [delta for delta in deltas if delta is not None]
 
     def transform_content_done_event(
         self,
@@ -1072,6 +1183,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         current_response_id: str | None,
         delta_done_event: OpenAIRealtimeResponseTextDone | OpenAIRealtimeResponseAudioDone,
         delta_type: ALL_DELTA_TYPES,
+        item_status: Literal["completed", "incomplete"] = "completed",
     ) -> list[OpenAIRealtimeEvents]:
         """
         - return response.content_part.done
@@ -1112,7 +1224,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "id": current_output_item_id,
                 "object": "realtime.item",
                 "type": "message",
-                "status": "completed",
+                "status": item_status,
                 "role": "assistant",
                 "content": [
                     (
@@ -1129,7 +1241,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         returned_items.append(response_output_item_done)
         return returned_items
 
-    def _consume_usage_metadata_for_response_done(self, frame: dict) -> dict | None:
+    def _consume_usage_metadata_for_response_done(self, frame: dict[str, object]) -> dict[str, object] | None:
         """Pop usageMetadata from the frame (authoritative) or drain the pending buffer.
 
         Uses pop so a frame with both ``toolCall`` and ``turnComplete`` can't
@@ -1182,7 +1294,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return events
 
     @staticmethod
-    def get_nested_value(obj: dict, path: str) -> object | None:
+    def get_nested_value(obj: Mapping[str, object], path: str) -> object | None:
         keys: Final = path.split(".")
         current: object = obj
         for key in keys:
@@ -1255,6 +1367,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         current_conversation_id: str | None,
         output_items: list[OpenAIRealtimeOutputItemDone] | None,
         session_configuration_request: str | None = None,
+        cancelled: bool = False,
     ) -> OpenAIRealtimeDoneEvent:
         if current_conversation_id is None:
             current_conversation_id = f"conv_{uuid.uuid4()}"
@@ -1291,6 +1404,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             _chat_completion_usage,
         )
         _usage_dict: Final = responses_api_usage.model_dump()
+        # the responses usage conversion drops video output tokens
+        _video_tokens: Final = getattr(
+            getattr(_chat_completion_usage, "completion_tokens_details", None), "video_tokens", None
+        )
+        if _video_tokens:
+            _usage_dict.setdefault("output_tokens_details", {})["video_tokens"] = _video_tokens
         self._add_pipecat_usage_detail_aliases(_usage_dict)
         response_done_event: Final = OpenAIRealtimeDoneEvent(
             type="response.done",
@@ -1298,8 +1417,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             response=OpenAIRealtimeResponseDoneObject(
                 object="realtime.response",
                 id=current_response_id,
-                status="completed",
-                status_details=None,
+                status="cancelled" if cancelled else "completed",
+                status_details={"type": "cancelled", "reason": "turn_detected"} if cancelled else None,
                 output=([output_item["item"] for output_item in output_items] if output_items else []),
                 conversation_id=current_conversation_id,
                 modalities=_modalities,
@@ -1345,13 +1464,21 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
 
             # send the list of standard 'new' content.delta events
+            server_content: Final = BidiGenerateContentServerContent(**json_message["serverContent"])
             transformed_message: Final = self.transform_content_delta_events(
-                BidiGenerateContentServerContent(**json_message["serverContent"]),
+                server_content,
                 current_output_item_id,
                 current_response_id,
                 delta_type=delta_type,
             )
-            returned_message.append(transformed_message)
+            video_events: Final = self.transform_video_delta_events(
+                server_content["modelTurn"].get("parts", []) if "modelTurn" in server_content else [],
+                current_output_item_id,
+                current_response_id,
+            )
+            if transformed_message["delta"] or not video_events:
+                returned_message.append(transformed_message)
+            returned_message.extend(video_events)
         elif (
             openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE
             or openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE
@@ -1376,6 +1503,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 delta_type=delta_type,
             )
             returned_message.extend(additional_items)
+            self._closed_output_item_id = resolved_item_id
 
         return {
             "returned_message": returned_message,
@@ -1394,7 +1522,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     ) -> OpenAIRealtimeEventTypes | ResponsesAPIStreamEvents:
         if isinstance(value, dict):
             model_turn_event = value.get("modelTurn")
-            generation_complete_event = value.get("generationComplete")
+            generation_complete_event = value.get("generationComplete") if "turnComplete" not in value else None
         else:
             model_turn_event = None
             generation_complete_event = None
@@ -1448,6 +1576,19 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         return self._consume_input_transcription_usage_estimate(model)
 
+    def unbilled_response_on_session_close(self, model: str) -> OpenAIRealtimeDoneEvent | None:
+        cancelled_response_id: Final = self._cancelled_response_id
+        if self._pending_usage_metadata is None or cancelled_response_id is None:
+            return None
+        self._cancelled_response_id = None
+        return self.transform_response_done_event(
+            message=BidiGenerateContentServerMessage(),
+            current_response_id=cancelled_response_id,
+            current_conversation_id=None,
+            output_items=None,
+            cancelled=True,
+        )
+
     def transform_realtime_response(
         self,
         message: str | bytes,
@@ -1469,7 +1610,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         verbose_logger.debug(
             "Realtime Response Transform: Gemini frame keys=%s",
-            (sorted(json_message.keys()) if isinstance(json_message, dict) else type(json_message).__name__),
+            (
+                sorted(json_message.keys())
+                if isinstance(json_message, dict)
+                else type(_DECODED_JSON.validate_python(json_message)).__name__
+            ),
         )
 
         logging_session_id: Final = logging_obj.litellm_trace_id
@@ -1485,6 +1630,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         server_content: Final = json_message.get("serverContent")
         if isinstance(server_content, dict):
+            # Live Avatar video flows continuously, outside any turn: a video-only model
+            # turn must not open a response; the spoken turn is opened by its transcript
+            _avatar_parts: Final = self._model_turn_parts(
+                cast(BidiGenerateContentServerContent, server_content)  # cast-ok: a serverContent frame
+            )
+            if _avatar_parts and all(self._video_mime_type(part) is not None for part in _avatar_parts):
+                returned_message.extend(
+                    self.transform_video_delta_events(_avatar_parts, current_output_item_id, current_response_id)
+                )
+                del server_content["modelTurn"]
             input_tx: Final = server_content.get("inputTranscription")
             if isinstance(input_tx, dict) and input_tx.get("text"):
                 transcription_usage: Final = self._consume_input_transcription_usage_estimate(model)
@@ -1493,7 +1648,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         OpenAIRealtimeEvents,
                         {
                             "type": "conversation.item.input_audio_transcription.completed",
-                            "event_id": f"event_{uuid.uuid4()}",
+                            "event_id": new_event_id(),
                             "transcript": input_tx["text"],
                             "item_id": f"item_{uuid.uuid4()}",
                             "content_index": 0,
@@ -1509,6 +1664,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 if current_output_item_id is None:
                     current_output_item_id = f"item_{uuid.uuid4()}"
                     current_conversation_id = current_conversation_id or f"conv_{uuid.uuid4()}"
+                    current_delta_type = "audio"  # rebind-ok: a transcript-first response opens the audio item
                     returned_message.extend(
                         self.return_new_content_delta_events(
                             session_configuration_request=session_configuration_request,
@@ -1754,6 +1910,40 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 current_output_item_id = None
                 current_response_id = None
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
+                if "interrupted" in json_message["serverContent"]:
+                    self._cancelled_response_id = current_response_id
+                if (
+                    current_output_item_id not in (None, self._closed_output_item_id)
+                    and current_delta_type is not None
+                    and any(flag in json_message["serverContent"] for flag in ("interrupted", "generationComplete"))
+                ):
+                    closing_content_done_event = self.transform_content_done_event(
+                        delta_chunks=current_delta_chunks,
+                        current_output_item_id=current_output_item_id,
+                        current_response_id=current_response_id,
+                        delta_type=current_delta_type,
+                    )
+                    returned_message.append(closing_content_done_event)
+                    returned_message.extend(
+                        self.return_additional_content_done_events(
+                            current_output_item_id=current_output_item_id,
+                            current_response_id=current_response_id,
+                            delta_done_event=closing_content_done_event,
+                            delta_type=current_delta_type,
+                            item_status=(
+                                "incomplete" if "interrupted" in json_message["serverContent"] else "completed"
+                            ),
+                        )
+                    )
+                    self._closed_output_item_id = current_output_item_id
+                if (
+                    "interrupted" in json_message["serverContent"]
+                    and "turnComplete" not in json_message["serverContent"]
+                ):
+                    if "usageMetadata" in json_message:
+                        self._pending_usage_metadata = json_message["usageMetadata"]
+                    server_content_handled = True
+                    continue
                 _has_pending_function_call = current_item_chunks and any(
                     chunk.get("item", {}).get("type") == "function_call" for chunk in current_item_chunks
                 )
@@ -1773,7 +1963,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     current_conversation_id=current_conversation_id,
                     session_configuration_request=session_configuration_request,
                     output_items=None,
+                    cancelled=current_response_id is not None and current_response_id == self._cancelled_response_id,
                 )
+                self._cancelled_response_id = None
                 returned_message.append(transformed_response_done_event)
                 current_output_item_id = None
                 current_response_id = None

@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
+from integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+)
 from integration._support.database import read_rows
 from integration._support.mcp import (
     ENTRY_POINTS,
@@ -76,6 +83,44 @@ def test_static_credential_reaches_the_peer_in_its_mode_shape_and_is_encrypted_a
         assert response.status_code == 200, response.text
         assert _header(_one_call(peer), header) == shape.format(secret=secret, basic=basic).encode()
         assert _plaintext_rows(identity, secret) == [], "credential stored in plaintext"
+
+
+@pytest.mark.parametrize("entry", ("rest", "server_mcp"))
+def test_an_ordinary_server_permission_lists_and_calls_with_the_servers_default_credential(
+    gateway: Gateway, entry: EntryPoint
+) -> None:
+    tool: Final = ScriptedTool("ping", lambda _: text_result("pong"))
+    with scripted_peer(tool) as peer, gateway.scenario() as scenario:
+        alias: Final = "ordinary" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(
+            scenario, peer, alias, auth_type="bearer_token", credentials={"auth_value": "default-bearer"}
+        )
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        server_info: Final = gateway.request("GET", f"/v1/mcp/server/{identity}", key=key)
+        key_info: Final = gateway.request("GET", "/key/info", key=key)
+        assert server_info.status_code == 200, server_info.text
+        server: Final = JSON_OBJECT.validate_json(server_info.content)
+        assert server["server_id"] == identity and "additional_auth" not in server
+        assert key_info.status_code == 200
+        info: Final = object_value(JSON_OBJECT.validate_json(key_info.content)["info"])
+        permission: Final = object_value(info["object_permission"])
+        assert permission["mcp_servers"] == [identity] and "mcp_auth_profiles" not in permission
+
+        caller: Final = McpCaller(gateway, key, entry, alias)
+        listed: Final = caller.list_tools(identity)
+        tool_name: Final = "ping" if entry == "rest" else f"{alias}-ping"
+        assert listed.ok and listed.tools == (tool_name,), listed.raw
+        discovery_headers: Final = tuple(
+            TypeAdapter(dict[str, str]).validate_python(request["headers"])
+            for request in peer.drain()
+            if JSON_OBJECT.validate_python(request["body"]).get("method") == "tools/list"
+        )
+        assert discovery_headers
+        assert all(headers.get("authorization") == "Bearer default-bearer" for headers in discovery_headers)
+        called: Final = caller.call(tool_name, {}, identity)
+        assert called.ok and called.text == "pong", called.raw
+        headers: Final = TypeAdapter(dict[str, str]).validate_python(_one_call(peer)["headers"])
+        assert headers["authorization"] == "Bearer default-bearer"
 
 
 def test_create_response_does_not_echo_the_stored_credential(gateway: Gateway) -> None:

@@ -177,6 +177,13 @@ impl RouterCooldowns {
         Ok(self.fails.memory().flush()?)
     }
 
+    /// Drops everything this process holds in memory, the refresh throttle's read history
+    /// included, and leaves Redis alone.
+    pub fn flush_local(&self) -> Result<(), Error> {
+        self.cooldowns.flush_local()?;
+        Ok(self.fails.memory().flush()?)
+    }
+
     /// The memory tier keyed as Python's `InMemoryCache` was, for the fuzz probe that reads
     /// in-memory router state.
     pub fn snapshot(&self) -> Result<Vec<(String, Cooldown)>, Error> {
@@ -191,14 +198,10 @@ impl RouterCooldowns {
             memory.delete(&key)?;
             return Ok(false);
         }
-        let remaining = Duration::from_secs_f64(remaining);
-        if memory.expires_at(&key)? > Some(now + remaining + CORRECTION_SLACK) {
-            memory.delete(&key)?;
-            memory.set(
-                &key,
-                cooldown.clone(),
-                Some(remaining.min(MAX_CORRECTED_TTL)),
-            )?;
+        let remaining = Duration::try_from_secs_f64(remaining).unwrap_or(Duration::MAX);
+        let ends = now.saturating_add(remaining);
+        if memory.expires_at(&key)? > Some(ends.saturating_add(CORRECTION_SLACK)) {
+            memory.refresh(&key, cooldown.clone(), remaining.min(MAX_CORRECTED_TTL))?;
         }
         Ok(true)
     }

@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_MEDIA_BOUNDARY,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.bedrock.chat.chat_completions.transformation import AmazonBedrockRuntimeChatCompletionsConfig
 from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
@@ -306,6 +307,22 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert result.usage.prompt_tokens == 13797
         assert result.usage.completion_tokens == 350
         assert result.usage.total_tokens == 14147
+
+    def test_chunk_parser_leaves_out_vllm_prompt_fields_unless_the_provider_passes_them_through(self):
+        handler = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+
+        result = handler.chunk_parser(
+            {
+                "id": "chatcmpl-1",
+                "object": "chat.completion.chunk",
+                "model": "m",
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}],
+                "prompt_token_ids": [151644, 872],
+                "prompt_text": "<|im_start|>user",
+            }
+        )
+
+        assert result.model_dump(include={"prompt_token_ids", "prompt_text"}) == {}
 
     def test_chunk_parser_preserves_service_tier(self):
         """OpenAI-compatible upstreams serve a service_tier on every streamed
@@ -2733,6 +2750,163 @@ def test_completion_leaves_the_callers_closing_developer_message_unchanged_on_a_
     assert messages == sent
 
 
+_SYSTEM_FIRST_DEPLOYMENT: Final = {"id": "deployment-1", "supports_mid_conversation_system": False}
+_LEADING_SYSTEM: Final = {"role": "system", "content": "You are terse."}
+_FIRST_USER_TURN: Final = {"role": "user", "content": "Hi there"}
+_ASSISTANT_TURN: Final = {"role": "assistant", "content": "Hello!"}
+_NEXT_USER_TURN: Final = {"role": "user", "content": "What is the capital of France?"}
+_TOOL_CALL_TURN: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+}
+_TOOL_RESULT: Final = {"role": "tool", "tool_call_id": "call_1", "content": "21C"}
+_CACHED_REMINDER_PART: Final = {"type": "text", "text": "Reply in French.", "cache_control": {"type": "ephemeral"}}
+
+
+def _reminder_as_user_turn(*parts: dict[str, object]) -> dict[str, object]:
+    return {"role": "user", "content": [{"type": "text", "text": CONVERTED_SYSTEM_NOTE}, *parts]}
+
+
+_REMINDER_AS_USER_TURN: Final = _reminder_as_user_turn({"type": "text", "text": "Reply in French."})
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected"),
+    [
+        pytest.param(
+            [_LEADING_SYSTEM, _FIRST_USER_TURN, _ASSISTANT_TURN, {"role": "system", "content": "Reply in French."}, _NEXT_USER_TURN],
+            [_LEADING_SYSTEM, _FIRST_USER_TURN, _ASSISTANT_TURN, _REMINDER_AS_USER_TURN, _NEXT_USER_TURN],
+            id="string-content",
+        ),
+        pytest.param(
+            [_LEADING_SYSTEM, _FIRST_USER_TURN, _ASSISTANT_TURN, {"role": "system", "content": [_CACHED_REMINDER_PART]}, _NEXT_USER_TURN],
+            [_LEADING_SYSTEM, _FIRST_USER_TURN, _ASSISTANT_TURN, _reminder_as_user_turn(_CACHED_REMINDER_PART), _NEXT_USER_TURN],
+            id="list-content-keeps-cache-control",
+        ),
+        pytest.param(
+            [_LEADING_SYSTEM, _FIRST_USER_TURN, _ASSISTANT_TURN, {"role": "system", "content": "Reply in French."}],
+            [_LEADING_SYSTEM, _FIRST_USER_TURN, _ASSISTANT_TURN, _REMINDER_AS_USER_TURN],
+            id="closing-after-the-assistant",
+        ),
+        pytest.param(
+            [_LEADING_SYSTEM, _FIRST_USER_TURN, _TOOL_CALL_TURN, {"role": "system", "content": "Reply in French."}, _TOOL_RESULT],
+            [_LEADING_SYSTEM, _FIRST_USER_TURN, _TOOL_CALL_TURN, _TOOL_RESULT, _REMINDER_AS_USER_TURN],
+            id="between-a-tool-call-and-its-result",
+        ),
+        pytest.param(
+            [
+                _LEADING_SYSTEM,
+                _FIRST_USER_TURN,
+                _ASSISTANT_TURN,
+                {"role": "developer", "content": "Answer with exactly one word."},
+                {"role": "system", "content": "Reply in French."},
+                _NEXT_USER_TURN,
+            ],
+            [
+                {"role": "system", "content": "You are terse.\n\nAnswer with exactly one word."},
+                _FIRST_USER_TURN,
+                _ASSISTANT_TURN,
+                _REMINDER_AS_USER_TURN,
+                _NEXT_USER_TURN,
+            ],
+            id="with-a-leading-system-and-a-later-developer",
+        ),
+        pytest.param(
+            [_FIRST_USER_TURN, {"role": "system", "content": "Reply in French."}, _NEXT_USER_TURN],
+            [_FIRST_USER_TURN, _REMINDER_AS_USER_TURN, _NEXT_USER_TURN],
+            id="without-a-leading-system",
+        ),
+    ],
+)
+def test_translate_developer_role_sends_a_later_system_message_as_a_user_turn_in_place_on_a_system_first_deployment(
+    messages: list[dict[str, object]], expected: list[dict[str, object]]
+) -> None:
+    sent: Final = copy.deepcopy(messages)
+    placed: Final = OpenAIGPTConfig().translate_developer_role_to_system_role(
+        messages=messages,
+        model="Qwen/Qwen3.8-27B",
+        custom_llm_provider="hosted_vllm",
+        api_base="http://vllm.internal:8000/v1",
+        model_info=_SYSTEM_FIRST_DEPLOYMENT,
+    )
+    assert list(placed) == expected
+    assert messages == sent
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "api_base", "model_info"),
+    [
+        pytest.param("hosted_vllm", "http://vllm.internal:8000/v1", None, id="undeclared"),
+        pytest.param(
+            "hosted_vllm",
+            "http://vllm.internal:8000/v1",
+            {"id": "deployment-1", "supports_mid_conversation_system": True},
+            id="declared-true",
+        ),
+        pytest.param("openai", "https://api.openai.com/v1", _SYSTEM_FIRST_DEPLOYMENT, id="openai-hosted"),
+    ],
+)
+def test_translate_developer_role_keeps_a_later_system_message_unless_the_deployment_is_system_first_off_openai(
+    custom_llm_provider: str, api_base: str, model_info: dict[str, object] | None
+) -> None:
+    messages: Final = [
+        _LEADING_SYSTEM,
+        _FIRST_USER_TURN,
+        _TOOL_CALL_TURN,
+        {"role": "system", "content": "Reply in French."},
+        _TOOL_RESULT,
+        _ASSISTANT_TURN,
+        {"role": "system", "content": [_CACHED_REMINDER_PART]},
+    ]
+    placed: Final = OpenAIGPTConfig().translate_developer_role_to_system_role(
+        messages=copy.deepcopy(messages),
+        model="Qwen/Qwen3.8-27B",
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        model_info=model_info,
+    )
+    assert list(placed) == messages
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([_FIRST_USER_TURN, _ASSISTANT_TURN, _NEXT_USER_TURN], id="no-system-message"),
+        pytest.param([_LEADING_SYSTEM, _FIRST_USER_TURN, _TOOL_CALL_TURN, _TOOL_RESULT], id="leading-system-only"),
+    ],
+)
+def test_translate_developer_role_leaves_a_request_without_a_later_system_message_unchanged_on_a_system_first_deployment(
+    messages: list[dict[str, object]],
+) -> None:
+    placed: Final = OpenAIGPTConfig().translate_developer_role_to_system_role(
+        messages=copy.deepcopy(messages),
+        model="Qwen/Qwen3.8-27B",
+        custom_llm_provider="hosted_vllm",
+        api_base="http://vllm.internal:8000/v1",
+        model_info=_SYSTEM_FIRST_DEPLOYMENT,
+    )
+    assert list(placed) == messages
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_sends_a_later_system_message_as_a_user_turn_to_a_system_first_hosted_vllm_deployment(
+    respx_mock: respx.MockRouter,
+) -> None:
+    chat: Final = respx_mock.post("http://vllm.internal:8000/v1/chat/completions").mock(
+        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+    )
+    litellm.completion(
+        model="hosted_vllm/Qwen/Qwen3.8-27B",
+        api_base="http://vllm.internal:8000/v1",
+        messages=[_LEADING_SYSTEM, _FIRST_USER_TURN, _ASSISTANT_TURN, {"role": "system", "content": "Reply in French."}, _NEXT_USER_TURN],
+        model_info=_SYSTEM_FIRST_DEPLOYMENT,
+    )
+    sent: Final = json.loads(chat.calls.last.request.content)["messages"]
+    assert [message["role"] for message in sent] == ["system", "user", "assistant", "user", "user"]
+    assert sent[3]["content"] == _REMINDER_AS_USER_TURN["content"]
+
+
 def _user_turn_with_litellm_only_media_fields() -> list[dict[str, object]]:
     return [
         {
@@ -2823,3 +2997,20 @@ async def test_chat_sends_a_breakpoint_by_the_deployments_own_flag_not_a_sibling
         "opted-in": True,
         "flagless": False,
     }
+
+
+def test_mid_stream_error_chunk_keeps_the_provider_fields_and_the_logged_code() -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+    from litellm.llms.openai.common_utils import OpenAIError
+    from litellm.proxy.common_utils.openai_error_payload import relayed_provider_specific_fields
+
+    handler: Final = OpenAIChatCompletionStreamingHandler(streaming_response=iter(()), sync_stream=True)
+    with pytest.raises(OpenAIError) as raised:
+        handler.chunk_parser({"error": {"message": "bad", "code": 400, "param": "temperature", "detail": "kept"}})
+    with pytest.raises(litellm.BadRequestError) as mapped:
+        exception_type(model="qwen", original_exception=raised.value, custom_llm_provider="hosted_vllm")
+
+    assert mapped.value.param == "temperature"
+    assert relayed_provider_specific_fields(mapped.value) == {"detail": "kept"}
+    assert mapped.value.code is None

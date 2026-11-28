@@ -10,6 +10,7 @@ from queue import SimpleQueue
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from mcp import Client
@@ -24,10 +25,12 @@ from pydantic import ConfigDict, ValidationError
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.lens.exporter import LensExporter
 from litellm.proxy._types import AlertType, LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from litellm.proxy.mcp_server.mcp_server_manager import (
     MCPServerManager,
 )
+from litellm.proxy.mcp_server.operations import log_mcp_sdk_rejection
 from litellm.proxy.mcp_server.server import (
     _log_sdk_rejection,
     mcp_server_tool_call,
@@ -137,6 +140,44 @@ async def test_sdk_rejection_emits_one_redacted_zero_cost_failure(
     assert rejection["stage"] == "sdk_dispatch"
     assert "DO_NOT_LOG_THIS" not in json.dumps(payload, default=str)
     assert "sk-sdk-rejection-unit-test" not in json.dumps(payload, default=str)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key_value", "team_value", "enabled"),
+    ((None, None, True), (None, False, False), (False, True, False), (True, False, True)),
+    ids=("configured-default", "team-off", "key-off", "key-overrides-team"),
+)
+async def test_sdk_rejection_obeys_lens_policy_without_disabling_audit_logging(
+    sdk_rejection_logger: SDKRejectionLogger, key_value: bool | None, team_value: bool | None, enabled: bool
+) -> None:
+    auth: Final = UserAPIKeyAuth(
+        user_id="lens-policy-user",
+        metadata={"lens_enabled": key_value},
+        team_metadata={"lens_enabled": team_value},
+    )
+    received: Final = SimpleQueue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        received.put(request)
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as http:
+        exporter: Final = LensExporter(http)
+        exporter.start()
+        with patch("litellm.callbacks", [sdk_rejection_logger, exporter]):
+            await log_mcp_sdk_rejection(
+                method="tools/unknown",
+                request_id="lens-sdk-policy",
+                error_code=-32601,
+                start_time=datetime(2026, 1, 1),
+                user_api_key_auth=auth,
+            )
+        await exporter.aclose()
+
+    assert received.qsize() == int(enabled)
+    assert len(sdk_rejection_logger.failures) == 1
+    assert sdk_rejection_logger.post_failures == 1
 
 
 @pytest.mark.asyncio

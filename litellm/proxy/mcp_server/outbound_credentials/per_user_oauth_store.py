@@ -11,17 +11,23 @@ collaborators acquire their globals per call, mirroring v1's lazy-import pattern
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Callable, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Final
+
+import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.proxy.mcp_server.oauth_identity_binding import credential_binding_matches
 from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
+    AuthorizationCodeTokenDenied,
+    AuthorizationCodeTokenSuccess,
+    AuthorizationCodeTokenUnreachable,
 )
 from litellm.proxy.mcp_server.outbound_credentials.dual_cache_token_backend import (
-    AsyncCache,
     DualCacheTokenCacheBackend,
 )
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
@@ -51,6 +57,7 @@ _DEFAULT_TTL_SECONDS: Final = 300.0
 
 ServerLookup = Callable[[str], "MCPServer | None"]
 StoreBuilder = Callable[[ServerLookup], tuple[InvalidatableOAuthTokenStore, bool]]
+_TOKEN_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 async def _read_credential(user_id: str, server_id: str) -> Mapping[str, object] | None:
@@ -61,7 +68,7 @@ async def _read_credential(user_id: str, server_id: str) -> Mapping[str, object]
 
     if prisma_client is None:
         raise TokenStoreUnavailable("Database not connected")
-    return await get_user_oauth_credential(prisma_client, user_id, server_id)
+    return await get_user_oauth_credential(prisma_client, user_id, server_id, use_writer=True)
 
 
 async def _persist_credential(
@@ -73,7 +80,8 @@ async def _persist_credential(
     scopes: tuple[str, ...] | None,
     identity_binding_proof: str | None = None,
     cimd_client_id: str | None = None,
-) -> None:
+    refreshed_from: str | None = None,
+) -> bool | None:
     from litellm.proxy.mcp_server.db import (  # noqa: PLC0415
         store_user_oauth_credential,
     )
@@ -81,7 +89,7 @@ async def _persist_credential(
 
     if prisma_client is None:
         return
-    await store_user_oauth_credential(
+    return await store_user_oauth_credential(
         prisma_client=prisma_client,
         user_id=user_id,
         server_id=server_id,
@@ -92,30 +100,55 @@ async def _persist_credential(
         skip_byok_guard=True,
         identity_binding_proof=identity_binding_proof,
         **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
+        **({"refreshed_from": refreshed_from} if refreshed_from is not None else {}),
     )
 
 
-async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str, str]) -> dict[str, object] | None:
+async def _post_token_endpoint(
+    url: str, form: dict[str, str], headers: dict[str, str]
+) -> AuthorizationCodeTokenSuccess | AuthorizationCodeTokenDenied | AuthorizationCodeTokenUnreachable:
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
         get_async_httpx_client,  # pyright: ignore
     )
     from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415
 
-    # litellm's httpx handler and httpx.Response are only partially typed; the IdP returns a JSON
-    # object and the refresher validates each field, so the untyped boundary is contained here.
     provider: Final = httpxSpecialProvider.Oauth2Check
     request_headers: Final = {"Accept": "application/json", **headers}
-    # A failed refresh is a miss, not a 500 (matches v1), so any error becomes None.
     try:
         client: Final = get_async_httpx_client(llm_provider=provider)  # pyright: ignore
         response: Final = await client.post(url, headers=request_headers, data=form)  # pyright: ignore
         response.raise_for_status()  # pyright: ignore
-        body: Final[dict[str, object]] = response.json()  # pyright: ignore
+    except httpx.HTTPStatusError as exc:
+        verbose_logger.warning("MCP OAuth refresh token endpoint returned HTTP %s", exc.response.status_code)
+        try:
+            error_body: Final = _TOKEN_BODY_ADAPTER.validate_json(exc.response.content)
+        except (ValidationError, json.JSONDecodeError, UnicodeDecodeError):
+            return AuthorizationCodeTokenDenied(
+                status_code=exc.response.status_code,
+                body={},
+                detail=f"token endpoint returned HTTP {exc.response.status_code}",
+            )
+        return AuthorizationCodeTokenDenied(
+            status_code=exc.response.status_code,
+            body=error_body,
+            detail=f"token endpoint returned HTTP {exc.response.status_code}",
+        )
     except Exception as exc:  # noqa: BLE001
-        verbose_logger.warning("MCP OAuth refresh request failed: %s", exc)
-        return None
-    else:
-        return body  # pyright: ignore
+        verbose_logger.warning("MCP OAuth refresh request failed: %s", type(exc).__name__)
+        return AuthorizationCodeTokenUnreachable(detail=type(exc).__name__)
+    try:
+        body: Final = _TOKEN_BODY_ADAPTER.validate_json(response.content)
+    except (ValidationError, json.JSONDecodeError, UnicodeDecodeError):
+        verbose_logger.warning(
+            "MCP OAuth refresh token endpoint returned HTTP %s with non-JSON-object body",
+            response.status_code,
+        )
+        return AuthorizationCodeTokenDenied(
+            status_code=response.status_code,
+            body={},
+            detail="token endpoint returned a non-JSON-object body",
+        )
+    return AuthorizationCodeTokenSuccess(body=body)
 
 
 def _redis_cache_is_available() -> bool:
@@ -124,7 +157,9 @@ def _redis_cache_is_available() -> bool:
     return user_api_key_cache.has_redis
 
 
-def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, RefreshCoordinator | None, bool]:
+def _runtime_backend_and_coordinator() -> tuple[
+    TokenCacheBackend | None, RefreshCoordinator[OAuthToken | None] | None, bool
+]:
     """The cross-replica cache + coordinator when Redis is wired, else ``(None, None, False)`` so the
     foundation's in-process defaults are used (a single replica needs no shared cache or lock).
     """
@@ -132,19 +167,16 @@ def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, Refres
         decrypt_value_helper,
         encrypt_value_helper,
     )
-    from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+    from litellm.proxy.proxy_server import mcp_state_cache  # noqa: PLC0415
 
-    coordinator: Final = runtime_refresh_coordinator()
+    coordinator: Final[RefreshCoordinator[OAuthToken | None] | None] = runtime_refresh_coordinator()
     if coordinator is None:
         return None, None, False
     codec: Final = OAuthTokenCacheCodec(
         encrypt_value_helper,
         lambda blob: decrypt_value_helper(blob, "mcp_per_user_token", exception_type="debug"),
     )
-    # user_api_key_cache satisfies the AsyncCache slice (DualCache types ttl via **kwargs) - an
-    # untyped-boundary cast.
-    cache: Final[AsyncCache] = user_api_key_cache  # pyright: ignore
-    backend: Final = DualCacheTokenCacheBackend(cache, codec)
+    backend: Final = DualCacheTokenCacheBackend(mcp_state_cache, codec)
     return backend, coordinator, True
 
 

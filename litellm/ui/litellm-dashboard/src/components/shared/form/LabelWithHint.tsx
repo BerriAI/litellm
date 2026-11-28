@@ -1,17 +1,36 @@
 "use client";
 
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, Info } from "lucide-react";
 import React from "react";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import i18n from "@/i18n/i18n";
 
 const hintIconClassName = "size-3.5 shrink-0 cursor-help text-muted-foreground";
 
-export const labelWithHint = (label: React.ReactNode, hint: React.ReactNode): React.ReactNode => (
+export const labelWithHint = (
+  label: React.ReactNode,
+  hint: React.ReactNode,
+  icon: "help" | "info" = "help",
+): React.ReactNode => (
   <>
     {label}
     <Tooltip>
-      <TooltipTrigger render={<CircleHelp className={hintIconClassName} />} />
+      <TooltipTrigger
+        render={
+          icon === "info" ? (
+            <button
+              type="button"
+              className={hintIconClassName}
+              aria-label={typeof label === "string" ? i18n.t("shared.fieldInformation", { label }) : undefined}
+            >
+              <Info className="size-full" />
+            </button>
+          ) : (
+            <CircleHelp className={hintIconClassName} />
+          )
+        }
+      />
       <TooltipContent>{hint}</TooltipContent>
     </Tooltip>
   </>

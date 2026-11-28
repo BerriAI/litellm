@@ -14,12 +14,15 @@ mod deferred;
 mod error;
 mod logger;
 mod mapping;
+mod messages_input;
 mod python;
+mod receipt;
 pub use adapter::LegacyLogging;
-pub use call::PublicCall;
+pub use call::{LoggedCallParam, PublicCall};
 pub(crate) use callbacks::{LegacyCallbacks, SentRequest, is_internal_call};
 pub(crate) use logger::{DeploymentHooks, PythonLogger, finalize, setup};
 pub use mapping::{CallBoundary, CallbackMapping, Dispatch, callback_mappings};
+pub use receipt::{NativeBilledRates, NativeReceipt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoggingOperation {

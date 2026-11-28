@@ -1,7 +1,8 @@
 import asyncio
+import hashlib
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Final
@@ -22,8 +23,19 @@ from litellm.models.alert import (
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.alert_repository import AlertRepository
+from litellm.repositories.config_repository import ConfigRepository
 from tests.integration._support.client import Gateway
 from tests.integration._support.database import read_rows, write_rows
+
+
+PROMPT_CACHE_EVIDENCE: Final = {
+    "config_fingerprint": "config-1",
+    "provider": "anthropic",
+    "provider_model": "claude-sonnet-5-5",
+    "consecutive_misses": 3,
+    "proven_write_tokens": 2048,
+    "ttl_seconds": 300,
+}
 
 
 def saved_alert(content: bytes) -> Alert:
@@ -41,10 +53,22 @@ def saved_page(content: bytes) -> AlertPage:
 @dataclass(frozen=True, slots=True)
 class Alerts:
     repository: AlertRepository
+    config: ConfigRepository
     resource_id: str
 
     def detection(self, kind: AlertType = "spend", day: int = 0) -> AlertDetection:
         start: Final = datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(days=day)
+        if kind == "prompt_cache":
+            return AlertDetection.model_validate(
+                {
+                    "type": kind,
+                    "resource_type": "deployment",
+                    "resource_id": self.resource_id,
+                    "window_start": start,
+                    "window_end": start + timedelta(seconds=3),
+                    "evidence": {**PROMPT_CACHE_EVIDENCE, "prefix_fingerprint": f"prefix-{day}"},
+                }
+            )
         evidence: Final = (
             {"deprecation_date": "2026-03-01", "replacement_model": "example/replacement"}
             if kind == "model_deprecation"
@@ -75,15 +99,17 @@ async def alerts() -> AsyncIterator[Alerts]:
     client: Final = PrismaClient(os.environ["DATABASE_URL"], ProxyLogging(UserApiKeyCache()))
     await client.connect()
     try:
-        yield Alerts(AlertRepository(client), resource_id)
+        yield Alerts(AlertRepository(client), ConfigRepository(client, use_writer=True), resource_id)
     finally:
         try:
             write_rows('DELETE FROM "LiteLLM_Alert" WHERE resource_id=%s', (resource_id,))
+            receipt: Final = "performance_alert_digest:" + hashlib.sha256(f"test:{resource_id}".encode()).hexdigest()
+            write_rows('DELETE FROM "LiteLLM_Config" WHERE param_name=%s', (receipt,))
         finally:
             await client.disconnect()
 
 
-@pytest.mark.parametrize("kind", ("spend", "traffic", "latency", "reliability", "model_deprecation"))
+@pytest.mark.parametrize("kind", ("spend", "traffic", "latency", "reliability", "model_deprecation", "prompt_cache"))
 @pytest.mark.asyncio
 async def test_each_alert_type_round_trips_through_api_and_status_changes(
     alerts: Alerts, gateway: Gateway, kind: AlertType
@@ -311,6 +337,82 @@ async def test_daily_history_matches_scope_and_weighted_metrics(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("email", "alias", "expected"),
+    (
+        ("person@example.com", "Example user", "person@example.com"),
+        ("person@example.com", None, "person@example.com"),
+        (None, "Example user", "Example user"),
+        ("", "Example user", "Example user"),
+        ("   ", "Example user", "Example user"),
+        (None, None, None),
+    ),
+)
+async def test_user_alerts_display_email_in_list_and_detail(
+    alerts: Alerts, gateway: Gateway, email: str | None, alias: str | None, expected: str | None
+) -> None:
+    write_rows(
+        'INSERT INTO "LiteLLM_UserTable" (user_id, user_email, user_alias) VALUES (%s, %s, %s)',
+        (alerts.resource_id, email, alias),
+    )
+    try:
+        saved: Final = await alerts.repository.record(alerts.detection().model_copy(update={"resource_type": "user"}))
+        detail: Final = gateway.request("GET", f"/alerts/{saved.id}")
+        assert detail.status_code == 200, detail.text
+        view: Final = AlertView.model_validate_json(detail.content)
+        assert view.resource_name == expected
+        assert view.resource_id == alerts.resource_id
+        assert view.evidence == saved.evidence
+        listed: Final = gateway.request("GET", "/alerts", params={"type": "spend", "limit": "1"})
+        assert listed.status_code == 200, listed.text
+        assert AlertViewPage.model_validate_json(listed.content).data == (view,)
+    finally:
+        write_rows('DELETE FROM "LiteLLM_UserTable" WHERE user_id=%s', (alerts.resource_id,))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ("resolved", "dismissed"))
+async def test_bulk_status_updates_all_matching_open_pages_and_preserves_other_alerts(
+    alerts: Alerts, gateway: Gateway, status: str
+) -> None:
+    saved: Final = tuple([await alerts.repository.record(alerts.detection(day=day)) for day in range(30)])
+    other: Final = await alerts.repository.record(alerts.detection("traffic"))
+    already_resolved: Final = await alerts.repository.set_status(int(saved[0].id), "resolved", "previous-admin")
+    response: Final = gateway.request("PATCH", "/alerts", {"status": status, "type": "spend"})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"updated": 29}
+    for alert in saved[1:]:
+        changed: Final = await alerts.repository.get(int(alert.id))
+        assert changed is not None
+        assert changed.status == status
+        assert changed.updated_by
+        assert changed.evidence == alert.evidence
+    assert await alerts.repository.get(int(saved[0].id)) == already_resolved
+    assert await alerts.repository.get(int(other.id)) == other
+    repeat: Final = gateway.request("PATCH", "/alerts", {"status": status, "type": "spend"})
+    assert repeat.status_code == 200, repeat.text
+    assert repeat.json() == {"updated": 0}
+
+
+@pytest.mark.asyncio
+async def test_bulk_performance_filter_leaves_prompt_cache_until_all_alerts_are_updated(
+    alerts: Alerts, gateway: Gateway
+) -> None:
+    spend: Final = await alerts.repository.record(alerts.detection())
+    cache: Final = await alerts.repository.record(alerts.detection("prompt_cache"))
+    performance: Final = gateway.request("PATCH", "/alerts", {"status": "resolved", "type": "performance"})
+    assert performance.status_code == 200, performance.text
+    resolved: Final = await alerts.repository.get(int(spend.id))
+    assert resolved is not None and resolved.status == "resolved"
+    assert await alerts.repository.get(int(cache.id)) == cache
+    all_alerts: Final = gateway.request("PATCH", "/alerts", {"status": "dismissed"})
+    assert all_alerts.status_code == 200, all_alerts.text
+    dismissed: Final = await alerts.repository.get(int(cache.id))
+    assert dismissed is not None and dismissed.status == "dismissed"
+    assert await alerts.repository.get(int(spend.id)) == resolved
+
+
+@pytest.mark.asyncio
 async def test_type_filter_applies_before_cursor_limit(alerts: Alerts, gateway: Gateway) -> None:
     oldest: Final = await alerts.repository.record(alerts.detection("traffic"))
     await alerts.repository.record(alerts.detection("spend"))
@@ -324,11 +426,36 @@ async def test_type_filter_applies_before_cursor_limit(alerts: Alerts, gateway: 
     following: Final = gateway.request("GET", "/alerts", params={"type": "traffic", "limit": "1", "cursor": newest.id})
     assert following.status_code == 200, following.text
     assert AlertViewPage.model_validate_json(following.content).data[0].id == oldest.id
+    cache: Final = await alerts.repository.record(alerts.detection("prompt_cache"))
     performance: Final = gateway.request("GET", "/alerts", params={"type": "performance"})
     assert performance.status_code == 200, performance.text
-    assert all(
-        alert.type != "model_deprecation" for alert in AlertViewPage.model_validate_json(performance.content).data
-    )
+    assert {alert.type for alert in AlertViewPage.model_validate_json(performance.content).data} <= {
+        "spend",
+        "traffic",
+        "latency",
+        "reliability",
+    }
+    incidents: Final = gateway.request("GET", "/alerts", params={"type": "prompt_cache"})
+    assert incidents.status_code == 200, incidents.text
+    assert [alert.id for alert in AlertViewPage.model_validate_json(incidents.content).data] == [cache.id]
+
+
+@pytest.mark.asyncio
+async def test_a_dismissed_prompt_cache_incident_stays_the_only_one_for_its_configuration(alerts: Alerts) -> None:
+    first: Final = await alerts.repository.record(alerts.detection("prompt_cache"))
+    dismissed: Final = await alerts.repository.set_status(int(first.id), "dismissed", "reviewer")
+    assert await alerts.repository.record(alerts.detection("prompt_cache", day=3)) == dismissed
+    assert read_rows('SELECT count(*) AS count FROM "LiteLLM_Alert" WHERE resource_id=%s', (alerts.resource_id,)) == [
+        {"count": 1}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_daily_summaries_carry_metric_alerts_and_never_prompt_cache_alerts(alerts: Alerts) -> None:
+    spend: Final = await alerts.repository.record(alerts.detection("spend"))
+    cache: Final = await alerts.repository.record(alerts.detection("prompt_cache"))
+    assert [summary.id for summary in await alerts.repository.summaries(int(spend.id) - 1, int(spend.id))] == [spend.id]
+    assert await alerts.repository.summaries(int(cache.id) - 1, int(cache.id)) == ()
 
 
 @pytest.mark.asyncio
@@ -372,3 +499,118 @@ async def test_deleted_resource_preserves_history_and_history_timeout_preserves_
     finally:
         write_rows('DELETE FROM "LiteLLM_TeamTable" WHERE team_id=%s', (team,))
         write_rows('DELETE FROM "LiteLLM_DailyTeamSpend" WHERE team_id=%s', (team,))
+
+
+@pytest.mark.asyncio
+async def test_daily_performance_summary_deduplicates_workers_and_keeps_failed_deliveries(alerts: Alerts) -> None:
+    from litellm.integrations.performance_alert_notifications import PerformanceAlertNotifier, slack_text
+    from litellm.models.alert import AlertSummary
+
+    destination: Final = f"test:{alerts.resource_id}"
+    notifier: Final = PerformanceAlertNotifier(alerts.config, alerts.repository)
+    first: Final = await alerts.repository.record(alerts.detection())
+    now: Final = first.created_at + timedelta(minutes=1)
+    delivered: Final[list[str]] = []  # mutable-ok: captures the external delivery boundary
+
+    async def send(rows: Sequence[AlertSummary], receipt: str) -> bool:
+        delivered.append(slack_text(rows, "https://gateway.example"))
+        return True
+
+    async def unavailable(rows: Sequence[AlertSummary], receipt: str) -> bool:
+        return False
+
+    await notifier.deliver(destination, send, now)
+    assert len(delivered) == 1
+    for day in range(1, 8):
+        await alerts.repository.record(alerts.detection(day=day))
+    restarted: Final = PerformanceAlertNotifier(alerts.config, alerts.repository)
+    await restarted.deliver(destination, send, now + timedelta(hours=23))
+    assert len(delivered) == 1
+    tomorrow: Final = now + timedelta(days=1)
+    await restarted.deliver(destination, unavailable, tomorrow)
+    assert len(delivered) == 1
+    await restarted.deliver(destination, send, tomorrow + timedelta(minutes=3))
+    assert len(delivered) == 1
+    retry: Final = tomorrow + timedelta(days=1, minutes=3)
+    await asyncio.gather(
+        notifier.deliver(destination, send, retry),
+        restarted.deliver(destination, send, retry),
+    )
+    assert len(delivered) == 2
+    assert delivered[-1].count("?alert=") == 5
+    assert f"?alert={first.id}|" not in delivered[-1]
+    await restarted.deliver(destination, send, retry + timedelta(days=1, minutes=1))
+    assert len(delivered) == 2
+
+
+@pytest.mark.asyncio
+async def test_first_summary_does_not_replay_old_alerts(alerts: Alerts) -> None:
+    from litellm.integrations.performance_alert_notifications import PerformanceAlertNotifier
+    from litellm.models.alert import AlertSummary
+
+    saved: Final = await alerts.repository.record(alerts.detection())
+    delivered: Final[list[tuple[AlertSummary, ...]]] = []  # mutable-ok: captures the external delivery boundary
+
+    async def send(rows: Sequence[AlertSummary], receipt: str) -> bool:
+        delivered.append(tuple(rows))
+        return True
+
+    notifier: Final = PerformanceAlertNotifier(alerts.config, alerts.repository)
+    now: Final = saved.created_at + timedelta(days=2)
+    await notifier.deliver(f"test:{alerts.resource_id}", send, now)
+    assert delivered == []
+    recent: Final = await alerts.repository.record(alerts.detection(day=1))
+    await notifier.deliver(f"test:{alerts.resource_id}", send, now + timedelta(minutes=5))
+    assert tuple(row.id for row in delivered[0]) == (recent.id,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("crash", (False, True))
+async def test_failed_first_summary_does_not_replay_old_alerts_on_retry(alerts: Alerts, crash: bool) -> None:
+    from litellm.integrations.performance_alert_notifications import PerformanceAlertNotifier
+    from litellm.models.alert import AlertSummary
+
+    old: Final = await alerts.repository.record(alerts.detection())
+    recent: Final = await alerts.repository.record(alerts.detection(day=1))
+    now: Final = recent.created_at + timedelta(days=2)
+    write_rows('UPDATE "LiteLLM_Alert" SET created_at=%s WHERE id=%s', (now, int(recent.id)))
+    write_rows('UPDATE "LiteLLM_Alert" SET created_at=%s WHERE id=%s', (now - timedelta(days=2), int(old.id)))
+    delivered: Final[list[tuple[str, ...]]] = []  # mutable-ok: captures the external delivery boundary
+
+    async def unavailable(rows: Sequence[AlertSummary], receipt: str) -> bool:
+        if crash:
+            raise RuntimeError("Connection lost after sending")
+        return False
+
+    async def send(rows: Sequence[AlertSummary], receipt: str) -> bool:
+        delivered.append(tuple(row.id for row in rows))
+        return True
+
+    notifier: Final = PerformanceAlertNotifier(alerts.config, alerts.repository)
+    if crash:
+        with pytest.raises(RuntimeError, match="Connection lost after sending"):
+            await notifier.deliver(f"test:{alerts.resource_id}", unavailable, now)
+    else:
+        await notifier.deliver(f"test:{alerts.resource_id}", unavailable, now)
+    await notifier.deliver(f"test:{alerts.resource_id}", send, now + timedelta(minutes=3))
+    assert delivered == []
+    await notifier.deliver(f"test:{alerts.resource_id}", send, now + timedelta(days=1, minutes=3))
+    assert delivered == [(recent.id,)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", (False, True))
+async def test_model_deprecation_preference_persists_without_changing_performance(
+    alerts: Alerts, gateway: Gateway, enabled: bool
+) -> None:
+    previous: Final = gateway.request("GET", "/alerts/monitoring")
+    assert previous.status_code == 200, previous.text
+    before: Final = previous.json()
+    try:
+        updated: Final = gateway.request("PATCH", "/alerts/monitoring", {"model_deprecations_enabled": enabled})
+        assert updated.status_code == 200, updated.text
+        assert updated.json() == {**before, "model_deprecations_enabled": enabled}
+        refreshed: Final = gateway.request("GET", "/alerts/monitoring")
+        assert refreshed.json() == updated.json()
+    finally:
+        await alerts.config.set_model_deprecations_enabled(before["model_deprecations_enabled"])

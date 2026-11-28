@@ -1,11 +1,14 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { focusManager } from "@tanstack/react-query";
+import { downloadBlob } from "@/components/EntityUsageExport/utils";
 import userEvent from "@testing-library/user-event";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getProxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import SkillDetail, { skillHubDetail } from "./skill_detail";
-import type { Plugin, PluginDownloadEvent, PluginDownloadsResponse } from "./types";
+import type { Plugin, PluginDownloadEvent, PluginDownloadsResponse, SkillHubSkill } from "./types";
+
+vi.mock("@/components/EntityUsageExport/utils", () => ({ downloadBlob: vi.fn() }));
 
 const digest = "a".repeat(64);
 const archivePath = `/claude-code/plugins/my-skill/archive/${digest}.zip`;
@@ -26,6 +29,19 @@ const renderSkill = (source = skill.source, isAdmin = false) =>
   renderWithProviders(
     <SkillDetail skill={{ ...skill, source }} onBack={vi.fn()} accessToken="dashboard-token" isAdmin={isAdmin} />,
   );
+const renderHub = (overrides: Partial<SkillHubSkill> = {}) => {
+  const hubSkill: SkillHubSkill = {
+    ...skill,
+    security_scan_passed: false,
+    visibility: "private",
+    download_url: "/skill-hub/skills/my-skill/archive",
+    content_url: "/skill-hub/skills/my-skill/content",
+    ...overrides,
+  };
+  return renderWithProviders(
+    <SkillDetail skill={skillHubDetail(hubSkill)} onBack={vi.fn()} accessToken="dashboard-token" isAdmin />,
+  );
+};
 const downloadsUrl = `${getProxyBaseUrl()}/skill-hub/skills/my-skill/downloads?limit=25`;
 const event = {
   id: "9007199254740993",
@@ -68,29 +84,86 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("downloads the backend CSV in one authenticated request without changing the table", async () => {
+  setGlobalLitellmHeaderName("X-LiteLLM-Key");
+  renderHub();
+  skillRequestMock.mockResolvedValueOnce(Response.json(page([event], 2, event.id)));
+  fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
+  await screen.findByRole("cell", { name: event.user_email });
+  const pending = Promise.withResolvers<Response>();
+  skillRequestMock.mockReturnValueOnce(pending.promise);
+  fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
+  expect(await screen.findByRole("button", { name: "Exporting..." })).toBeDisabled();
+  const csv = "download_id,user_email\r\n1,reader@example.test\r\n2,second@example.test\r\n";
+  pending.resolve(new Response(csv, { headers: { "Content-Type": "text/csv;charset=utf-8" } }));
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
+  expect(skillRequestMock).toHaveBeenCalledTimes(2);
+  expect(skillRequestMock).toHaveBeenLastCalledWith(
+    `${getProxyBaseUrl()}/skill-hub/skills/my-skill/downloads/export`,
+    expect.objectContaining({
+      method: "GET",
+      headers: expect.objectContaining({ "X-LiteLLM-Key": "Bearer dashboard-token" }),
+    }),
+  );
+  expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), "my-skill.csv");
+  const blob = vi.mocked(downloadBlob).mock.calls[0][0];
+  const content = await new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsText(blob);
+  });
+  expect(content).toBe(csv);
+  expect(screen.queryByRole("cell", { name: "second@example.test" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled();
+});
+
+it.each(["server", "stream"])("does not save a CSV after a %s failure and allows retry", async (failure) => {
+  renderHub();
+  skillRequestMock.mockResolvedValueOnce(Response.json(page()));
+  fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
+  await screen.findByText("No authenticated download history yet.");
+  const brokenStream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("download_id\r\n"));
+      controller.error(new TypeError("Download interrupted"));
+    },
+  });
+  skillRequestMock.mockResolvedValueOnce(
+    failure === "server"
+      ? Response.json({ detail: "Unavailable" }, { status: 500 })
+      : new Response(brokenStream, { headers: { "Content-Type": "text/csv" } }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not export download history. Try again.");
+  expect(downloadBlob).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Download CSV" })).toBeEnabled();
+  skillRequestMock.mockResolvedValueOnce(new Response("download_id\r\n", { headers: { "Content-Type": "text/csv" } }));
+  fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 it.each(["legacy", "portable"])(
   "retries a private %s ZIP download through the configured auth header and local route",
   async (kind) => {
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
-    URL.createObjectURL = vi.fn(() => "blob:skill-download");
     setGlobalLitellmHeaderName("X-LiteLLM-Key");
     const expectedUrl = kind === "portable" ? `${getProxyBaseUrl()}/skill-hub/skills/my-skill/archive` : url;
-    const detail =
-      kind === "portable"
-        ? skillHubDetail({ ...skill, visibility: "private", download_url: "/skill-hub/skills/my-skill/archive" })
-        : skill;
-    renderWithProviders(<SkillDetail skill={detail} onBack={vi.fn()} accessToken="dashboard-token" />);
+    renderHub(kind === "legacy" ? { download_url: url, content_url: null } : {});
+    if (kind === "legacy") {
+      expect(screen.getByRole("tab", { name: "How to Use" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Install / Share" })).not.toBeInTheDocument();
+    }
     skillRequestMock.mockResolvedValueOnce(Response.json({ detail: "Archive not found" }, { status: 404 }));
     fireEvent.click(screen.getByRole("button", { name: "Download ZIP" }));
     expect(screen.getByRole("button", { name: "Downloading…" })).toBeDisabled();
     expect(await screen.findByRole("alert")).toHaveTextContent("Archive not found");
-    expect(click).not.toHaveBeenCalled();
+    expect(downloadBlob).not.toHaveBeenCalled();
     skillRequestMock.mockResolvedValueOnce(
       new Response("zip-bytes", { headers: { "Content-Type": "application/zip" } }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Download ZIP" }));
-    await waitFor(() => expect(click).toHaveBeenCalledOnce());
-    expect((click.mock.contexts[0] as HTMLAnchorElement).download).toBe("my-skill.zip");
+    await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
+    expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), "my-skill.zip");
     expect(skillRequestMock).toHaveBeenLastCalledWith(
       expectedUrl,
       expect.objectContaining({
@@ -105,14 +178,40 @@ it.each(["legacy", "portable"])(
 
 it("keeps an external archive as a link while retaining stored download history", async () => {
   const externalUrl = `https://external.example.com${archivePath}`;
-  renderSkill({ ...skill.source, url: externalUrl }, true);
+  const reference = {
+    source: { ...skill.source, url: externalUrl },
+    download_url: null,
+    content_url: null,
+    author: { name: "Maintainer", email: "maintainer@example.test" },
+    category: "Review",
+    homepage: "https://example.test/skill",
+  };
+  renderHub(reference);
+  for (const name of ["Maintainer", "maintainer@example.test", "Review", "https://example.test/skill"])
+    expect(screen.getByRole("cell", { name })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Install / Share" })).not.toBeInTheDocument();
   expect(screen.getByRole("link")).toHaveAttribute("href", externalUrl);
   expect(screen.getByRole("link")).toHaveAttribute("target", "_blank");
   expect(screen.queryByRole("button", { name: "Download ZIP" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "How to Use" }));
+  expect(screen.getByText("/plugin install my-skill@litellm")).toBeInTheDocument();
   skillRequestMock.mockResolvedValueOnce(Response.json(page([event])));
   fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
   expect(await screen.findByRole("cell", { name: event.user_email })).toBeInTheDocument();
   expect(screen.getByText(/External downloads are not tracked/)).toBeInTheDocument();
+});
+
+it("renders the stored GitLab ref and subdirectory as the source link", () => {
+  const source = {
+    source: "git-subdir",
+    url: "https://gitlab.com/team/nested/repo.git",
+    ref: "release-2",
+    path: "plugins/example",
+  };
+  renderSkill(source);
+  const href = "https://gitlab.com/team/nested/repo/-/tree/release-2/plugins/example";
+  expect(screen.getByRole("link")).toHaveAttribute("href", href);
+  expect(screen.getByRole("link")).toHaveTextContent(href.replace("https://", ""));
 });
 
 it("shows attribution and string cursors, retains rows on failure, and hides populated history on role loss", async () => {
@@ -198,13 +297,7 @@ it("copies the selected private install without sharing a session key and report
   const writeText = vi.spyOn(navigator.clipboard, "writeText").mockReturnValueOnce(pendingCopy.promise);
   setGlobalLitellmHeaderName("X-LiteLLM-Key");
   skillRequestMock.mockResolvedValue(Response.json({ detail: "Not Found" }, { status: 404 }));
-  renderWithProviders(
-    <SkillDetail
-      skill={skillHubDetail({ ...skill, visibility: "private", download_url: "/skill-hub/skills/my-skill/archive" })}
-      onBack={vi.fn()}
-      accessToken="dashboard-token"
-    />,
-  );
+  renderHub();
   expect(skillRequestMock).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Install / Share" }));
   await chooseSelectOption(user, screen.getByRole("combobox", { name: "Coding agent" }), "Claude Code");
@@ -239,13 +332,7 @@ it("offers the indexed public skill name and discards its availability when reop
       skills: [{ name: "my-skill-2", type: "archive", url: `${getProxyBaseUrl()}${portablePath}?digest=sha256:abc` }],
     }),
   );
-  renderWithProviders(
-    <SkillDetail
-      skill={skillHubDetail({ ...skill, visibility: "public", download_url: portablePath })}
-      onBack={vi.fn()}
-      accessToken="dashboard-token"
-    />,
-  );
+  renderHub({ visibility: "public", download_url: portablePath });
   fireEvent.click(screen.getByRole("button", { name: "Install / Share" }));
   fireEvent.click(await screen.findByRole("radio", { name: "Public command" }));
   focusManager.setFocused(false);

@@ -1,16 +1,20 @@
+locals {
+  alb_subnet_ids = var.private_ingress ? local.private_subnet_ids : local.public_subnet_ids
+}
+
 resource "aws_lb" "this" {
   name               = local.name
   load_balancer_type = "application"
-  internal           = false
+  internal           = var.private_ingress
   security_groups    = [aws_security_group.alb.id]
-  subnets            = local.public_subnet_ids
+  subnets            = local.alb_subnet_ids
 
   idle_timeout = 120
 
   lifecycle {
     precondition {
-      condition     = length(local.public_subnet_ids) >= 2
-      error_message = "The ALB needs at least 2 public subnets in different AZs. Set `public_subnet_ids` when using `vpc_id`, or list at least 2 `azs` when the module creates the VPC."
+      condition     = length(local.alb_subnet_ids) >= 2
+      error_message = "The ALB needs at least 2 subnets in different AZs. Set `private_subnet_ids` for private ingress or `public_subnet_ids` for public ingress when using `vpc_id`, or list at least 2 `azs` when the module creates the VPC."
     }
   }
 

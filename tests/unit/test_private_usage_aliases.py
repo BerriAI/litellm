@@ -13,11 +13,6 @@ PROXY_CLASS_NAME_ALIAS_CASES: Final = (
         "PROXY_DynamicRateLimitHandler",
     ),
     (
-        "litellm.proxy.hooks.dynamic_rate_limiter_v3",
-        "_PROXY_DynamicRateLimitHandlerV3",
-        "PROXY_DynamicRateLimitHandlerV3",
-    ),
-    (
         "litellm.proxy.common_utils.config_sync_pubsub",
         "_ConfigSyncPubSub",
         "ConfigSyncPubSub",
@@ -66,11 +61,6 @@ PROXY_CLASS_NAME_ALIAS_CASES: Final = (
         "litellm.proxy.hooks.parallel_request_limiter",
         "_PROXY_MaxParallelRequestsHandler",
         "PROXY_MaxParallelRequestsHandler",
-    ),
-    (
-        "litellm.proxy.hooks.parallel_request_limiter_v3",
-        "_PROXY_MaxParallelRequestsHandler_v3",
-        "PROXY_MaxParallelRequestsHandler_v3",
     ),
     (
         "litellm.proxy.hooks.sensitive_data_routing",
@@ -377,11 +367,6 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
         "copy_user_api_key_auth_for_cache",
     ),
     (
-        "litellm.proxy.auth.resolvers.store",
-        "_fetch_key_object_from_db_with_reconnect",
-        "fetch_key_object_from_db_with_reconnect",
-    ),
-    (
         "litellm.proxy.auth.route_checks",
         "_user_is_org_admin",
         "user_is_org_admin",
@@ -480,16 +465,6 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
         "litellm.proxy.common_request_processing",
         "_check_and_merge_model_level_guardrails",
         "check_and_merge_model_level_guardrails",
-    ),
-    (
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub",
-        "_ConfigSyncPubSub",
-        "ConfigSyncPubSub",
-    ),
-    (
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub",
-        "_pubsub_capable_client",
-        "pubsub_capable_client",
     ),
     (
         "litellm.proxy.common_utils.key_rotation_manager",
@@ -1005,11 +980,6 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
         "litellm.proxy.proxy_server",
         "_get_projected_spend_over_limit",
         "get_projected_spend_over_limit",
-    ),
-    (
-        "litellm.proxy.proxy_server",
-        "_get_redoc_url",
-        "get_redoc_url",
     ),
     (
         "litellm.proxy.proxy_server",
@@ -2687,13 +2657,6 @@ PROXY_ALIAS_CASES: Final = (
     (
         "litellm.proxy.auth.auth_checks",
         "",
-        "_fetch_key_object_from_db_with_reconnect",
-        "fetch_key_object_from_db_with_reconnect",
-        False,
-    ),
-    (
-        "litellm.proxy.auth.auth_checks",
-        "",
         "_get_agent_ids_from_access_groups",
         "get_agent_ids_from_access_groups",
         False,
@@ -3172,13 +3135,6 @@ PROXY_ALIAS_CASES: Final = (
         "",
         "_PROXY_MaxParallelRequestsHandler_v3",
         "PROXY_MaxParallelRequestsHandler_v3",
-        False,
-    ),
-    (
-        "litellm.proxy.hooks.parallel_request_limiter_v3",
-        "_PROXY_MaxParallelRequestsHandler_v3",
-        "_create_rate_limit_descriptors",
-        "create_rate_limit_descriptors",
         False,
     ),
     (
@@ -4061,13 +4017,6 @@ PROXY_ALIAS_CASES: Final = (
         "",
         "_get_projected_spend_over_limit",
         "get_projected_spend_over_limit",
-        False,
-    ),
-    (
-        "litellm.proxy.utils",
-        "",
-        "_get_redoc_url",
-        "get_redoc_url",
         False,
     ),
     (

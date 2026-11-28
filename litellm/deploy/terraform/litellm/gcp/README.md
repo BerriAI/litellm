@@ -14,7 +14,8 @@ Deploys the componentized LiteLLM proxy on GCP:
 - **GCS bucket** — private, versioned, uniform IAM; exposed as `GCS_BUCKET_NAME`
 - **Secret Manager** entries for `LITELLM_MASTER_KEY` and `DATABASE_PASSWORD`
 - **Cloud Run v2** services for `gateway` (port 4000), `backend` (port 4001),
-  and `ui` (port 3000), all using a shared runtime service account
+  and `ui` (port 3000). The gateway, backend, and migration job share a
+  runtime service account. The UI uses a separate service account.
 - **Cloud Run Job** (`litellm-migrations`) that runs `prisma migrate deploy` through the `migrations` component of the same image
 - **External global HTTP(S) load balancer** with serverless NEGs and a URL
   map mirroring the helm-chart ingress path routing:
@@ -133,9 +134,9 @@ job doesn't get the config (it only runs `prisma migrate deploy`).
 proxy_config = {
   model_list = [
     {
-      model_name = "gpt-4o"
+      model_name = "gpt-6.1-sol"
       litellm_params = {
-        model   = "openai/gpt-4o"
+        model   = "openai/gpt-6.1-sol"
         api_key = "os.environ/OPENAI_API_KEY"
       }
     },
@@ -210,6 +211,16 @@ literal header string, e.g. `Authorization=Bearer <token>`.
 `no_content`; flip `otel_capture_message_content = "prompt_and_completion"`
 only after auditing what lands in the backend, since prompts and
 completions are typically sensitive.
+
+```hcl
+otel_capture_message_content = "no_content"
+turn_off_message_logging     = true
+```
+
+Use these settings together to keep prompts and responses out of LiteLLM
+message logging and OpenTelemetry message content. The logging setting
+preserves other proxy configuration. It does not remove customer metadata
+from all telemetry.
 
 Behavior matches the AWS stack 1:1; the only naming differences are
 `otel_headers_secret` (a Secret Manager resource ID) vs AWS's
@@ -465,6 +476,37 @@ Set `allow_plaintext_lb = true` and leave `lb_domains = []`. Without the
 flag, plan fails with a clear error pointing at the precondition.
 Intended for short-lived trial / dev stacks only.
 
+## Private ingress
+
+By default the load balancer is external. To use a regional internal
+Application Load Balancer in a module-created VPC, set:
+
+```hcl
+private_ingress = {
+  proxy_subnet_cidr  = "10.42.0.0/23"
+  ssl_certificate_id = "projects/my-project/regions/us-central1/sslCertificates/my-cert"
+}
+lb_domains = ["proxy.internal.example.com"]
+```
+
+Choose a proxy-only CIDR that does not overlap existing ranges. With an
+existing VPC, set `private_ingress.subnetwork_id` to a regular subnet in
+`region` for the frontend IP. Omit `proxy_subnet_cidr` if that VPC already
+has an active regional managed proxy-only subnet. Point private DNS at
+`lb_ip`. Private HTTPS serves port 443 only. For HTTP-only development,
+omit `ssl_certificate_id` and `lb_domains` and set `allow_plaintext_lb = true`.
+
+Private mode does not grant the `allUsers` invoker role. Cloud Run accepts
+only internal traffic, including the internal load balancer. The load
+balancer does not supply a Cloud Run identity token, so private mode disables
+the Cloud Run IAM invoker check. The project organization policy must allow
+this. LiteLLM authentication still applies. Clients need network access to
+the regional private frontend, and the default Cloud Run URLs also accept
+only internal traffic.
+
+Changing an existing deployment between public and private ingress replaces
+the load balancer and its IP. Plan for DNS changes and an interruption.
+
 ## Using as a module
 
 The directory itself is a module with **no `provider` block** — the caller
@@ -517,10 +559,73 @@ with its own provider config (one `examples/default`-style root per project),
 or fork the module to add `configuration_aliases` and pass per-instance
 `providers = { ... }`.
 
+## Customer-owned secrets
+
+Pass full Secret Manager resource IDs (`projects/PROJECT/secrets/NAME`),
+without a version suffix. The module does not read their payloads.
+
+| Input | Value stored in the enabled latest version |
+| --- | --- |
+| `litellm_master_key_secret_id` | The plain LiteLLM master key beginning with `sk-`. Leave `litellm_master_key` empty. |
+| `db_password_secret_id` | The plain password for the Cloud SQL user named by `db_username`. |
+
+The customer can choose the secret names, for example
+`<tenant>-litellm-<env>-master-key` and `<tenant>-litellm-<env>-db-password`.
+With an external database password, the module still creates Cloud SQL
+and the database, but does not create the app user. For a new deployment,
+first provision with `create_runtime = false` and the external secret IDs.
+In the customer bootstrap, create `db_username` on the writer with the
+same password and grant the user the database and schema privileges
+needed to run migrations. Then enable the runtime. Do not export either
+secret payload from the customer bootstrap.
+
+The module grants the runtime service account
+`roles/secretmanager.secretAccessor` on both referenced secrets. The
+deployment identity needs permission to manage those secret-level IAM
+bindings, not to access secret versions. With Google-managed encryption,
+no extra KMS grant is needed. With CMEK, grant
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key to the Secret
+Manager service agent for the secrets' project. The Cloud Run service
+account does not need direct KMS access.
+
+Switching an existing deployment does not scrub previous Terraform state.
+The existing Cloud SQL user's `ABANDON` deletion policy leaves it in the
+database when this module stops managing it. Use new secret names and rotate
+the old credentials. Memorystore AUTH is unchanged and is not enabled by
+this module.
+
+## Bring your own service accounts
+
+Set `runtime_service_account_email` for the gateway, backend, and migration
+job, and `ui_service_account_email` for the UI. Both inputs are optional
+strings and default to `null`. If an input is omitted, the module manages
+that service account as before. With `create_runtime = false`, the UI
+service account is not used or created.
+
+Grant the existing runtime account these roles in the deployment project
+before deploying:
+
+| Project role | When needed |
+| --- | --- |
+| `roles/cloudsql.client` | Always |
+| `roles/monitoring.metricWriter` | When the gateway metrics sidecar is enabled |
+| `roles/logging.logWriter` | When the gateway metrics sidecar is enabled |
+
+The UI account needs no project roles. Give the deployment identity
+`iam.serviceAccounts.actAs` (for example, via `roles/iam.serviceAccountUser`
+on each account) to attach them to Cloud Run. The module skips project IAM
+grants for the supplied accounts, but still manages secret- and bucket-level
+grants for the runtime account. Cloud Run image pulls use the Cloud Run
+service agent, not either runtime account.
+
+Switching an existing deployment to a supplied account removes the
+corresponding module-managed account and its project grants. Review the
+plan and provision the replacement identity before switching.
+
 ## Dependencies only (run LiteLLM on GKE)
 
 Set `create_runtime = false` to provision Cloud SQL, Memorystore, GCS,
-Secret Manager, and the runtime service account without Cloud Run or the
+Secret Manager, and the runtime service account (unless supplied) without Cloud Run or the
 load balancer. For a Shared VPC, set the full host-project network ID and
 skip PSA creation after the host project has configured it:
 

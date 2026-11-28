@@ -25,10 +25,10 @@ class FalAIBytedanceBaseConfig(FalAIFluxProV11UltraConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
 
         param_mapping: Final = {
@@ -92,6 +92,7 @@ class FalAIBytedanceSeedreamV3Config(FalAIBytedanceBaseConfig):
     """
 
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/bytedance/seedream/v3/text-to-image"
+    MODEL_FAMILY_ROOTS: tuple[str, ...] = ("fal-ai/bytedance/seedream/", "bytedance/seedream/")
 
 
 class FalAIBytedanceDreaminaV31Config(FalAIBytedanceBaseConfig):

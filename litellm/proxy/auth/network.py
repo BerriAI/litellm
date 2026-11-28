@@ -8,6 +8,7 @@ from fastapi import Request
 from pydantic import Field
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.types.llms.base import LiteLLMBaseModel
 
 TrustedProxyNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -30,7 +31,7 @@ def normalize_cidr_ranges(configured_ranges: object, *, setting_name: str = "tru
     if isinstance(configured_ranges, str):
         return [r.strip() for r in configured_ranges.split(",") if r.strip()]
     if isinstance(configured_ranges, (list, tuple, set)):
-        return [str(r).strip() for r in configured_ranges if str(r).strip()]
+        return [str(r).strip() for r in iter_items(configured_ranges) if str(r).strip()]
     verbose_proxy_logger.warning(
         "Invalid %s value: expected a list of CIDR ranges, got %s",
         setting_name,

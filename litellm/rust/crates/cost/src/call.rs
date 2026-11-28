@@ -9,6 +9,8 @@ pub struct CallContext {
     pub channel: Channel,
     /// OpenAI data residency, picks the residency uplift
     pub residency: Option<Residency>,
+    /// OpenAI call sent to the FedRAMP endpoint, picks the FedRAMP uplift
+    pub fedramp_endpoint: bool,
     /// Vertex call sent to a regional endpoint, picks the regional uplift
     pub non_global_endpoint: bool,
     /// Anthropic `speed: fast`, picks the speed uplift
@@ -23,13 +25,25 @@ pub struct CallContext {
 
 /// Anthropic `speed`
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Deserialize),
+    serde(rename_all = "lowercase")
+)]
 pub enum Speed {
     Fast,
 }
 
 /// Anthropic and Bedrock `inference_geo`, lowercased as on main
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize), serde(from = "String"))]
 pub struct InferenceGeo(Box<str>);
+
+impl From<String> for InferenceGeo {
+    fn from(geo: String) -> Self {
+        Self::new(&geo)
+    }
+}
 
 impl InferenceGeo {
     pub fn new(geo: &str) -> Self {

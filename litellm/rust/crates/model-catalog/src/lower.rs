@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::num::NonZeroU64;
 
-use litellm_cost::money::UnitPrice;
+use litellm_cost::call::{InferenceGeo, Speed};
+use litellm_cost::money::{Multiplier, UnitPrice};
 use litellm_cost::price::{
     Adjustments, Band, BandEdge, Billing, CacheReadFallback, CacheReadMode, CacheTtl,
     GuardrailUnit, InputUnit, Meter, OffPeak, OffPeakRates, OutputUnit, Price, Prices, Residency,
@@ -13,29 +14,204 @@ use litellm_cost::schedule::{Schedule, Window};
 use crate::error::{Error, Repr, pointer_child, pointer_for_key};
 use crate::model::Model;
 use crate::vocabulary::Mode;
-use crate::wire::{EntryWire, FlatPrice, OffPeakBlock, TierRow, WebSearchBillingUnit};
+use crate::wire::{
+    EntryWire, FlatKey, FlatPrice, OffPeakBlock, TierRow, TierSuffix, WebSearchBillingUnit,
+};
 
 impl TryFrom<&EntryWire> for Prices {
     type Error = Vec<Error>;
 
     fn try_from(wire: &EntryWire) -> Result<Self, Self::Error> {
-        let mut problems = Vec::new();
-        let sourced = flat_prices(&wire.prices)
-            .chain(tier_prices(wire, &mut problems))
-            .chain(search_context_prices(wire))
-            .chain(guardrail_prices(wire));
-        let rates = dedupe(sourced, &mut problems);
-        let off_peak = wire
-            .off_peak
-            .as_ref()
-            .and_then(|block| off_peak(block, &mut problems));
+        let (prices, problems) = lowered(wire, &wire.prices, Tiers::Priced);
         if problems.is_empty() {
-            let billing = billing(wire, &rates);
-            Ok(Prices::new(rates, off_peak, billing))
+            Ok(prices)
         } else {
             Err(problems)
         }
     }
+}
+
+/// The prices main bills a row at. Unlike `Prices::try_from` this never fails, because a
+/// deployment's `model_info` merged over a catalog row can hold what the catalog checks reject
+#[derive(Clone, Debug, PartialEq)]
+pub enum BilledPrices {
+    /// One price list, whatever the prompt size
+    Flat(Prices),
+    /// Token tiers price input, so main bills the whole call from the tier the prompt picks
+    Tiered {
+        /// The tiers as prompt bands, beside the flat prices they do not replace
+        tiers: Prices,
+        /// The flat prices alone. An empty prompt picks no tier and reads these
+        empty_prompt: Prices,
+    },
+}
+
+impl BilledPrices {
+    pub fn for_prompt(&self, prompt_tokens: u64) -> &Prices {
+        match self {
+            Self::Flat(prices) => prices,
+            Self::Tiered { empty_prompt, .. } if prompt_tokens == 0 => empty_prompt,
+            Self::Tiered { tiers, .. } => tiers,
+        }
+    }
+}
+
+/// Lowers `wire` the way main reads it
+/// - A row whose token tiers price input is `Tiered`. The flat text token prices the tiers replace
+///   are dropped from `tiers`, and a tier's missing cache and reasoning rates are that tier's
+///   input and output rate
+/// - Result tiers are left out, the search calculator prices them
+/// - A modality input token price main could not parse is 0, where a missing one borrows the text rate
+/// - Any other contradiction keeps the price read first
+pub fn billed_prices(wire: &EntryWire) -> BilledPrices {
+    let flat: Vec<FlatPrice> = wire
+        .prices
+        .iter()
+        .cloned()
+        .chain(unparsable_modality_prices(wire))
+        .collect();
+    let empty_prompt = lowered(wire, &flat, Tiers::Unread).0;
+    if !tiers_price(wire, &TEXT_INPUT) {
+        return BilledPrices::Flat(empty_prompt);
+    }
+    let beside_tiers: Vec<FlatPrice> = flat
+        .into_iter()
+        .filter(|flat| !replaced_by_tiers(wire, &flat.flat))
+        .collect();
+    BilledPrices::Tiered {
+        tiers: lowered(wire, &beside_tiers, Tiers::WholeCall).0,
+        empty_prompt,
+    }
+}
+
+fn unparsable_modality_prices(wire: &EntryWire) -> impl Iterator<Item = FlatPrice> + '_ {
+    wire.problems.iter().filter_map(|problem| {
+        let key = problem.key().filter(|_| problem.field().is_none())?;
+        let flat = FlatKey::parse(&key)?;
+        matches!(
+            flat.meter,
+            Meter::Input(InputUnit::Token(
+                TokenKind::Audio | TokenKind::Image | TokenKind::Video
+            ))
+        )
+        .then_some(FlatPrice {
+            key,
+            path: problem.path().to_owned(),
+            flat,
+            price: UnitPrice::new(0.0)?,
+        })
+    })
+}
+
+fn tiers_price(wire: &EntryWire, meter: &Meter) -> bool {
+    wire.tier_rows
+        .iter()
+        .flatten()
+        .any(|row| row.range.is_some() && row.prices.iter().any(|price| price.flat.meter == *meter))
+}
+
+/// Whether main ignores a flat price because the row has token tiers. A tier supplies input and
+/// the cache rates, which fall back to the tier's input. It supplies output and reasoning only
+/// when a tier prices output, otherwise the standard flat output price stands in
+fn replaced_by_tiers(wire: &EntryWire, flat: &FlatKey) -> bool {
+    let text_output = Meter::Output(OutputUnit::Token(TokenKind::Text));
+    if matches!(flat.tier, Some(TierSuffix::Batches | TierSuffix::Decisions)) {
+        return false;
+    }
+    match &flat.meter {
+        Meter::Input(InputUnit::Token(TokenKind::Text))
+        | Meter::CacheRead {
+            kind: TokenKind::Text,
+            ..
+        }
+        | Meter::CacheWrite {
+            kind: TokenKind::Text,
+            ..
+        } => true,
+        Meter::Output(OutputUnit::Token(TokenKind::Text)) => {
+            tiers_price(wire, &text_output) || flat.has_suffix()
+        }
+        Meter::Output(OutputUnit::ReasoningToken) => {
+            tiers_price(wire, &text_output) || tiers_price(wire, &flat.meter)
+        }
+        _ => false,
+    }
+}
+
+const TEXT_INPUT: Meter = Meter::Input(InputUnit::Token(TokenKind::Text));
+
+/// How `lowered` reads `tiered_pricing`
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tiers {
+    /// Every tier is a price, the catalog's reading
+    Priced,
+    /// Token tiers are the prices of the whole call, main's reading of a prompt that picks a tier
+    WholeCall,
+    /// No tier is read, main's reading of an empty prompt or of tiers that price no input
+    Unread,
+}
+
+fn lowered(wire: &EntryWire, flat: &[FlatPrice], tiers: Tiers) -> (Prices, Vec<Error>) {
+    let mut problems = Vec::new();
+    let tiered = match tiers {
+        Tiers::Priced => tier_prices(wire, &mut problems),
+        Tiers::WholeCall => with_tier_fallbacks(tier_prices(wire, &mut problems)),
+        Tiers::Unread => Vec::new(),
+    };
+    let sourced = flat_prices(flat)
+        .chain(tiered)
+        .chain(search_context_prices(wire))
+        .chain(guardrail_prices(wire));
+    let rates = dedupe(sourced, &mut problems);
+    let off_peak = wire
+        .off_peak
+        .as_ref()
+        .and_then(|block| off_peak(block, &mut problems));
+    let billing = billing(wire, &rates);
+    (Prices::new(rates, off_peak, billing), problems)
+}
+
+/// Main fills a tier's missing cache-read and cache-write rates with that tier's input rate and its
+/// missing reasoning rate with that tier's output rate, before any off-peak swap
+fn with_tier_fallbacks(tiered: Vec<Sourced>) -> Vec<Sourced> {
+    const TEXT_OUTPUT: Meter = Meter::Output(OutputUnit::Token(TokenKind::Text));
+    const FROM_INPUT: [Meter; 2] = [
+        Meter::CacheRead {
+            kind: TokenKind::Text,
+            mode: CacheReadMode::Implicit,
+        },
+        Meter::CacheWrite {
+            kind: TokenKind::Text,
+            ttl: CacheTtl::Default,
+        },
+    ];
+    const FROM_OUTPUT: [Meter; 1] = [Meter::Output(OutputUnit::ReasoningToken)];
+    let filled: Vec<Sourced> = tiered
+        .iter()
+        .flat_map(|lender| {
+            let borrowers: &[Meter] = if lender.price.meter == TEXT_INPUT {
+                &FROM_INPUT
+            } else if lender.price.meter == TEXT_OUTPUT {
+                &FROM_OUTPUT
+            } else {
+                &[]
+            };
+            borrowers
+                .iter()
+                .filter(|meter| {
+                    !tiered.iter().any(|priced| {
+                        priced.price.meter == **meter && priced.price.when == lender.price.when
+                    })
+                })
+                .map(|meter| Sourced {
+                    price: Price::online(meter.clone(), lender.price.when),
+                    rate: lender.rate,
+                    source: lender.source.clone(),
+                    path: lender.path.clone(),
+                })
+        })
+        .collect();
+    tiered.into_iter().chain(filled).collect()
 }
 
 fn billing(wire: &EntryWire, rates: &BTreeMap<Price, UnitPrice>) -> Billing {
@@ -53,15 +229,13 @@ fn billing(wire: &EntryWire, rates: &BTreeMap<Price, UnitPrice>) -> Billing {
             Meter::Input(InputUnit::Character) | Meter::Output(OutputUnit::Character)
         )
     });
-    let prices_cache_read = prices_meter(|meter| {
-        matches!(
-            meter,
-            Meter::CacheRead {
-                kind: TokenKind::Text,
-                ..
-            }
-        )
-    });
+    let prices_cache_read = rates.contains_key(&Price::online(
+        Meter::CacheRead {
+            kind: TokenKind::Text,
+            mode: CacheReadMode::Implicit,
+        },
+        When::default(),
+    ));
     Billing {
         text_unit: if prices_characters && !prices_tokens {
             TextUnit::Character
@@ -107,9 +281,27 @@ impl From<&EntryWire> for Adjustments {
                 (Uplift::FedrampEndpoint, wire.fedramp_uplift),
             ]
             .into_iter()
-            .filter_map(|(uplift, factor)| Some((uplift, factor?))),
+            .filter_map(|(uplift, factor)| Some((uplift, factor?)))
+            .chain(provider_specific_uplifts(wire)),
         )
     }
+}
+
+/// The geo and `speed: fast` multipliers main reads out of `provider_specific_entry`, every numeric key but `fast`
+/// being a geo. A served `global` or `not_available` geo is never uplifted on main, so those keys are skipped
+fn provider_specific_uplifts(wire: &EntryWire) -> impl Iterator<Item = (Uplift, Multiplier)> + '_ {
+    wire.attributes
+        .provider_specific_entry
+        .iter()
+        .flatten()
+        .filter_map(|(key, factor)| {
+            let uplift = match key.as_str() {
+                "fast" => Uplift::Speed(Speed::Fast),
+                "global" | "not_available" => return None,
+                geo => Uplift::InferenceGeo(InferenceGeo::new(geo)),
+            };
+            Some((uplift, Multiplier::new(factor.as_f64()?)?))
+        })
 }
 
 impl TryFrom<EntryWire> for Model {
@@ -246,20 +438,24 @@ fn tier_prices(wire: &EntryWire, problems: &mut Vec<Error>) -> Vec<Sourced> {
     let mut ordered = based;
     ordered.sort_by_key(|(_, [start, _], _)| *start);
     problems.extend(ladder_problems(basis, &ordered));
+    let floors = std::iter::once(0).chain(ordered.iter().map(|(_, [_, end], _)| *end));
     ordered
         .iter()
-        .flat_map(|(basis, [start, _], row)| {
-            row.prices.iter().map(move |flat| (*basis, *start, flat))
+        .zip(floors)
+        .flat_map(|((basis, [start, _], row), floor)| {
+            let over = match basis {
+                TierBasis::PromptTokens => floor,
+                TierBasis::Results => start.saturating_sub(1),
+            };
+            row.prices.iter().map(move |flat| (*basis, over, flat))
         })
-        .filter_map(
-            |(basis, start, flat)| match tier_price(basis, start, flat) {
-                Ok(sourced) => Some(sourced),
-                Err(problem) => {
-                    problems.push(problem);
-                    None
-                }
-            },
-        )
+        .filter_map(|(basis, over, flat)| match tier_price(basis, over, flat) {
+            Ok(sourced) => Some(sourced),
+            Err(problem) => {
+                problems.push(problem);
+                None
+            }
+        })
         .collect()
 }
 
@@ -300,7 +496,9 @@ fn ladder_problems(basis: TierBasis, ordered: &[(TierBasis, [u64; 2], &TierRow)]
     reversed.chain(first).chain(gaps).collect()
 }
 
-fn tier_price(basis: TierBasis, start: u64, flat: &FlatPrice) -> Result<Sourced, Error> {
+/// `over` is where the tier starts: the end of the token tier before it, so a ladder written with a
+/// one token gap still bills the next tier from its first token, or one less than a result tier's start
+fn tier_price(basis: TierBasis, over: u64, flat: &FlatPrice) -> Result<Sourced, Error> {
     if flat.flat.has_suffix() {
         return Err(Error::new(
             flat.path.clone(),
@@ -310,10 +508,10 @@ fn tier_price(basis: TierBasis, start: u64, flat: &FlatPrice) -> Result<Sourced,
         ));
     }
     let (meter, band) = match (basis, &flat.flat.meter) {
-        (TierBasis::PromptTokens, meter) => (meter.clone(), Band::over_prompt_tokens(start)),
+        (TierBasis::PromptTokens, meter) => (meter.clone(), Band::over_prompt_tokens(over)),
         (TierBasis::Results, Meter::Input(InputUnit::Query { over_results: None })) => (
             Meter::Input(InputUnit::Query {
-                over_results: NonZeroU64::new(start.saturating_sub(1)),
+                over_results: NonZeroU64::new(over),
             }),
             Band::Base,
         ),
@@ -472,15 +670,12 @@ fn schedule(block: &OffPeakBlock, problems: &mut Vec<Error>) -> Option<Schedule>
 
 #[cfg(test)]
 mod tests {
-    use litellm_cost::money::Multiplier;
     use litellm_cost::price::{Channel, ServiceTier};
     use litellm_cost::schedule::{UtcWindow, Weekday};
     use rstest::rstest;
     use serde_json::{Value, json};
 
     use super::*;
-
-    const TEXT_INPUT: Meter = Meter::Input(InputUnit::Token(TokenKind::Text));
 
     fn wire(entry: Value) -> EntryWire {
         let Value::Object(fields) = entry else {
@@ -564,18 +759,14 @@ mod tests {
         ]}))
         .unwrap();
         assert_eq!(
-            prices.band(ServiceTier::Standard, 256_001),
-            Band::over_prompt_tokens(256_000)
-        );
-        assert_eq!(
             prices
-                .rate(
-                    &TEXT_INPUT,
-                    ServiceTier::Standard,
-                    Band::over_prompt_tokens(256_000)
-                )
-                .map(UnitPrice::get),
-            Some(2e-6)
+                .iter()
+                .map(|(price, rate)| (price.when.band, rate.get()))
+                .collect::<Vec<_>>(),
+            [
+                (Band::Base, 1e-6),
+                (Band::over_prompt_tokens(256_000), 2e-6)
+            ]
         );
     }
 
@@ -703,6 +894,283 @@ mod tests {
         );
     }
 
+    fn billed(entry: Value) -> Vec<(Meter, ServiceTier, Band, f64)> {
+        let Value::Object(fields) = entry else {
+            panic!("entry must be an object")
+        };
+        billed_prices(&EntryWire::read(&fields))
+            .for_prompt(1)
+            .iter()
+            .map(|(price, rate)| {
+                (
+                    price.meter.clone(),
+                    price.when.tier,
+                    price.when.band,
+                    rate.get(),
+                )
+            })
+            .collect()
+    }
+
+    const TEXT_OUTPUT: Meter = Meter::Output(OutputUnit::Token(TokenKind::Text));
+    const REASONING: Meter = Meter::Output(OutputUnit::ReasoningToken);
+    const CACHE_READ: Meter = Meter::CacheRead {
+        kind: TokenKind::Text,
+        mode: CacheReadMode::Implicit,
+    };
+    const CACHE_WRITE: Meter = Meter::CacheWrite {
+        kind: TokenKind::Text,
+        ttl: CacheTtl::Default,
+    };
+
+    #[rstest]
+    fn tiers_over_a_flat_priced_row_bill_text_tokens_from_the_tiers_alone() {
+        use ServiceTier::Standard;
+        let second = Band::over_prompt_tokens(256_000);
+        let audio = Meter::Input(InputUnit::Token(TokenKind::Audio));
+
+        assert_eq!(
+            billed(json!({
+                "input_cost_per_token": 9e-6,
+                "input_cost_per_token_priority": 9e-6,
+                "input_cost_per_token_above_200k_tokens": 9e-6,
+                "output_cost_per_token": 9e-6,
+                "output_cost_per_reasoning_token": 9e-6,
+                "cache_read_input_token_cost": 9e-6,
+                "cache_creation_input_token_cost_above_1hr": 9e-6,
+                "input_cost_per_audio_token": 7e-6,
+                "tiered_pricing": [
+                    {"range": [0, 256000], "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6},
+                    {"range": [256000, 1000000], "input_cost_per_token": 3e-6, "output_cost_per_token": 4e-6}
+                ]
+            })),
+            [
+                (TEXT_INPUT, Standard, Band::Base, 1e-6),
+                (TEXT_INPUT, Standard, second, 3e-6),
+                (audio, Standard, Band::Base, 7e-6),
+                (TEXT_OUTPUT, Standard, Band::Base, 2e-6),
+                (TEXT_OUTPUT, Standard, second, 4e-6),
+                (REASONING, Standard, Band::Base, 2e-6),
+                (REASONING, Standard, second, 4e-6),
+                (CACHE_READ, Standard, Band::Base, 1e-6),
+                (CACHE_READ, Standard, second, 3e-6),
+                (CACHE_WRITE, Standard, Band::Base, 1e-6),
+                (CACHE_WRITE, Standard, second, 3e-6),
+            ]
+        );
+    }
+
+    #[rstest]
+    fn tiers_that_price_no_output_keep_the_standard_flat_output_and_reasoning() {
+        use ServiceTier::Standard;
+
+        assert_eq!(
+            billed(json!({
+                "input_cost_per_token": 9e-6,
+                "output_cost_per_token": 5e-6,
+                "output_cost_per_token_priority": 9e-6,
+                "output_cost_per_token_above_200k_tokens": 9e-6,
+                "output_cost_per_reasoning_token": 6e-6,
+                "tiered_pricing": [{"range": [0, 256000], "input_cost_per_token": 1e-6}]
+            })),
+            [
+                (TEXT_INPUT, Standard, Band::Base, 1e-6),
+                (TEXT_OUTPUT, Standard, Band::Base, 5e-6),
+                (REASONING, Standard, Band::Base, 6e-6),
+                (CACHE_READ, Standard, Band::Base, 1e-6),
+                (CACHE_WRITE, Standard, Band::Base, 1e-6),
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case::batch_prices(json!({
+        "input_cost_per_token_batches": 5e-6,
+        "tiered_pricing": [{"range": [0, 10], "input_cost_per_token": 1e-6}]
+    }), 4)]
+    #[case::result_tiers_do_not_replace_token_prices(json!({
+        "input_cost_per_token": 5e-6,
+        "cache_read_input_token_cost": 1e-6,
+        "tiered_pricing": [{"max_results_range": [0, 25], "input_cost_per_query": 1e-3}]
+    }), 2)]
+    #[case::a_ladder_the_catalog_rejects_still_prices(json!({
+        "tiered_pricing": [
+            {"range": [0, 128000], "input_cost_per_token": 1e-6},
+            {"range": [128001, 1000000], "input_cost_per_token": 2e-6}
+        ]
+    }), 6)]
+    #[case::two_spellings_keep_the_first(json!({
+        "input_cost_per_token": 1e-6,
+        "input_cost_per_token_above_0k_tokens": 2e-6,
+        "cache_read_input_token_cost": 1e-7
+    }), 2)]
+    fn billing_keeps_what_the_catalog_checks_would_reject(
+        #[case] entry: Value,
+        #[case] expected_prices: usize,
+    ) {
+        assert_eq!(billed(entry).len(), expected_prices);
+    }
+
+    fn billed_wire(entry: Value) -> BilledPrices {
+        let Value::Object(fields) = entry else {
+            panic!("entry must be an object")
+        };
+        billed_prices(&EntryWire::read(&fields))
+    }
+
+    fn rates(prices: &Prices) -> Vec<(Meter, Band, f64)> {
+        prices
+            .iter()
+            .map(|(price, rate)| (price.meter.clone(), price.when.band, rate.get()))
+            .collect()
+    }
+
+    #[rstest]
+    fn an_empty_prompt_reads_the_flat_prices_of_a_tiered_row() {
+        let billed = billed_wire(json!({
+            "litellm_provider": "fireworks_ai",
+            "input_cost_per_token": 9e-6,
+            "output_cost_per_token": 8e-6,
+            "tiered_pricing": [
+                {"range": [0, 256000], "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}
+            ]
+        }));
+
+        assert_eq!(
+            rates(billed.for_prompt(0)),
+            [
+                (TEXT_INPUT, Band::Base, 9e-6),
+                (TEXT_OUTPUT, Band::Base, 8e-6)
+            ]
+        );
+        assert_eq!(
+            rates(billed.for_prompt(1)),
+            [
+                (TEXT_INPUT, Band::Base, 1e-6),
+                (TEXT_OUTPUT, Band::Base, 2e-6),
+                (REASONING, Band::Base, 2e-6),
+                (CACHE_READ, Band::Base, 1e-6),
+                (CACHE_WRITE, Band::Base, 1e-6),
+            ]
+        );
+        assert_eq!(
+            billed.for_prompt(0).billing(),
+            Billing {
+                cache_read_fallback: CacheReadFallback::HalfInputRate,
+                ..Billing::default()
+            }
+        );
+        assert_eq!(billed.for_prompt(1).billing(), Billing::default());
+    }
+
+    #[rstest]
+    fn a_tier_only_row_has_no_price_for_an_empty_prompt() {
+        let billed = billed_wire(json!({
+            "litellm_provider": "dashscope",
+            "tiered_pricing": [{"range": [0, 256000], "input_cost_per_token": 1e-6}]
+        }));
+
+        assert_eq!(rates(billed.for_prompt(0)), []);
+    }
+
+    #[rstest]
+    fn a_row_without_token_tiers_bills_every_prompt_from_its_flat_prices() {
+        let billed = billed_wire(json!({
+            "input_cost_per_token": 9e-6,
+            "tiered_pricing": [{"range": [0, 256000], "output_cost_per_token": 2e-6}]
+        }));
+
+        assert_eq!(billed.for_prompt(0), billed.for_prompt(1));
+        assert_eq!(
+            rates(billed.for_prompt(1)),
+            [(TEXT_INPUT, Band::Base, 9e-6)]
+        );
+        assert_eq!(billed.for_prompt(1).billing(), Billing::default());
+    }
+
+    #[rstest]
+    fn billing_leaves_result_tiers_to_the_search_calculator() {
+        let billed = billed_wire(json!({"tiered_pricing": [
+            {"max_results_range": [0, 25], "input_cost_per_query": 5e-3},
+            {"max_results_range": [26, 100], "input_cost_per_query": 2.5e-2}
+        ]}));
+
+        assert_eq!(rates(billed.for_prompt(1)), []);
+    }
+
+    #[rstest]
+    #[case::one_token_gap(json!([0, 128000]), json!([128001, 1000000]), 128_000)]
+    #[case::contiguous(json!([0, 128000]), json!([128000, 1000000]), 128_000)]
+    #[case::first_tier_not_from_zero(json!([5, 128000]), json!([128000, 1000000]), 128_000)]
+    fn a_token_tier_starts_where_the_one_before_it_ends(
+        #[case] first: Value,
+        #[case] second: Value,
+        #[case] expected_floor: u64,
+    ) {
+        let billed = billed_wire(json!({"tiered_pricing": [
+            {"range": first, "input_cost_per_token": 1e-6},
+            {"range": second, "input_cost_per_token": 2e-6}
+        ]}));
+
+        let input: Vec<_> = rates(billed.for_prompt(1))
+            .into_iter()
+            .filter(|(meter, ..)| *meter == TEXT_INPUT)
+            .collect();
+        assert_eq!(
+            input,
+            [
+                (TEXT_INPUT, Band::Base, 1e-6),
+                (TEXT_INPUT, Band::over_prompt_tokens(expected_floor), 2e-6)
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case::audio(
+        "input_cost_per_audio_token",
+        Some(Meter::Input(InputUnit::Token(TokenKind::Audio)))
+    )]
+    #[case::image_priority(
+        "input_cost_per_image_token_priority",
+        Some(Meter::Input(InputUnit::Token(TokenKind::Image)))
+    )]
+    #[case::text_input("input_cost_per_token", None)]
+    #[case::cache_read("cache_read_input_token_cost", None)]
+    #[case::output_audio("output_cost_per_audio_token", None)]
+    #[case::character("input_cost_per_character", None)]
+    fn only_a_modality_input_token_price_main_could_not_parse_is_free(
+        #[case] key: &str,
+        #[case] free: Option<Meter>,
+    ) {
+        let billed = billed_wire(json!({"output_cost_per_token": 2e-6, key: "invalid"}));
+        let priced_at_zero: Vec<Meter> = billed
+            .for_prompt(1)
+            .iter()
+            .filter(|(_, rate)| rate.get() == 0.0)
+            .map(|(price, _)| price.meter.clone())
+            .collect();
+
+        assert_eq!(priced_at_zero, free.into_iter().collect::<Vec<_>>());
+    }
+
+    #[rstest]
+    fn billing_drops_an_off_peak_block_with_no_hours() {
+        let Value::Object(fields) = json!({
+            "input_cost_per_token": 1e-6,
+            "off_peak_pricing": {"input_cost_per_token": 5e-7}
+        }) else {
+            unreachable!()
+        };
+        let billed = billed_prices(&EntryWire::read(&fields));
+        let prices = billed.for_prompt(1);
+
+        assert_eq!(prices.off_peak(), None);
+        assert_eq!(
+            prices.get(&Price::online(TEXT_INPUT, When::default())),
+            UnitPrice::new(1e-6)
+        );
+    }
+
     #[rstest]
     fn off_peak_hours_and_windows_form_one_schedule_with_its_rates() {
         let prices = prices(json!({"off_peak_pricing": {
@@ -775,6 +1243,31 @@ mod tests {
     }
 
     #[rstest]
+    #[case::us_geo("us", Uplift::InferenceGeo(InferenceGeo::new("us")), Some(1.1))]
+    #[case::geo_keys_fold_like_the_served_geo(
+        "EU",
+        Uplift::InferenceGeo(InferenceGeo::new("eu")),
+        Some(1.1)
+    )]
+    #[case::fast_is_speed_not_a_geo("fast", Uplift::Speed(Speed::Fast), Some(1.1))]
+    #[case::global_is_never_uplifted(
+        "global",
+        Uplift::InferenceGeo(InferenceGeo::new("global")),
+        None
+    )]
+    fn provider_specific_entry_lowers_geo_and_speed_uplifts(
+        #[case] key: &str,
+        #[case] uplift: Uplift,
+        #[case] expected: Option<f64>,
+    ) {
+        let adjustments = Adjustments::from(&wire(json!({
+            "provider_specific_entry": {key: 1.1, "bedrock_invocation_schema": "messages"}
+        })));
+
+        assert_eq!(adjustments.get(&uplift).map(Multiplier::get), expected);
+    }
+
+    #[rstest]
     fn a_model_reports_field_provider_and_price_problems_together() {
         let Value::Object(fields) = json!({
             "mode": "chatt",
@@ -828,6 +1321,10 @@ mod tests {
     )]
     #[case::fireworks_without_cache_read_borrows_half(
         json!({"litellm_provider": "fireworks_ai", "input_cost_per_token": 1e-6}),
+        Billing { cache_read_fallback: CacheReadFallback::HalfInputRate, ..Billing::default() }
+    )]
+    #[case::fireworks_with_only_a_tier_cache_read_still_borrows_half(
+        json!({"litellm_provider": "fireworks_ai", "input_cost_per_token": 1e-6, "cache_read_input_token_cost_priority": 1e-7}),
         Billing { cache_read_fallback: CacheReadFallback::HalfInputRate, ..Billing::default() }
     )]
     #[case::fireworks_with_cache_read_keeps_it(

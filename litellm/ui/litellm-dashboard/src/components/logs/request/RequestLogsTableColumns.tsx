@@ -14,7 +14,9 @@ import { copyToClipboard, getSpendString } from "@/utils/dataUtils";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
 import { getBatchIdFromRequestId, getBatchRequestCounts, isBatchCallType } from "../batchLogUtils";
 import type { LogEntry } from "../types";
+import { customerLogIdentity } from "../customerIdentity";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
+import { readMetaString } from "../detail/utils";
 import { AgentBadge, AgentIcon, BatchBadge, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
 export interface RequestLogsTableColumnsDeps {
@@ -22,11 +24,6 @@ export interface RequestLogsTableColumnsDeps {
   onSessionClick: (log: LogEntry) => void;
   resolveUserEmail?: (userId: string) => string | undefined;
 }
-
-const readMetaString = (metadata: Record<string, unknown> | undefined, key: string): string | undefined => {
-  const value = metadata?.[key];
-  return typeof value === "string" && value !== "" ? value : undefined;
-};
 
 const readMcpLogoUrl = (metadata: Record<string, unknown> | undefined): string | undefined => {
   const mcpMetadata = metadata?.["mcp_tool_call_metadata"];
@@ -303,6 +300,26 @@ export const getRequestLogsTableColumns = (
     size: 150,
     enableSorting: false,
     cell: ({ row }) => <TruncatedText value={readMetaString(row.original.metadata, "user_api_key_team_alias")} />,
+  },
+  {
+    id: "customer",
+    header: t("logs.detail.customer.title"),
+    size: 190,
+    enableSorting: false,
+    cell: ({ row }) => {
+      const { summary, recognized } = customerLogIdentity(row.original.metadata, row.original.end_user);
+      if (!summary.length) return <span className="text-muted-foreground">-</span>;
+      return (
+        <div className="flex flex-col gap-0.5">
+          {summary.map((customer) => (
+            <TruncatedText key={customer.scope} value={customer.name} tooltip={customer.name} />
+          ))}
+          <Badge variant={recognized ? "secondary" : "outline"} className="mt-0.5 text-[10px]">
+            {t(`logs.detail.customer.${recognized ? "recognized" : "asserted"}`)}
+          </Badge>
+        </div>
+      );
+    },
   },
   {
     id: "key_hash",

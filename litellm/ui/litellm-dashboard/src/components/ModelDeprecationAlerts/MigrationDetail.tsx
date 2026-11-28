@@ -44,7 +44,7 @@ function migrationFollowUp(
 ): string {
   const retirement = alert.model.status === "deprecated" ? "retired on" : "retires on";
   const keys = context.count === undefined ? "the affected" : context.count;
-  return `${context.team}: please migrate ${keys} virtual keys using ${alert.usageModel}. This model ${retirement} ${alert.model.deprecation_date}. Last seen ${context.lastSeen} UTC. Please confirm once migration is complete. Affected keys: ${context.url}`;
+  return `${context.team}: please migrate ${keys} Virtual Keys using ${alert.usageModel}. This model ${retirement} ${alert.model.deprecation_date}. Last seen ${context.lastSeen} UTC. Please confirm once migration is complete. Affected keys: ${context.url}`;
 }
 
 export default function MigrationDetail({

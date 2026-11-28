@@ -12,19 +12,17 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
-    Any,
     Final,
     Literal,
-    Optional,
     Protocol,
     TypedDict,
-    Union,
     cast,  # noqa: TID251  # prisma types the condition/pipeline Json columns as str, but reads return decoded values
 )
 
 from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, require_get
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PolicyRepository
 from litellm.types.proxy.policy_engine import (
@@ -47,13 +45,14 @@ if TYPE_CHECKING:
 POLICY_VERSION_ID_PREFIX: Final = "policy_"
 
 
-class _RawPipelineStep(TypedDict):
-    guardrail: str
+def _dict_fields(value: object) -> Mapping[str, object] | None:
+    fields: Final = as_str_mapping(value)
+    return fields if isinstance(value, dict) else None
 
 
-class _RawPipelineConfig(TypedDict, total=False):
-    mode: str
-    steps: Sequence[Union[PipelineStep, "_RawPipelineStep"]]
+def _pipeline_step(step_data: object) -> object:
+    step_fields: Final = _dict_fields(step_data)
+    return PipelineStep.model_validate(dict(**step_fields)) if step_fields is not None else step_data
 
 
 class _PolicyRow(Protocol):
@@ -218,7 +217,7 @@ class PolicyRegistry:
         self._initialized = True
         verbose_proxy_logger.info("Loaded %s policies", len(self._policies))
 
-    def parse_policy(self, policy_name: str, policy_data: dict[str, Any]) -> Policy:
+    def parse_policy(self, policy_name: str, policy_data: Mapping[str, object]) -> Policy:
         """
         Parse a policy from raw configuration data.
 
@@ -231,48 +230,56 @@ class PolicyRegistry:
         """
         # Parse guardrails
         guardrails_data: Final = policy_data.get("guardrails", {})
-        if isinstance(guardrails_data, dict):
-            guardrails = PolicyGuardrails(
-                add=guardrails_data.get("add"),
-                remove=guardrails_data.get("remove"),
+        guardrails_fields: Final = _dict_fields(guardrails_data)
+        if guardrails_fields is not None:
+            guardrails = PolicyGuardrails.model_validate(
+                {
+                    "add": guardrails_fields.get("add"),
+                    "remove": guardrails_fields.get("remove"),
+                }
             )
         else:
             # Handle legacy format where guardrails might be a list
-            guardrails = PolicyGuardrails(add=guardrails_data if guardrails_data else None)
+            guardrails = PolicyGuardrails.model_validate({"add": guardrails_data if guardrails_data else None})
 
         # Parse condition (simple model-based condition)
         condition = None
         condition_data: Final = policy_data.get("condition")
         if condition_data:
-            condition = PolicyCondition(model=condition_data.get("model"))
+            condition = PolicyCondition.model_validate({"model": require_get(condition_data).get("model")})
 
         # Parse pipeline (optional ordered guardrail execution)
         pipeline: Final = PolicyRegistry._parse_pipeline(policy_data.get("pipeline"))
 
-        return Policy(
-            inherit=policy_data.get("inherit"),
-            description=policy_data.get("description"),
-            guardrails=guardrails,
-            condition=condition,
-            pipeline=pipeline,
+        return Policy.model_validate(
+            {
+                "inherit": policy_data.get("inherit"),
+                "description": policy_data.get("description"),
+                "guardrails": guardrails,
+                "condition": condition,
+                "pipeline": pipeline,
+            }
         )
 
     _parse_policy = parse_policy
 
     @staticmethod
     def _parse_pipeline(
-        pipeline_data: Optional["_RawPipelineConfig"],
+        pipeline_data: object,
     ) -> GuardrailPipeline | None:
         """Parse a pipeline configuration from raw data."""
         if pipeline_data is None:
             return None
 
-        steps_data: Final[Sequence[PipelineStep | _RawPipelineStep]] = pipeline_data.get("steps", [])
-        steps = [PipelineStep(**step_data) if isinstance(step_data, dict) else step_data for step_data in steps_data]
+        pipeline_fields: Final = require_get(pipeline_data)
+        steps_data: Final = pipeline_fields.get("steps", [])
+        steps: Final = [_pipeline_step(step_data) for step_data in iter_items(steps_data)]
 
-        return GuardrailPipeline(
-            mode=pipeline_data.get("mode", "pre_call"),
-            steps=steps,
+        return GuardrailPipeline.model_validate(
+            {
+                "mode": pipeline_fields.get("mode", "pre_call"),
+                "steps": steps,
+            }
         )
 
     def get_policy(self, policy_name: str) -> Policy | None:
@@ -742,7 +749,7 @@ class PolicyRegistry:
             policies: Final = await self.get_all_policies_from_db(prisma_client, version_status="production")
 
             # Build a temporary in-memory map for resolution
-            temp_policies: Final = {}
+            temp_policies: Final[dict[str, Policy]] = {}
             for policy_response in policies:
                 policy = self.parse_policy(
                     policy_response.policy_name,

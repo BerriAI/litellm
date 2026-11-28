@@ -76,6 +76,13 @@ def test_importing_litellm_reports_the_declared_release_version() -> None:
     assert litellm._version.version == PYPROJECT["project"]["version"]
 
 
+def test_gateway_binary_package_ships_at_the_litellm_release_version() -> None:
+    manifest: Final = tomllib.loads((PROJECT_ROOT / "litellm/packaging/litellm-proxy/pyproject.toml").read_text())
+
+    assert manifest["project"]["version"] == PYPROJECT["project"]["version"]
+    assert _locked_package("litellm-proxy")["version"] == PYPROJECT["project"]["version"]
+
+
 def test_every_declared_extra_is_locked_with_its_requirements() -> None:
     declared: Final = {
         canonicalize_name(extra): _requirement_names(requirements)
@@ -138,3 +145,14 @@ def test_declared_anyio_floor_is_at_or_above_stranded_lock_waiter_fix() -> None:
         specifier.operator == ">=" and Version(specifier.version) >= ANYIO_STRANDED_LOCK_WAITER_FIX
         for specifier in declared[0].specifier
     ), ANYIO_STRANDED_LOCK_WAITER_SOURCE
+
+
+def test_semantic_cache_supported_redisvl_range_matches_the_declared_proxy_extra() -> None:
+    from litellm.caching.redis_semantic_cache import SUPPORTED_REDISVL_VERSIONS
+
+    declared: Final = tuple(
+        Requirement(requirement).specifier
+        for requirement in OPTIONAL_DEPENDENCIES["extra_proxy"]
+        if canonicalize_name(Requirement(requirement).name) == "redisvl"
+    )
+    assert declared == (SpecifierSet(SUPPORTED_REDISVL_VERSIONS),)

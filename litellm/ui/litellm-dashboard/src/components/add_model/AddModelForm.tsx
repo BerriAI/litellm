@@ -19,12 +19,8 @@ import { Trans, useTranslation } from "react-i18next";
 import TeamDropdown from "../common_components/team_dropdown";
 import { requiredRule } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
-import {
-  MountedFormField,
-  MountedFormProvider,
-  type MountRegistry,
-  type MountedFormValues,
-} from "../common_components/MountedFormField";
+import { MountedFormProvider, type MountRegistry, type MountedFormValues } from "../common_components/MountedFormField";
+import { DeploymentMountedField as MountedFormField } from "./deployment-form/DeploymentMountedField";
 import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem, type ProviderCreateInfo, credentialCreateCall, modelAvailableCall } from "../networking";
 import CredentialModal from "../model_add/CredentialModal";
@@ -34,7 +30,7 @@ import { ProviderLogo } from "../molecules/models/ProviderLogo";
 import AccessGroupTagsCombobox from "./AccessGroupTagsCombobox";
 import AdvancedSettings from "./advanced_settings";
 import ConditionalPublicModelName from "./conditional_public_model_name";
-import LiteLLMModelNameField from "./litellm_model_name";
+import NimModelNameField from "./NimModelNameField";
 import ConnectionErrorDisplay from "./model_connection_test";
 import ProviderSpecificFields from "./provider_specific_fields";
 import { authTypesFor } from "./provider_auth_types";
@@ -295,7 +291,9 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                           />
                         )}
                       </MountedFormField>
-                      <LiteLLMModelNameField
+                      <NimModelNameField
+                        accessToken={accessToken}
+                        canDiscover={canCreateCredential}
                         selectedProvider={selectedProvider}
                         providerModels={providerModels}
                         getPlaceholder={getPlaceholder}

@@ -1,9 +1,11 @@
 import re
 from collections.abc import Callable, Iterator, Mapping
+from functools import partial, reduce
 from graphlib import CycleError, TopologicalSorter
 from itertools import chain, islice
 from types import MappingProxyType
 from typing import Final
+from urllib.parse import unquote
 
 from pydantic import TypeAdapter
 
@@ -12,11 +14,17 @@ _OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS: Final = ("enum", "const", "not")
 _LOCAL_SCHEMA_REF_PREFIXES: Final = (("#/$defs/", "$defs"), ("#/definitions/", "definitions"))
 _MAX_SCHEMA_FLATTEN_DEPTH: Final = 32
 _EMPTY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType({})
+_ROOT_DEFS_POINTER: Final = "#/$defs/"
+_DYNAMIC_REF_KEYWORDS: Final = ("$dynamicRef", "$recursiveRef")
+_DEFS_CONTAINERS: Final = ("$defs", "definitions")
+_DEFINITION_BLOCKS: Final = frozenset({"$defs", "definitions", "components"})
+_REFERENCE_KEYWORDS: Final = frozenset({"$ref", *_DYNAMIC_REF_KEYWORDS})
+_NOT: Final = frozenset({"not"})
 
 
 def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
-    properties: Final = schema.get("properties")
-    return properties if isinstance(properties, dict) else _EMPTY_SCHEMA
+    properties: Final = _schema_at(schema, "properties")
+    return _EMPTY_SCHEMA if properties is None else properties
 
 
 def _schema_branches(schema: Mapping[str, object], combinator: str) -> tuple[object, ...]:
@@ -48,11 +56,153 @@ def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[s
     if matched is None:
         return None
     prefix, container = matched
-    definitions: Final = root.get(container)
-    if not isinstance(definitions, dict):
+    definitions: Final = _schema_at(root, container)
+    if definitions is None:
         return None
-    target: Final = definitions.get(ref[len(prefix) :])
-    return target if isinstance(target, dict) else None
+    return _schema_at(definitions, ref[len(prefix) :])
+
+
+def _required_names_in_order(schema: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(name for name in _list_at(schema, "required") if isinstance(name, str))
+
+
+def _local_definitions(schema: Mapping[str, object]) -> Mapping[str, object]:
+    return dict(chain.from_iterable((_schema_at(schema, container) or {}).items() for container in _DEFS_CONTAINERS))
+
+
+def _shadows_a_definition(target: Mapping[str, object], schema: Mapping[str, object]) -> bool:
+    outer: Final = _local_definitions(schema)
+    return any(name in outer and outer[name] != body for name, body in _local_definitions(target).items())
+
+
+def _with_root_ref_inlined(schema: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    if schema is None:
+        return None
+    ref: Final = schema.get("$ref")
+    target: Final = _resolve_local_schema_ref(schema, ref) if isinstance(ref, str) else None
+    if target is None:
+        return schema
+    if _shadows_a_definition(target, schema):
+        return None
+    siblings: Final = {key: value for key, value in schema.items() if key != "$ref"}
+    required: Final = dict.fromkeys((*_required_names_in_order(target), *_required_names_in_order(schema)))
+    defs: Final = {
+        container: {**(_schema_at(target, container) or {}), **(_schema_at(schema, container) or {})}
+        for container in _DEFS_CONTAINERS
+        if container in target or container in schema
+    }
+    return {
+        **target,
+        **siblings,
+        **defs,
+        "properties": {**_schema_properties(target), **_schema_properties(schema)},
+        "required": list(required),
+    }
+
+
+def schema_with_root_ref_resolved(schema: Mapping[str, object]) -> Mapping[str, object] | None:
+    unresolved: Final[Mapping[str, object] | None] = schema
+    resolved: Final = reduce(
+        lambda partial, _hop: _with_root_ref_inlined(partial), range(_MAX_SCHEMA_FLATTEN_DEPTH), unresolved
+    )
+    return None if resolved is None or isinstance(resolved.get("$ref"), str) else resolved
+
+
+def _referenced_def_names(ref: object) -> frozenset[str] | None:
+    if not isinstance(ref, str):
+        return frozenset()
+    pointer: Final = schema_fragment_ref(ref)
+    if pointer == "#" or (pointer.startswith("#/") and not pointer.startswith("#/$defs")):
+        return frozenset()
+    if not pointer.startswith(_ROOT_DEFS_POINTER):
+        return None
+    name: Final = pointer[len(_ROOT_DEFS_POINTER) :].split("/")[0]
+    return frozenset((name, unquote(name).replace("~1", "/").replace("~0", "~")))
+
+
+def ref_points_into_defs(ref: str, defs: Mapping[str, object]) -> bool:
+    names: Final = _referenced_def_names(ref)
+    return ref.startswith("#") and names is not None and any(name in defs for name in names)
+
+
+def _def_names_a_ref_may_reach(ref: object) -> frozenset[str] | None:
+    names: Final = _referenced_def_names(ref)
+    if names is None or not isinstance(ref, str):
+        return names
+    return names | {ref.split("/")[-1]}
+
+
+def _node_ref_def_names(node: Mapping[object, object]) -> tuple[frozenset[str] | None, ...]:
+    if any(keyword in node for keyword in _DYNAMIC_REF_KEYWORDS):
+        return (None,)
+    return (_def_names_a_ref_may_reach(node["$ref"]),) if "$ref" in node else ()
+
+
+def _json_object(value: object) -> Mapping[object, object] | None:
+    return _JSON_OBJECT.validate_python(value) if isinstance(value, dict) else None
+
+
+def _json_children(value: object) -> tuple[object, ...]:
+    mapping: Final = _json_object(value)
+    if mapping is not None:
+        return tuple(mapping.values())
+    return _SCHEMA_LIST.validate_python(value) if isinstance(value, list) else ()
+
+
+def _json_levels(value: object) -> Iterator[tuple[object, ...]]:
+    frontier: tuple[object, ...] = (value,)  # rebind-ok: level-order cursor, one level a round
+    while frontier:
+        yield frontier
+        frontier = tuple(chain.from_iterable(_json_children(node) for node in frontier))
+
+
+def _json_objects(value: object) -> Iterator[Mapping[object, object]]:
+    values: Final = chain.from_iterable(islice(_json_levels(value), _MAX_SCHEMA_NESTING))
+    return (node for item in values if (node := _json_object(item)) is not None)
+
+
+def _schema_ref_def_names(schema: Mapping[str, object]) -> Iterator[frozenset[str] | None]:
+    return chain.from_iterable(_node_ref_def_names(node) for node in _json_objects(schema))
+
+
+def _legacy_definitions(schema: Mapping[str, object]) -> Mapping[str, object]:
+    components: Final = _schema_at(schema, "components") or _EMPTY_SCHEMA
+    return {
+        **(_schema_at(components, "schemas") or _EMPTY_SCHEMA),
+        **(_schema_at(schema, "definitions") or _EMPTY_SCHEMA),
+    }
+
+
+def _definitions_named(blocks: tuple[Mapping[str, object], ...], name: str) -> Iterator[Mapping[str, object]]:
+    return (definition for block in blocks if (definition := _schema_at(block, name)) is not None)
+
+
+def _reached_def_names(
+    body: Mapping[str, object], definition_blocks: tuple[Mapping[str, object], ...]
+) -> frozenset[str] | None:
+    reached: Final[set[str]] = set()  # mutable-ok: copying the visited set every round is quadratic on long ref chains
+    frontier: tuple[Mapping[str, object], ...] = (body,)  # rebind-ok: the schemas the last round reached
+    while frontier:
+        found = tuple(chain.from_iterable(_schema_ref_def_names(node) for node in frontier))
+        if None in found:
+            return None
+        new_names = frozenset(chain.from_iterable(names for names in found if names is not None)) - reached
+        reached.update(new_names)
+        frontier = tuple(chain.from_iterable(_definitions_named(definition_blocks, name) for name in new_names))
+    return frozenset(reached)
+
+
+def schema_without_unreferenced_defs(schema: Mapping[str, object]) -> Mapping[str, object]:
+    defs: Final = _schema_at(schema, "$defs")
+    if defs is None:
+        return schema
+    body: Final = {key: value for key, value in schema.items() if key not in _DEFINITION_BLOCKS}
+    reached: Final = _reached_def_names(body, (defs, _legacy_definitions(schema)))
+    if reached is None:
+        return schema
+    kept: Final = {name: definition for name, definition in defs.items() if name in reached}
+    rest: Final = {key: value for key, value in schema.items() if key != "$defs"}
+    return {**rest, "$defs": kept} if kept else rest
 
 
 def _mergeable_branch(
@@ -222,24 +372,91 @@ def drop_lookaround_regex_patterns(schema: Mapping[str, object]) -> Mapping[str,
     return _schema_without_rejected_regex(schema, _uses_regex_lookaround)
 
 
+def drop_schema_keywords(schema: Mapping[str, object], keywords: frozenset[str]) -> Mapping[str, object]:
+    """Drop each of ``keywords`` from every schema position, with its value.
+
+    Only schema positions are walked, as in :func:`drop_non_python_regex_patterns`, so a
+    property or ``$defs`` entry that is only named like a keyword stays, and so does a key
+    inside ``default``, ``examples`` or ``const`` data. The root ``components.schemas`` entries
+    are walked too, since a ``#/components/schemas/...`` ref reaches them. A ``not`` subschema is
+    kept as sent, since dropping a keyword under it would forbid values the caller allowed. For the
+    same reason, once anything is dropped, a ``not`` with a ``$ref``, ``$dynamicRef`` or
+    ``$recursiveRef`` key anywhere under it is dropped whole, since the ref may reach a schema that
+    lost a keyword. The input is never mutated, and the same object comes back when nothing was dropped.
+    """
+    keeping_every_not: Final = _schema_without_keywords(schema, keywords, drop_referencing_nots=False)
+    if keeping_every_not is schema:
+        return schema
+    return _schema_without_keywords(schema, keywords, drop_referencing_nots=True)
+
+
+def _schema_without_keywords(
+    schema: Mapping[str, object], keywords: frozenset[str], drop_referencing_nots: bool
+) -> Mapping[str, object]:
+    rewrite: Final = partial(_node_without_keywords, keywords=keywords, drop_referencing_nots=drop_referencing_nots)
+    rebuild: Final = partial(_schema_rebuilt, rewrite=rewrite, subschemas=_subschemas_outside_not)
+    return _with_component_schemas_rebuilt(rebuild(schema), rebuild)
+
+
+def _with_component_schemas_rebuilt(
+    schema: Mapping[str, object],
+    rebuild: Callable[[Mapping[str, object]], Mapping[str, object]],
+) -> Mapping[str, object]:
+    components: Final = _schema_at(schema, "components")
+    schemas: Final = None if components is None else _schema_at(components, "schemas")
+    if components is None or schemas is None:
+        return schema
+    rebuilt: Final = {**schemas, **{name: rebuild(sub) for name, sub in _named_schemas(schemas)}}
+    if all(rebuilt[name] is schemas[name] for name in schemas):
+        return schema
+    return {**schema, "components": {**components, "schemas": rebuilt}}
+
+
+def with_sanitized_schema_at(
+    container: Mapping[str, object],
+    path: tuple[str, ...],
+    sanitize: Callable[[Mapping[str, object]], Mapping[str, object]],
+) -> Mapping[str, object]:
+    """Run the JSON schema found under the keys in ``path`` through ``sanitize``, such as
+    ``("json_schema", "schema")`` on a chat ``response_format``. The same object comes back
+    when ``path`` leads to no schema or nothing changed."""
+    if not path:
+        return sanitize(container)
+    value: Final = _schema_at(container, path[0])
+    if value is None:
+        return container
+    sanitized: Final = with_sanitized_schema_at(value, path[1:], sanitize)
+    return container if sanitized is value else {**container, path[0]: sanitized}
+
+
 def _schema_without_rejected_regex(
     schema: Mapping[str, object], rejected: Callable[[str], bool]
 ) -> Mapping[str, object]:
+    return _schema_rebuilt(schema, partial(_node_without_rejected_regex, rejected=rejected), _subschemas)
+
+
+def _schema_rebuilt(
+    schema: Mapping[str, object],
+    rewrite: Callable[[Mapping[str, object], Mapping[int, Mapping[str, object]]], Mapping[str, object]],
+    subschemas: Callable[[Mapping[str, object]], Iterator[Mapping[str, object]]],
+) -> Mapping[str, object]:
     rebuilt: dict[int, Mapping[str, object]] = {}  # mutable-ok: per-call memo of rewritten nodes, deepest level first
-    for level in reversed(tuple(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))):
-        rebuilt.update(
-            (id(node), rewritten)
-            for node in level
-            if (rewritten := _node_without_rejected_regex(node, rebuilt, rejected)) is not node
-        )
+    for level in reversed(tuple(islice(_schema_levels_through(schema, subschemas), _MAX_SCHEMA_NESTING))):
+        rebuilt.update((id(node), rewritten) for node in level if (rewritten := rewrite(node, rebuilt)) is not node)
     return rebuilt.get(id(schema), schema)
 
 
 def _schema_levels(schema: Mapping[str, object]) -> Iterator[tuple[Mapping[str, object], ...]]:
+    return _schema_levels_through(schema, _subschemas)
+
+
+def _schema_levels_through(
+    schema: Mapping[str, object], subschemas: Callable[[Mapping[str, object]], Iterator[Mapping[str, object]]]
+) -> Iterator[tuple[Mapping[str, object], ...]]:
     frontier: tuple[Mapping[str, object], ...] = (schema,)  # rebind-ok: level-order cursor, one level a round
     while frontier:
         yield frontier
-        frontier = tuple(child for node in frontier for child in _subschemas(node))
+        frontier = tuple(child for node in frontier for child in subschemas(node))
 
 
 def schema_fragment_ref(ref: str) -> str:
@@ -305,6 +522,7 @@ def _schema_nodes(schema: Mapping[str, object]) -> Iterator[Mapping[str, object]
 
 
 _SCHEMA_LIST: Final = TypeAdapter(tuple[object, ...])
+_JSON_OBJECT: Final = TypeAdapter(dict[object, object])
 
 
 def _list_at(container: Mapping[str, object], key: str) -> tuple[object, ...]:
@@ -369,6 +587,10 @@ def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
             yield value
 
 
+def _subschemas_outside_not(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    return _subschemas({key: value for key, value in node.items() if key != "not"} if "not" in node else node)
+
+
 def _node_without_rejected_regex(
     node: Mapping[str, object],
     rebuilt: Mapping[int, Mapping[str, object]],
@@ -385,6 +607,29 @@ def _node_without_rejected_regex(
     if not dropped_pattern_properties or kept.get("additionalProperties") is not False:
         return kept
     return {**kept, "additionalProperties": _any_of(dropped_pattern_properties)}
+
+
+def _node_without_keywords(
+    node: Mapping[str, object],
+    rebuilt: Mapping[int, Mapping[str, object]],
+    keywords: frozenset[str],
+    drop_referencing_nots: bool,
+) -> Mapping[str, object]:
+    dropped: Final = (keywords | _NOT) if drop_referencing_nots and _not_holds_reference(node) else keywords
+    kept: Final = {
+        key: value if key == "not" else _keyword_value_rebuilt(key, value, rebuilt, _rejects_no_regex)
+        for key, value in node.items()
+        if key not in dropped
+    }
+    return node if len(kept) == len(node) and all(kept[key] is node[key] for key in kept) else kept
+
+
+def _not_holds_reference(node: Mapping[str, object]) -> bool:
+    return any(not _REFERENCE_KEYWORDS.isdisjoint(sub) for sub in _json_objects(node.get("not")))
+
+
+def _rejects_no_regex(pattern: str) -> bool:
+    return False
 
 
 def _dropped_pattern_properties(

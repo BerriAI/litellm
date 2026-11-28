@@ -39,13 +39,16 @@ from litellm.proxy._types import (
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
+from litellm.repositories import rust_database
 from litellm.proxy.management_endpoints import (
     mcp_management_endpoints as mgmt_endpoints,
 )
 from litellm.proxy.mcp_server.mcp_server_manager import MCPServerConfig, MCPServerManager
 from litellm.proxy.utils import ProxyLogging
+from litellm.rust_bridge._native import RustOrganizationRepository, RustTeamRepository, RustUserRepository
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
+from tests.unit.proxy.rust_auth_stores import FakeUserStore, RustAuthStores
 
 
 def generate_mock_mcp_server_db_record(
@@ -220,9 +223,7 @@ async def test_mcp_publication_list_and_detail_derive_current_status(
 
 @pytest.mark.parametrize("approval_status", ("pending_review", "rejected", "draft", "active"))
 @pytest.mark.parametrize("strict", (False, True))
-def test_mcp_publication_projection_excludes_unregistered_lifecycle_records(
-    approval_status: str, strict: bool
-) -> None:
+def test_mcp_publication_projection_excludes_unregistered_lifecycle_records(approval_status: str, strict: bool) -> None:
     from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 
     record: Final = LiteLLM_MCPServerTable(
@@ -1854,7 +1855,9 @@ class TestUserScopedMCPServerAccess:
         with (
             patch("litellm.proxy.auth.auth_checks.get_user_object", AsyncMock(return_value=user)),
             patch(f"{self._MODULE}._get_team_scoped_mcp_server_list", self._team_scoped({"team-a": ["server-1"]})),
-            patch("litellm.proxy.management_helpers.object_permission_utils._resolve_team_allowed_mcp_servers", resolver),
+            patch(
+                "litellm.proxy.management_helpers.object_permission_utils._resolve_team_allowed_mcp_servers", resolver
+            ),
             patch(f"{self._MODULE}.global_mcp_server_manager", registry),
         ):
             result: Final = await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=admin, user_id="scoped_user")
@@ -1944,9 +1947,7 @@ class TestUserScopedMCPServerAccess:
 
     @pytest.mark.asyncio
     async def test_non_admin_may_only_scope_to_themselves(self):
-        member: Final = generate_mock_user_api_key_auth(
-            user_role=LitellmUserRoles.INTERNAL_USER, user_id="scoped_user"
-        )
+        member: Final = generate_mock_user_api_key_auth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="scoped_user")
 
         with (
             patch(
@@ -1992,6 +1993,7 @@ class TestUserScopedMCPServerAccess:
                 await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=admin, user_id="ghost")
 
         assert exc_info.value.status_code == 404
+
 
 class TestFetchAllMCPServersOrdering:
     def test_display_order_is_case_insensitive_name_then_id(self) -> None:
@@ -2802,8 +2804,11 @@ class TestTemporaryMCPSessionEndpoints:
             TEMPORARY_MCP_SERVER_TTL_SECONDS,
             add_session_mcp_server,
         )
+        from litellm.types.mcp_server.mcp_server_manager import MCPServerEventsConfig
 
+        settings: Final = MCPServerEventsConfig(enabled=True, allowed_events=("build.*",))
         payload = NewMCPServerRequest(
+            events=settings,
             server_id="temp-server",
             alias="Temporary",
             url="https://temp.example.com",
@@ -2868,6 +2873,7 @@ class TestTemporaryMCPSessionEndpoints:
 
         args, _ = mock_manager.build_mcp_server_from_table.call_args
         temp_record = args[0]
+        assert temp_record.events == response.events == settings
         assert temp_record.credentials == {
             "auth_value": "token-abc",
             "client_id": "client-id",
@@ -3162,9 +3168,16 @@ class TestTemporaryMCPSessionEndpoints:
         prisma.db.litellm_mcpservertable.find_first = AsyncMock(return_value=None)
         prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
         request: Final = Request(
-            {"type": "http", "method": "GET", "scheme": "http", "server": ("localhost", 4000),
-             "path": "/v1/mcp/server/oauth/saved-server/authorize", "headers": [],
-             "query_string": b"", "client": ("127.0.0.1", 1234)}
+            {
+                "type": "http",
+                "method": "GET",
+                "scheme": "http",
+                "server": ("localhost", 4000),
+                "path": "/v1/mcp/server/oauth/saved-server/authorize",
+                "headers": [],
+                "query_string": b"",
+                "client": ("127.0.0.1", 1234),
+            }
         )
         with (
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
@@ -4877,8 +4890,7 @@ async def test_health_checks_probe_shared_servers_once_across_auth_contexts(
         for server_id in ("shared", "first", "second", "denied")
     }
     routes: Final = {
-        server_id: respx_mock.get(server.url).respond(401)
-        for server_id, server in manager.registry.items()
+        server_id: respx_mock.get(server.url).respond(401) for server_id, server in manager.registry.items()
     }
     contexts: Final = [
         UserAPIKeyAuth(
@@ -4891,15 +4903,9 @@ async def test_health_checks_probe_shared_servers_once_across_auth_contexts(
         for index, grants in enumerate((("shared", "first"), ("shared", "second")))
     ]
     with (
-        patch.object(
-            mgmt_endpoints, "global_mcp_server_manager", manager
-        ),
-        patch.object(
-            mcp_server_manager, "global_mcp_server_manager", manager
-        ),
-        patch.object(
-            mgmt_endpoints, "build_effective_auth_contexts", AsyncMock(return_value=contexts)
-        ),
+        patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+        patch.object(mcp_server_manager, "global_mcp_server_manager", manager),
+        patch.object(mgmt_endpoints, "build_effective_auth_contexts", AsyncMock(return_value=contexts)),
         patch("litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": "restricted"}),
     ):
         result: Final = await mgmt_endpoints.health_check_servers(
@@ -4989,14 +4995,14 @@ async def test_health_reachability_requires_explicit_api_opt_in(
     assert response.status_code == 200, response.text
     rows: Final = (
         [HealthResponse.model_validate_json(response.content)]
-        if detail else TypeAdapter(list[HealthResponse]).validate_json(response.content)
+        if detail
+        else TypeAdapter(list[HealthResponse]).validate_json(response.content)
     )
     expected_status: Final = "reachable" if flag == "true" else "unknown"
     assert [row.model_dump() for row in rows] == [{"server_id": server.server_id, "status": expected_status}]
     assert route.call_count == 1
     legacy_parser: Final = (
-        LegacyHealthResponse.model_validate_json
-        if detail else TypeAdapter(list[LegacyHealthResponse]).validate_json
+        LegacyHealthResponse.model_validate_json if detail else TypeAdapter(list[LegacyHealthResponse]).validate_json
     )
     if flag == "true":
         with pytest.raises(ValidationError, match="literal_error"):
@@ -5057,6 +5063,51 @@ class TestMCPRegistryEndpoint:
         custom_entry = data["servers"][1]["server"]
         assert custom_entry["name"] == "zapier"
         assert custom_entry["remotes"][0]["url"].endswith("/zapier/mcp")
+
+    @pytest.mark.parametrize(
+        ("server_name", "mcp_info", "expected_title", "expected_description"),
+        [
+            ("docs_mcp", {"description": "Docs MCP server"}, "docs_mcp", "Docs MCP server"),
+            ("docs_mcp", {"description": ""}, "docs_mcp", "docs"),
+            ("docs_mcp", None, "docs_mcp", "docs"),
+            (None, {"description": "Docs MCP server"}, "docs", "Docs MCP server"),
+        ],
+    )
+    def test_registry_entry_uses_saved_description_and_server_name(
+        self,
+        server_name: str | None,
+        mcp_info: dict[str, str] | None,
+        expected_title: str,
+        expected_description: str,
+    ) -> None:
+        from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+        client: Final = create_mcp_router_test_client()
+        server: Final = MCPServer(
+            server_id="server-docs",
+            name="docs",
+            alias="docs",
+            server_name=server_name,
+            url="https://mcp.example.com/mcp",
+            transport=MCPTransport.http,
+            available_on_public_internet=True,
+            mcp_info=mcp_info,
+        )
+        manager: Final = MCPServerManager()
+        manager.registry = {server.server_id: server}
+
+        with (
+            patch_proxy_general_settings({"enable_mcp_registry": True}),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+        ):
+            response: Final = client.get("/v1/mcp/registry.json")
+
+        assert response.status_code == 200, response.text
+        entry: Final = response.json()["servers"][1]["server"]
+        assert entry["description"] == expected_description
+        assert entry["title"] == expected_title
+        assert entry["name"] == "docs"
+        assert entry["remotes"][0]["url"].endswith("/docs/mcp")
 
     @pytest.mark.asyncio
     async def test_health_check_specific_servers(self):
@@ -8674,9 +8725,15 @@ async def test_saved_server_authorize_denial_does_not_dispatch_upstream():
     from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 
     manager: Final = MCPServerManager()
-    row: Final = LiteLLM_MCPServerTable(server_id="denied-peer", alias="denied_peer", transport=MCPTransport.http,
-        auth_type=MCPAuth.oauth2, url="https://upstream.example/mcp",
-        authorization_url="https://upstream.example/authorize", token_url="https://upstream.example/token")
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="denied-peer",
+        alias="denied_peer",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        url="https://upstream.example/mcp",
+        authorization_url="https://upstream.example/authorize",
+        token_url="https://upstream.example/token",
+    )
     prisma: Final = MagicMock()
     prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
@@ -8693,8 +8750,13 @@ async def test_saved_server_authorize_denial_does_not_dispatch_upstream():
         patch.object(mgmt_endpoints, "resolve_ephemeral_dcr_client", new_callable=AsyncMock) as register,
     ):
         with pytest.raises(HTTPException) as exc:
-            await mgmt_endpoints.mcp_authorize(request=None, server_id=row.server_id, user_api_key_dict=user,
-                client_id="client", redirect_uri="http://localhost/callback")
+            await mgmt_endpoints.mcp_authorize(
+                request=None,
+                server_id=row.server_id,
+                user_api_key_dict=user,
+                client_id="client",
+                redirect_uri="http://localhost/callback",
+            )
     assert exc.value.status_code == 403
     authorize.assert_not_awaited()
     register.assert_not_awaited()
@@ -8957,14 +9019,19 @@ class TestPinMCPServerTools:
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
                 AsyncMock(return_value=stored),
             ),
-            patch("litellm.proxy.management_endpoints.mcp_management_endpoints.set_mcp_server_pinned_tools", store_mock),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.set_mcp_server_pinned_tools", store_mock
+            ),
             patch("litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager", manager),
             patch("litellm.proxy.mcp_server.rest_endpoints.global_mcp_server_manager", manager),
             patch.dict(
                 sys.modules,
                 {
                     "litellm.proxy.proxy_server": types.SimpleNamespace(
-                        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()), general_settings={}, llm_router=None
+                        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+                        general_settings={},
+                        current_general_settings=dict,
+                        llm_router=None,
                     )
                 },
             ),
@@ -9185,6 +9252,21 @@ class _ResolutionEffects:
         self.env_invalidate.assert_not_called()
 
 
+_RESOLUTION_STORES: Final[list[RustAuthStores]] = []
+
+
+@pytest.fixture
+def mcp_resolution_auth_stores(monkeypatch: pytest.MonkeyPatch) -> Iterator[RustAuthStores]:
+    """Team and organization rows for the resolution fixtures, which _mock_mcp_resolution_prisma_client fills."""
+    stores: Final = RustAuthStores()
+    fakes: Final = {RustTeamRepository: stores.team, RustOrganizationRepository: stores.organization}
+    other_stores: Final = rust_database.repository
+    monkeypatch.setattr(rust_database, "repository", lambda kind: fakes.get(kind) or other_stores(kind))
+    _RESOLUTION_STORES.append(stores)
+    yield stores
+    _RESOLUTION_STORES.remove(stores)
+
+
 def _mock_mcp_resolution_prisma_client(
     server: LiteLLM_MCPServerTable,
     key_permission: LiteLLM_ObjectPermissionTable,
@@ -9202,7 +9284,10 @@ def _mock_mcp_resolution_prisma_client(
     )
 
     def matches_server_filter(name: str, condition: object) -> bool:
-        if name == "OR" and condition == [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]:
+        if name == "OR" and condition == [
+            {"approval_status": None},
+            {"approval_status": {"in": ["active", "approved"]}},
+        ]:
             return server.approval_status in (None, "active", "approved")
         if name == "submitted_by":
             return server.submitted_by == condition
@@ -9228,9 +9313,15 @@ def _mock_mcp_resolution_prisma_client(
 
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=find_many_side_effect)
     prisma.db.litellm_mcpservertable.find_unique = unique_lookup(server, "server_id")
-    prisma.db.litellm_teamtable.find_unique = unique_lookup(team, "team_id")
-    prisma.db.litellm_usertable.find_unique = unique_lookup(user, "user_id")
-    prisma.db.litellm_organizationtable.find_unique = unique_lookup(organization, "organization_id")
+    [stores] = _RESOLUTION_STORES
+    stores.team.rows.clear()
+    stores.team.rows[team.team_id] = team
+    stores.organization.rows.clear()
+    if organization is not None:
+        stores.organization.rows[organization.organization_id] = organization
+    users: Final = rust_database.repository(RustUserRepository)
+    if isinstance(users, FakeUserStore) and user is not None:
+        users.rows[user.user_id] = user.model_dump(mode="json")
     prisma.db.litellm_accessgrouptable.find_unique = unique_lookup(access_group, "access_group_id")
     prisma.db.litellm_objectpermissiontable.find_unique = unique_lookup(object_permission, "object_permission_id")
     return prisma
@@ -9243,6 +9334,7 @@ def _mock_mcp_resolution_cache() -> MagicMock:
     return cache
 
 
+@pytest.mark.usefixtures("rust_auth_stores", "mcp_resolution_auth_stores")
 class TestMCPServerResolutionRegressions:
     @pytest.mark.asyncio
     async def test_team_granted_database_server_is_visible_to_virtual_key(self) -> None:
@@ -9745,6 +9837,7 @@ class TestMCPServerResolutionRegressions:
         health_check.assert_awaited_once()
 
 
+@pytest.mark.usefixtures("rust_auth_stores", "mcp_resolution_auth_stores")
 class TestMCPServerResolutionCharacterization:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("caller", ["denied", "admin"])
@@ -9778,7 +9871,9 @@ class TestMCPServerResolutionCharacterization:
         existing_find_many: Final = prisma.db.litellm_mcpservertable.find_many
 
         async def current_rows(**kwargs: object) -> list[LiteLLM_MCPServerTable]:
-            if kwargs.get("where") == {"OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]}:
+            if kwargs.get("where") == {
+                "OR": [{"approval_status": None}, {"approval_status": {"in": ["active", "approved"]}}]
+            }:
                 return [hidden] if eligible else []
             return await existing_find_many(**kwargs)
 
@@ -9822,14 +9917,14 @@ class TestMCPServerResolutionCharacterization:
         second_id: Final = "lit3974_second_credential"
         prisma, manager, caller = await self._resolution_case("db_runtime", "allowed", first_id)
         ids: Final = (first_id, second_id)
-        rows: Final = tuple(
-            generate_mock_mcp_server_db_record(server_id=sid, alias=f"alias-{sid}") for sid in ids
-        )
+        rows: Final = tuple(generate_mock_mcp_server_db_record(server_id=sid, alias=f"alias-{sid}") for sid in ids)
         prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=list(rows))
         auth: Final = caller.model_copy(
-            update={"object_permission": LiteLLM_ObjectPermissionTable(
-                object_permission_id="lit3974_multiple_credentials", mcp_servers=list(ids)
-            )}
+            update={
+                "object_permission": LiteLLM_ObjectPermissionTable(
+                    object_permission_id="lit3974_multiple_credentials", mcp_servers=list(ids)
+                )
+            }
         )
         manager.config_mcp_servers = {
             **manager.config_mcp_servers,
@@ -10065,6 +10160,7 @@ class TestMCPServerResolutionCharacterization:
 
     async def _detail_grant_case(
         self,
+        stores: RustAuthStores,
         source: str,
         grant_route: str,
         server_id: str,
@@ -10132,6 +10228,10 @@ class TestMCPServerResolutionCharacterization:
             access_group=access_group,
             object_permission=route_permission if user is not None or organization is not None else None,
         )
+        if access_group is not None:
+            stores.access_group.seed(access_group.access_group_id, access_group)
+        if user is not None or organization is not None:
+            stores.object_permission.seed(route_permission.object_permission_id, route_permission)
         if source != "db_runtime":
             prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
             prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
@@ -10170,10 +10270,14 @@ class TestMCPServerResolutionCharacterization:
         ],
     )
     async def test_grants_do_not_cross_caller_identities(
-        self, grant_route: str, identity_field: str, foreign_identity: str | list[str]
+        self,
+        rust_auth_stores: RustAuthStores,
+        grant_route: str,
+        identity_field: str,
+        foreign_identity: str | list[str],
     ) -> None:
         server_id: Final = "lit3974_identity_isolation"
-        prisma, manager, auth = await self._detail_grant_case("config", grant_route, server_id)
+        prisma, manager, auth = await self._detail_grant_case(rust_auth_stores, "config", grant_route, server_id)
         foreign_auth: Final = auth.model_copy(update={identity_field: foreign_identity})
         with (
             patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
@@ -11250,10 +11354,12 @@ class TestMCPServerResolutionCharacterization:
             pytest.param("config", "access-group", id="config-access-group"),
         ],
     )
-    async def test_fetch_mcp_server_widening_grant_routes(self, source: str, grant_route: str) -> None:
+    async def test_fetch_mcp_server_widening_grant_routes(
+        self, rust_auth_stores: RustAuthStores, source: str, grant_route: str
+    ) -> None:
         effects: Final = _ResolutionEffects()
         server_id: Final = f"lit3974_{source}_{grant_route.replace(' ', '_')}"
-        prisma, manager, auth = await self._detail_grant_case(source, grant_route, server_id)
+        prisma, manager, auth = await self._detail_grant_case(rust_auth_stores, source, grant_route, server_id)
         add_server: Final = AsyncMock()
         health_check: Final = AsyncMock(
             return_value=generate_mock_mcp_server_db_record(server_id=server_id, alias="lit3974_grant")
@@ -11473,29 +11579,46 @@ class TestMCPServerResolutionCharacterization:
 @pytest.mark.parametrize("explicit_transport", [False, True])
 def test_modern_sse_create_is_rejected_before_persistence(explicit_transport: bool) -> None:
     with pytest.raises(ValidationError, match="Modern MCP requires HTTP or stdio"):
-        NewMCPServerRequest.model_validate({
-            "url": "https://upstream.example/sse",
-            "mcp_info": {"protocol_version": "2026-07-28"},
-            **({"transport": "sse"} if explicit_transport else {}),
-        })
+        NewMCPServerRequest.model_validate(
+            {
+                "url": "https://upstream.example/sse",
+                "mcp_info": {"protocol_version": "2026-07-28"},
+                **({"transport": "sse"} if explicit_transport else {}),
+            }
+        )
 
 
 @pytest.mark.parametrize("metadata", [False, True])
 def test_modern_sse_runtime_configuration_is_rejected(metadata: bool) -> None:
     with pytest.raises(ValidationError, match="Modern MCP requires HTTP or stdio"):
-        MCPServer.model_validate({
-            "server_id": "modern", "name": "modern", "transport": "sse",
-            **({"mcp_info": {"protocol_version": "2026-07-28"}} if metadata else {"protocol_version": "2026-07-28"}),
-        })
+        MCPServer.model_validate(
+            {
+                "server_id": "modern",
+                "name": "modern",
+                "transport": "sse",
+                **(
+                    {"mcp_info": {"protocol_version": "2026-07-28"}} if metadata else {"protocol_version": "2026-07-28"}
+                ),
+            }
+        )
 
 
-@pytest.mark.parametrize("transport,version", [("http", "2026-07-28"), ("stdio", "2026-07-28"), ("sse", "2025-11-25"), ("sse", "auto")])
-def test_supported_protocol_transport_configurations_remain_valid(transport: str, version: str, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "transport,version", [("http", "2026-07-28"), ("stdio", "2026-07-28"), ("sse", "2025-11-25"), ("sse", "auto")]
+)
+def test_supported_protocol_transport_configurations_remain_valid(
+    transport: str, version: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
-    payload: Final = NewMCPServerRequest.model_validate({
-        "transport": transport, "url": "https://upstream.example/mcp", "command": "python", "args": ["peer.py"],
-        "mcp_info": {"protocol_version": version},
-    })
+    payload: Final = NewMCPServerRequest.model_validate(
+        {
+            "transport": transport,
+            "url": "https://upstream.example/mcp",
+            "command": "python",
+            "args": ["peer.py"],
+            "mcp_info": {"protocol_version": version},
+        }
+    )
     assert payload.transport == transport
     assert payload.mcp_info == {"protocol_version": version}
 
@@ -11504,18 +11627,27 @@ def test_supported_protocol_transport_configurations_remain_valid(transport: str
 @pytest.mark.parametrize("protocol_only", [False, True])
 async def test_modern_sse_partial_update_rejected_without_writes(protocol_only: bool) -> None:
     old_record: Final = LiteLLM_MCPServerTable(
-        server_id="srv-1", transport="sse" if protocol_only else "http",
+        server_id="srv-1",
+        transport="sse" if protocol_only else "http",
         mcp_info={"protocol_version": "auto" if protocol_only else "2026-07-28"},
     )
-    payload: Final = UpdateMCPServerRequest.model_validate({
-        "server_id": "srv-1",
-        **({"mcp_info": {"protocol_version": "2026-07-28"}} if protocol_only else {"transport": "sse", "url": "https://upstream.example/sse"}),
-    })
+    payload: Final = UpdateMCPServerRequest.model_validate(
+        {
+            "server_id": "srv-1",
+            **(
+                {"mcp_info": {"protocol_version": "2026-07-28"}}
+                if protocol_only
+                else {"transport": "sse", "url": "https://upstream.example/sse"}
+            ),
+        }
+    )
     update_mock: Final = AsyncMock(side_effect=HTTPException(status_code=418, detail="Unexpected persistence"))
     p1, p2, p3, p4, p5 = _edit_endpoint_patches(old_record, update_mock)
     with p1, p2, p3, p4, p5:
         with pytest.raises(HTTPException) as error:
-            await mgmt_endpoints.edit_mcp_server(payload=payload, user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN))
+            await mgmt_endpoints.edit_mcp_server(
+                payload=payload, user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+            )
     assert error.value.status_code == 400
     assert "Modern MCP requires HTTP or stdio" in str(error.value.detail)
     update_mock.assert_not_awaited()
@@ -11538,7 +11670,9 @@ async def test_protocol_partial_update_fails_closed_when_stored_configuration_is
 def test_modern_sse_complete_update_is_rejected() -> None:
     with pytest.raises(ValidationError, match="Modern MCP requires HTTP or stdio"):
         UpdateMCPServerRequest(
-            server_id="server", transport=MCPTransport.sse, url="https://upstream.example/sse",
+            server_id="server",
+            transport=MCPTransport.sse,
+            url="https://upstream.example/sse",
             mcp_info={"protocol_version": "2026-07-28"},
         )
 
@@ -11562,14 +11696,24 @@ async def test_changed_upstream_session_gets_an_isolated_id_without_saved_client
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     saved = MCPServer(
-        server_id="saved-upstream", name="saved", transport="http", auth_type="oauth2",
-        url="https://old.example/mcp", issuer="https://old.example",
-        client_id="old-client", client_secret="old-secret",
+        server_id="saved-upstream",
+        name="saved",
+        transport="http",
+        auth_type="oauth2",
+        url="https://old.example/mcp",
+        issuer="https://old.example",
+        client_id="old-client",
+        client_secret="old-secret",
     )
     monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
     payload = NewMCPServerRequest(
-        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
-        oauth2_flow="authorization_code", url="https://new.example/mcp", issuer="https://new.example",
+        server_id=saved.server_id,
+        server_name="saved",
+        transport="http",
+        auth_type="oauth2",
+        oauth2_flow="authorization_code",
+        url="https://new.example/mcp",
+        issuer="https://new.example",
     )
     staged = management._inherit_credentials_from_existing_server(payload)
     assert not (staged.credentials or {}).get("client_id")
@@ -11583,16 +11727,29 @@ def test_staged_url_edit_clears_resubmitted_issuer_and_endpoints(monkeypatch):
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     saved = MCPServer(
-        server_id="saved-oauth", name="saved", transport="http", auth_type="oauth2",
-        url="https://old.example/mcp", issuer="https://old.example",
-        authorization_url="https://old.example/authorize", token_url="https://old.example/token",
-        registration_url="https://old.example/register", client_id="old-client",
+        server_id="saved-oauth",
+        name="saved",
+        transport="http",
+        auth_type="oauth2",
+        url="https://old.example/mcp",
+        issuer="https://old.example",
+        authorization_url="https://old.example/authorize",
+        token_url="https://old.example/token",
+        registration_url="https://old.example/register",
+        client_id="old-client",
     )
     monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
     payload = NewMCPServerRequest(
-        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
-        oauth2_flow="authorization_code", url="https://new.example/mcp", issuer=saved.issuer,
-        authorization_url=saved.authorization_url, token_url=saved.token_url, registration_url=saved.registration_url,
+        server_id=saved.server_id,
+        server_name="saved",
+        transport="http",
+        auth_type="oauth2",
+        oauth2_flow="authorization_code",
+        url="https://new.example/mcp",
+        issuer=saved.issuer,
+        authorization_url=saved.authorization_url,
+        token_url=saved.token_url,
+        registration_url=saved.registration_url,
     )
     staged = management._inherit_credentials_from_existing_server(payload)
     assert staged.issuer is None
@@ -11609,14 +11766,23 @@ async def test_distinct_issuer_identifier_edit_isolates_session_client(monkeypat
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     saved = MCPServer(
-        server_id="saved-oauth", name="saved", transport="http", auth_type="oauth2",
-        url="https://resource.example/mcp", issuer="https://idp.example",
-        client_id="saved-client", client_secret="saved-secret",
+        server_id="saved-oauth",
+        name="saved",
+        transport="http",
+        auth_type="oauth2",
+        url="https://resource.example/mcp",
+        issuer="https://idp.example",
+        client_id="saved-client",
+        client_secret="saved-secret",
     )
     monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
     payload = NewMCPServerRequest(
-        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
-        url=saved.url, issuer="https://IDP.example:443/",
+        server_id=saved.server_id,
+        server_name="saved",
+        transport="http",
+        auth_type="oauth2",
+        url=saved.url,
+        issuer="https://IDP.example:443/",
     )
     staged = management._inherit_credentials_from_existing_server(payload)
     assert not (staged.credentials or {}).get("client_id")
@@ -11630,15 +11796,25 @@ async def test_url_edit_stages_existing_client_with_previous_issuer_binding(monk
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     saved = MCPServer(
-        server_id="saved-oauth", name="saved", transport="http", auth_type="oauth2",
-        url="https://resource.example/mcp", issuer="https://idp.example",
-        client_id="static-client", client_secret="static-secret", authentication_token="old-token",
+        server_id="saved-oauth",
+        name="saved",
+        transport="http",
+        auth_type="oauth2",
+        url="https://resource.example/mcp",
+        issuer="https://idp.example",
+        client_id="static-client",
+        client_secret="static-secret",
+        authentication_token="old-token",
         token_endpoint_auth_method="client_secret_basic",
     )
     monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
     payload = NewMCPServerRequest(
-        server_id=saved.server_id, server_name="saved", transport="http", auth_type="oauth2",
-        url=saved.url + "?v=2", issuer=saved.issuer,
+        server_id=saved.server_id,
+        server_name="saved",
+        transport="http",
+        auth_type="oauth2",
+        url=saved.url + "?v=2",
+        issuer=saved.issuer,
     )
     staged = management._inherit_credentials_from_existing_server(payload)
     assert staged.credentials["client_id"] == "static-client"
@@ -11665,7 +11841,9 @@ async def test_session_identity_checks_saved_row_when_registry_is_empty(monkeypa
     monkeypatch.setattr(management, "_get_prisma_client_or_none", lambda: MagicMock())
     monkeypatch.setattr(management, "get_mcp_server", AsyncMock(return_value=saved))
     payload = NewMCPServerRequest(
-        server_id=saved.server_id, auth_type="oauth2", transport="http",
+        server_id=saved.server_id,
+        auth_type="oauth2",
+        transport="http",
         url="https://new.example/mcp" if upstream_changed else saved.url,
     )
     resolved = await management._resolve_session_server_id(payload)
@@ -11688,14 +11866,22 @@ def test_edit_does_not_rebind_resubmitted_saved_client_to_new_issuer(monkeypatch
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     saved = MCPServer(
-        server_id="saved-static", name="saved", transport="http", auth_type="oauth2",
-        url="https://old.example/mcp", issuer="https://old.example",
-        client_id="saved-client", client_secret="saved-secret",
+        server_id="saved-static",
+        name="saved",
+        transport="http",
+        auth_type="oauth2",
+        url="https://old.example/mcp",
+        issuer="https://old.example",
+        client_id="saved-client",
+        client_secret="saved-secret",
     )
     monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
     payload = NewMCPServerRequest(
-        server_id=saved.server_id, transport="http", auth_type="oauth2",
-        url="https://new.example/mcp", issuer="https://new.example",
+        server_id=saved.server_id,
+        transport="http",
+        auth_type="oauth2",
+        url="https://new.example/mcp",
+        issuer="https://new.example",
         credentials={"client_id": saved.client_id, "client_secret": saved.client_secret},
     )
     staged = management._inherit_credentials_from_existing_server(payload)
@@ -11704,26 +11890,38 @@ def test_edit_does_not_rebind_resubmitted_saved_client_to_new_issuer(monkeypatch
     assert saved.client_id == "saved-client"
 
 
-@pytest.mark.parametrize("replacement", [
-    {"client_secret": "replacement-secret"},
-    {"client_secret": "old-secret", "token_endpoint_auth_method": "client_secret_basic"},
-    {"client_secret": None},
-    {"dcr_issuer": "https://new.example", "dcr_server_url": "https://new.example/mcp"},
-])
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        {"client_secret": "replacement-secret"},
+        {"client_secret": "old-secret", "token_endpoint_auth_method": "client_secret_basic"},
+        {"client_secret": None},
+        {"dcr_issuer": "https://new.example", "dcr_server_url": "https://new.example/mcp"},
+    ],
+)
 def test_staged_issuer_edit_preserves_replacement_with_same_client_id(monkeypatch, replacement):
     from litellm.proxy.management_endpoints import mcp_management_endpoints as management
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     saved = MCPServer(
-        server_id="saved-static", name="saved", transport="http", auth_type="oauth2",
-        url="https://old.example/mcp", issuer="https://old.example",
-        client_id="shared-client", client_secret="old-secret",
+        server_id="saved-static",
+        name="saved",
+        transport="http",
+        auth_type="oauth2",
+        url="https://old.example/mcp",
+        issuer="https://old.example",
+        client_id="shared-client",
+        client_secret="old-secret",
     )
     monkeypatch.setitem(management.global_mcp_server_manager.registry, saved.server_id, saved)
     submitted = {"client_id": "shared-client", **replacement}
     payload = NewMCPServerRequest(
-        server_id=saved.server_id, transport="http", auth_type="oauth2",
-        url="https://new.example/mcp", issuer="https://new.example", credentials=submitted,
+        server_id=saved.server_id,
+        transport="http",
+        auth_type="oauth2",
+        url="https://new.example/mcp",
+        issuer="https://new.example",
+        credentials=submitted,
     )
     staged = management._inherit_credentials_from_existing_server(payload)
     assert staged.credentials == submitted

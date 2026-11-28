@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Team } from "../key_team_helpers/key_list";
 import { validatorRules } from "../common_components/formRules";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
-import { MountedFormField } from "../common_components/MountedFormField";
+import { DeploymentMountedField as MountedFormField } from "./deployment-form/DeploymentMountedField";
 import { UtcDateTimeInput } from "@/components/shared/form/UtcDateTimeInput";
 import CacheControlInjectionPoints, {
   CACHE_CONTROL_LABEL,
@@ -78,6 +78,21 @@ const usageCostRules = {
   validate: validatorRules({ validator: validateNumber }, ptuNoUsageCostRule(PTU_COUNT_FIELD)),
 };
 
+function createJsonRules() {
+  let last: { language: string; value: string; result: Promise<void> } | undefined;
+  return {
+    validate: validatorRules({
+      validator: (_rule, value: string) => {
+        const language = i18n.language;
+        if (last && last.value === value && last.language === language) return last.result;
+        const result = formItemValidateJSON(null, value);
+        last = { language, value, result };
+        return result;
+      },
+    }),
+  };
+}
+
 const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   showAdvancedSettings,
   setShowAdvancedSettings,
@@ -87,6 +102,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   accessToken,
 }) => {
   const { t } = useTranslation();
+  const [jsonRules] = React.useState(() => ({ litellm: createJsonRules(), modelInfo: createJsonRules() }));
   const [customPricing, setCustomPricing] = React.useState(false);
   const [pricingModel, setPricingModel] = React.useState<"per_token" | "per_second">("per_token");
   const [showCacheControl, setShowCacheControl] = React.useState(false);
@@ -523,7 +539,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 t("addModel.advancedSettings.litellmParamsHint"),
               )}
               className="mb-4 mt-4"
-              rules={{ validate: validatorRules({ validator: formItemValidateJSON }) }}
+              rules={jsonRules.litellm}
             >
               {(control) => (
                 <Textarea
@@ -560,7 +576,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                 t("addModel.advancedSettings.modelInfoHint"),
               )}
               className="mb-0"
-              rules={{ validate: validatorRules({ validator: formItemValidateJSON }) }}
+              rules={jsonRules.modelInfo}
             >
               {(control) => (
                 <Textarea

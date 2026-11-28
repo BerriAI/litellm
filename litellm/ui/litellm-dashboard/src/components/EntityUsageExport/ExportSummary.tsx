@@ -8,10 +8,11 @@ interface ExportSummaryProps {
 }
 
 const ExportSummary: React.FC<ExportSummaryProps> = ({ dateRange, selectedFilters }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.language.startsWith("en") ? undefined : i18n.language;
   return (
     <div className="text-sm text-muted-foreground">
-      {dateRange.from?.toLocaleDateString()} - {dateRange.to?.toLocaleDateString()}
+      {dateRange.from?.toLocaleDateString(locale)} - {dateRange.to?.toLocaleDateString(locale)}
       {selectedFilters.length > 0 && ` · ${t("usage.export.summary.filterCount", { count: selectedFilters.length })}`}
     </div>
   );

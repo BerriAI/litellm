@@ -5,6 +5,7 @@ You.com API Reference: https://you.com/docs/api-reference/search/v1-search
 OpenAPI spec:          https://you.com/specs/openapi_search_v1.yaml
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Final, TypedDict
 
 import httpx
@@ -57,11 +58,11 @@ class YouComSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Set headers for the You.com Search API.
 
@@ -89,9 +90,9 @@ class YouComSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        optional_params: Mapping[str, object],
+        data: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
+        **kwargs: object,
     ) -> str:
         """
         Pick the endpoint based on whether an API key is configured.
@@ -122,8 +123,8 @@ class YouComSearchConfig(BaseSearchConfig):
         self,
         query: str | list[str],
         optional_params: dict,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform Search request to You.com API format.
 
@@ -162,7 +163,7 @@ class YouComSearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform You.com API response to LiteLLM unified SearchResponse format.
@@ -176,8 +177,8 @@ class YouComSearchConfig(BaseSearchConfig):
         response_json: Final = decoded_json_object(_DECODED_JSON.validate_python(raw_response.json()))
         raw_results: Final = decoded_json_object(response_json.get("results") or {})
 
-        web_results: Final = raw_results.get("web") or []
-        news_results: Final = raw_results.get("news") or []
+        web_results: Final[object] = raw_results.get("web") or []
+        news_results: Final[object] = raw_results.get("news") or []
 
         results: Final[list[SearchResult]] = []
         for entry in list(iter_items(web_results)) + list(iter_items(news_results)):

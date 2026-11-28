@@ -469,6 +469,35 @@ describe("usage access", () => {
     expect(input.onMessage).toHaveBeenCalledExactlyOnceWith("Done");
   });
 
+  it.each([null, "administered-team"])(
+    "queries permitted teams without a user override for team selection %s",
+    async (teamIds) => {
+      const input = {
+        ...options(),
+        access: { mode: "usage", scope: { type: "user_and_teams", userId: "signed-in-user" } } as const,
+      };
+      const model = transport([
+        completion([call("get_team_usage_data", { ...dates, team_ids: teamIds })]),
+        completion(),
+      ]);
+      await runLiteAdmin(input, model.client);
+      expect(managementFetch).toHaveBeenCalledTimes(1);
+      const url = new URL(String(managementFetch.mock.calls[0][0]));
+      expect(url.pathname).toBe("/root/team/daily/activity/aggregated");
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        ...dates,
+        ...(teamIds ? { team_ids: teamIds } : {}),
+        api_key_limit: "20",
+      });
+      expect(model.requests[0].messages[0].content).toContain("permitted team usage");
+      expect(model.requests[0].tools?.map((tool) => tool.function.name)).toEqual([
+        "render_usage_chart",
+        "get_team_usage_data",
+        "get_usage_data",
+      ]);
+    },
+  );
+
   it.each([
     ["get_usage_data", { ...dates, user_id: "other-user" }],
     ["get_team_usage_data", { ...dates, team_ids: null }],
@@ -543,8 +572,8 @@ describe("usage charts", () => {
       const expectedChart = {
         kind: "bar",
         title: "Spend by model",
-        period: `${dates.start_date} to ${dates.end_date} (UTC)`,
-        scope: scope === "global" ? "Gateway usage" : "Your usage",
+        period: { start: dates.start_date, end: dates.end_date },
+        scope: scope === "global" ? "gateway" : "yours",
         unit: "usd",
         total: 15,
         data: [
@@ -561,7 +590,11 @@ describe("usage charts", () => {
       expect(query.get("user_id")).toBe(scope === "user" ? "signed-in-user" : null);
       expect(JSON.parse(String(model.requests[2].messages.at(-1)?.content))).toMatchObject({
         success: true,
-        chart: { total: 15 },
+        chart: {
+          total: 15,
+          period: `${dates.start_date} to ${dates.end_date} (UTC)`,
+          scope: scope === "global" ? "Gateway usage" : "Your usage",
+        },
       });
     },
   );

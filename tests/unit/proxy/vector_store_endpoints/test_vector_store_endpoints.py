@@ -36,6 +36,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
 from litellm.proxy.vector_store_files_endpoints.endpoints import (
     _update_request_data_with_model_routing_hint,
 )
+from litellm.types.router import DeploymentTypedDict
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 from litellm.types.vector_stores import IndexCreateRequest, IndexListResponse
 from litellm.vector_stores.main import _direct_vector_store_embedding_executor
@@ -453,6 +454,83 @@ async def test_vector_store_file_list_uses_single_team_model_for_router_routing(
     assert "api_base" not in result
 
 
+def _family_wildcard_of_a_model_in(known_models: set[str]) -> str:
+    family, _, _ = min(model for model in known_models if "-" in model and "/" not in model).partition("-")
+    return f"{family}-*"
+
+
+def _team_openai_deployment(public_model_name: str, model: str, api_key: str) -> DeploymentTypedDict:
+    return {
+        "model_name": public_model_name,
+        "litellm_params": {"model": model, "api_key": api_key},
+        "model_info": {"id": f"team-a-{api_key}", "team_id": "team-a", "team_public_model_name": public_model_name},
+    }
+
+
+async def _list_fallback_data_for_a_key_wildcard_over(
+    key_provider_models: set[str], other_team_deployments: tuple[DeploymentTypedDict, ...] = ()
+) -> dict[str, object]:
+    llm_router: Final = litellm.Router(
+        model_list=[*other_team_deployments, _team_openai_deployment("openai/*", "openai/*", "sk-team-openai")]
+    )
+    return await _update_request_data_with_model_routing_hint(
+        data={"vector_store_id": "vs_123"},
+        request=Request(scope={"type": "http", "query_string": b"", "headers": []}),
+        llm_router=llm_router,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key",
+            team_id="team-a",
+            team_models=[*(deployment["model_name"] for deployment in other_team_deployments), "openai/*"],
+            models=[_family_wildcard_of_a_model_in(key_provider_models)],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_gives_a_key_wildcard_the_team_openai_wildcard_serving_its_models():
+    result: Final = await _list_fallback_data_for_a_key_wildcard_over(litellm.open_ai_chat_completion_models)
+
+    assert result["api_key"] == "sk-team-openai"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_skips_a_team_openai_model_the_key_wildcard_cannot_use():
+    result: Final = await _list_fallback_data_for_a_key_wildcard_over(
+        litellm.open_ai_chat_completion_models,
+        other_team_deployments=(_team_openai_deployment("team-shared", "openai/team-shared", "sk-team-shared"),),
+    )
+
+    assert result["api_key"] == "sk-team-openai"
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_refuses_the_team_openai_wildcard_to_a_key_wildcard_of_another_provider():
+    from litellm.proxy.auth.auth_checks import ProxyException
+
+    with pytest.raises(ProxyException):
+        await _list_fallback_data_for_a_key_wildcard_over(litellm.anthropic_models)
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_refuses_the_proxy_openai_wildcard_to_a_key_that_does_not_name_it():
+    from litellm.proxy.auth.auth_checks import ProxyException
+
+    proxy_openai_wildcard: Final[DeploymentTypedDict] = {
+        "model_name": "openai/*",
+        "litellm_params": {"model": "openai/*", "api_key": "sk-proxy-openai"},
+    }
+
+    with pytest.raises(ProxyException):
+        await _update_request_data_with_model_routing_hint(
+            data={"vector_store_id": "vs_123"},
+            request=Request(scope={"type": "http", "query_string": b"", "headers": []}),
+            llm_router=litellm.Router(model_list=[proxy_openai_wildcard]),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="test-key", team_id="team-a", team_models=["openai/*"], models=["gpt-4o-mini"]
+            ),
+        )
+
+
 @pytest.mark.asyncio
 async def test_vector_store_file_list_authorizes_inferred_team_model():
     from litellm.proxy.auth.auth_checks import ProxyException
@@ -602,7 +680,8 @@ async def test_vector_store_file_list_authorizes_model_query_param_before_creden
 async def test_vector_store_file_list_model_query_param_enforces_project_model_grant():
     from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
     from litellm.proxy.auth.auth_checks import ProxyException
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     request = MagicMock(spec=Request)
     request.query_params = {"model": "team-openai"}
@@ -612,11 +691,11 @@ async def test_vector_store_file_list_model_query_param_enforces_project_model_g
     llm_router.model_group_alias = {}
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="team_id:team-123",
+        key=AuthObject.team("team-123"),
         value=LiteLLM_TeamTableCachedObj(team_id="team-123", models=["team-openai"]),
     )
     await cache.async_set_cache(
-        key=project_cache_key("proj-1"),
+        key=AuthObject.project("proj-1"),
         value=LiteLLM_ProjectTableCachedObj(project_id="proj-1", models=["other-deployment"]),
     )
     user_api_key_dict = UserAPIKeyAuth(team_id="team-123", team_models=["team-openai"], project_id="proj-1")
@@ -1439,6 +1518,39 @@ class TestIndexCreate:
 
         assert result["index_name"] == "test-index"
         mock_prisma.db.litellm_managedvectorstoreindextable.create.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("fresh_vector_store_read_throughs")
+    async def test_index_created_here_resolves_while_the_table_reload_is_cooling_down(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.common_utils.registry_read_through import lookup_vector_store_index
+        from tests.unit.proxy.conftest import FakeVectorStoreIndexRow
+
+        prisma_client = MagicMock()
+        index_table = prisma_client.db.litellm_managedvectorstoreindextable
+        index_table.find_many = AsyncMock(return_value=[])
+        index_table.find_unique = AsyncMock(return_value=None)
+        index_table.create = AsyncMock(return_value=FakeVectorStoreIndexRow("kb-made-here", "azure-ai-search"))
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+        monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+
+        assert await lookup_vector_store_index("kb-made-here") == "unmanaged"
+        await index_create(
+            request=MagicMock(spec=Request),
+            index_create_request=IndexCreateRequest(
+                index_name="kb-made-here",
+                litellm_params={"vector_store_index": "kb-made-here", "vector_store_name": "azure-ai-search"},
+            ),
+            fastapi_response=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(
+                token="sk-test", key_name="sk-...test", user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+            ),
+        )
+
+        assert await lookup_vector_store_index("kb-made-here") == "managed"
+        assert index_table.find_many.await_count == 1
 
 
 class TestIndexList:
@@ -3055,15 +3167,24 @@ def test_vector_store_search_rejects_caller_embedding_selection_params(blocked_k
 
 
 @pytest.mark.parametrize(
-    ("provider", "expected_status", "expected_searches"),
-    [("opensearch", 400, 0), ("opensearch/x", 400, 0), ("openai", 200, 1)],
+    ("store_key", "provider", "expected_status", "expected_searches"),
+    [
+        ("opensearch_index_name", "opensearch", 400, 0),
+        ("opensearch_index_name", "opensearch/x", 400, 0),
+        ("opensearch_index_name", "openai", 200, 1),
+        ("opensearch_search_pipeline", "opensearch", 400, 0),
+        ("opensearch_hybrid_search", "opensearch/x", 400, 0),
+        ("opensearch_search_pipeline", "openai", 200, 1),
+        ("opensearch_text_field", "opensearch", 200, 1),
+        ("opensearch_embedding_field", "opensearch/x", 200, 1),
+    ],
 )
-def test_vector_store_search_rejects_caller_opensearch_index_name_only_on_opensearch_stores(
-    provider, expected_status, expected_searches
+def test_vector_store_search_rejects_caller_opensearch_store_params_only_on_opensearch_stores(
+    store_key, provider, expected_status, expected_searches
 ):
     """
-    Regression: a caller must not pick the index an OpenSearch store searches, while
-    other providers keep ignoring the key as they did before OpenSearch support.
+    Regression: a caller must not change which index, pipeline, or hybrid mode an OpenSearch store
+    searches with, while the field keys and other providers' requests pass through as before.
     """
     from fastapi.testclient import TestClient
 
@@ -3097,13 +3218,14 @@ def test_vector_store_search_rejects_caller_opensearch_index_name_only_on_opense
             with patch("litellm.proxy.proxy_server.llm_router", router):  # test-quality-ok: router built over the fake search
                 response = TestClient(app).post(
                     "/v1/vector_stores/kb/search",
-                    json={"query": "q", "opensearch_index_name": "another-teams-index"},
+                    json={"query": "q", store_key: "_none"},
                 )
     finally:
         app.dependency_overrides = original_overrides
 
     assert response.status_code == expected_status, response.json()
-    assert fake_search.await_count == expected_searches
+    assert [call.kwargs.get(store_key) for call in fake_search.await_args_list] == ["_none"] * expected_searches
+    assert expected_status == 200 or store_key in str(response.json())
 
 
 def test_vector_store_search_accepts_a_query_image_without_a_query():
@@ -3658,3 +3780,142 @@ async def test_update_vector_store_persists_submitted_metadata_as_json() -> None
 
     written = mock_prisma_client.db.litellm_managedvectorstorestable.update.await_args.kwargs["data"]
     assert json.loads(written["vector_store_metadata"]) == {"owner": "search-team", "tier": 2}
+
+
+@pytest.mark.asyncio
+async def test_search_resolution_preserves_registered_physical_ids(monkeypatch: pytest.MonkeyPatch):
+    from dataclasses import replace
+
+    import httpx
+    import respx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.vector_store_endpoints.utils import (
+        get_litellm_managed_vector_store,
+        resolve_vector_store_fallback_plan,
+    )
+    from litellm.vector_stores.fallbacks import vector_store_fallback_context
+    from litellm.vector_stores.main import asearch
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    stores: Final = [
+        LiteLLM_ManagedVectorStore(
+            is_config=True,
+            vector_store_id=f"connection-{host}",
+            custom_llm_provider="openai",
+            vector_store_name=host,
+            litellm_params={
+                "vector_store_id": f"native-{host}",
+                "api_base": f"https://{host}.native-resource.example/v1",
+                "api_key": host,
+                **({"fallbacks": ["connection-backup"]} if host == "primary" else {}),
+            },
+        )
+        for host in ("primary", "backup")
+    ]
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry(stores))
+    caller: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    resolved: Final = await get_litellm_managed_vector_store("connection-primary")
+    assert resolved is not None
+    plan: Final = await resolve_vector_store_fallback_plan(resolved, caller)
+    assert plan is not None
+    primary_id: Final = "native-primary"
+    backup_id: Final = "native-backup"
+    request_data: Final = build_request_data_from_managed_vector_store(resolved)
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(f"https://primary.native-resource.example/v1/vector_stores/{primary_id}/search").respond(503)
+        backup: Final = upstream.post(
+            f"https://backup.native-resource.example/v1/vector_stores/{backup_id}/search"
+        ).respond(200, json={"object": "vector_store.search_results.page", "search_query": "q", "data": []})
+        with vector_store_fallback_context(replace(plan, cooldown_time=0)):
+            response: Final = await asearch(
+                **request_data, query="q", client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+            )
+        assert backup.calls[0].request.headers["authorization"] == "Bearer backup"
+        assert response["data"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("primary_status", [200, 503])
+async def test_fallback_search_uses_effective_pre_call_hook_filters(
+    monkeypatch: pytest.MonkeyPatch, primary_status: int
+) -> None:
+    from collections.abc import Mapping
+
+    import httpx
+    import respx
+    from fastapi import FastAPI
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.proxy.vector_store_endpoints.endpoints import router
+    from litellm.types.utils import CallTypesLiteral
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    hook_filter: Final = {"type": "eq", "key": "tenant", "value": "hook-tenant"}
+    seen: Final[list[Mapping[str, object]]] = []
+
+    class TenantHook(CustomLogger):
+        async def async_pre_call_hook(
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            cache: DualCache,
+            data: dict[str, object],
+            call_type: CallTypesLiteral,
+        ) -> dict[str, object]:
+            seen.append({key: data[key] for key in ("filters", "max_num_results") if key in data})
+            return {**data, "filters": hook_filter, "max_num_results": 1}
+
+    async def authorized() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    stores: Final = [
+        LiteLLM_ManagedVectorStore(
+            is_config=True,
+            vector_store_id=f"hook-{host}-{primary_status}",
+            custom_llm_provider="openai",
+            litellm_params={
+                "api_base": f"https://hook-{host}.example/v1",
+                "api_key": "test",
+                "filters": {"type": "eq", "key": "region", "value": host},
+                "max_num_results": 9,
+                **({"fallbacks": [f"hook-backup-{primary_status}"]} if host == "primary" else {}),
+            },
+        )
+        for host in ("primary", "backup")
+    ]
+    monkeypatch.setattr(litellm, "vector_store_registry", VectorStoreRegistry(stores))
+    monkeypatch.setattr(litellm, "callbacks", [TenantHook()])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(proxy_server, "llm_router", litellm.Router(model_list=[]))
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(proxy_server.user_api_key_cache))
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = authorized
+    with respx.mock(assert_all_called=False) as upstream:
+        first: Final = upstream.route(host="hook-primary.example").respond(
+            primary_status, json={"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+        )
+        second: Final = upstream.route(host="hook-backup.example").respond(
+            200, json={"object": "vector_store.search_results.page", "search_query": "q", "data": []}
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+            response: Final = await client.post(
+                f"/v1/vector_stores/hook-primary-{primary_status}/search", json={"query": "q"}
+            )
+        assert response.status_code == 200, response.text
+        assert seen == [{}]
+        assert first.call_count == 1
+        assert second.call_count == int(primary_status == 503)
+        assert [json.loads(call.request.content) for call in upstream.calls] == [
+            {
+                "query": "q",
+                "filters": {"type": "and", "filters": [{"type": "eq", "key": "region", "value": host}, hook_filter]},
+                "max_num_results": 1,
+                "ranking_options": None,
+                "rewrite_query": None,
+            }
+            for host in (("primary",) if primary_status == 200 else ("primary", "backup"))
+        ]

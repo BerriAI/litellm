@@ -24,6 +24,7 @@ use litellm_llms::{
     },
     cohere::ocr::transformation::CohereParseConfig,
     mistral::ocr::transformation::MistralOcrConfig,
+    nace::ocr::transformation::NaceParseConfig,
     reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config},
     vertex_ai::ocr::{
         deepseek_transformation::VertexAIDeepSeekOCRConfig, transformation::VertexAiOcrConfig,
@@ -63,6 +64,10 @@ macro_rules! with_config {
                 let $config = AzureDocumentIntelligenceOcrConfig;
                 $body
             }
+            OcrConfigKind::Nace => {
+                let $config = NaceParseConfig;
+                $body
+            }
             OcrConfigKind::ReductoLegacy => {
                 let $config = ReductoParseLegacyConfig;
                 $body
@@ -92,6 +97,7 @@ pub(crate) enum OcrConfigKind {
     AzureAi,
     AzureCohere,
     AzureDocumentIntelligence,
+    Nace,
     ReductoLegacy,
     ReductoV3,
     VertexAi,
@@ -107,6 +113,7 @@ impl OcrConfigKind {
             Self::AzureAi | Self::AzureCohere | Self::AzureDocumentIntelligence => {
                 LlmProviders::AzureAi
             }
+            Self::Nace => LlmProviders::Nace,
             Self::ReductoLegacy | Self::ReductoV3 => LlmProviders::Reducto,
             Self::VertexAi | Self::VertexDeepSeek => LlmProviders::VertexAi,
         }
@@ -277,6 +284,7 @@ pub(crate) fn resolve_provider_config<'a>(
             OcrConfigKind::AzureCohere
         }
         LlmProviders::AzureAi => OcrConfigKind::AzureAi,
+        LlmProviders::Nace => OcrConfigKind::Nace,
         LlmProviders::Reducto if provider.model.eq_ignore_ascii_case("parse-legacy") => {
             OcrConfigKind::ReductoLegacy
         }
@@ -319,6 +327,7 @@ mod tests {
     #[case(OcrConfigKind::AzureAi)]
     #[case(OcrConfigKind::AzureCohere)]
     #[case(OcrConfigKind::AzureDocumentIntelligence)]
+    #[case(OcrConfigKind::Nace)]
     #[case(OcrConfigKind::ReductoLegacy)]
     #[case(OcrConfigKind::ReductoV3)]
     #[case(OcrConfigKind::VertexAi)]
@@ -336,6 +345,7 @@ mod tests {
     #[case("cohere")]
     #[case("mistral")]
     #[case("azure_ai")]
+    #[case("nace")]
     #[case("reducto")]
     #[case("vertex_ai")]
     fn provider_names_round_trip_exactly(#[case] provider: &str) {
@@ -358,6 +368,7 @@ mod tests {
     #[case("mistral/ocr")]
     #[case("azure_ai/ocr")]
     #[case("azure_ai/doc-intelligence/prebuilt-layout")]
+    #[case("nace/parse-low")]
     #[case("reducto/parse-v3")]
     #[case("vertex_ai/mistral-ocr")]
     #[case("vertex_ai/deepseek-ocr")]
@@ -396,6 +407,7 @@ mod tests {
     )]
     #[case("vertex_ai/mistral-ocr", Some("VERTEX_AI_API_KEY"))]
     #[case("vertex_ai/deepseek-ocr", Some("VERTEX_AI_API_KEY"))]
+    #[case("nace/parse-low", Some("NACE_API_KEY"))]
     #[case("reducto/parse-v3", None)]
     #[case("reducto/parse-legacy", None)]
     fn api_key_metadata_follows_provider_overrides_and_python_defaults(
@@ -566,6 +578,7 @@ mod tests {
     #[case("aws_textract/detect-document-text", OcrConfigKind::AwsTextract)]
     #[case("aws_textract/analyze-document", OcrConfigKind::AwsTextractAnalyze)]
     #[case("aws_textract/Analyze-Document", OcrConfigKind::AwsTextractAnalyze)]
+    #[case("nace/parse-high", OcrConfigKind::Nace)]
     #[case("reducto/parse-legacy", OcrConfigKind::ReductoLegacy)]
     #[case("reducto/future-parse-model", OcrConfigKind::ReductoV3)]
     #[case("azure_ai/Cohere-parse-v5", OcrConfigKind::AzureCohere)]

@@ -10,8 +10,8 @@
 //! - `Catalog`: the parsed map. `Catalog::parse` takes the JSON body and returns `Loaded<Catalog>`,
 //!   keeping every entry in file order with its raw fields and collecting row and alias errors.
 //! - `ModelEntry`: one model. `ModelEntry::fields` is the raw JSON object, so unknown fields are
-//!   never lost; `ModelEntry::model` is the optional typed `Model` with attributes, prices,
-//!   adjustments and capabilities. Invalid rows retain their raw fields without a typed model.
+//!   never lost. `Model::from_fields` lowers it into the typed `Model` with attributes, prices,
+//!   adjustments and capabilities, or the errors that make the row invalid.
 //! - Aliases: an entry may list `aliases`; each alias resolves to its canonical key. Problems
 //!   found while indexing them (bad lists, collisions) are kept in `Loaded::errors` instead of
 //!   failing the document.
@@ -46,9 +46,13 @@ mod fallback;
 mod lower;
 mod model;
 mod model_info;
+mod pricing;
 mod register;
 mod resolve;
 mod store;
+#[cfg(test)]
+mod test_support;
+mod view;
 mod vocabulary;
 pub mod wire;
 
@@ -57,11 +61,13 @@ pub use catalog::*;
 pub use cost_map::*;
 pub use error::*;
 pub use fallback::*;
+pub use lower::{BilledPrices, billed_prices};
 pub use model::*;
 pub use model_info::*;
 pub use register::*;
 pub use resolve::*;
 pub use store::*;
+pub use view::*;
 pub use vocabulary::*;
 
 #[cfg(feature = "schema")]

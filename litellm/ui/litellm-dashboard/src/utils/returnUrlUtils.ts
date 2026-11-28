@@ -227,7 +227,7 @@ function isDevEnvironment(): boolean {
  * @returns true if the URL is safe to redirect to
  */
 export function isValidReturnUrl(url: string, runtimeBackendUrl: string | null = null): boolean {
-  if (!url) {
+  if (!url || /[\\\r\n\t]/.test(url)) {
     return false;
   }
 
@@ -243,6 +243,9 @@ export function isValidReturnUrl(url: string, runtimeBackendUrl: string | null =
 
   try {
     const returnUrlObj = new URL(url);
+    if (returnUrlObj.protocol !== "http:" && returnUrlObj.protocol !== "https:") {
+      return false;
+    }
     const currentHostname = window.location.hostname;
 
     if (runtimeBackendUrl && returnUrlObj.origin === new URL(runtimeBackendUrl).origin) {

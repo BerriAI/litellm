@@ -1,5 +1,5 @@
 import { useCanManageProjects } from "@/app/(dashboard)/hooks/projects/projectAccess";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -7,7 +7,7 @@ import { isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { Folder, Plus, SearchIcon, X } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { useMemo, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
@@ -20,7 +20,7 @@ export function ProjectsPage() {
   const { t } = useTranslation();
   const { data: projects, isLoading } = useProjects();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
-  const { userId } = useAuthorized();
+  const { userId, premiumUser } = useAuthorized();
   const canCreateProject = useCanManageProjects(isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""));
 
   const [selectedProjectId, setSelectedProjectId] = useQueryState(
@@ -59,12 +59,43 @@ export function ProjectsPage() {
     clearProjectKeysTableState();
   };
 
+  if (!premiumUser) {
+    return (
+      <>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Folder />
+            {t("projects.page.title")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("projects.page.description")}</PageHeaderDescription>
+        </PageHeader>
+        <PageContent>
+          <p className="text-sm text-muted-foreground">
+            <Trans
+              i18nKey="projects.page.enterpriseNotice"
+              components={{
+                pricing: (
+                  <a
+                    href="https://www.litellm.ai/#pricing"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline-offset-4 hover:underline"
+                  />
+                ),
+              }}
+            />
+          </p>
+        </PageContent>
+      </>
+    );
+  }
+
   if (selectedProjectId) {
     return <ProjectDetail projectId={selectedProjectId} onBack={closeProject} />;
   }
 
   return (
-    <Page>
+    <>
       <PageHeader>
         <PageHeaderTitle>
           <Folder />
@@ -117,6 +148,6 @@ export function ProjectsPage() {
       </PageContent>
 
       <CreateProjectModal isOpen={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} />
-    </Page>
+    </>
   );
 }

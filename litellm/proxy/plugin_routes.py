@@ -262,7 +262,7 @@ async def list_plugins(
 async def plugin_auth_token(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     plugin_name: str = "litellm-platform-plugin",
-) -> dict:
+) -> dict[str, object]:
     """Issue a short-lived, audience-scoped plugin session claim.
 
     The claim contains {user_id, user_role, plugin, exp}.  It does NOT

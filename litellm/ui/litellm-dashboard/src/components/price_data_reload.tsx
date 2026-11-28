@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import type { TFunction } from "i18next";
 import React, { useEffect, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -102,7 +103,7 @@ const isValidReloadInterval = (value: number) => {
 const formatDateTime = (dateTimeString: string | null, t: TFunction = i18n.t.bind(i18n)) => {
   if (!dateTimeString) return t("priceDataReload.never");
   const parsed = new Date(dateTimeString);
-  return Number.isNaN(parsed.getTime()) ? dateTimeString : parsed.toLocaleString();
+  return Number.isNaN(parsed.getTime()) ? dateTimeString : displayTimestamp(parsed);
 };
 
 const CostMapProvenanceRows: React.FC<{ sourceInfo: CostMapSourceInfo }> = ({ sourceInfo }) => {

@@ -48,7 +48,7 @@ def _without_assessments(value: JsonValue) -> JsonValue:
     return value
 
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.8-flash"
 # Matches the word/topic policy the guardrail this suite points at actually denies.
 # Content filters are not assumed: the guardrail resource carries no contentPolicy,
 # so a hate/violence prompt returns action=NONE and never blocks.
@@ -175,7 +175,7 @@ class TestBedrockGuardrail:
         # model: ask it to echo the word verbatim. The word in the prompt itself
         # is not scanned in this mode.
         prompt = f"Reply with exactly this one word and nothing else: {blocked_word}"
-        result = poll_until_blocked(lambda: client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128))
+        result = poll_until_blocked(lambda: client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=1024))
 
         match result:
             case UnknownApiError(status_code=status, body=body):
@@ -260,7 +260,7 @@ class TestBedrockGuardrail:
 
         prompt = f"Reply with exactly this one word and nothing else: {blocked_word}"
         blocked = poll_until_blocked_stream(
-            lambda: client.chat_stream_raw(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128)
+            lambda: client.chat_stream_raw(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=1024)
         )
         _assert_policy_block(blocked, "streamed /chat/completions")
         error = _blocked_stream_error(blocked)

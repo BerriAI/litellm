@@ -6,12 +6,12 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Container, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -105,6 +105,11 @@ from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretField
 from litellm.types.router import reject_server_owned_wif_fields
 from litellm.types.utils import AdminApiKeySecretReference, admin_api_key_secret_reference
 
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
+    from litellm.proxy.utils import PrismaClient
+
 #### Health ENDPOINTS ####
 
 
@@ -115,7 +120,7 @@ class _HealthBacklogResponse(TypedDict):
     rejected_requests: ReadOnly[int]
 
 
-def _reject_os_environ_references(params: dict) -> None:
+def _reject_os_environ_references(params: object) -> None:
     """
     Validate that the provided params do not contain any ``os.environ/``
     references. Values with that prefix are expected to come only from
@@ -737,7 +742,9 @@ async def health_services_endpoint(
         raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
-def convert_health_check_to_dict(check) -> dict:
+def convert_health_check_to_dict(
+    check: "prisma_models.LiteLLM_HealthCheckTable | LatestHealthCheckRow",
+) -> dict[str, object]:
     """Convert health check database record to dictionary format"""
     return {
         "health_check_id": check.health_check_id,
@@ -771,10 +778,10 @@ def _check_prisma_client():
 
 
 async def _save_health_check_to_db(
-    prisma_client,
+    prisma_client: "PrismaClient",
     model_name: str,
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
     start_time: float,
     user_id: str | None,
     model_id: str | None = None,
@@ -836,23 +843,44 @@ def _build_model_param_to_info_mapping(model_list: list) -> dict:
     return model_param_to_info
 
 
+_ModelInfos: TypeAlias = tuple[Mapping[str, object], ...]
+_MODEL_INFOS_BY_PARAM: Final = TypeAdapter(Mapping[str, _ModelInfos])
+
+
+def _info_model_id(info: Mapping[str, object]) -> str:
+    model_id: Final = info.get("model_id")
+    return str(model_id) if model_id else ""
+
+
+def _model_infos_by_id(model_infos_by_param: Mapping[str, _ModelInfos]) -> Mapping[str, _ModelInfos]:
+    with_ids: Final = sorted(
+        (info for info in chain.from_iterable(model_infos_by_param.values()) if info.get("model_id")),
+        key=_info_model_id,
+    )
+    return MappingProxyType({model_id: tuple(infos) for model_id, infos in groupby(with_ids, key=_info_model_id)})
+
+
 def _model_infos_for_endpoint(
-    model_param_to_info: Mapping[str, list[Mapping[str, str | None]]], endpoint: Mapping[str, object]
-) -> tuple[Mapping[str, str | None], ...]:
-    model_param: Final = endpoint.get("model")
-    if not isinstance(model_param, str):
-        return ()
-    model_infos: Final = model_param_to_info.get(model_param, [])
+    model_infos_by_param: Mapping[str, _ModelInfos],
+    model_infos_by_id: Mapping[str, _ModelInfos],
+    endpoint: Mapping[str, object],
+) -> _ModelInfos:
+    """By ``model_id`` when the endpoint has one, else by model string.
+
+    The check rewrites ``litellm_params.model`` in place (it strips ``bedrock/``), so a result read back from the
+    shared cache can carry a model string the local deployment list never had.
+    """
     endpoint_model_id: Final = endpoint.get("model_id")
-    if not endpoint_model_id:
-        return tuple(model_infos)
-    return tuple(info for info in model_infos if info["model_id"] == endpoint_model_id)
+    if endpoint_model_id:
+        return model_infos_by_id.get(str(endpoint_model_id), ())
+    model_param: Final = endpoint.get("model")
+    return model_infos_by_param.get(model_param, ()) if isinstance(model_param, str) else ()
 
 
 def _aggregate_health_check_results(
-    model_param_to_info: dict,
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    model_param_to_info: Mapping[str, object],
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
 ) -> dict:
     """
     Aggregate health check results per unique model.
@@ -868,42 +896,40 @@ def _aggregate_health_check_results(
         Dictionary mapping (model_id, model_name) to aggregated health check results
     """
     model_results: Final = {}
+    infos_by_param: Final = _MODEL_INFOS_BY_PARAM.validate_python(model_param_to_info)
+    infos_by_id: Final = _model_infos_by_id(infos_by_param)
 
     # Process healthy endpoints
     for endpoint in healthy_endpoints:
-        model_param = endpoint.get("model")
-        if model_param and model_param in model_param_to_info:
-            for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
-                key = (model_info["model_id"], model_info["model_name"])
-                if key not in model_results:
-                    model_results[key] = {
-                        "model_name": model_info["model_name"],
-                        "model_id": model_info["model_id"],
-                        "healthy_count": 0,
-                        "unhealthy_count": 0,
-                        "error_message": None,
-                    }
-                model_results[key]["healthy_count"] += 1
+        for model_info in _model_infos_for_endpoint(infos_by_param, infos_by_id, endpoint):
+            key = (model_info["model_id"], model_info["model_name"])
+            if key not in model_results:
+                model_results[key] = {
+                    "model_name": model_info["model_name"],
+                    "model_id": model_info["model_id"],
+                    "healthy_count": 0,
+                    "unhealthy_count": 0,
+                    "error_message": None,
+                }
+            model_results[key]["healthy_count"] += 1
 
     # Process unhealthy endpoints
     for endpoint in unhealthy_endpoints:
-        model_param = endpoint.get("model")
         error_message = endpoint.get("error")
-        if model_param and model_param in model_param_to_info:
-            for model_info in _model_infos_for_endpoint(model_param_to_info, endpoint):
-                key = (model_info["model_id"], model_info["model_name"])
-                if key not in model_results:
-                    model_results[key] = {
-                        "model_name": model_info["model_name"],
-                        "model_id": model_info["model_id"],
-                        "healthy_count": 0,
-                        "unhealthy_count": 0,
-                        "error_message": None,
-                    }
-                model_results[key]["unhealthy_count"] += 1
-                # Use the first error message encountered
-                if not model_results[key]["error_message"] and error_message:
-                    model_results[key]["error_message"] = str(error_message)[:500]
+        for model_info in _model_infos_for_endpoint(infos_by_param, infos_by_id, endpoint):
+            key = (model_info["model_id"], model_info["model_name"])
+            if key not in model_results:
+                model_results[key] = {
+                    "model_name": model_info["model_name"],
+                    "model_id": model_info["model_id"],
+                    "healthy_count": 0,
+                    "unhealthy_count": 0,
+                    "error_message": None,
+                }
+            model_results[key]["unhealthy_count"] += 1
+            # Use the first error message encountered
+            if not model_results[key]["error_message"] and error_message:
+                model_results[key]["error_message"] = str(error_message)[:500]
 
     return model_results
 
@@ -922,14 +948,22 @@ def _new_health_status(result: _AggregatedHealthResult) -> str:
     return "healthy" if result["healthy_count"] > 0 else "unhealthy"
 
 
+_LatestCheckKey: TypeAlias = tuple[str, str] | str
+
+
+def _latest_check_key(model_id: str | None, model_name: str) -> _LatestCheckKey:
+    """A row is the previous check only for its own model id and name, so names sharing an id never skip each other."""
+    return (model_id, model_name) if model_id else model_name
+
+
 def _should_persist_health_check_result(
-    result: _AggregatedHealthResult, latest_checks_map: Mapping[str, LatestHealthCheckRow]
+    result: _AggregatedHealthResult, latest_checks_map: Mapping[_LatestCheckKey, LatestHealthCheckRow]
 ) -> bool:
     """
     True when this result has to be written: no previous row, the status changed, or the
     previous row is older than one hour (periodic refresh while the status is stable).
     """
-    lookup_key: Final = result["model_id"] if result["model_id"] else result["model_name"]
+    lookup_key: Final = _latest_check_key(result["model_id"], result["model_name"])
     last_check: Final = latest_checks_map.get(lookup_key)
     if last_check is None or last_check.status != _new_health_status(result):
         return True
@@ -938,9 +972,9 @@ def _should_persist_health_check_result(
 
 
 async def _save_health_check_results_if_changed(
-    prisma_client,
-    model_results: dict,
-    latest_checks_map: dict,
+    prisma_client: "PrismaClient",
+    model_results: Mapping[object, _AggregatedHealthResult],
+    latest_checks_map: Mapping[_LatestCheckKey, LatestHealthCheckRow],
     start_time: float,
     checked_by: str | None = None,
 ) -> bool:
@@ -960,7 +994,7 @@ async def _save_health_check_results_if_changed(
     Args:
         prisma_client: Database client
         model_results: Dictionary of aggregated health check results per model
-        latest_checks_map: Dictionary mapping model_id/model_name to latest health check
+        latest_checks_map: Latest health check per (model_id, model_name), or per model_name for rows without an id
         start_time: Start time of health check for calculating response time
         checked_by: Identifier for who/what performed the check
 
@@ -990,10 +1024,10 @@ async def _save_health_check_results_if_changed(
 
 
 async def save_background_health_checks_to_db(
-    prisma_client,
+    prisma_client: "PrismaClient | None",
     model_list: list,
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
     start_time: float,
     checked_by: str | None = None,
 ) -> bool:
@@ -1026,10 +1060,9 @@ async def save_background_health_checks_to_db(
 
         # Step 3: Get latest health checks for all models in one query to compare status
         latest_checks: Final = await query_latest_health_checks(prisma_client)
-        latest_checks_map: Final = {}
+        latest_checks_map: Final[dict[_LatestCheckKey, LatestHealthCheckRow]] = {}
         for check in latest_checks:
-            # Use model_id as primary key, fallback to model_name
-            key = check.model_id if check.model_id else check.model_name
+            key = _latest_check_key(check.model_id, check.model_name)
             if key not in latest_checks_map:
                 latest_checks_map[key] = check
 
@@ -1077,7 +1110,7 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return role_value in _PROXY_ADMIN_ROLES
 
 
-def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
+def _strip_admin_only_fields_from_health_result(result: Mapping[str, object]) -> dict[str, object]:
     """
     Return a copy of the /health response with the admin-only fields (provider routing plus
     server-owned federation or OAuth token-exchange params) removed from each healthy/unhealthy
@@ -1454,7 +1487,7 @@ def _resolve_targeted_model_ids(
     }
 
 
-def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: set) -> dict:
+def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: Container[object]) -> dict[str, object]:
     """
     Restrict a cached background health-check result dict to endpoints whose
     model_id is in ``allowed_model_ids``.
@@ -1480,16 +1513,16 @@ def _filter_health_check_results_by_model_ids(results: dict, allowed_model_ids: 
 
 
 async def _perform_health_check_and_save(
-    model_list,
-    target_model,
+    model_list: list[object],
+    target_model: str | None,
     recorded_model_name: str | None,
-    cli_model,
-    details,
-    prisma_client,
-    start_time,
-    user_id,
-    model_id=None,
-    max_concurrency=None,
+    cli_model: str | None,
+    details: bool | None,
+    prisma_client: "PrismaClient | None",
+    start_time: float,
+    user_id: str | None,
+    model_id: str | None = None,
+    max_concurrency: int | None = None,
     **perform_health_check_extra,
 ):
     """Helper function to perform health check and save results to database"""
@@ -1609,7 +1642,7 @@ async def health_endpoint(
     is_admin: Final = _is_proxy_admin(user_api_key_dict)
     model_specific_request: Final = bool(model or model_id)
 
-    def _post_process(result: dict) -> dict:
+    def _post_process(result: Mapping[str, object]) -> Mapping[str, object]:
         # api_base / api_version reveal which provider/region/internal host the
         # deployment talks to; only proxy admins receive them. Non-admin keys
         # still see model/model_id and the healthy/unhealthy status. We also
@@ -1900,7 +1933,7 @@ def read_license_data() -> EnterpriseLicenseData | None:
     return license_data
 
 
-def _read_allowed_features(license_data: Mapping[str, object]) -> list:
+def _read_allowed_features(license_data: Mapping[str, object]) -> list[object]:
     raw_allowed_features: Final = license_data.get("allowed_features")
     if isinstance(raw_allowed_features, list):
         return list(raw_allowed_features)
@@ -2617,8 +2650,8 @@ async def test_model_connection(
 
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
-        config_litellm_params: dict = {}
-        loaded_model_info: dict | None = None
+        config_litellm_params: dict[str, object] = {}
+        loaded_model_info: dict[str, object] | None = None
         deployment_by_id: Deployment | None = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when

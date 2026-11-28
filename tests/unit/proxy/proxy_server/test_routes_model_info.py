@@ -27,7 +27,7 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ProxyModelTable, UserAPIKeyAuth
-from litellm.litellm_core_utils.model_cost_table import publish
+from litellm.litellm_core_utils.model_cost_table import changed_in_place, publish
 
 from .conftest import normalize, route_entry_points_to_stubs  # type: ignore[import-not-found]
 
@@ -164,6 +164,93 @@ async def test_upstream_limits_reach_model_info_routes(
             assert group_response.status_code == 200, group_response.text
             assert group_response.json()["data"][0]["max_input_tokens"] == 4096
     publish(litellm.model_cost)
+
+
+async def test_openrouter_catalog_limits_reach_every_model_info_route(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[object]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", copy.deepcopy(litellm.model_cost))
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    monkeypatch.setattr(litellm, "check_provider_endpoint", True)
+    monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "named",
+                "litellm_params": {"model": "openrouter/vendor/capped", "api_key": "openrouter-key"},
+                "model_info": {"id": "named-deployment"},
+            },
+            {
+                "model_name": "overridden",
+                "litellm_params": {"model": "openrouter/vendor/capped", "api_key": "openrouter-key"},
+                "model_info": {"id": "overridden-deployment", "max_output_tokens": 512},
+            },
+            {
+                "model_name": "openrouter/*",
+                "litellm_params": {"model": "openrouter/*", "api_key": "openrouter-key"},
+                "model_info": {"id": "wildcard-deployment"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    catalog: Final = {
+        "data": [
+            {"id": "vendor/capped", "context_length": 4096, "top_provider": {"max_completion_tokens": 1024}},
+            {"id": "vendor/uncapped", "context_length": 8192, "top_provider": {"max_completion_tokens": None}},
+        ]
+    }
+    expected: Final = {
+        "named": (4096, 1024),
+        "overridden": (4096, 512),
+        "openrouter/vendor/capped": (4096, 1024),
+        "openrouter/vendor/uncapped": (8192, None),
+    }
+
+    def limits_by_name(rows: list[dict[str, object]], name_key: str) -> dict[object, tuple[object, object]]:
+        return {
+            row[name_key]: (row.get("max_input_tokens"), row.get("max_output_tokens"))
+            for row in rows
+            if row[name_key] in expected
+        }
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=catalog))
+    ) as upstream:
+        handler.client = upstream
+        litellm.in_memory_llm_clients_cache.set_cache("async_httpx_clientopenrouter", handler)
+        await proxy_server.ProxyStartupEvent.refresh_model_info()
+        with respx.mock(assert_all_called=False) as sync_upstream, auth_as():
+            sync_upstream.get("https://openrouter.ai/api/v1/models/user").mock(
+                return_value=httpx.Response(200, json=catalog)
+            )
+            for path in ("/v1/model/info", "/model/info"):
+                info_response: Final = client.get(path)
+                assert info_response.status_code == 200, info_response.text
+                assert (
+                    limits_by_name(
+                        [
+                            {"model_name": row["model_name"], **row["model_info"]}
+                            for row in info_response.json()["data"]
+                        ],
+                        "model_name",
+                    )
+                    == expected
+                )
+            group_response: Final = client.get("/model_group/info")
+            assert group_response.status_code == 200, group_response.text
+            assert limits_by_name(group_response.json()["data"], "model_group") == expected
+            models_response: Final = client.get("/v1/models")
+            assert models_response.status_code == 200, models_response.text
+            assert limits_by_name(models_response.json()["data"], "id") == expected
+    changed_in_place()
 
 
 # ---------------------------------------------------------------------------
@@ -1616,6 +1703,7 @@ def access_group_team(monkeypatch, mock_prisma):
     from litellm.models.access_group import LiteLLM_AccessGroupTable
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     router: Final = litellm.Router(
         model_list=[
@@ -1627,7 +1715,7 @@ def access_group_team(monkeypatch, mock_prisma):
 
     def seed_team(models: list[str]) -> None:
         cache.set_cache(
-            key=f"team_id:{_ACCESS_GROUP_TEAM_ID}",
+            key=AuthObject.team(_ACCESS_GROUP_TEAM_ID),
             value=LiteLLM_TeamTableCachedObj(
                 team_id=_ACCESS_GROUP_TEAM_ID, models=models, access_group_ids=[_ACCESS_GROUP_ID]
             ),
@@ -1635,7 +1723,7 @@ def access_group_team(monkeypatch, mock_prisma):
         )
 
     cache.set_cache(
-        key=f"access_group_id:{_ACCESS_GROUP_ID}",
+        key=AuthObject.access_group(_ACCESS_GROUP_ID),
         value=LiteLLM_AccessGroupTable(
             access_group_id=_ACCESS_GROUP_ID,
             access_group_name="group-models",

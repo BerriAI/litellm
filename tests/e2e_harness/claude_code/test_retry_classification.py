@@ -24,7 +24,7 @@ from claude_code.cli_driver import (
 )
 
 _BEDROCK_503 = (
-    "[claude-opus-4-7-bedrock-converse] tool_search probe failed: status 503: "
+    "[claude-opus-5-5-bedrock-converse] tool_search probe failed: status 503: "
     '{"error":{"message":"litellm.ServiceUnavailableError: BedrockException - '
     '{\\"message\\":\\"Bedrock is unable to process your request.\\"}"}}'
 )

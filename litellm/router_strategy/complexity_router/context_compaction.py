@@ -384,14 +384,13 @@ async def _check_client_managed_admission(
 ) -> None:
     if not ctx.settings().enable_pre_call_checks:
         return
-    ctx.pre_call_checks(
+    await asyncio.to_thread(
+        ctx.pre_call_checks,
         model=str(payload["model"]),
         healthy_deployments=list[object](_ITEMS.validate_python((deployment,))),
         messages=_ITEMS.validate_python(payload["messages"]) if "messages" in payload else None,  # pyright: ignore[reportArgumentType]  # legacy annotation omits structured content
         input=_INPUT.validate_python(payload.get("input")),
         request_kwargs=_DICT.validate_python(payload),
-        input_token_count=await _count(ctx, payload),
-        skip_inline_token_count=True,
     )
 
 

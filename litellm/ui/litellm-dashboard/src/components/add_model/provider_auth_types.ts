@@ -1,9 +1,9 @@
-import type { ParseKeys } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import { Providers } from "../provider_info_helpers";
 
 export interface ProviderAuthType {
   readonly id: string;
-  readonly labelKey: ParseKeys;
+  readonly label: (t: TFunction) => string;
   readonly descriptionKey: ParseKeys;
   readonly fieldKeys: readonly string[];
   readonly requiredFieldKeys: readonly string[];
@@ -21,25 +21,41 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
   GITHUB_COPILOT: [
     {
       id: "shared_device_login",
-      labelKey: "addModel.providerAuthTypes.sharedDeviceLogin.label",
+      label: (t) => t("addModel.providerAuthTypes.sharedDeviceLogin.label"),
       descriptionKey: "addModel.providerAuthTypes.sharedDeviceLogin.description",
       fieldKeys: ["api_base", "api_key"],
       requiredFieldKeys: [],
     },
     {
       id: GITHUB_COPILOT_PER_USER_AUTH_TYPE,
-      labelKey: "addModel.providerAuthTypes.perUserOauth.label",
+      label: (t) => t("addModel.providerAuthTypes.perUserOauth.label"),
       credentialOnly: true,
       descriptionKey: "addModel.providerAuthTypes.perUserOauth.description",
       fieldKeys: [GITHUB_COPILOT_AUTH_TYPE_KEY, GITHUB_COPILOT_HOST_KEY],
       requiredFieldKeys: [GITHUB_COPILOT_AUTH_TYPE_KEY],
       fixedValues: { [GITHUB_COPILOT_AUTH_TYPE_KEY]: GITHUB_COPILOT_PER_USER_AUTH_TYPE },
     },
+    {
+      id: "github_app",
+      label: () => "GitHub App",
+      descriptionKey: "addModel.providerAuthTypes.githubApp.description",
+      credentialOnly: true,
+      fieldKeys: [
+        GITHUB_COPILOT_AUTH_TYPE_KEY,
+        GITHUB_COPILOT_HOST_KEY,
+        "github_copilot_app_id",
+        "github_copilot_app_installation_id",
+        "github_copilot_app_private_key_ref",
+        "github_copilot_app_private_key",
+      ],
+      requiredFieldKeys: ["github_copilot_app_id", "github_copilot_app_installation_id"],
+      fixedValues: { [GITHUB_COPILOT_AUTH_TYPE_KEY]: "github_app" },
+    },
   ],
   MICROSOFT_365_COPILOT: [
     {
       id: "oauth_token_exchange",
-      labelKey: "addModel.providerAuthTypes.oauthTokenExchange.label",
+      label: (t) => t("addModel.providerAuthTypes.oauthTokenExchange.label"),
       credentialOnly: true,
       descriptionKey: "addModel.providerAuthTypes.oauthTokenExchange.description",
       fieldKeys: [
@@ -54,7 +70,7 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
     },
     {
       id: "static_token",
-      labelKey: "addModel.providerAuthTypes.staticToken.label",
+      label: (t) => t("addModel.providerAuthTypes.staticToken.label"),
       descriptionKey: "addModel.providerAuthTypes.staticToken.description",
       fieldKeys: ["api_key"],
       requiredFieldKeys: ["api_key"],
@@ -65,7 +81,9 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
 export const authTypesFor = (provider: string | null): readonly ProviderAuthType[] => {
   const providerKeys: readonly (keyof typeof Providers)[] = Object.keys(Providers) as (keyof typeof Providers)[];
   const providerKey =
-    provider === null ? undefined : providerKeys.find((key) => key === provider || Providers[key] === provider);
+    provider === null
+      ? undefined
+      : providerKeys.find((key) => key.toLowerCase() === provider.toLowerCase() || Providers[key] === provider);
 
   return providerKey === undefined
     ? EMPTY_PROVIDER_AUTH_TYPES
@@ -78,6 +96,9 @@ export const authTypeFieldKeys = (provider: string | null): readonly string[] =>
     .filter((fieldKey, index, fieldKeys) => fieldKeys.indexOf(fieldKey) === index);
 
 export const inferAuthTypeId = (authTypes: readonly ProviderAuthType[], values: Record<string, unknown>): string =>
+  authTypes.find(
+    ({ fixedValues }) => fixedValues && Object.entries(fixedValues).every(([key, value]) => values[key] === value),
+  )?.id ??
   authTypes.find(({ requiredFieldKeys }) =>
     requiredFieldKeys.some(
       (fieldKey) => values[fieldKey] !== undefined && values[fieldKey] !== null && values[fieldKey] !== "",

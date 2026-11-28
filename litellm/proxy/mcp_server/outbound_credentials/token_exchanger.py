@@ -234,7 +234,7 @@ class OboTokenExchanger:
         http_post: ExchangeHttpPost,
         *,
         cache: TokenCacheBackend | None = None,
-        coordinator: RefreshCoordinator | None = None,
+        coordinator: RefreshCoordinator[OAuthToken | None] | None = None,
         clock: Callable[[], float] = time.time,
         default_ttl_seconds: float = _DEFAULT_TTL_SECONDS,
         min_ttl_seconds: float = _MIN_TTL_SECONDS,
@@ -242,7 +242,7 @@ class OboTokenExchanger:
     ) -> None:
         self._http_post = http_post
         self._cache: TokenCacheBackend = cache or InMemoryTokenCacheBackend(clock=clock)
-        self._coordinator: RefreshCoordinator = coordinator or InProcessRefreshCoordinator()
+        self._coordinator: RefreshCoordinator[OAuthToken | None] = coordinator or InProcessRefreshCoordinator()
         self._clock = clock
         self._default_ttl_seconds = default_ttl_seconds
         self._min_ttl_seconds = min_ttl_seconds

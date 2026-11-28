@@ -1,3 +1,4 @@
+from collections.abc import Awaitable, Callable
 from typing import Final, cast
 
 import httpx
@@ -38,11 +39,11 @@ def get_watsonx_iam_url():
     return get_secret_str("WATSONX_IAM_URL") or "https://iam.cloud.ibm.com/identity/token"
 
 
-def generate_iam_token(api_key=None, **params) -> str:
+def generate_iam_token(api_key: str | None = None, **params: object) -> str:
     result: object = iam_token_cache.get_cache(api_key)
 
     if result is None:
-        headers: Final = {}
+        headers: Final[dict[str, str]] = {}
         headers["Content-Type"] = "application/x-www-form-urlencoded"
         if api_key is None:
             api_key = (
@@ -140,7 +141,7 @@ async def _aconvert_watsonx_messages_core(
     messages: list[AllMessageValues],
     provider: str,
     custom_prompt_dict: dict,
-    apply_template_fn,
+    apply_template_fn: Callable[..., Awaitable[str | None]],
 ) -> str:
     """Async core logic for converting watsonx messages to prompt"""
     from litellm.types.llms.watsonx import WatsonXModelPattern
@@ -172,7 +173,7 @@ def _convert_watsonx_messages_core(
     messages: list[AllMessageValues],
     provider: str,
     custom_prompt_dict: dict,
-    apply_template_fn,
+    apply_template_fn: Callable[..., str | None],
 ) -> str:
     """Sync core logic for converting watsonx messages to prompt"""
     from litellm.types.llms.watsonx import WatsonXModelPattern
@@ -203,7 +204,7 @@ async def aconvert_watsonx_messages_to_prompt(
     model: str,
     messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: dict,
+    custom_prompt_dict: dict[str, object],
 ) -> str:
     """Async version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -221,7 +222,7 @@ def convert_watsonx_messages_to_prompt(
     model: str,
     messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: dict,
+    custom_prompt_dict: dict[str, object],
 ) -> str:
     """Sync version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -239,11 +240,11 @@ def convert_watsonx_messages_to_prompt(
 class IBMWatsonXMixin:
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -348,8 +349,8 @@ class IBMWatsonXMixin:
             )
         return WatsonXCredentials(api_key=api_key, api_base=api_base, token=cast(str | None, token))
 
-    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict:
-        payload: Final[dict] = {}
+    def _prepare_payload(self, model: str, api_params: WatsonXAPIParams) -> dict[str, object]:
+        payload: Final[dict[str, object]] = {}
         if model.startswith("deployment/"):
             return {}  # Deployment models do not support 'space_id' or 'project_id' in their payload
         payload["model_id"] = model

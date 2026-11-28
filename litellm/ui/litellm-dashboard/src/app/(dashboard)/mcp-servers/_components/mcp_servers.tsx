@@ -1,6 +1,8 @@
 import { isAdminRole, isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import type { ParseKeys } from "i18next";
-import { CircleHelp, Plug, Search } from "lucide-react";
+import { CircleHelp, Plug, Search, Server } from "lucide-react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -17,9 +19,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useQueryState } from "nuqs";
 import { useTranslation } from "react-i18next";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "@/app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
@@ -46,18 +47,13 @@ import MCPToolSearchSettings from "@/components/Settings/AdminSettings/MCPToolSe
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "@/components/mcp_tools/ByokCredentialModal";
-import { getSecureItem } from "@/utils/secureStorage";
-import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
 import { uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
 import UserEnvVarsModal from "./UserEnvVarsModal";
 import { listMCPUserEnvVarStatus } from "@/components/networking";
+import { type McpServerSortKey, useMcpServersUrlState } from "./useMcpServersUrlState";
 
-const ALL_FILTER_VALUE = "all";
-
-export type SortKey = "created_desc" | "updated_desc" | "name_asc" | "health";
-
-const SORT_OPTIONS: { value: SortKey; labelKey: ParseKeys }[] = [
+const SORT_OPTIONS: { value: McpServerSortKey; labelKey: ParseKeys }[] = [
   { value: "created_desc", labelKey: "mcpServers.servers.sort.options.createdDesc" },
   { value: "updated_desc", labelKey: "mcpServers.servers.sort.options.updatedDesc" },
   { value: "name_asc", labelKey: "mcpServers.servers.sort.options.nameAsc" },
@@ -83,7 +79,7 @@ const compareByTimestampDesc = (a: string | null | undefined, b: string | null |
   return tb - ta;
 };
 
-export const compareServers = (a: MCPServer, b: MCPServer, sort: SortKey): number => {
+export const compareServers = (a: MCPServer, b: MCPServer, sort: McpServerSortKey): number => {
   switch (sort) {
     case "name_asc":
       return compareByName(a, b);
@@ -101,24 +97,12 @@ export const compareServers = (a: MCPServer, b: MCPServer, sort: SortKey): numbe
   }
 };
 
-const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
+type AccessGroupEntry = string | { name?: string } | null;
 
-// Server id stashed by the Tools tab before an OBO OAuth redirect, read once at
-// mount so the redirect returns straight to that server's Tools tab.
-const readToolsOAuthServerId = (): string | null => {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  try {
-    const stored = getSecureItem(TOOLS_OAUTH_UI_STATE_KEY);
-    if (!stored) {
-      return null;
-    }
-    return JSON.parse(stored)?.serverId ?? null;
-  } catch {
-    return null;
-  }
-};
+const accessGroupName = (group: AccessGroupEntry) => (typeof group === "string" ? group : group?.name);
+
+const inAccessGroup = (server: MCPServer, group: string): boolean =>
+  (server.mcp_access_groups ?? []).some((entry: AccessGroupEntry) => accessGroupName(entry) === group);
 
 function DeleteServerDialog({
   open,
@@ -175,6 +159,11 @@ function DeleteServerDialog({
   );
 }
 
+const roleAccess = (role: string | null) => ({
+  isAdmin: role !== null && isAdminRole(role),
+  canViewLiveConnections: role !== null && isProxyAdminTierRole(role),
+});
+
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, isViewOnly = false }) => {
   const { t } = useTranslation();
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
@@ -203,31 +192,35 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
     });
   }, [mcpServers, healthStatuses]);
 
-  // state
+  const { isAdmin, canViewLiveConnections } = roleAccess(userRole);
+  const {
+    tab,
+    setTab,
+    team: selectedTeam,
+    setTeam,
+    accessGroup: selectedMcpAccessGroup,
+    setAccessGroup,
+    search: searchQuery,
+    setSearch,
+    sort: sortKey,
+    setSort,
+    selectedServerId,
+    selectedServer,
+    editServer,
+    openServer,
+    closeServer,
+    envVarsDeepLinkId,
+    clearEnvVarsDeepLink,
+  } = useMcpServersUrlState({ isAdmin, canViewLiveConnections }, serversWithHealth, mcpServers !== undefined);
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  // Server whose Tools tab should be reopened after an OBO OAuth redirect; read
-  // once from sessionStorage so the restored server selection is correct on the
-  // first render. Cleared when the user navigates back to the list (handleBack)
-  // so a later visit to the same server defaults to Overview, not the Tools tab.
-  const [toolsTabServerId, setToolsTabServerId] = useState<string | null>(readToolsOAuthServerId);
-  const [selectedServerId, setSelectedServerId] = useState<string | null>(toolsTabServerId);
-  const [editServer, setEditServer] = useState(false);
-  const [selectedTeam, setSelectedTeam] = useState<string>("all");
-  const [selectedMcpAccessGroup, setSelectedMcpAccessGroup] = useState<string>("all");
-  const [filteredServers, setFilteredServers] = useState<MCPServer[]>([]);
   const [isModalVisible, setModalVisible] = useState(false);
   const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
   const [isImportVisible, setImportVisible] = useState(false);
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
-  const [fillEnvVarsParam, setFillEnvVarsParam] = useQueryState("fill_env_vars");
-  // Per-user env-var fill modal target + deep-link source captured once from the URL.
   const [envVarsModalServer, setEnvVarsModalServer] = useState<MCPServer | null>(null);
-  const [deepLinkServerId, setDeepLinkServerId] = useState<string | null>(() => fillEnvVarsParam);
-  const [searchQuery, setSearchQuery] = useState<string>("");
-  const [sortKey, setSortKey] = useState<SortKey>("created_desc");
   const isInternalUser = userRole === "Internal User";
 
   const stdioEnabled = useMcpStdioEnabled();
@@ -255,47 +248,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
     [envVarStatuses],
   );
 
-  useEffect(() => {
-    if (fillEnvVarsParam !== null) setFillEnvVarsParam(null);
-  }, [fillEnvVarsParam, setFillEnvVarsParam]);
-
   const deepLinkServer = useMemo(
-    () => (deepLinkServerId ? serversWithHealth.find((s) => s.server_id === deepLinkServerId) ?? null : null),
-    [deepLinkServerId, serversWithHealth],
+    () => (envVarsDeepLinkId ? serversWithHealth.find((s) => s.server_id === envVarsDeepLinkId) ?? null : null),
+    [envVarsDeepLinkId, serversWithHealth],
   );
   const activeEnvVarsServer = envVarsModalServer ?? deepLinkServer;
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    try {
-      const stored = getSecureItem(EDIT_OAUTH_UI_STATE_KEY);
-      if (!stored) {
-        return;
-      }
-      const parsed = JSON.parse(stored);
-      if (parsed?.serverId) {
-        setSelectedServerId(parsed.serverId);
-        setEditServer(true);
-      }
-    } catch (err) {
-      console.error("Failed to restore MCP edit view state", err);
-    }
-  }, []);
-
-  // The restored server id was consumed by the initializer above; remove the
-  // one-shot sessionStorage key so a full page reload doesn't reopen the Tools
-  // tab (removeItem only, no setState).
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      try {
-        window.sessionStorage.removeItem(TOOLS_OAUTH_UI_STATE_KEY);
-      } catch {
-        // ignore storage errors
-      }
-    }
-  }, []);
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
@@ -349,46 +306,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
 
   const sortOptions = useMemo(() => SORT_OPTIONS.map(({ value, labelKey }) => ({ value, label: t(labelKey) })), [t]);
 
-  // Filtering logic for both team and access group
-  const filterServers = useCallback(
-    (teamId: string, group: string) => {
-      if (!serversWithHealth) return setFilteredServers([]);
-      let filtered = serversWithHealth;
-      if (teamId === "personal") {
-        setFilteredServers([]);
-        return;
-      }
-      if (teamId !== "all") {
-        filtered = filtered.filter((server) => server.teams?.some((team) => team.team_id === teamId));
-      }
-      if (group !== "all") {
-        filtered = filtered.filter((server) =>
-          server.mcp_access_groups?.some((g: string | { name?: string } | null) =>
-            typeof g === "string" ? g === group : g?.name === group,
-          ),
-        );
-      }
-      setFilteredServers(filtered);
-    },
-    [serversWithHealth],
-  );
-
-  // Handle team filter change
-  const handleTeamChange = (teamId: string) => {
-    setSelectedTeam(teamId);
-    filterServers(teamId, selectedMcpAccessGroup);
-  };
-
-  // Handle MCP access group filter change
-  const handleMcpAccessGroupChange = (group: string) => {
-    setSelectedMcpAccessGroup(group);
-    filterServers(selectedTeam, group);
-  };
-
-  // Initial and effect-based filtering (trigger on query data updates and health data updates)
-  useEffect(() => {
-    filterServers(selectedTeam, selectedMcpAccessGroup);
-  }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup, filterServers]);
+  const filteredServers = useMemo(() => {
+    if (selectedTeam === "personal") return [];
+    return serversWithHealth
+      .filter((server) => selectedTeam === "all" || server.teams?.some((team) => team.team_id === selectedTeam))
+      .filter((server) => selectedMcpAccessGroup === "all" || inAccessGroup(server, selectedMcpAccessGroup));
+  }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup]);
 
   // Search + sort layer applied on top of the team/access-group filters.
   const displayedServers = useMemo(() => {
@@ -418,13 +341,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
       setIsDeletingServer(true);
       await deleteMCPServer(accessToken, serverIdToDelete);
       toast.success(t("mcpServers.servers.toasts.deleted"));
-      // If the user is currently viewing the detail page of the server they
-      // just deleted, return them to the All Servers list. Otherwise the
-      // detail view would stay mounted, fall back to an empty stub server,
-      // and show a phantom "Unnamed Server" page.
       if (selectedServerId === serverIdToDelete) {
-        setEditServer(false);
-        setSelectedServerId(null);
+        closeServer();
       }
       refetch();
     } catch (error) {
@@ -444,38 +362,15 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
   // Find the server to delete from the servers list
   const serverToDelete = mcpServers?.find((server) => server.server_id === serverIdToDelete);
 
-  const handleCreateSuccess = (newMcpServer: MCPServer) => {
-    setFilteredServers((prev) => [...prev, newMcpServer]);
+  const handleCreateSuccess = () => {
     setModalVisible(false);
     refetch();
   };
 
-  // Memoize the selected server to prevent unnecessary re-renders
-  const selectedServer = React.useMemo(() => {
-    return (
-      filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
-        server_id: "",
-        server_name: "",
-        alias: "",
-        url: "",
-        transport: "",
-        auth_type: "",
-        created_at: "",
-        created_by: "",
-        updated_at: "",
-        updated_by: "",
-      }
-    );
-  }, [filteredServers, selectedServerId]);
-
-  // Memoize the onBack callback to prevent unnecessary re-renders
   const handleBack = React.useCallback(() => {
-    setEditServer(false);
-    setSelectedServerId(null);
-    // Drop the post-redirect one-shot so re-selecting that server opens Overview.
-    setToolsTabServerId(null);
+    closeServer();
     refetch();
-  }, [refetch]);
+  }, [closeServer, refetch]);
 
   if (!accessToken || !userRole || !userID) {
     return <div className="p-6 text-center text-muted-foreground">{t("mcpServers.servers.missingAuth")}</div>;
@@ -483,7 +378,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
 
   return (
     <TooltipProvider>
-      <div className="h-full w-full p-6">
+      <PageContent>
         <DeleteServerDialog
           open={isDeleteModalOpen}
           onOpenChange={(open) => !open && cancelDelete()}
@@ -508,20 +403,19 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
             setDiscoveryVisible(true);
           }}
         />
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-xl font-semibold">{t("mcpServers.servers.header.title")}</h1>
-              {filteredServers.length > 0 && <Badge variant="secondary">{filteredServers.length}</Badge>}
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">{t("mcpServers.servers.header.subtitle")}</p>
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
+        <PageHeader>
+          <PageHeaderTitle>
+            <Server />
+            {t("mcpServers.servers.header.title")}
+            {filteredServers.length > 0 && <Badge variant="secondary">{filteredServers.length}</Badge>}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("mcpServers.servers.header.subtitle")}</PageHeaderDescription>
+          <PageHeaderControls className="flex-wrap">
             <Link href={uiHref("connect")} className={cn(buttonVariants({ variant: "outline" }), "shrink-0")}>
               <Plug />
               {t("mcpServers.servers.header.myConnections")}
             </Link>
-            {isAdminRole(userRole) ? (
+            {isAdmin ? (
               <>
                 <Button className="shrink-0" variant="secondary" onClick={() => setImportVisible(true)}>
                   {t("mcpServers.servers.header.importFromJson")}
@@ -542,8 +436,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                 {t("mcpServers.servers.header.submitServer")}
               </Button>
             )}
-          </div>
-        </div>
+          </PageHeaderControls>
+        </PageHeader>
         <ImportMCPServers
           accessToken={accessToken}
           open={isImportVisible}
@@ -565,8 +459,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           }}
           accessToken={accessToken}
         />
-        <Tabs defaultValue="servers" className="mt-2 w-full">
-          <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
+        <Tabs value={tab} onValueChange={setTab} className="w-full gap-6">
+          <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto rounded-none border-b p-0">
             <TabsTrigger value="servers" className="flex-none rounded-none px-4 py-2">
               {t("mcpServers.servers.tabs.allServers")}
             </TabsTrigger>
@@ -576,7 +470,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
             <TabsTrigger value="connect" className="flex-none rounded-none px-4 py-2">
               {t("mcpServers.servers.tabs.connect")}
             </TabsTrigger>
-            {isAdminRole(userRole) && (
+            {isAdmin && (
               <>
                 <TabsTrigger value="semantic-filter" className="flex-none rounded-none px-4 py-2">
                   {t("mcpServers.servers.tabs.semanticFilter")}
@@ -595,19 +489,19 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                 </TabsTrigger>
               </>
             )}
-            {isProxyAdminTierRole(userRole) && (
+            {canViewLiveConnections && (
               <TabsTrigger value="connections" className="flex-none rounded-none px-4 py-2">
                 {t("mcpServers.servers.tabs.liveConnections")}
               </TabsTrigger>
             )}
           </TabsList>
           <TabsContent value="servers" keepMounted>
-            {selectedServerId ? (
+            {selectedServer ? (
               <MCPServerView
-                key={selectedServerId}
+                key={selectedServer.server_id}
                 mcpServer={selectedServer}
                 onBack={handleBack}
-                isProxyAdmin={isAdminRole(userRole)}
+                isProxyAdmin={isAdmin}
                 isEditing={editServer}
                 accessToken={accessToken}
                 userID={userID}
@@ -615,7 +509,6 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                 isViewOnly={isViewOnly}
                 availableAccessGroups={uniqueMcpAccessGroups}
                 existingServers={mcpServers}
-                initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
                 stdioEnabled={stdioEnabled}
               />
             ) : (
@@ -630,7 +523,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                         <Select
                           items={teamSelectItems}
                           value={selectedTeam}
-                          onValueChange={(v: string | null) => handleTeamChange(v ?? ALL_FILTER_VALUE)}
+                          onValueChange={(v: string | null) => setTeam(v)}
                         >
                           <SelectTrigger className="w-55" aria-label={t("mcpServers.servers.filters.team.label")}>
                             <SelectValue />
@@ -665,7 +558,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                         <Select
                           items={accessGroupSelectItems}
                           value={selectedMcpAccessGroup}
-                          onValueChange={(v: string | null) => handleMcpAccessGroupChange(v ?? ALL_FILTER_VALUE)}
+                          onValueChange={(v: string | null) => setAccessGroup(v)}
                         >
                           <SelectTrigger
                             className="w-55"
@@ -694,18 +587,14 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                     <InputGroupInput
                       placeholder={t("mcpServers.servers.searchPlaceholder")}
                       value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onChange={(e) => setSearch(e.target.value)}
                     />
                   </InputGroup>
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium whitespace-nowrap text-muted-foreground">
                       {t("mcpServers.servers.sort.label")}
                     </p>
-                    <Select
-                      items={sortOptions}
-                      value={sortKey}
-                      onValueChange={(v: string | null) => setSortKey((v ?? "created_desc") as SortKey)}
-                    >
+                    <Select items={sortOptions} value={sortKey} onValueChange={(v: string | null) => setSort(v)}>
                       <SelectTrigger className="w-55">
                         <SelectValue />
                       </SelectTrigger>
@@ -752,16 +641,13 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                           hasUserFields={serversWithUserFields.has(server.server_id)}
                           isLoadingHealth={isLoadingHealth}
                           isRechecking={recheckingServerIds?.has(server.server_id)}
-                          onClick={() => {
-                            setSelectedServerId(server.server_id);
-                            setEditServer(true);
-                          }}
+                          onClick={() => openServer(server.server_id)}
                           onRecheckHealth={
                             recheckServerHealth ? () => recheckServerHealth(server.server_id) : undefined
                           }
                           onByokConnect={server.is_byok ? () => setByokModalServer(server) : undefined}
                           onOpenFillFields={() => setEnvVarsModalServer(server)}
-                          onDelete={isAdminRole(userRole) ? () => handleDelete(server.server_id) : undefined}
+                          onDelete={isAdmin ? () => handleDelete(server.server_id) : undefined}
                           stdioEnabled={stdioEnabled}
                         />
                       ))}
@@ -777,7 +663,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           <TabsContent value="connect" keepMounted>
             <MCPConnect />
           </TabsContent>
-          {isAdminRole(userRole) && (
+          {isAdmin && (
             <>
               <TabsContent value="semantic-filter" keepMounted>
                 <MCPSemanticFilterSettings accessToken={accessToken} />
@@ -796,7 +682,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
               </TabsContent>
             </>
           )}
-          {isProxyAdminTierRole(userRole) && (
+          {canViewLiveConnections && (
             <TabsContent value="connections">
               <MCPGatewaySessionsTab
                 accessToken={accessToken}
@@ -825,7 +711,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           accessToken={accessToken}
           onClose={() => {
             setEnvVarsModalServer(null);
-            setDeepLinkServerId(null);
+            clearEnvVarsDeepLink();
           }}
           onSaved={() => {
             // Refresh the bulk status so the red "N user fields missing" footer
@@ -833,7 +719,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
             refetchEnvVarStatus();
           }}
         />
-      </div>
+      </PageContent>
     </TooltipProvider>
   );
 };

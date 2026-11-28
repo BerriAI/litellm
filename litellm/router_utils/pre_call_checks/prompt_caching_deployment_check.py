@@ -263,9 +263,9 @@ class PromptCachingDeploymentCheck(CustomLogger):
         model: str,
         healthy_deployments: list,
         messages: list[AllMessageValues] | None,
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         preferred_id: Final = await self.async_preferred_deployment_id(
             model, healthy_deployments, messages, request_kwargs
         )
