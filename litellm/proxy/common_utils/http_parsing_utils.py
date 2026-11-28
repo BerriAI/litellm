@@ -17,6 +17,7 @@ from litellm.constants import (
     AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     CURSOR_CLI_PASS_THROUGH_ROUTE_PREFIX,
+    GNANI_BATCH_ROUTE_PREFIX,
     LITELLM_CLIENT_DISCONNECT_DETAIL,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
@@ -455,6 +456,8 @@ def is_opaque_pass_through_request(route: str, content_type: str) -> bool:
     if route.startswith((f"{OPENSEARCH_PASS_THROUGH_ROUTE_PREFIX}/", f"{CURSOR_CLI_PASS_THROUGH_ROUTE_PREFIX}/")):
         return True
     media_type: Final = _normalize_media_type(content_type)
+    if route.startswith(f"{GNANI_BATCH_ROUTE_PREFIX}/"):
+        return media_type == "multipart/form-data"
     return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (
         media_type.startswith("audio/") or media_type == "multipart/form-data"
     )

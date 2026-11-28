@@ -606,7 +606,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         requested_query_params: dict | None = None,
         _parsed_body: Mapping[str, object] | None = None,
         forward_multipart: bool = False,
-        raw_body: str | bytes | None = None,
+        raw_body: str | bytes | AsyncIterator[bytes] | None = None,
         raw_response: bool = False,
     ) -> httpx.Response:
         """
@@ -1382,11 +1382,23 @@ def _filtered_upstream_request(
     return dict(filtered_headers), filtered_body
 
 
-def _raw_pass_through_body(request: Request) -> str | bytes | None:
+def _raw_pass_through_body(
+    request: Request, stream: AsyncIterator[bytes] | None
+) -> str | bytes | AsyncIterator[bytes] | None:
+    if stream is not None:
+        return stream
     value: Final[object] = getattr(getattr(request, "state", None), LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
     if isinstance(value, bytearray):
         return bytes(value)
     return value if isinstance(value, (str, bytes)) else None
+
+
+def _passthrough_body_override(
+    custom_body: Mapping[str, object] | None, multipart: bool, stream: AsyncIterator[bytes] | None
+) -> Mapping[str, object] | None:
+    if custom_body:
+        return custom_body
+    return {} if multipart or stream is not None else None
 
 
 def _v2_requires_inference_controls(callback: object) -> bool:
@@ -1644,6 +1656,8 @@ async def pass_through_request(
     response_owner: AsyncExitStack | None = None,
     *,
     preserve_trace_context: bool = False,
+    raw_request_body: AsyncIterator[bytes] | None = None,
+    allow_redirects: bool = True,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -1672,6 +1686,8 @@ async def pass_through_request(
         raw_response: Relay opaque response bytes without parsing, buffering or following redirects
         response_owner: Request-scoped owner that closes the upstream even if streaming never starts
         preserve_trace_context: Relay the caller trace context without injecting the proxy span
+        raw_request_body: Stream the supplied request bytes upstream without re-encoding them
+        allow_redirects: Allow the HTTP client to follow upstream redirects
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1718,19 +1734,10 @@ async def pass_through_request(
             str(url), custom_llm_provider
         )
 
-        state_raw_body: Final = _raw_pass_through_body(request)
-
-        # Skip body parsing for multipart requests - make_multipart_http_request will handle it
-        # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
+        state_raw_body: Final = _raw_pass_through_body(request, raw_request_body)
         is_multipart: Final = HttpPassThroughEndpointHelpers.is_multipart(request) and not custom_body
-
-        if custom_body:
-            _parsed_body = dict(custom_body)
-        elif is_multipart:
-            # Don't parse multipart body here - it will be handled by make_multipart_http_request
-            _parsed_body = {}
-        else:
-            _parsed_body = await read_request_body(request)  # rebind-ok: pre-existing rebinding on a rename-only line
+        body_override: Final = _passthrough_body_override(custom_body, is_multipart, raw_request_body)
+        _parsed_body = dict(body_override) if body_override is not None else await read_request_body(request)
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
@@ -1839,7 +1846,7 @@ async def pass_through_request(
         resolved_timeout: Final = resolve_pass_through_request_timeout(timeout)
         async_client_obj: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PassThroughEndpoint,
-            params={"timeout": resolved_timeout},
+            params={"timeout": resolved_timeout, **({} if allow_redirects else {"follow_redirects": False})},
         )
         async_client: Final = async_client_obj.client
         passthrough_logging_payload: Final = PassthroughStandardLoggingPayload(

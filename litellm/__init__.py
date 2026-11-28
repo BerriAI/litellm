@@ -1674,6 +1674,7 @@ from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_k
 
 ### PASSTHROUGH ###
 from .passthrough import allm_passthrough_route, llm_passthrough_route
+from .llms.gnani.batches.jobs import agnani_batch as agnani_batch, gnani_batch as gnani_batch
 from .google_genai import agenerate_content
 from .google_genai import generate_content as generate_content  # pyright: ignore[reportUnknownVariableType]  # native request types require the optional google-genai SDK
 

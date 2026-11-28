@@ -56,7 +56,7 @@ locals {
     "/v1beta/*",
     "/interactions/*",
     "/anthropic/*", "/azure/*", "/azure_ai/*", "/azure_speech/*", "/aws/*", "/bedrock/*", "/comprehendmedical*", "/transcribe*",
-    "/cohere/*", "/gemini/*", "/google/*",
+    "/cohere/*", "/gemini/*", "/gnani/stt/v3/batch/*", "/google/*",
     "/vertex_ai/*", "/vertex-ai/*",
     "/assemblyai/*", "/eu.assemblyai/*",
     "/langfuse/*", "/vllm/*",
