@@ -4525,6 +4525,39 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is None
         assert response_usage.output_tokens_details is None
 
+    def test_transform_usage_preserves_speed(self):
+        """Test that provider-reported speed round-trips into Responses usage"""
+        usage = Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            speed="fast",
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-opus-4-1",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        assert response_usage.speed == "fast"
+        assert response_usage.input_tokens == 10
+        assert response_usage.output_tokens == 5
+        assert response_usage.total_tokens == 15
+
     def test_transform_usage_with_image_tokens(self):
         """Test that image_tokens from Vertex AI/Gemini are properly transformed to output_tokens_details"""
         # Setup: Simulate Vertex AI/Gemini usage with image_tokens in completion_tokens_details
