@@ -9,8 +9,11 @@ names, aliases, and wildcard-matched names keep their own label values.
 
 import sys
 import types
+from datetime import UTC, datetime
+from typing import Final
 from unittest.mock import patch
 
+import httpx
 import pytest
 from prometheus_client import REGISTRY
 
@@ -114,6 +117,85 @@ async def test_unknown_models_collapse_to_one_series_on_proxy_request_metrics(ro
         assert _requested_model_values(metric) == {UNRECOGNIZED_REQUESTED_MODEL_LABEL}
         assert _series_count(metric) == 1
         assert _total_value(metric) == 25
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handoff", "expected"),
+    [
+        (datetime(2026, 1, 1), "openai/gpt-4o-mini"),
+        (1.0, UNRECOGNIZED_REQUESTED_MODEL_LABEL),
+        (None, UNRECOGNIZED_REQUESTED_MODEL_LABEL),
+    ],
+)
+async def test_configured_deployment_name_is_kept_only_with_a_provider_handoff(
+    handoff: datetime | float | None, expected: str
+) -> None:
+    deployment: Final = "openai/gpt-4o-mini"
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "chat", "litellm_params": {"model": deployment, "api_key": "fake-key"}}],
+    )
+    logger: Final = PrometheusLogger()
+
+    with patch(
+        "litellm.proxy.proxy_server.llm_router", router, create=True
+    ):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+        await logger.async_post_call_failure_hook(
+            request_data={
+                "model": deployment,
+                "first_api_call_start_time": handoff,
+                "metadata": {},
+                "proxy_server_request": {},
+            },
+            original_exception=litellm.ServiceUnavailableError(
+                message="provider unavailable", llm_provider="openai", model=deployment
+            ),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key-1"),
+        )
+
+    for metric in (logger.litellm_proxy_failed_requests_metric, logger.litellm_proxy_total_requests_metric):
+        assert _requested_model_values(metric) == {expected}
+        assert _total_value(metric) == 1
+
+
+@pytest.mark.asyncio
+async def test_billed_image_without_a_logged_group_keeps_accounting_in_the_bounded_bucket() -> None:
+    deployment: Final = "gemini/gemini-3.1-flash-image"
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "image-edit", "litellm_params": {"model": deployment, "api_key": "fake-key"}}],
+    )
+    logger: Final = PrometheusLogger()
+
+    with patch(
+        "litellm.proxy.proxy_server.llm_router", router, create=True
+    ):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+        await logger.async_post_call_failure_hook(
+            request_data={
+                "model": deployment,
+                "first_api_call_start_time": datetime(2020, 1, 1, tzinfo=UTC),
+                "metadata": {},
+                "call_type": "aimage_edit",
+                "response_cost": 0.25,
+                "combined_usage_object": litellm.Usage(prompt_tokens=12, completion_tokens=5, total_tokens=17),
+                "standard_logging_object": {"model": deployment, "custom_llm_provider": "gemini"},
+            },
+            original_exception=litellm.UnprocessableEntityError(
+                message="provider answered without an image",
+                llm_provider="gemini",
+                model=deployment,
+                response=httpx.Response(422, request=httpx.Request("POST", "https://gemini.invalid")),
+            ),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key-1"),
+        )
+
+    for metric, expected in (
+        (logger.litellm_spend_metric, 0.25),
+        (logger.litellm_tokens_metric, 17.0),
+        (logger.litellm_input_tokens_metric, 12.0),
+        (logger.litellm_output_tokens_metric, 5.0),
+    ):
+        assert _requested_model_values(metric) == {UNRECOGNIZED_REQUESTED_MODEL_LABEL}
+        assert _total_value(metric) == expected
 
 
 @pytest.mark.asyncio
