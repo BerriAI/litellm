@@ -1,23 +1,44 @@
-from typing import Optional
+from collections.abc import Mapping
+from typing import Final, Optional
 
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy._types import GenerateKeyRequest, LiteLLM_TeamTable
+
+_METADATA: Final = TypeAdapter(Mapping[str, object])
+
+
+def _is_within(requested: str | None, cap: str) -> bool:
+    if requested is None or requested == "-1":
+        return False
+    try:
+        return duration_in_seconds(requested) <= duration_in_seconds(cap)
+    except ValueError:
+        return False
 
 
 def add_team_member_key_duration(
     team_table: Optional[LiteLLM_TeamTable],
     data: GenerateKeyRequest,
 ) -> GenerateKeyRequest:
+    """The team's key duration is both the default and the longest a member key may live."""
     if team_table is None:
         return data
 
     if data.user_id is None:  # only apply for team member keys, not service accounts
         return data
 
-    if (
-        team_table.metadata is not None
-        and team_table.metadata.get("team_member_key_duration") is not None
-    ):
-        data.duration = team_table.metadata["team_member_key_duration"]
+    try:
+        metadata: Final = _METADATA.validate_python(team_table.metadata or {})
+    except ValidationError:
+        return data
+    team_duration: Final = metadata.get("team_member_key_duration")
+    if not isinstance(team_duration, str) or team_duration.strip() == "":
+        return data
+
+    if not _is_within(data.duration, team_duration):
+        data.duration = team_duration
 
     return data
 
