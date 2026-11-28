@@ -12,6 +12,15 @@ use crate::{
 /// `DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE`, the chunk `async_delete_cache_keys` deletes at once.
 const DELETE_CHUNK: usize = 1000;
 
+/// How the memory tier dates a write to a key it still holds.
+#[derive(Clone, Copy)]
+enum Deadline {
+    /// The key keeps the deadline of its first write, as `InMemoryCache.set_cache` does.
+    Keep,
+    /// The key takes the new `ttl`, for a value whose writer rewrites it on a schedule.
+    Renew,
+}
+
 impl<V: Clone + IntoValue, R> DualCache<V, R> {
     /// `DualCache.async_set_cache`: memory, then a `SET` of `json.dumps(value)`. A Redis failure, or
     /// a value `json.dumps` refuses, only logs.
@@ -21,7 +30,8 @@ impl<V: Clone + IntoValue, R> DualCache<V, R> {
         value: V,
         ttl: Option<Duration>,
     ) -> Result<(), Error> {
-        self.set_now(key, value, ttl, codec::dumps).await
+        self.set_now(key, value, ttl, Deadline::Keep, codec::dumps)
+            .await
     }
 
     /// `DualCache.set_cache`, whose sync `RedisCache.set_cache` writes `str(value)`.
@@ -31,8 +41,25 @@ impl<V: Clone + IntoValue, R> DualCache<V, R> {
         value: V,
         ttl: Option<Duration>,
     ) -> Result<(), Error> {
-        self.set_now(key, value, ttl, |value| Ok(codec::str(value)))
-            .await
+        self.set_now(key, value, ttl, Deadline::Keep, |value| {
+            Ok(codec::str(value))
+        })
+        .await
+    }
+
+    /// `set_str` for a value its writer rewrites before it expires. Memory takes `ttl` again on
+    /// every write, where `set_str` leaves a live key on its first deadline. Redis already restarts
+    /// the TTL of a key on each `SET`, so the two tiers now expire together.
+    pub(crate) async fn refresh_str(
+        &self,
+        key: &str,
+        value: V,
+        ttl: Duration,
+    ) -> Result<(), Error> {
+        self.set_now(key, value, Some(ttl), Deadline::Renew, |value| {
+            Ok(codec::str(value))
+        })
+        .await
     }
 
     /// `DualCache._set_on_batch`: memory now, the `SET` on the batch `send` picks. Memory and Redis
@@ -44,7 +71,7 @@ impl<V: Clone + IntoValue, R> DualCache<V, R> {
         value: V,
         ttl: Option<Duration>,
     ) -> Result<Pending<()>, Error> {
-        self.declare_encoded(send, key, value, ttl, codec::dumps)
+        self.declare_encoded(send, key, value, ttl, Deadline::Keep, codec::dumps)
     }
 
     /// `DualCache.async_set_cache_pipeline`: memory, then one pipeline of `SET`s. A value
@@ -103,10 +130,11 @@ impl<V: Clone + IntoValue, R> DualCache<V, R> {
         key: &str,
         value: V,
         ttl: Option<Duration>,
+        deadline: Deadline,
         encode: impl FnOnce(V) -> Result<String, Error>,
     ) -> Result<(), Error> {
         if let Err(error) = self
-            .declare_encoded(Send::Now, key, value, ttl, encode)?
+            .declare_encoded(Send::Now, key, value, ttl, deadline, encode)?
             .await
         {
             redis_failure!(&error, "LiteLLM Cache: exception in async add_cache");
@@ -120,11 +148,15 @@ impl<V: Clone + IntoValue, R> DualCache<V, R> {
         key: &str,
         value: V,
         ttl: Option<Duration>,
+        deadline: Deadline,
         encode: impl FnOnce(V) -> Result<String, Error>,
     ) -> Result<Pending<()>, Error> {
         let ttl = ttl.or(self.default_in_memory_ttl());
         let encoded = self.redis.get().map(|_| encode(value.clone()));
-        self.memory.set(key, value, ttl)?;
+        match (deadline, ttl) {
+            (Deadline::Renew, Some(ttl)) => self.memory.refresh(key, value, ttl)?,
+            _ => self.memory.set(key, value, ttl)?,
+        }
         let (Some(remote), Some(encoded)) = (self.redis.get(), encoded) else {
             return Ok(ready(()));
         };
