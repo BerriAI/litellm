@@ -713,3 +713,36 @@ def test_per_user_refresh_failure_does_not_become_a_sign_in_challenge(
     with pytest.raises(MCPServerListError) as exc_info:
         raise_classified_list_failure(exc, "srv")
     assert exc_info.value.fault.tag == expected_fault
+
+
+def test_per_user_dead_grant_listing_is_a_gateway_managed_reauth_challenge():
+    from litellm.proxy.mcp_server.faults.list_outcomes import raise_classified_list_failure
+    from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import PER_USER_OAUTH_RECOVERY_EXTENSION
+
+    request: Final = httpx2.Request("POST", "https://upstream.example.com/mcp")
+    response: Final = httpx2.Response(
+        401,
+        headers={"www-authenticate": 'Bearer resource_metadata="https://upstream.example.com/.well-known"'},
+        request=request,
+    )
+    response.extensions[PER_USER_OAUTH_RECOVERY_EXTENSION] = CredError.of_unauthorized("sign in again")
+    exc: Final = httpx2.HTTPStatusError("rejected", request=request, response=response)
+
+    with pytest.raises(MCPUpstreamAuthError) as exc_info:
+        raise_classified_list_failure(exc, "srv")
+
+    assert exc_info.value.managed_reauth is True
+
+
+def test_managed_reauth_on_a_multi_server_route_uses_aggregate_resource_metadata():
+    error: Final = MCPUpstreamAuthError(
+        status_code=401,
+        www_authenticate='Bearer resource_metadata="https://upstream.example.com/.well-known"',
+        server_name="alpha",
+        managed_reauth=True,
+    ).to_http_exception("https://gateway.example", "/alpha,beta/mcp")
+
+    assert (
+        error.headers["www-authenticate"]
+        == 'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource"'
+    )

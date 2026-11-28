@@ -22,12 +22,17 @@ TOKEN_EXCHANGE: Final = "urn:ietf:params:oauth:grant-type:token-exchange"
 class AuthorizationServer:
     wire: Wire
     clients: dict[str, str] = field(default_factory=dict)
+    rotated_secrets: dict[str, str] = field(default_factory=dict)
     codes: dict[str, dict[str, str]] = field(default_factory=dict)
     access_tokens: dict[str, dict[str, str]] = field(default_factory=dict)
     refresh_tokens: dict[str, dict[str, str]] = field(default_factory=dict)
     revoked: set[str] = field(default_factory=set)
+    refresh_failures: int = 0
+    refresh_invalid_grant_started: threading.Event = field(default_factory=threading.Event)
+    refresh_invalid_grant_release: threading.Event | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
     mint: Callable[[str], str] | None = None
+    authorization_code_expires_in: int | None = 3600
 
     @property
     def issuer(self) -> str:
@@ -47,16 +52,37 @@ class AuthorizationServer:
         with self.lock:
             return token in self.access_tokens and token not in self.revoked
 
+    def revoke_access_token(self, token: str) -> None:
+        with self.lock:
+            self.revoked.add(token)
+
+    def revoke_refresh_tokens(self) -> None:
+        with self.lock:
+            self.refresh_tokens.clear()
+
+    def rotate_client_secret(self, client_id: str, secret: str) -> None:
+        with self.lock:
+            self.rotated_secrets[client_id] = secret
+
+    def fail_next_refreshes(self, count: int) -> None:
+        with self.lock:
+            self.refresh_failures = count
+
+    def hold_invalid_grant_refreshes_until(self, release: threading.Event) -> None:
+        with self.lock:
+            self.refresh_invalid_grant_release = release
+
     def issue(self, grant: str, client_id: str, subject: str, scope: str) -> dict[str, object]:
         access: Final = self.mint(grant) if self.mint is not None else f"at-{grant}-{secrets.token_urlsafe(8)}"
         refresh: Final = f"rt-{secrets.token_urlsafe(8)}"
         with self.lock:
             self.access_tokens[access] = {"client_id": client_id, "subject": subject, "scope": scope, "grant": grant}
             self.refresh_tokens[refresh] = {"client_id": client_id, "subject": subject, "scope": scope}
+        expires_in: Final = self.authorization_code_expires_in if grant == "authorization_code" else 3600
         return {
             "access_token": access,
             "token_type": "Bearer",
-            "expires_in": 3600,
+            **({"expires_in": expires_in} if expires_in is not None else {}),
             "refresh_token": refresh,
             "scope": scope,
         }
@@ -82,7 +108,10 @@ def _client_credentials(request: Request, form: dict[str, str]) -> tuple[str, st
 
 @contextmanager
 def oauth_server(
-    *, scopes: tuple[str, ...] = ("tools.read", "tools.call"), mint: Callable[[str], str] | None = None
+    *,
+    scopes: tuple[str, ...] = ("tools.read", "tools.call"),
+    mint: Callable[[str], str] | None = None,
+    authorization_code_expires_in: int | None = 3600,
 ) -> Iterator[AuthorizationServer]:
     """``mint(grant)``, when given, chooses each issued access token instead of a random one."""
     holder: list[AuthorizationServer] = []
@@ -166,8 +195,27 @@ def oauth_server(
                 return _json(200, server.issue("authorization_code", client_id, "integration-user", issued["scope"]))
             if grant == "refresh_token":
                 with server.lock:
-                    known: Final = server.refresh_tokens.pop(form.get("refresh_token", ""), None)
+                    expected_refresh_secret: Final = server.rotated_secrets.get(client_id)
+                if expected_refresh_secret is not None and expected_refresh_secret != client_secret:
+                    return _json(
+                        401, {"error": "invalid_client", "error_description": "refresh client authentication failed"}
+                    )
+                with server.lock:
+                    transient_failure: Final = server.refresh_failures > 0
+                    if transient_failure:
+                        server.refresh_failures -= 1
+                    known: Final = (
+                        None if transient_failure else server.refresh_tokens.pop(form.get("refresh_token", ""), None)
+                    )
+                if transient_failure:
+                    return _json(
+                        500, {"error": "temporarily_unavailable", "error_description": "scripted token endpoint outage"}
+                    )
                 if known is None:
+                    server.refresh_invalid_grant_started.set()
+                    release: Final = server.refresh_invalid_grant_release
+                    if release is not None:
+                        release.wait(10)
                     return _json(400, {"error": "invalid_grant", "error_description": "unknown refresh token"})
                 return _json(200, server.issue("refresh_token", known["client_id"], known["subject"], known["scope"]))
             if grant == "client_credentials":
@@ -198,5 +246,5 @@ def oauth_server(
         return _json(404, {"error": "not_found", "path": path, "method": request.method})
 
     with wire_server(respond) as wire:
-        holder.append(AuthorizationServer(wire, mint=mint))
+        holder.append(AuthorizationServer(wire, mint=mint, authorization_code_expires_in=authorization_code_expires_in))
         yield holder[0]
