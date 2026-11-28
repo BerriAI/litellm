@@ -17966,6 +17966,7 @@
         "show": "显示密码"
       },
       "selectParam": "选择{{label}}",
+      "enterParam": "输入{{label}}",
       "integrationParameters": "集成参数",
       "badges": {
         "sensitive": "敏感",

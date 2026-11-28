@@ -14,6 +14,7 @@ from litellm.proxy.common_utils.callback_config_validation import (
     logging_metadata_config_error,
     logging_metadata_env_reference_error,
     raise_on_logging_metadata_env_reference,
+    raise_on_stored_metadata_env_reference,
 )
 
 
@@ -531,7 +532,7 @@ def test_an_env_reference_inside_json_string_logging_is_rejected() -> None:
     assert error is not None and "Callback param 'arize_api_key'" in error
     assert logging_metadata_config_error(metadata) == error
     with pytest.raises(HTTPException) as raised:
-        raise_on_logging_metadata_env_reference(metadata)
+        raise_on_logging_metadata_env_reference(metadata, source="key metadata")
     assert raised.value.status_code == 400
 
 
@@ -551,15 +552,42 @@ def test_an_env_reference_is_rejected_whatever_the_callback_name() -> None:
 )
 def test_logging_metadata_without_an_env_reference_passes(metadata: dict[str, object] | None) -> None:
     assert logging_metadata_env_reference_error(metadata) is None
-    raise_on_logging_metadata_env_reference(metadata)
+    raise_on_logging_metadata_env_reference(metadata, source="team metadata")
 
 
 def test_an_env_reference_raises_a_400_carrying_the_error() -> None:
     metadata: Final = {"logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
     with pytest.raises(HTTPException) as raised:
-        raise_on_logging_metadata_env_reference(metadata)
+        raise_on_logging_metadata_env_reference(metadata, source="user metadata")
     assert raised.value.status_code == 400
-    assert raised.value.detail == {"error": logging_metadata_env_reference_error(metadata)}
+    assert raised.value.detail == {"error": logging_metadata_env_reference_error(metadata, source="user metadata")}
+
+
+def test_the_rejection_names_the_writer_and_points_at_credentials() -> None:
+    metadata: Final = {"logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
+    error: Final = logging_metadata_env_reference_error(metadata, source="team metadata")
+    assert error is not None and "(from team metadata)" in error
+    assert "litellm_credential_name" in error
+
+
+def _stored_reference_error(requested: dict[str, object], stored: dict[str, object]) -> str:
+    with pytest.raises(HTTPException) as raised:
+        raise_on_stored_metadata_env_reference("Team t1", requested, stored, source="team metadata")
+    assert raised.value.status_code == 400
+    return str(raised.value.detail)
+
+
+def test_resending_the_stored_reference_says_it_is_already_stored() -> None:
+    stored: Final = {"owner": "x", "logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
+    assert "Team t1 already stores this reference" in _stored_reference_error(stored, stored)
+
+
+def test_a_new_reference_under_a_stored_param_is_not_called_already_stored() -> None:
+    stored: Final = {"logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
+    requested: Final = {"logging": [_arize_entry(arize_space_id="os.environ/OTHER_SPACE")]}
+    error: Final = _stored_reference_error(requested, stored)
+    assert "already stores" not in error and "Callback param 'arize_space_id'" in error
+
 
 
 _REFERENCE: Final = {"callback_name": "arize", "callback_type": "success", "litellm_credential_name": "space-a"}

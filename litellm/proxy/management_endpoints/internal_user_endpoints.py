@@ -681,7 +681,7 @@ async def new_user(
                 detail=f"Only proxy admins can create administrative users (proxy_admin, proxy_admin_viewer). Attempted to create user with role: {data.user_role}. Your role: {user_api_key_dict.user_role}",
             )
 
-        raise_on_logging_metadata_env_reference(env_reference_check_metadata(data.metadata))
+        raise_on_logging_metadata_env_reference(env_reference_check_metadata(data.metadata), source="user metadata")
         if data.auto_create_key and isinstance(user_api_key_dict, UserAPIKeyAuth):
             enforce_batch_limits_are_admin_only(data, None, user_api_key_dict, "key")
             enforce_vector_store_index_grants_are_admin_only(data, None, None, user_api_key_dict, "key")
@@ -1857,6 +1857,7 @@ async def _update_single_user_helper(
         data=user_request,
         non_default_values=non_default_values,
         existing_metadata=existing_metadata or {},
+        metadata_owner=(f"User {_target_user_id}", "user metadata"),
     )
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.

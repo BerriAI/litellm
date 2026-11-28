@@ -25278,7 +25278,7 @@ def test_non_admin_resaving_referencing_key_metadata_read_back_encrypted_is_not_
     assert removed.value.status_code == 403
 
 
-def test_a_resent_encrypted_env_reference_is_refused_on_key_and_user_writes(monkeypatch):
+def test_a_resent_encrypted_env_reference_is_refused_by_the_key_logging_validator(monkeypatch):
     from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
@@ -25300,6 +25300,33 @@ def test_a_resent_encrypted_env_reference_is_refused_on_key_and_user_writes(monk
 
     assert exc_info.value.status_code == 400
     assert "arize_api_key" in str(exc_info.value.detail) and "os.environ/" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
+    ("owner", "expected"),
+    [
+        pytest.param(None, "This key already stores this reference", id="key"),
+        pytest.param(("User u1", "user metadata"), "User u1 already stores this reference", id="user"),
+    ],
+)
+def test_resending_a_stored_encrypted_env_reference_says_it_is_already_stored(monkeypatch, owner, expected):
+    from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    stored: Final = encrypt_callback_vars(
+        {"logging": [{"callback_name": "arize", "callback_vars": {"arize_api_key": "os.environ/ARIZE_KEY_TENANT_1"}}]}
+    )
+    assert isinstance(stored, dict)
+    with pytest.raises(HTTPException) as exc_info:
+        prepare_metadata_fields(
+            data=UpdateKeyRequest(key="sk-1", metadata=stored),
+            non_default_values={"metadata": dict(stored)},
+            existing_metadata=dict(stored),
+            **({} if owner is None else {"metadata_owner": owner}),
+        )
+    assert exc_info.value.status_code == 400
+    assert expected in str(exc_info.value.detail)
+    assert "ARIZE_KEY_TENANT_1" not in str(exc_info.value.detail)
 
 
 def test_an_encrypted_env_reference_inside_json_string_logging_is_refused(monkeypatch):

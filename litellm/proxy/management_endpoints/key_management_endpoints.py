@@ -96,9 +96,11 @@ from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     evict_and_broadcast,
 )
 from litellm.proxy.common_utils.callback_config_validation import (
+    EnvReferenceSource,
     credential_reference_rejection,
     logging_metadata_config_error,
     logging_metadata_env_reference_error,
+    raise_on_stored_metadata_env_reference,
     string_keyed,
 )
 from litellm.proxy.common_utils.callback_utils import (
@@ -510,6 +512,7 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 _DECODED_JSON: Final = TypeAdapter(object)
 _ROLLOVER_CAP_VALUE: Final[TypeAdapter[BudgetRolloverCap]] = TypeAdapter(BudgetRolloverCap)
 _METADATA_OBJECT: Final = TypeAdapter(Mapping[str, object])
+_OPTIONAL_METADATA_OBJECT: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _HASHED_TOKEN: Final = re.compile(r"[0-9a-f]{64}")
 
 
@@ -2965,12 +2968,24 @@ async def generate_service_account_key_fn(
 
 
 def prepare_metadata_fields(
-    data: BaseModel, non_default_values: dict, existing_metadata: dict, *, logging_references_approved: bool = False
+    data: BaseModel,
+    non_default_values: dict,
+    existing_metadata: dict,
+    *,
+    logging_references_approved: bool = False,
+    metadata_owner: tuple[str, EnvReferenceSource] = ("This key", "key metadata"),
 ) -> dict:
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
-    raise_on_invalid_key_metadata(non_default_values.get("metadata"))
+    requested_metadata: Final = _OPTIONAL_METADATA_OBJECT.validate_python(non_default_values.get("metadata"))
+    raise_on_stored_metadata_env_reference(
+        metadata_owner[0],
+        env_reference_check_metadata(requested_metadata),
+        env_reference_check_metadata(_METADATA_OBJECT.validate_python(existing_metadata)),
+        source=metadata_owner[1],
+    )
+    raise_on_invalid_key_metadata(requested_metadata)
 
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()

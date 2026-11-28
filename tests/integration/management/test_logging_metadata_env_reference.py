@@ -19,24 +19,26 @@ LITERAL_VARS: Final[Mapping[str, JsonValue]] = {API_KEY: "arize-literal-key", SP
 
 
 def _logging(field: str) -> dict[str, JsonValue]:
+    return _logging_with(field, REFERENCE)
+
+
+def _logging_with(field: str, value: str) -> dict[str, JsonValue]:
     return {
         "logging": [
-            {
-                "callback_name": "arize",
-                "callback_type": "success",
-                "callback_vars": {**LITERAL_VARS, field: REFERENCE},
-            }
+            {"callback_name": "arize", "callback_type": "success", "callback_vars": {**LITERAL_VARS, field: value}}
         ]
     }
 
 
-def _refusal(field: str) -> str:
-    return f"Callback param '{field}' (from key/team callback metadata) contains an 'os.environ/' reference."
+def _refusal(field: str, source: str) -> str:
+    return f"Callback param '{field}' (from {source}) contains an 'os.environ/' reference."
 
 
-def _assert_refused(response: httpx.Response, field: str) -> None:
+def _assert_refused(response: httpx.Response, field: str, source: str) -> None:
     assert response.status_code == 400, response.text
-    assert _refusal(field) in string_value(object_value(response.json()["error"])["message"]), response.text
+    message: Final = string_value(object_value(response.json()["error"])["message"])
+    assert _refusal(field, source) in message, response.text
+    assert "litellm_credential_name" in message, response.text
 
 
 def _team_metadata(team: str) -> JsonValue:
@@ -64,7 +66,7 @@ def test_team_update_refuses_an_env_reference_in_logging_metadata(gateway: Gatew
     with gateway.scenario() as scenario:
         team: Final = scenario.team(metadata={"owner": "env-reference-audit"})
         refused: Final = gateway.request("POST", "/team/update", {"team_id": team, "metadata": _logging(field)})
-        _assert_refused(refused, field)
+        _assert_refused(refused, field, "team metadata")
         assert _team_metadata(team) == {"owner": "env-reference-audit"}
 
 
@@ -75,7 +77,7 @@ def test_team_new_refuses_an_env_reference_in_logging_metadata(gateway: Gateway,
         refused: Final = gateway.request("POST", "/team/new", {"team_alias": alias, "metadata": _logging(field)})
         if refused.status_code == 200:
             scenario.cleanups.callback(scenario.delete_team, string_value(refused.json()["team_id"]))
-        _assert_refused(refused, field)
+        _assert_refused(refused, field, "team metadata")
         assert read_rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_alias = %s', (alias,)) == []
 
 
@@ -85,7 +87,7 @@ def test_key_generate_refuses_an_env_reference_in_logging_metadata(gateway: Gate
         alias: Final = f"env-reference-{uuid.uuid4().hex}"
         refused: Final = gateway.request("POST", "/key/generate", {"key_alias": alias, "metadata": _logging(field)})
         _drop_created_key(scenario, refused)
-        _assert_refused(refused, field)
+        _assert_refused(refused, field, "key metadata")
         assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = %s', (alias,)) == []
 
 
@@ -94,7 +96,7 @@ def test_key_update_refuses_an_env_reference_in_logging_metadata(gateway: Gatewa
     with gateway.scenario() as scenario:
         key: Final = scenario.key(metadata={"owner": "env-reference-audit"})
         refused: Final = gateway.request("POST", "/key/update", {"key": key, "metadata": _logging(field)})
-        _assert_refused(refused, field)
+        _assert_refused(refused, field, "key metadata")
         assert _key_metadata(key) == {"owner": "env-reference-audit"}
 
 
@@ -106,7 +108,7 @@ def test_user_new_refuses_an_env_reference_in_its_keys_logging_metadata(gateway:
         if refused.status_code == 200:
             scenario.cleanups.callback(scenario.delete_user, user)
         _drop_created_key(scenario, refused)
-        _assert_refused(refused, field)
+        _assert_refused(refused, field, "user metadata")
         assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,)) == []
         assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE user_id = %s', (user,)) == []
 
@@ -119,7 +121,7 @@ def test_user_new_without_a_key_refuses_an_env_reference(gateway: Gateway) -> No
         )
         if refused.status_code == 200:
             scenario.cleanups.callback(scenario.delete_user, user)
-        _assert_refused(refused, SPACE_ID)
+        _assert_refused(refused, SPACE_ID, "user metadata")
         assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,)) == []
 
 
@@ -128,7 +130,7 @@ def test_user_update_refuses_an_env_reference_in_logging_metadata(gateway: Gatew
     with gateway.scenario() as scenario:
         user: Final = scenario.user(metadata={"owner": "env-reference-audit"})
         refused: Final = gateway.request("POST", "/user/update", {"user_id": user, "metadata": _logging(field)})
-        _assert_refused(refused, field)
+        _assert_refused(refused, field, "user metadata")
         rows: Final = read_rows('SELECT metadata FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,))
         assert rows == [{"metadata": {"owner": "env-reference-audit"}}]
 
@@ -149,9 +151,9 @@ def test_team_writes_refuse_an_env_reference_in_callback_settings(gateway: Gatew
         updated: Final = gateway.request(
             "POST", "/team/update", {"team_id": team, "metadata": _callback_settings(field)}
         )
-        _assert_refused(updated, field)
+        _assert_refused(updated, field, "team metadata")
         patched: Final = gateway.request("PATCH", f"/team/{team}", {"metadata": _callback_settings(field)})
-        _assert_refused(patched, field)
+        _assert_refused(patched, field, "team metadata")
         assert "already stores" not in patched.text
         assert _team_metadata(team) == {"owner": "env-reference-audit"}
         alias: Final = f"env-reference-{uuid.uuid4().hex}"
@@ -160,7 +162,7 @@ def test_team_writes_refuse_an_env_reference_in_callback_settings(gateway: Gatew
         )
         if created.status_code == 200:
             scenario.cleanups.callback(scenario.delete_team, string_value(created.json()["team_id"]))
-        _assert_refused(created, field)
+        _assert_refused(created, field, "team metadata")
         assert read_rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_alias = %s', (alias,)) == []
 
 
@@ -185,7 +187,7 @@ def test_team_key_bulk_update_reports_the_key_with_an_env_reference_as_failed(ga
         assert isinstance(failed, list) and len(failed) == 1, response.text
         failure: Final = object_value(failed[0])
         assert failure["key"] == hashed(refused_key), response.text
-        assert _refusal(SPACE_ID) in string_value(failure["failed_reason"]), response.text
+        assert _refusal(SPACE_ID, "key metadata") in string_value(failure["failed_reason"]), response.text
         assert _key_metadata(refused_key) == {"owner": "env-reference-audit"}
         applied: Final = gateway.request(
             "POST",
@@ -202,8 +204,14 @@ def test_a_stored_env_reference_blocks_metadata_saves_until_it_is_removed(gatewa
         legacy: Final = _logging(SPACE_ID)
         write_rows('UPDATE "LiteLLM_TeamTable" SET metadata = %s::jsonb WHERE team_id = %s', (json.dumps(legacy), team))
         patched: Final = gateway.request("PATCH", f"/team/{team}", {"metadata": {"cost_center": "1"}})
-        _assert_refused(patched, SPACE_ID)
+        _assert_refused(patched, SPACE_ID, "team metadata")
         assert f"Team {team} already stores this reference" in patched.text, patched.text
+        assert _team_metadata(team) == legacy
+        retyped: Final = gateway.request(
+            "POST", "/team/update", {"team_id": team, "metadata": _logging_with(SPACE_ID, "os.environ/OTHER_SPACE")}
+        )
+        _assert_refused(retyped, SPACE_ID, "team metadata")
+        assert "already stores" not in retyped.text, retyped.text
         assert _team_metadata(team) == legacy
         unrelated: Final = gateway.request("POST", "/team/update", {"team_id": team, "tpm_limit": 5000})
         assert unrelated.status_code == 200, unrelated.text
@@ -214,6 +222,51 @@ def test_a_stored_env_reference_blocks_metadata_saves_until_it_is_removed(gatewa
         repatched: Final = gateway.request("PATCH", f"/team/{team}", {"metadata": {"cost_center": "1"}})
         assert repatched.status_code == 200, repatched.text
         assert object_value(_team_metadata(team))["cost_center"] == "1"
+
+
+def test_a_key_storing_an_env_reference_names_it_when_its_metadata_is_resent(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"owner": "env-reference-audit"})
+        legacy: Final = _logging(SPACE_ID)
+        write_rows(
+            'UPDATE "LiteLLM_VerificationToken" SET metadata = %s::jsonb WHERE token = %s',
+            (json.dumps(legacy), hashed(key)),
+        )
+        resent: Final = gateway.request("POST", "/key/update", {"key": key, "metadata": legacy})
+        _assert_refused(resent, SPACE_ID, "key metadata")
+        assert "This key already stores this reference" in resent.text, resent.text
+        retyped: Final = gateway.request(
+            "POST", "/key/update", {"key": key, "metadata": _logging_with(SPACE_ID, "os.environ/OTHER_SPACE")}
+        )
+        _assert_refused(retyped, SPACE_ID, "key metadata")
+        assert "already stores" not in retyped.text, retyped.text
+        assert _key_metadata(key) == legacy
+        cleared: Final = gateway.request("POST", "/key/update", {"key": key, "metadata": {"logging": []}})
+        assert cleared.status_code == 200, cleared.text
+        assert object_value(_key_metadata(key))["logging"] == []
+
+
+def test_key_bulk_update_reports_the_key_with_an_env_reference_as_failed(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        refused_key: Final = scenario.key(metadata={"owner": "env-reference-audit"})
+        plain_key: Final = scenario.key(metadata={"owner": "env-reference-audit"})
+        response: Final = gateway.request(
+            "POST",
+            "/key/bulk_update",
+            {
+                "keys": [
+                    {"key": refused_key, "metadata": _logging(SPACE_ID)},
+                    {"key": plain_key, "metadata": {"owner": "x"}},
+                ]
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = object_value(response.json())
+        failed: Final = body["failed_updates"]
+        assert isinstance(failed, list) and len(failed) == 1, response.text
+        assert _refusal(SPACE_ID, "key metadata") in string_value(object_value(failed[0])["failed_reason"])
+        assert _key_metadata(refused_key) == {"owner": "env-reference-audit"}
+        assert _key_metadata(plain_key) == {"owner": "x"}
 
 
 @pytest.mark.parametrize("field", FIELDS)
@@ -239,7 +292,7 @@ def test_bulk_user_creation_refuses_only_the_row_with_an_env_reference(gateway: 
         assert response.status_code == 200, response.text
         refused, plain = response.json()["data"]
         assert (refused["user_id"], refused["success"], refused["key"]) == (refused_user, False, None), response.text
-        assert _refusal(field) in string_value(refused["error"]), response.text
+        assert _refusal(field, "user metadata") in string_value(refused["error"]), response.text
         assert (plain["success"], plain["error"]) == (True, None), response.text
         assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (refused_user,)) == []
 
@@ -255,7 +308,7 @@ def test_key_generate_refuses_an_env_reference_in_json_string_logging(gateway: G
             "POST", "/key/generate", {"key_alias": alias, "metadata": _json_string_reference_logging()}
         )
         _drop_created_key(scenario, refused)
-        _assert_refused(refused, SPACE_ID)
+        _assert_refused(refused, SPACE_ID, "key metadata")
         assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = %s', (alias,)) == []
 
 
@@ -265,7 +318,7 @@ def test_team_update_refuses_an_env_reference_in_json_string_logging(gateway: Ga
         refused: Final = gateway.request(
             "POST", "/team/update", {"team_id": team, "metadata": _json_string_reference_logging()}
         )
-        _assert_refused(refused, SPACE_ID)
+        _assert_refused(refused, SPACE_ID, "team metadata")
         assert _team_metadata(team) == {"owner": "env-reference-audit"}
 
 
@@ -278,6 +331,9 @@ def _encrypted_reference_logging(monkeypatch: pytest.MonkeyPatch) -> dict[str, J
     )
     assert isinstance(encrypted, dict) and "os.environ" not in json.dumps(encrypted), encrypted
     return encrypted
+
+
+_CREATE_SOURCES: Final = {"/team/new": "team metadata", "/user/new": "user metadata"}
 
 
 @pytest.mark.parametrize("route", [pytest.param("/team/new", id="team-new"), pytest.param("/user/new", id="user-new")])
@@ -296,7 +352,7 @@ def test_a_copied_ciphertext_of_an_env_reference_is_refused_on_create(
         if refused.status_code == 200:
             created: Final = string_value(refused.json()["team_id" if route == "/team/new" else "user_id"])
             scenario.cleanups.callback(scenario.delete_team if route == "/team/new" else scenario.delete_user, created)
-        _assert_refused(refused, API_KEY)
+        _assert_refused(refused, API_KEY, _CREATE_SOURCES[route])
         assert read_rows('SELECT team_id FROM "LiteLLM_TeamTable" WHERE team_alias = %s', (name,)) == []
         assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (name,)) == []
 
@@ -319,7 +375,7 @@ def test_bulk_user_creation_refuses_a_copied_ciphertext_of_an_env_reference(
         assert response.status_code == 200, response.text
         refused, plain = response.json()["data"]
         assert (refused["user_id"], refused["success"]) == (refused_user, False), response.text
-        assert _refusal(API_KEY) in string_value(refused["error"]), response.text
+        assert _refusal(API_KEY, "user metadata") in string_value(refused["error"]), response.text
         assert (plain["user_id"], plain["success"]) == (plain_user, True), response.text
         assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (refused_user,)) == []
 

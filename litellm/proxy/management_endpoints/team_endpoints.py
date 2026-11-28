@@ -143,7 +143,7 @@ from litellm.proxy.common_utils.callback_config_validation import (
     mixpanel_logging_metadata_error,
     normalize_logging_entries,
     raise_on_logging_metadata_env_reference,
-    raise_on_team_metadata_env_reference,
+    raise_on_stored_metadata_env_reference,
     string_keyed,
 )
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars, env_reference_check_metadata
@@ -1976,7 +1976,9 @@ async def new_team(
             entity="team",
         )
         _new_team_metadata: Final[object] = getattr(data, "metadata", None)
-        raise_on_logging_metadata_env_reference(env_reference_check_metadata(_new_team_metadata))
+        raise_on_logging_metadata_env_reference(
+            env_reference_check_metadata(_new_team_metadata), source="team metadata"
+        )
 
         # Check if license is over limit
         total_teams: Final = await _team_db(prisma_client).count()
@@ -2841,10 +2843,11 @@ async def update_team(
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
-        raise_on_team_metadata_env_reference(
-            data.team_id,
+        raise_on_stored_metadata_env_reference(
+            f"Team {data.team_id}",
             env_reference_check_metadata(getattr(data, "metadata", None)),
             env_reference_check_metadata(_existing_team_metadata),
+            source="team metadata",
         )
 
         check_passthrough_routes_caller_permission(

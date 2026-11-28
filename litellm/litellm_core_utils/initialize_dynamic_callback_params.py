@@ -45,12 +45,12 @@ def iter_client_callback_metadata_dicts(
             yield key, candidate
 
 
-def _is_env_reference(value: object) -> bool:
+def is_callback_env_reference(value: object) -> bool:
     return isinstance(value, str) and "os.environ/" in value
 
 
 def callback_env_reference_error(param: str, value: object, *, source: str) -> str | None:
-    if not _is_env_reference(value):
+    if not is_callback_env_reference(value):
         return None
     return (
         f"Callback param '{param}' (from {source}) contains an 'os.environ/' "

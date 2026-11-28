@@ -8,15 +8,24 @@ per-integration checks here.
 import math
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
-from typing import Final, Literal, cast  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
+from typing import (
+    Final,
+    Literal,
+    TypeAlias,
+    cast,  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
+)
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.initialize_dynamic_callback_params import callback_env_reference_error
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    callback_env_reference_error,
+    is_callback_env_reference,
+)
 from litellm.types.utils import (
     BAGGAGE_METADATA_KEYS_VAR,
     EXCLUDED_SERVICES_VAR,
@@ -39,6 +48,11 @@ _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
     {"arize_success_sampling_rate", "arize_error_sampling_rate"}
 )
 _LOGGING_METADATA: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_CREDENTIAL_HINT: Final = (
+    "\nTo keep a separate secret per key, team or user, save it as a credential and name it with "
+    "litellm_credential_name in the logging entry."
+)
+EnvReferenceSource: TypeAlias = Literal["key metadata", "team metadata", "user metadata"]
 
 
 def callback_config_error(
@@ -324,57 +338,65 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     )
 
 
-def logging_metadata_env_reference_error(metadata: Mapping[str, object] | None) -> str | None:
-    if not metadata:
+def logging_metadata_env_reference_error(
+    metadata: Mapping[str, object] | None, *, source: EnvReferenceSource = "key metadata"
+) -> str | None:
+    reference: Final = next(iter(_metadata_env_references(metadata)), None)
+    if reference is None:
         return None
-    logging_entries: Final = normalize_logging_entries(metadata.get("logging"), skip_invalid=True)
-    entries: Final = (
-        *(() if isinstance(logging_entries, InvalidLoggingMetadata) else logging_entries),
-        metadata.get("callback_settings"),
-    )
-    return next(
-        (error for entry in entries if (error := _entry_env_reference_error(entry)) is not None),
-        None,
-    )
+    return f"{callback_env_reference_error(*reference, source=source)}{_CREDENTIAL_HINT}"
 
 
-def raise_on_logging_metadata_env_reference(metadata: object) -> None:
-    error: Final = _metadata_env_reference_error(metadata)
+def raise_on_logging_metadata_env_reference(metadata: object, *, source: EnvReferenceSource) -> None:
+    error: Final = _metadata_env_reference_error(metadata, source)
     if error is not None:
         raise HTTPException(status_code=400, detail={"error": error})
 
 
-def raise_on_team_metadata_env_reference(team_id: str, requested_metadata: object, stored_metadata: object) -> None:
-    error: Final = _metadata_env_reference_error(requested_metadata)
-    if error is None:
+def raise_on_stored_metadata_env_reference(
+    owner: str, requested_metadata: object, stored_metadata: object, *, source: EnvReferenceSource
+) -> None:
+    requested: Final = _object_metadata_env_references(requested_metadata)
+    if not requested:
         return
-    if _metadata_env_reference_error(stored_metadata) != error:
+    error: Final = _metadata_env_reference_error(requested_metadata, source)
+    if requested[0] not in _object_metadata_env_references(stored_metadata):
         raise HTTPException(status_code=400, detail={"error": error})
     raise HTTPException(
         status_code=400,
         detail={
-            "error": f"Team {team_id} already stores this reference in its metadata, so it must be removed "
+            "error": f"{owner} already stores this reference in its metadata, so it must be removed "
             "before metadata can be saved. Send metadata.logging or metadata.callback_settings without "
             f"it to clear it. {error}"
         },
     )
 
 
-def _metadata_env_reference_error(metadata: object) -> str | None:
+def _metadata_env_reference_error(metadata: object, source: EnvReferenceSource) -> str | None:
     if not isinstance(metadata, Mapping):
         return None
-    return logging_metadata_env_reference_error(_LOGGING_METADATA.validate_python(metadata))
+    return logging_metadata_env_reference_error(_LOGGING_METADATA.validate_python(metadata), source=source)
 
 
-def _entry_env_reference_error(entry: object) -> str | None:
-    return next(
-        (
-            error
-            for name, value in _entry_callback_vars(entry).items()
-            if (error := callback_env_reference_error(name, value, source="key/team callback metadata")) is not None
-        ),
-        None,
+def _object_metadata_env_references(metadata: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(metadata, Mapping):
+        return ()
+    return _metadata_env_references(_LOGGING_METADATA.validate_python(metadata))
+
+
+def _metadata_env_references(metadata: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
+    if not metadata:
+        return ()
+    logging_entries: Final = normalize_logging_entries(metadata.get("logging"), skip_invalid=True)
+    entries: Final = (
+        *(() if isinstance(logging_entries, InvalidLoggingMetadata) else logging_entries),
+        metadata.get("callback_settings"),
     )
+    return tuple(chain.from_iterable(map(_entry_env_references, entries)))
+
+
+def _entry_env_references(entry: object) -> Iterator[tuple[str, str]]:
+    return ((name, value) for name, value in _entry_callback_vars(entry).items() if is_callback_env_reference(value))
 
 
 def stored_callback_entries(logging_entries: object) -> tuple[tuple[str | None, Mapping[str, str]], ...]:
