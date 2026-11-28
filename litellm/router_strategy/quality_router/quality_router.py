@@ -17,6 +17,7 @@ then cheapest `model_info.input_cost_per_token`).
 
 import math
 from collections.abc import Mapping, Sequence
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_router_logger
@@ -25,6 +26,7 @@ from litellm.router_deprecated import RenamedRouterAttribute, renamed_router_par
 from litellm.router_strategy.complexity_router.complexity_router import (
     ComplexityRouter,
 )
+from litellm.router_strategy.savings_baseline import resolve_baseline_routing_fields
 from litellm.types.utils import StandardLoggingRoutingDecision
 
 from .config import QualityRouterConfig, RoutingPreferences
@@ -102,6 +104,10 @@ class QualityRouter(CustomLogger):
         if self._tier_to_models_cache is None:
             self._tier_to_models_cache = self._build_tier_index()
         return self._tier_to_models_cache
+
+    @cached_property
+    def _savings_baseline_fields(self) -> StandardLoggingRoutingDecision:
+        return resolve_baseline_routing_fields(self.ctx, self.config.available_models)
 
     def _get_routing_preferences(self, deployment: object) -> dict[str, object] | None:
         """
@@ -365,12 +371,13 @@ class QualityRouter(CustomLogger):
             return PreRoutingHookResponse(
                 model=self.config.default_model,
                 messages=messages,
-                routing_decision=StandardLoggingRoutingDecision(
-                    router_model_name=self.model_name,
-                    router_type="quality",
-                    routed_model=self.config.default_model,
-                    cause="default_fallback",
-                ),
+                routing_decision={
+                    **self._savings_baseline_fields,
+                    "router_model_name": self.model_name,
+                    "router_type": "quality",
+                    "routed_model": self.config.default_model,
+                    "cause": "default_fallback",
+                },
             )
 
         # Try keyword override first — it short-circuits complexity classification.
@@ -395,13 +402,14 @@ class QualityRouter(CustomLogger):
                     "complexity_tier": None,
                 },
             )
-            routing_decision: Final = StandardLoggingRoutingDecision(
-                router_model_name=self.model_name,
-                router_type="quality",
-                routed_model=routed_model,
-                cause="keyword",
-                matched_keyword=matched_keyword,
-            )
+            routing_decision: Final[StandardLoggingRoutingDecision] = {
+                **self._savings_baseline_fields,
+                "router_model_name": self.model_name,
+                "router_type": "quality",
+                "routed_model": routed_model,
+                "cause": "keyword",
+                "matched_keyword": matched_keyword,
+            }
             keyword_quality_tier: Final = self._model_quality.get(routed_model)
             if keyword_quality_tier is not None:
                 routing_decision["tier"] = str(keyword_quality_tier)
@@ -445,13 +453,14 @@ class QualityRouter(CustomLogger):
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages,
-            routing_decision=StandardLoggingRoutingDecision(
-                router_model_name=self.model_name,
-                router_type="quality",
-                routed_model=routed_model,
-                cause="quality_tier",
-                tier=str(int(quality_tier)),
-                score=score,
-                signals=list(signals),
-            ),
+            routing_decision={
+                **self._savings_baseline_fields,
+                "router_model_name": self.model_name,
+                "router_type": "quality",
+                "routed_model": routed_model,
+                "cause": "quality_tier",
+                "tier": str(int(quality_tier)),
+                "score": score,
+                "signals": list(signals),
+            },
         )

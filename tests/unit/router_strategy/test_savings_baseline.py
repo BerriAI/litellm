@@ -1,12 +1,16 @@
+from math import isclose
+from typing import Final
+
 import pytest
 
+from litellm.proxy.spend_tracking.savings import autorouter_savings_for_request
 from litellm.router import Router
 from litellm.router_api import RoutingContext
 from litellm.router_strategy.savings_baseline import (
     Baseline,
-    canonical_model,
     _models_in,
     _most_expensive,
+    canonical_model,
     resolve_baseline,
 )
 
@@ -115,6 +119,83 @@ class TestResolveBaseline:
 
     def test_an_empty_candidate_set_zeroes_the_driver_rather_than_inventing_one(self, parent):
         assert resolve_baseline(parent, []) is None
+
+
+@pytest.mark.parametrize(
+    ("strategy", "role", "prompt", "cause"),
+    [
+        ("adaptive", "user", "hi", "bandit"),
+        ("quality", "user", "hi", "quality_tier"),
+        ("quality", "user", "use-fast", "keyword"),
+        ("quality", "system", "be brief", "default_fallback"),
+    ],
+)
+async def test_standalone_router_savings_use_configured_deployment_prices(
+    strategy: str, role: str, prompt: str, cause: str
+) -> None:
+    fast_input: Final = 0.000001
+    fast_output: Final = 0.000002
+    smart_input: Final = 0.00001
+    smart_output: Final = 0.00002
+    groups: Final = ["savings-fast", "savings-smart"]
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "savings-auto",
+                "litellm_params": {
+                    "model": f"auto_router/{strategy}_router",
+                    f"{strategy}_router_config": {
+                        "available_models": groups,
+                        **(
+                            {"weights": {"quality": 0.0, "cost": 1.0}}
+                            if strategy == "adaptive"
+                            else {"default_model": "savings-fast"}
+                        ),
+                    },
+                },
+            },
+            {
+                "model_name": "savings-fast",
+                "litellm_params": {"model": "openai/savings-fast"},
+                "model_info": {
+                    "id": "savings-fast-id",
+                    "input_cost_per_token": fast_input,
+                    "output_cost_per_token": fast_output,
+                    "litellm_routing_preferences": {"quality_tier": 1, "keywords": ["use-fast"]},
+                },
+            },
+            {
+                "model_name": "savings-smart",
+                "litellm_params": {"model": "openai/savings-smart"},
+                "model_info": {
+                    "id": "savings-smart-id",
+                    "input_cost_per_token": smart_input,
+                    "output_cost_per_token": smart_output,
+                    "litellm_routing_preferences": {"quality_tier": 4},
+                },
+            },
+        ]
+    )
+
+    result: Final = await RoutingContext(router).pre_routing_hook(
+        model="savings-auto", request_kwargs={}, messages=[{"role": role, "content": prompt}]
+    )
+
+    assert result is not None and result.routing_decision is not None
+    assert result.model == "savings-fast"
+    assert result.routing_decision.get("cause") == cause
+    savings: Final = autorouter_savings_for_request(
+        model="savings-fast",
+        custom_llm_provider="openai",
+        routing_decision=result.routing_decision,
+        usage_object={"prompt_tokens": 9, "completion_tokens": 3, "total_tokens": 12},
+        model_id="savings-fast-id",
+        llm_router=lambda: router,
+    )
+    expected: Final = 9 * (smart_input - fast_input) + 3 * (smart_output - fast_output)
+    assert savings is not None and isclose(savings, expected), (savings, expected)
+    assert result.routing_decision.get("savings_baseline_model") == "openai/savings-smart"
+    assert result.routing_decision.get("savings_baseline_deployment_id") == "savings-smart-id"
 
 
 class TestDeploymentsPricedByBaseModel:
