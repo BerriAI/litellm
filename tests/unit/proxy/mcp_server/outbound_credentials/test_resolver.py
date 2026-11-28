@@ -211,6 +211,15 @@ class _FakeTokenStore:
     async def fetch(self, user_id: str, server_id: str):
         return self._by_user.get((user_id, server_id))
 
+    async def peek(self, user_id: str, server_id: str):
+        return self._by_user.get((user_id, server_id))
+
+    async def invalidate(self, user_id: str, server_id: str):
+        return None
+
+    async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+        return Error(CredError.of_unauthorized("missing"))
+
 
 @pytest.mark.asyncio
 async def test_authorization_code_emits_bearer_for_a_stored_token():
@@ -219,7 +228,7 @@ async def test_authorization_code_emits_bearer_for_a_stored_token():
         Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
     )
     assert isinstance(result, Ok)
-    assert _emitted(result.ok)["Authorization"] == "Bearer at-alice"
+    assert (await _emitted_async(result.ok))[0]["Authorization"] == "Bearer at-alice"
 
 
 @pytest.mark.asyncio
@@ -236,10 +245,19 @@ async def test_authorization_code_without_token_is_semantically_unauthorized():
 
 
 @pytest.mark.asyncio
-async def test_authorization_code_store_unavailable_is_retryable_upstream_unavailable():
+async def test_authorization_code_store_unavailable_is_retryable():
     class _Unavailable:
         async def fetch(self, user_id: str, server_id: str):
             raise TokenStoreUnavailable("down")
+
+        async def peek(self, user_id: str, server_id: str):
+            raise TokenStoreUnavailable("down")
+
+        async def invalidate(self, user_id: str, server_id: str):
+            return None
+
+        async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+            return Error(CredError.of_upstream_unavailable("down"))
 
     result = await UpstreamCredentialProvider(oauth_token_store=_Unavailable()).resolve_credentials(
         Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
@@ -265,7 +283,7 @@ async def test_authorization_code_isolates_by_subject():
         Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
     )
     bob = await provider.resolve_credentials(Subject(tenant_id="", subject_id="bob"), _spec(AuthorizationCodeConfig()))
-    assert isinstance(alice, Ok) and _emitted(alice.ok)["Authorization"] == "Bearer at-alice"
+    assert isinstance(alice, Ok) and (await _emitted_async(alice.ok))[0]["Authorization"] == "Bearer at-alice"
     assert isinstance(bob, Error) and bob.error.tag == "unauthorized"
 
 
@@ -286,7 +304,7 @@ async def test_authorization_code_isolates_by_server_id_even_when_servers_share_
     granted = await provider.resolve_credentials(subject, spec_a)
     fresh = await provider.resolve_credentials(subject, spec_b)
 
-    assert isinstance(granted, Ok) and _emitted(granted.ok)["Authorization"] == "Bearer at-alice"
+    assert isinstance(granted, Ok) and (await _emitted_async(granted.ok))[0]["Authorization"] == "Bearer at-alice"
     assert isinstance(fresh, Error) and fresh.error.tag == "unauthorized"
     assert await provider.has_user_token(subject, spec_a) is True
     assert await provider.has_user_token(subject, spec_b) is False
@@ -302,6 +320,79 @@ async def test_has_user_token_reflects_the_stored_token():
     subject = Subject(tenant_id="", subject_id="alice")
     assert await present.has_user_token(subject, spec) is True
     assert await absent.has_user_token(subject, spec) is False
+
+
+@pytest.mark.asyncio
+async def test_has_user_token_defers_an_unknown_refresh_outcome_to_egress():
+    class _Unavailable:
+        async def fetch(self, user_id: str, server_id: str):
+            raise TokenStoreUnavailable("down")
+
+        async def peek(self, user_id: str, server_id: str):
+            raise TokenStoreUnavailable("down")
+
+        async def invalidate(self, user_id: str, server_id: str):
+            return None
+
+        async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+            return Error(CredError.of_upstream_unavailable("down"))
+
+    provider = UpstreamCredentialProvider(oauth_token_store=_Unavailable())
+    spec = _spec(AuthorizationCodeConfig())
+    assert await provider.has_user_token(Subject(tenant_id="", subject_id="alice"), spec) is True
+
+
+@pytest.mark.asyncio
+async def test_has_user_token_challenges_on_first_request_when_expired_refresh_is_dead():
+    class _DeadExpiredRefreshStore:
+        async def fetch(self, user_id: str, server_id: str):
+            return None
+
+        async def fetch_result(self, user_id: str, server_id: str):
+            return Error(CredError.of_unauthorized("The upstream OAuth grant is no longer valid; sign in again."))
+
+        async def peek(self, user_id: str, server_id: str):
+            return OAuthToken(access_token="expired-at", expires_at=1.0, refresh_token="dead-rt")
+
+        async def invalidate(self, user_id: str, server_id: str):
+            return None
+
+        async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+            return Error(CredError.of_unauthorized("dead"))
+
+    provider = UpstreamCredentialProvider(oauth_token_store=_DeadExpiredRefreshStore())
+    spec = _spec(AuthorizationCodeConfig())
+    assert await provider.has_user_token(Subject(tenant_id="", subject_id="alice"), spec) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        CredError.of_upstream_unavailable("token endpoint down"),
+        CredError.of_misconfigured("invalid_client"),
+    ],
+)
+async def test_has_user_token_preserves_non_auth_refresh_errors_for_egress(error: CredError):
+    class _FailingRefreshStore:
+        async def fetch(self, user_id: str, server_id: str):
+            return None
+
+        async def fetch_result(self, user_id: str, server_id: str):
+            return Error(error)
+
+        async def peek(self, user_id: str, server_id: str):
+            return OAuthToken(access_token="expired-at", expires_at=1.0, refresh_token="rt")
+
+        async def invalidate(self, user_id: str, server_id: str):
+            return None
+
+        async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+            return Error(error)
+
+    provider = UpstreamCredentialProvider(oauth_token_store=_FailingRefreshStore())
+    spec = _spec(AuthorizationCodeConfig())
+    assert await provider.has_user_token(Subject(tenant_id="", subject_id="alice"), spec) is True
 
 
 @pytest.mark.asyncio
@@ -1321,7 +1412,7 @@ async def test_resolved_source_matches_the_credential_sent_upstream(
     result = await resolve_credentials_with_source(provider, subject, _spec(config))
     assert isinstance(result, Ok)
     assert result.ok.source.value == expected_source
-    assert _emitted(result.ok.auth).get("Authorization") == expected_header
+    assert (await _emitted_async(result.ok.auth))[0].get("Authorization") == expected_header
     assert "stored-alice" not in repr(result.ok)
     assert "static-key" not in repr(result.ok)
 

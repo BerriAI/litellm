@@ -3,6 +3,7 @@ to exactly one category, wire values never carry upstream prose, and single-upst
 stay truthful to who failed."""
 
 import sys
+from collections.abc import Callable
 from typing import Final
 
 if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
@@ -12,7 +13,7 @@ import httpx
 import httpx2
 import pytest
 from mcp import MCPError
-from mcp.types import CONNECTION_CLOSED, ErrorData
+from mcp.types import CONNECTION_CLOSED
 
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.mcp_server.exceptions import (
@@ -26,6 +27,7 @@ from litellm.proxy.mcp_server.faults.list_outcomes import (
     list_fault_http_status,
     outcome_wire_value,
 )
+from litellm.proxy.mcp_server.outbound_credentials.types import CredError
 
 
 def test_carried_fault_passes_through():
@@ -688,3 +690,26 @@ def test_listing_failed_outright_only_when_every_server_faulted_non_auth() -> No
     )
     assert not listing_failed_outright({"a": ServerListFault(tag="auth_required", status_code=401)})
     assert not listing_failed_outright({"a": ServerListFault(tag="forbidden", status_code=403)})
+
+
+@pytest.mark.parametrize(
+    ("error_factory", "expected_fault"),
+    (
+        (lambda: CredError.of_upstream_unavailable("token endpoint down"), "unreachable"),
+        (lambda: CredError.of_misconfigured("bad client"), "internal"),
+    ),
+)
+def test_per_user_refresh_failure_does_not_become_a_sign_in_challenge(
+    error_factory: Callable[[], CredError], expected_fault: str
+) -> None:
+    from litellm.proxy.mcp_server.faults.list_outcomes import raise_classified_list_failure
+    from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import PER_USER_OAUTH_RECOVERY_EXTENSION
+
+    request: Final = httpx2.Request("POST", "https://upstream.example.com/mcp")
+    response: Final = httpx2.Response(401, request=request)
+    response.extensions[PER_USER_OAUTH_RECOVERY_EXTENSION] = error_factory()
+    exc: Final = httpx2.HTTPStatusError("rejected", request=request, response=response)
+
+    with pytest.raises(MCPServerListError) as exc_info:
+        raise_classified_list_failure(exc, "srv")
+    assert exc_info.value.fault.tag == expected_fault
