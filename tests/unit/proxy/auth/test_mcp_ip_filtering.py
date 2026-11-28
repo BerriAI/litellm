@@ -409,13 +409,11 @@ class TestXffTrustedHopsAccessControl:
 
 class TestXffPresentButDisabledWarning:
     """When an XFF header arrives but use_x_forwarded_for is off, the proxy must
-    loudly warn (the internal-only check is silently trusting the load balancer's
-    IP) yet still serve the request, so a crafted header can't DoS a no-LB deploy."""
+    warn (the internal-only check is silently trusting the load balancer's IP)
+    yet still serve the request, so a crafted header can't DoS a no-LB deploy."""
 
     def _reset_warning_flag(self):
-        from litellm.proxy.auth import ip_address_utils
-
-        ip_address_utils._warned_xff_present_but_disabled = False
+        ip_mod._warned_xff_present_but_disabled = False
 
     def _request_with_xff(self):
         request = MagicMock(spec=Request)
@@ -424,28 +422,32 @@ class TestXffPresentButDisabledWarning:
         request.headers = {"x-forwarded-for": "8.8.8.8"}
         return request
 
-    def test_warns_and_does_not_fail_when_xff_present_but_disabled(self):
-        self._reset_warning_flag()
-        request = self._request_with_xff()
+    def _advisories(self, caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+        return [
+            record
+            for record in caplog.records
+            if "X-Forwarded-For header but use_x_forwarded_for is not enabled"
+            in record.getMessage()
+        ]
 
-        with patch(
-            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger.error"
-        ) as mock_error:
+    def test_warns_and_does_not_fail_when_xff_present_but_disabled(self, caplog: pytest.LogCaptureFixture):
+        self._reset_warning_flag()
+
+        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
             result = IPAddressUtils.get_mcp_client_ip(
-                request, general_settings={"use_x_forwarded_for": False}
+                self._request_with_xff(),
+                general_settings={"use_x_forwarded_for": False},
             )
 
-        # Does not hard-fail: falls back to the direct peer (the load balancer).
         assert result == "10.0.0.7"
-        mock_error.assert_called_once()
-        assert "use_x_forwarded_for" in str(mock_error.call_args)
+        assert [record.levelno for record in self._advisories(caplog)] == [
+            logging.WARNING
+        ]
 
-    def test_warning_is_one_shot(self):
+    def test_warning_is_one_shot(self, caplog: pytest.LogCaptureFixture):
         self._reset_warning_flag()
 
-        with patch(
-            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger.error"
-        ) as mock_error:
+        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
             IPAddressUtils.get_mcp_client_ip(
                 self._request_with_xff(),
                 general_settings={"use_x_forwarded_for": False},
@@ -455,20 +457,16 @@ class TestXffPresentButDisabledWarning:
                 general_settings={"use_x_forwarded_for": False},
             )
 
-        # One-shot so a flood of crafted XFF headers cannot spam the logs.
-        mock_error.assert_called_once()
+        assert len(self._advisories(caplog)) == 1
 
-    def test_re_arms_after_xff_is_enabled_then_disabled_again(self):
+    def test_re_arms_after_xff_is_enabled_then_disabled_again(self, caplog: pytest.LogCaptureFixture):
         self._reset_warning_flag()
 
-        with patch(
-            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger.error"
-        ) as mock_error:
+        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
             IPAddressUtils.get_mcp_client_ip(
                 self._request_with_xff(),
                 general_settings={"use_x_forwarded_for": False},
             )
-            # Operator fixes the config; observing it enabled re-arms the warning.
             IPAddressUtils.get_mcp_client_ip(
                 self._request_with_xff(),
                 general_settings={
@@ -476,36 +474,34 @@ class TestXffPresentButDisabledWarning:
                     "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
                 },
             )
-            # Config rolls back to disabled: the misconfiguration must warn again.
             IPAddressUtils.get_mcp_client_ip(
                 self._request_with_xff(),
                 general_settings={"use_x_forwarded_for": False},
             )
 
-        assert mock_error.call_count == 2
+        assert [record.levelno for record in self._advisories(caplog)] == [
+            logging.WARNING,
+            logging.WARNING,
+        ]
 
-    def test_no_warning_without_xff_header(self):
+    def test_no_warning_without_xff_header(self, caplog: pytest.LogCaptureFixture):
         self._reset_warning_flag()
         request = MagicMock(spec=Request)
         request.client = MagicMock()
         request.client.host = "10.0.0.7"
         request.headers = {}
 
-        with patch(
-            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger.error"
-        ) as mock_error:
+        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
             IPAddressUtils.get_mcp_client_ip(
                 request, general_settings={"use_x_forwarded_for": False}
             )
 
-        mock_error.assert_not_called()
+        assert self._advisories(caplog) == []
 
-    def test_no_warning_when_xff_enabled(self):
+    def test_no_warning_when_xff_enabled(self, caplog: pytest.LogCaptureFixture):
         self._reset_warning_flag()
 
-        with patch(
-            "litellm.proxy.auth.ip_address_utils.verbose_proxy_logger.error"
-        ) as mock_error:
+        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
             IPAddressUtils.get_mcp_client_ip(
                 self._request_with_xff(),
                 general_settings={
@@ -514,7 +510,7 @@ class TestXffPresentButDisabledWarning:
                 },
             )
 
-        mock_error.assert_not_called()
+        assert self._advisories(caplog) == []
 
 
 class TestMCPServerIPFiltering:
