@@ -312,8 +312,8 @@ def _save_conversation(console: _ConsolePrinter, messages: list[dict[str, str]],
         filename += ".json"
 
     try:
-        with open(filename, "w") as f:
-            json.dump(messages, f, indent=2)
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(messages, f, indent=2, ensure_ascii=False)
         console.print(f"[green]Conversation saved to {filename}[/green]")
     except Exception as e:
         console.print(f"[red]Error saving conversation: {e}[/red]")
@@ -331,7 +331,7 @@ def _load_conversation(console: _ConsolePrinter, command: str, system: str | Non
         filename += ".json"
 
     try:
-        with open(filename, "r") as f:
+        with open(filename, "r", encoding="utf-8") as f:
             loaded: Final[_MessagesView] = {"messages": json.load(f)}
         console.print(f"[green]Conversation loaded from {filename}[/green]")
         return loaded["messages"]
