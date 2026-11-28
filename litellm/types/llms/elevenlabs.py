@@ -89,3 +89,41 @@ ElevenLabsServerMessageUnion: TypeAlias = (
     | ElevenLabsErrorMessage
 )
 ElevenLabsServerMessage: TypeAlias = Annotated[ElevenLabsServerMessageUnion, Field(discriminator="message_type")]
+
+
+class ElevenLabsSTTWord(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    text: str
+    type: Literal["word", "spacing", "audio_event"]
+    start: float | None = None
+    end: float | None = None
+    speaker_id: str | None = None
+    channel_index: int | None = None
+
+
+class ElevenLabsSTTChunk(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    text: str = ""
+    language_code: str | None = None
+    language_probability: float | None = None
+    words: tuple[ElevenLabsSTTWord, ...] = ()
+    channel_index: int | None = None
+    audio_duration_secs: float | None = None
+
+
+class ElevenLabsSTTMultichannelResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    transcripts: tuple[ElevenLabsSTTChunk, ...]
+    audio_duration_secs: float | None = None
+
+
+class OpenAIDiarizedSegment(TypedDict):
+    id: ReadOnly[str]
+    start: ReadOnly[float]
+    end: ReadOnly[float]
+    speaker: ReadOnly[str]
+    text: ReadOnly[str]
+    type: ReadOnly[Literal["transcript.text.segment"]]
