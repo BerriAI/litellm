@@ -859,6 +859,99 @@ class TestPhoenixTraceHandling:
             )
             assert span.resource.attributes.get("model_id") == "unified-proj"
 
+    def test_proxy_mode_parent_span_does_not_duplicate_llm_attributes_or_cost(self):
+        from datetime import datetime
+
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+
+        from litellm.integrations.opentelemetry import (
+            LITELLM_REQUEST_SPAN_NAME,
+            OpenTelemetryConfig,
+        )
+
+        exporter = InMemorySpanExporter()
+        logger = ArizePhoenixLogger(
+            config=OpenTelemetryConfig(exporter=exporter),
+            callback_name="arize_phoenix",
+        )
+
+        start = datetime(2024, 1, 1, 12, 0, 0)
+        end = datetime(2024, 1, 1, 12, 0, 1)
+
+        logger._handle_success(
+            {
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "optional_params": {},
+                "standard_logging_object": {
+                    "id": "call-1",
+                    "call_type": "acompletion",
+                    "model": "gpt-4",
+                    "response_cost": 0.0015,
+                    "metadata": {},
+                },
+                "litellm_params": {
+                    "custom_llm_provider": "openai",
+                    "proxy_server_request": {
+                        "url": "/v1/chat/completions",
+                        "method": "POST",
+                        "headers": {},
+                    },
+                },
+            },
+            response_obj={
+                "id": "chatcmpl-1",
+                "model": "gpt-4-0613",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi there"},
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 20,
+                    "total_tokens": 30,
+                },
+            },
+            start_time=start,
+            end_time=end,
+        )
+
+        spans = exporter.get_finished_spans()
+        by_name = {s.name: s for s in spans}
+        assert "litellm_proxy_request" in by_name
+        assert LITELLM_REQUEST_SPAN_NAME in by_name
+
+        parent_attrs = dict(by_name["litellm_proxy_request"].attributes or {})
+        child_attrs = dict(by_name[LITELLM_REQUEST_SPAN_NAME].attributes or {})
+
+        assert parent_attrs.get("openinference.span.kind") == "CHAIN"
+        assert "llm.model_name" not in parent_attrs
+        assert "llm.token_count.prompt" not in parent_attrs
+        assert "llm.token_count.completion" not in parent_attrs
+        assert "llm.token_count.total" not in parent_attrs
+        assert "llm.cost.total" not in parent_attrs
+        assert "llm.response.cost" not in parent_attrs
+
+        assert child_attrs.get("openinference.span.kind") == "LLM"
+        assert child_attrs.get("llm.model_name") == "gpt-4"
+        assert child_attrs.get("llm.token_count.prompt") == 10
+        assert child_attrs.get("llm.token_count.completion") == 20
+        assert child_attrs.get("llm.token_count.total") == 30
+        assert child_attrs.get("llm.cost.total") == pytest.approx(0.0015)
+
+        total_tokens = sum(
+            (s.attributes or {}).get("llm.token_count.total", 0) for s in spans
+        )
+        total_cost = sum(
+            (s.attributes or {}).get("llm.cost.total", 0.0) for s in spans
+        )
+        assert total_tokens == 30
+        assert total_cost == pytest.approx(0.0015)
+
 
 @pytest.mark.parametrize(("max_attribute_length", "expected_description"), [(None, "model not found"), (5, "model")])
 def test_failed_proxy_request_puts_the_error_message_on_every_phoenix_span_status(
