@@ -90,6 +90,29 @@ async def test_ping_emitted_while_waiting_for_first_chunk():
 
 
 @pytest.mark.asyncio
+async def test_ping_waits_for_a_half_written_frame_to_finish():
+    """/v1/messages relays raw transport reads, so an upstream can stall halfway through a frame."""
+    torn_head: Final = 'event: content_block_delta\ndata: {"type": "content_block_delta", "delta":'
+    torn_rest: Final = ' {"text": "1"}}\n\n'
+
+    async def stalls_mid_frame_then_at_boundary() -> AsyncGenerator[str, None]:
+        yield torn_head
+        await asyncio.sleep(0.2)
+        yield torn_rest
+        await asyncio.sleep(0.2)
+        yield TEXT_DELTA_CHUNK
+
+    wrapped: Final = wrap_sse_stream_with_keepalive_pings(
+        stream=stalls_mid_frame_then_at_boundary(), ping_interval_seconds=0.05
+    )
+    collected: Final = [chunk async for chunk in wrapped]
+
+    ping_index: Final = collected.index(ANTHROPIC_PING_SSE_CHUNK)
+    assert collected[:ping_index] == [torn_head, torn_rest]
+    assert collected[-1] == TEXT_DELTA_CHUNK
+
+
+@pytest.mark.asyncio
 async def test_no_pings_when_chunks_arrive_faster_than_interval():
     async def fast_stream() -> AsyncGenerator[str, None]:
         yield MESSAGE_START_CHUNK
