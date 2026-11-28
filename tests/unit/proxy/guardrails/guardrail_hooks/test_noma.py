@@ -2494,3 +2494,70 @@ class TestNomaAnonymizationFlow:
                     user_api_key_dict=mock_user_api_key_dict,
                     response=llm_response,
                 )
+
+
+class TestNomaRawFramesInAStream:
+    @staticmethod
+    def _guardrail():
+        return NomaGuardrail(
+            api_key="test-api-key",
+            api_base="https://api.test.noma.security/",
+            monitor_mode=False,
+            block_failures=True,
+            guardrail_name="noma-post-call",
+            event_hook="post_call",
+            default_on=True,
+        )
+
+    @staticmethod
+    def _streamed_text(content):
+        return ModelResponseStream(
+            id="resp_1",
+            choices=[StreamingChoices(delta=Delta(content=content), index=0)],
+            created=1234567890,
+            model="gpt-4.1-mini",
+            object="chat.completion.chunk",
+        )
+
+    async def _scan(self, items, verdict_for_text):
+        guardrail = self._guardrail()
+
+        async def upstream():
+            for item in items:
+                yield item
+
+        with patch.object(guardrail.async_handler, "post", side_effect=_noma_reply_per_text(verdict_for_text)):
+            return [
+                chunk
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                    response=upstream(),
+                    request_data={"litellm_call_id": "call-1", "metadata": {}},
+                )
+            ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("position", [0, 1, 2])
+    async def test_the_parsed_chunks_are_scanned_and_delivered_beside_a_raw_frame(self, position):
+        scanned = []
+
+        def verdict_for_text(text):
+            scanned.append(text)
+            return {"aggregatedScanResult": False, "scanResult": []}
+
+        parsed = [self._streamed_text("Hello"), self._streamed_text(" world")]
+
+        delivered = await self._scan([*parsed[:position], b"data: [DONE]\n\n", *parsed[position:]], verdict_for_text)
+
+        assert scanned == ["Hello world"]
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in delivered) == "Hello world"
+
+    @pytest.mark.asyncio
+    async def test_a_flagged_response_is_blocked_when_a_raw_frame_sits_beside_it(self):
+        parsed = [self._streamed_text("The launch code"), self._streamed_text(" is 0000.")]
+
+        with pytest.raises(NomaBlockedMessage):
+            await self._scan(
+                [parsed[0], b"data: [DONE]\n\n", parsed[1]],
+                lambda text: {"aggregatedScanResult": "launch code" in text, "scanResult": []},
+            )
