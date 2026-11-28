@@ -26,7 +26,9 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from litellm.integrations.s3_v2 import S3Logger
 
-BatchFileProvider: TypeAlias = Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"]
+BatchFileProvider: TypeAlias = Literal[
+    "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral", "openrouter"
+]
 
 _VERTEX_AI_UNKNOWN_CUSTOM_ID: Final = "unknown"  # what a Vertex AI batch row that carries no custom_id is read as
 _LINE: Final = re.compile(rb"[^\n]+")

@@ -23,31 +23,28 @@ production. Provider env vars are not required: missing creds resolve to None an
 flow through harmlessly because the handler is mocked.
 """
 
-from contextlib import ExitStack
-from dataclasses import dataclass
-from typing import Any, Dict
-from types import MappingProxyType
-from unittest.mock import MagicMock, patch
-
-import pytest
-
-
-import litellm
-import litellm.batches.main as bm
 import asyncio
 import datetime
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from typing import Final
+from contextlib import ExitStack
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any, Final
+from unittest.mock import MagicMock, patch
+
 import httpx
 import openai
+import pytest
 import respx
+from openai.types.batch import Batch
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
-from litellm.integrations.custom_logger import CustomLogger
-from openai.types.batch import Batch
-from litellm.types.utils import LiteLLMBatch, admin_api_key_secret_reference
 
+import litellm
+import litellm.batches.main as bm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import LiteLLMBatch, admin_api_key_secret_reference
 
 # --------------------------------------------------------------------------- #
 # Seam harness - one mock per provider handler instance + the Bedrock ARN
@@ -112,7 +109,7 @@ def _assert_only(fired, seams: Seams, op: str):
             m.assert_not_called()
 
 
-CREATE_KW: Dict[str, Any] = dict(
+CREATE_KW: dict[str, Any] = dict(
     completion_window="24h",
     endpoint="/v1/chat/completions",
     input_file_id="file-abc",
@@ -482,18 +479,18 @@ async def test_acancel_batch_delegates_to_cancel_batch():
 
 # Distinct values so a cross-wired field (e.g. api_key forwarded as api_base) is
 # impossible to miss.
-OPENAI_CREDS: Dict[str, Any] = dict(
+OPENAI_CREDS: dict[str, Any] = dict(
     api_key="sk-user-openai",
     api_base="https://openai.user.test",
     organization="org-user-123",
     max_retries=7,
 )
-AZURE_CREDS: Dict[str, Any] = dict(
+AZURE_CREDS: dict[str, Any] = dict(
     api_key="sk-user-azure",
     api_base="https://azure.user.test",
     api_version="2024-12-99",
 )
-VERTEX_CREDS: Dict[str, Any] = dict(
+VERTEX_CREDS: dict[str, Any] = dict(
     vertex_project="proj-user",
     vertex_location="loc-user",
     vertex_credentials="cred-user",
@@ -765,8 +762,7 @@ def test_retrieve__keeps_the_deployment_bucket_settings_in_litellm_params(seams:
 
     litellm_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
     assert {
-        key: litellm_params[key]
-        for key in ("s3_bucket_name", "s3_output_bucket_name", "allow_legacy_cloud_file_ids")
+        key: litellm_params[key] for key in ("s3_bucket_name", "s3_output_bucket_name", "allow_legacy_cloud_file_ids")
     } == {
         "s3_bucket_name": "configured-bucket",
         "s3_output_bucket_name": "output-bucket",
@@ -828,14 +824,16 @@ async def test_batch_logging_azure_credentials_regression():
     Fix: Pass litellm_params (containing credentials) from the logging object
     through to the file content retrieval functions.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import patch
+
+    import httpx
+
     from litellm.batches.batch_utils import (
-        extract_file_access_credentials,
         _fetch_batch_output_file_content,
+        extract_file_access_credentials,
         handle_completed_batch,
     )
     from litellm.types.llms.openai import Batch, HttpxBinaryResponseContent
-    import httpx
 
     print("\n=== Regression Test: Azure Batch Logging Credentials ===")
 
@@ -876,9 +874,7 @@ async def test_batch_logging_azure_credentials_regression():
 
     extracted_creds = extract_file_access_credentials(azure_credentials)
     assert "api_key" in extracted_creds, "api_key should be extracted"
-    assert (
-        extracted_creds["api_key"] == "test-azure-key-regression"
-    ), "Incorrect api_key"
+    assert extracted_creds["api_key"] == "test-azure-key-regression", "Incorrect api_key"
     assert "api_base" in extracted_creds, "api_base should be extracted"
     assert "api_version" in extracted_creds, "api_version should be extracted"
     assert "timeout" in extracted_creds, "timeout should be extracted"
@@ -905,25 +901,20 @@ async def test_batch_logging_azure_credentials_regression():
         )
         return HttpxBinaryResponseContent(response=mock_response)
 
-    with patch(
-        "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
-    ):
+    with patch("litellm.files.main.afile_content", side_effect=mock_afile_content_tracker):
         result = await _fetch_batch_output_file_content(
             batch=mock_batch,
             custom_llm_provider="azure",
             litellm_params=azure_credentials,
         )
 
-        assert credentials_received[
-            "value"
-        ], "REGRESSION: Azure credentials not passed to afile_content! This causes 'Missing credentials' error."
-        assert (
-            credentials_received["params"]["api_key"] == "test-azure-key-regression"
-        ), "REGRESSION: Incorrect api_key"
-        assert (
-            credentials_received["params"]["api_base"]
-            == "https://test-regression.openai.azure.com"
-        ), "REGRESSION: Incorrect api_base"
+        assert credentials_received["value"], (
+            "REGRESSION: Azure credentials not passed to afile_content! This causes 'Missing credentials' error."
+        )
+        assert credentials_received["params"]["api_key"] == "test-azure-key-regression", "REGRESSION: Incorrect api_key"
+        assert credentials_received["params"]["api_base"] == "https://test-regression.openai.azure.com", (
+            "REGRESSION: Incorrect api_base"
+        )
 
         print("   ✓ Credentials passed to afile_content")
         print(f"   ✓ api_key: {credentials_received['params']['api_key']}")
@@ -934,18 +925,14 @@ async def test_batch_logging_azure_credentials_regression():
     credentials_received["value"] = False
     credentials_received["params"] = None
 
-    with patch(
-        "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
-    ):
+    with patch("litellm.files.main.afile_content", side_effect=mock_afile_content_tracker):
         result = await handle_completed_batch(
             batch=mock_batch,
             custom_llm_provider="azure",
             litellm_params=azure_credentials,
         )
 
-        assert credentials_received[
-            "value"
-        ], "REGRESSION: Credentials not passed through _handle_completed_batch"
+        assert credentials_received["value"], "REGRESSION: Credentials not passed through _handle_completed_batch"
 
         assert result.cost > 0, "Cost should be calculated"
         assert result.usage.total_tokens == 40, "Usage should be calculated correctly"
@@ -964,9 +951,7 @@ async def test_batch_logging_azure_credentials_regression():
             "`AZURE_OPENAI_AD_TOKEN` environment variables."
         )
 
-        with patch(
-            "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
-        ):
+        with patch("litellm.files.main.afile_content", side_effect=mock_afile_content_tracker):
             try:
                 result = await handle_completed_batch(
                     batch=mock_batch,
@@ -977,8 +962,7 @@ async def test_batch_logging_azure_credentials_regression():
             except Exception as e:
                 if "Missing credentials" in str(e):
                     pytest.fail(
-                        f"REGRESSION: 'Missing credentials' error occurred! "
-                        f"Credentials not being passed. Error: {str(e)}"
+                        f"REGRESSION: 'Missing credentials' error occurred! Credentials not being passed. Error: {e!s}"
                     )
                 raise
 
@@ -990,9 +974,7 @@ async def test_batch_logging_azure_credentials_regression():
             content=batch_output,
             headers={"content-type": "application/octet-stream"},
         )
-        mock_afile_content.return_value = HttpxBinaryResponseContent(
-            response=mock_response
-        )
+        mock_afile_content.return_value = HttpxBinaryResponseContent(response=mock_response)
 
         result = await _fetch_batch_output_file_content(
             batch=mock_batch,
@@ -1591,7 +1573,9 @@ async def _list_on_vllm_router() -> Sequence[Batch]:
 
 
 async def _list_on_vllm_router_sync() -> Sequence[Batch]:
-    return litellm.list_batches(custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE).data
+    return litellm.list_batches(
+        custom_llm_provider="hosted_vllm", api_key="sk-test", api_base=VLLM_ROUTER_API_BASE
+    ).data
 
 
 @pytest.mark.parametrize("list_router", (_list_on_vllm_router, _list_on_vllm_router_sync))
@@ -1670,7 +1654,10 @@ async def test_openai_batch_list_items_come_back_as_openai_sent_them(respx_mock:
 
     first, second = page.data
     assert first.usage is not None
-    assert (first.usage.input_tokens_details.cached_tokens, first.usage.output_tokens_details.reasoning_tokens) == (4, 2)
+    assert (first.usage.input_tokens_details.cached_tokens, first.usage.output_tokens_details.reasoning_tokens) == (
+        4,
+        2,
+    )
     assert (second.id, second.object, second.status) == ("batch_def456", "batch", "queued")
 
 
@@ -1713,3 +1700,71 @@ def test_retrieve__model_that_is_not_a_string_skips_provider_config_lookup(seams
 
     assert result is seams.openai.retrieve_batch.return_value
     assert config_lookup.call_count == 0, config_lookup.call_args_list
+
+
+# =========================================================================== #
+# openrouter batch support
+# =========================================================================== #
+
+
+def test_create__openrouter_dispatch(seams):
+    result = bm.create_batch(**CREATE_KW, custom_llm_provider="openrouter", api_key="openrouter-test-key")
+
+    assert result is seams.openai.create_batch.return_value
+    _assert_only(seams.openai.create_batch, seams, "create_batch")
+
+
+def test_create__openrouter_credentials_default(seams, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test")
+    monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    bm.create_batch(**CREATE_KW, custom_llm_provider="openrouter")
+
+    sent = _sent(seams.openai.create_batch, "api_key", "api_base")
+    assert sent == {
+        "api_key": "sk-or-v1-test",
+        "api_base": "https://openrouter.ai/api/v1",
+    }
+
+
+def test_retrieve__openrouter_credentials_default(seams, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test")
+    monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    bm.retrieve_batch(batch_id="batch_123", custom_llm_provider="openrouter")
+
+    sent = _sent(seams.openai.retrieve_batch, "api_key", "api_base")
+    assert sent == {
+        "api_key": "sk-or-v1-test",
+        "api_base": "https://openrouter.ai/api/v1",
+    }
+
+
+def test_list__openrouter_credentials_default(seams, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test")
+    monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    bm.list_batches(custom_llm_provider="openrouter")
+
+    sent = _sent(seams.openai.list_batches, "api_key", "api_base")
+    assert sent == {
+        "api_key": "sk-or-v1-test",
+        "api_base": "https://openrouter.ai/api/v1",
+    }
+
+
+def test_cancel__openrouter_credentials_default(seams, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test")
+    monkeypatch.delenv("OPENROUTER_API_BASE", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    bm.cancel_batch(batch_id="batch_123", custom_llm_provider="openrouter")
+
+    sent = _sent(seams.openai.cancel_batch, "api_key", "api_base")
+    assert sent == {
+        "api_key": "sk-or-v1-test",
+        "api_base": "https://openrouter.ai/api/v1",
+    }
