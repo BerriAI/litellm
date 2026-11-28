@@ -377,6 +377,12 @@
     "api_key_env": "HUAWEI_MAAS_API_KEY",
     "api_base_env": "HUAWEI_MAAS_API_BASE"
   },
+  "openlux": {
+    "base_url": "https://api.openlux.ai/v1",
+    "api_key_env": "OPENLUX_API_KEY",
+    "api_base_env": "OPENLUX_API_BASE",
+    "user_agent": "litellm/{version} Python/{python}"
+  },
   "wally": {
     "base_url": "https://inference.runanywhere.ai/v1",
     "api_key_env": "WALLY_API_KEY",
