@@ -420,3 +420,102 @@ async def test_a_dropped_stream_is_sent_and_logged_as_a_billed_non_stream_call(
     assert recording_logger.stream is False
     assert response.hidden_params["response_cost"] > 0
     assert logged["response_cost"] == pytest.approx(response.hidden_params["response_cost"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_env")
+async def test_aextraction_forwards_enum_boolean_object_compute_and_object_list_fields(
+    respx_mock: respx.MockRouter,
+) -> None:
+    state: Final = "Order #A17: Maria bought 3 red mugs at $4.50 each and paid by credit card."
+    fields: Final = {
+        "payment": {"type": "enum", "enum": ["cash", "credit card", "paypal"]},
+        "gift_wrap": {"type": "boolean"},
+        "item": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "text"},
+                "qty": {"type": "number"},
+                "color": {"type": "enum", "enum": ["red", "blue"]},
+            },
+        },
+        "total": {"type": "compute", "unit": "USD"},
+        "rows": {
+            "type": "list",
+            "items": {"type": "object", "properties": {"name": {"type": "text"}, "qty": {"type": "number"}}},
+        },
+    }
+    result_payload: Final = {
+        "model": "clairic",
+        "answers": {
+            "payment": {"type": "enum", "value": "credit card"},
+            "gift_wrap": {"type": "boolean", "value": False},
+            "item": {"type": "object", "value": {"name": "mugs", "qty": 3, "color": "red"}},
+            "total": {"type": "compute", "value": 13.5, "guess": 13.5},
+            "rows": {
+                "type": "list",
+                "value": [{"name": "red mugs", "qty": 3}],
+                "property_spans": [{"name": [27, 35], "qty": [25, 26]}],
+            },
+        },
+        "truncated": False,
+        "usage": {"input_tokens": 180, "output_tokens": 24},
+    }
+    route: Final = respx_mock.post(_CLAIRIC_URL).respond(
+        json={"result": result_payload, "success": True, "errors": [], "messages": []}
+    )
+
+    response: Final = await litellm.aextraction(model="cloudflare/clairic", state=state, fields=fields)
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content) == {"model": "clairic", "state": state, "fields": fields}
+    assert response.answers["payment"].value == "credit card"
+    assert response.answers["gift_wrap"].value is False
+    assert response.answers["item"].value == {"name": "mugs", "qty": 3, "color": "red"}
+    assert response.answers["total"].value == 13.5
+    assert response.answers["rows"].value == [{"name": "red mugs", "qty": 3}]
+    assert response.answers["rows"].property_spans == ({"name": [27, 35], "qty": [25, 26]},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_env")
+async def test_state_rewritten_by_guardrail_drops_property_spans_when_state_text_is_omitted(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(_CLAIRIC_URL).respond(
+        json={
+            "result": {
+                "model": "clairic",
+                "answers": {
+                    "rows": {
+                        "type": "list",
+                        "value": [{"name": "red mugs", "qty": 3}],
+                        "span": [27, 35],
+                        "spans": [[27, 35]],
+                        "property_spans": [{"name": [27, 35], "qty": [25, 26]}],
+                    }
+                },
+                "truncated": False,
+                "usage": {"input_tokens": 100, "output_tokens": 12},
+            },
+            "success": True,
+            "errors": [],
+            "messages": [],
+        }
+    )
+
+    response: Final = await litellm.aextraction(
+        model="cloudflare/clairic",
+        state="masked",
+        fields={
+            "rows": {
+                "type": "list",
+                "items": {"type": "object", "properties": {"name": {"type": "text"}, "qty": {"type": "number"}}},
+            }
+        },
+        metadata={"extraction_state_rewritten_by_guardrail": True},
+    )
+
+    assert response.answers["rows"].span is None
+    assert response.answers["rows"].spans is None
+    assert response.answers["rows"].property_spans is None

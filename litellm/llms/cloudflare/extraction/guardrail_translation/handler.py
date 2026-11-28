@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 _FIELDS_ADAPTER: Final[TypeAdapter[Mapping[str, Mapping[str, object]]]] = TypeAdapter(
     Mapping[str, Mapping[str, object]]
 )
+_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_SEQUENCE_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
 _METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _IMAGES_ADAPTER: Final[TypeAdapter[tuple[ExtractionBase64Image | JsonValue, ...]]] = TypeAdapter(
     tuple[Annotated[ExtractionBase64Image | JsonValue, Field(union_mode="left_to_right")], ...]
@@ -31,10 +33,28 @@ _IMAGES_ADAPTER: Final[TypeAdapter[tuple[ExtractionBase64Image | JsonValue, ...]
 
 
 _AnswerKey: TypeAlias = Literal["value", "guess", "mean", "median", "p10", "p90", "quantiles"]
+_SpecPath: TypeAlias = tuple[str | int, ...]
 _ESTIMATE_KEYS: Final[tuple[_AnswerKey, ...]] = ("value", "guess", "mean", "median", "p10", "p90", "quantiles")
 _STATISTIC_KEYS: Final[frozenset[_AnswerKey]] = frozenset(("mean", "median", "p10", "p90", "quantiles"))
 _NULLED_ANSWER: Final[Mapping[str, None]] = MappingProxyType(
-    dict.fromkeys(("value", "guess", "mean", "median", "p10", "p90", "quantiles", "steps", "span", "spans"), None)
+    dict.fromkeys(
+        (
+            "value",
+            "guess",
+            "mean",
+            "median",
+            "p10",
+            "p90",
+            "quantiles",
+            "steps",
+            "span",
+            "spans",
+            "property_spans",
+            "raw",
+            "printed_value",
+        ),
+        None,
+    )
 )
 
 
@@ -43,7 +63,9 @@ class _AnswerText:
     name: str
     key: _AnswerKey
     item: int | None
+    prop: str | None
     text: str
+    rewritable: bool
 
 
 _SPEC_TEXT_KEYS: Final = ("instructions", "unit")
@@ -52,13 +74,65 @@ _SPEC_TEXT_KEYS: Final = ("instructions", "unit")
 @dataclass(frozen=True, slots=True)
 class _SpecText:
     name: str
-    key: str
+    path: _SpecPath
     text: str
 
 
-def _spec_texts_of(name: str, spec: Mapping[str, object]) -> tuple[_SpecText, ...]:
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    return _MAPPING_ADAPTER.validate_python(value) if isinstance(value, Mapping) else None
+
+
+def _as_sequence(value: object) -> tuple[object, ...] | None:
+    return (
+        _SEQUENCE_ADAPTER.validate_python(value)
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+        else None
+    )
+
+
+def _as_property_specs(value: object) -> Mapping[str, Mapping[str, object]] | None:
+    raw: Final = _as_mapping(value)
+    if raw is None:
+        return None
+    return {
+        key: _MAPPING_ADAPTER.validate_python(prop_spec)
+        for key, prop_spec in raw.items()
+        if isinstance(prop_spec, Mapping)
+    }
+
+
+def _leaf_spec_texts(name: str, prefix: _SpecPath, spec: Mapping[str, object]) -> tuple[_SpecText, ...]:
+    scalar_texts: Final = tuple(
+        _SpecText(name=name, path=(*prefix, key), text=text)
+        for key in _SPEC_TEXT_KEYS
+        if isinstance(text := spec.get(key), str)
+    )
+    enum_values: Final = _as_sequence(spec.get("enum"))
+    if enum_values is None:
+        return scalar_texts
+    enum_texts: Final = tuple(
+        _SpecText(name=name, path=(*prefix, "enum", index), text=item)
+        for index, item in enumerate(enum_values)
+        if isinstance(item, str)
+    )
+    return (*scalar_texts, *enum_texts)
+
+
+def _properties_spec_texts(name: str, prefix: _SpecPath, raw_props: object) -> tuple[_SpecText, ...]:
+    props: Final = _as_property_specs(raw_props)
+    if props is None:
+        return ()
     return tuple(
-        _SpecText(name=name, key=key, text=text) for key in _SPEC_TEXT_KEYS if isinstance(text := spec.get(key), str)
+        chain.from_iterable(_leaf_spec_texts(name, (*prefix, prop), prop_spec) for prop, prop_spec in props.items())
+    )
+
+
+def _spec_texts_of(name: str, spec: Mapping[str, object]) -> tuple[_SpecText, ...]:
+    items: Final = _as_mapping(spec.get("items"))
+    return (
+        *_leaf_spec_texts(name, (), spec),
+        *_properties_spec_texts(name, ("properties",), spec.get("properties")),
+        *(_properties_spec_texts(name, ("items", "properties"), items.get("properties")) if items is not None else ()),
     )
 
 
@@ -73,8 +147,73 @@ def _scans_by_name(scanned: Iterable[tuple[_NamedText, str]]) -> Mapping[str, tu
     return {name: tuple(group) for name, group in groupby(scanned, key=lambda pair: pair[0].name)}
 
 
+def _guardrailed_leaf_spec(
+    spec: Mapping[str, object],
+    updates: Mapping[_SpecPath, str],
+    prefix: _SpecPath,
+) -> Mapping[str, object]:
+    top: Final[Mapping[str, str]] = {
+        key: value for key in _SPEC_TEXT_KEYS if (value := updates.get((*prefix, key))) is not None
+    }
+    enum_values: Final = _as_sequence(spec.get("enum"))
+    enum_updates: Final[Mapping[int, str]] = (
+        {
+            index: item_text
+            for index in range(len(enum_values))
+            if (item_text := updates.get((*prefix, "enum", index))) is not None
+        }
+        if enum_values is not None
+        else {}
+    )
+    if not top and not enum_updates:
+        return spec
+    return {
+        **spec,
+        **top,
+        **(
+            {"enum": [enum_updates.get(index, item) for index, item in enumerate(enum_values)]}
+            if enum_values is not None and enum_updates
+            else {}
+        ),
+    }
+
+
+def _guardrailed_properties(
+    raw_props: object,
+    updates: Mapping[_SpecPath, str],
+    prefix: _SpecPath,
+) -> Mapping[str, Mapping[str, object]] | None:
+    props: Final = _as_property_specs(raw_props)
+    if props is None:
+        return None
+    return {prop: _guardrailed_leaf_spec(prop_spec, updates, (*prefix, prop)) for prop, prop_spec in props.items()}
+
+
 def _guardrailed_spec(spec: Mapping[str, object], scanned: Sequence[tuple[_SpecText, str]]) -> Mapping[str, object]:
-    return {**spec, **{text.key: guardrailed for text, guardrailed in scanned}}
+    if not scanned:
+        return spec
+    updates: Final[Mapping[_SpecPath, str]] = {text.path: guardrailed for text, guardrailed in scanned}
+    updated_top: Final = _guardrailed_leaf_spec(spec, updates, ())
+    has_props: Final = any(path[0] == "properties" for path in updates)
+    has_item_props: Final = any(path[0] == "items" for path in updates)
+    updated_props: Final = (
+        _guardrailed_properties(spec.get("properties"), updates, ("properties",)) if has_props else None
+    )
+    raw_items: Final = _as_mapping(spec.get("items")) if has_item_props else None
+    updated_item_props: Final = (
+        _guardrailed_properties(raw_items.get("properties"), updates, ("items", "properties"))
+        if raw_items is not None
+        else None
+    )
+    return {
+        **updated_top,
+        **({"properties": updated_props} if updated_props is not None else {}),
+        **(
+            {"items": {**raw_items, "properties": updated_item_props}}
+            if raw_items is not None and updated_item_props is not None
+            else {}
+        ),
+    }
 
 
 def _metadata_key(data: Mapping[str, object]) -> Literal["metadata", "litellm_metadata"]:
@@ -87,6 +226,32 @@ def _metadata(data: Mapping[str, object]) -> Mapping[str, object]:
 
 def _is_text_answer(answer: ExtractionAnswer, spec: Mapping[str, object] | None) -> bool:
     return answer.type == "text" or (answer.type == "list" and (spec is None or spec.get("items") == "text"))
+
+
+def _object_property_specs(
+    answer_type: str, spec: Mapping[str, object] | None
+) -> Mapping[str, Mapping[str, object]] | None:
+    if spec is None:
+        return None
+    if answer_type == "object":
+        return _as_property_specs(spec.get("properties"))
+    if answer_type == "list":
+        items: Final = _as_mapping(spec.get("items"))
+        return _as_property_specs(items.get("properties")) if items is not None else None
+    return None
+
+
+def _is_text_property(
+    prop: str,
+    value: JsonValue,
+    prop_specs: Mapping[str, Mapping[str, object]] | None,
+) -> bool:
+    if not isinstance(value, str):
+        return False
+    if prop_specs is None:
+        return True
+    prop_spec: Final = prop_specs.get(prop)
+    return prop_spec is None or prop_spec.get("type") == "text"
 
 
 def _image_urls(images: object) -> tuple[str, ...]:
@@ -107,18 +272,79 @@ def _scalar_text(value: JsonValue, whole: bool) -> str | None:
     return str(value) if isinstance(value, (str, int, float)) else None
 
 
-def _item_texts(items: Sequence[JsonValue], whole: bool) -> tuple[tuple[int, str], ...]:
-    return tuple((index, text) for index, item in enumerate(items) if (text := _scalar_text(item, whole)) is not None)
+def _object_texts(
+    name: str,
+    key: _AnswerKey,
+    item: int | None,
+    obj: Mapping[str, JsonValue],
+    whole: bool,
+    prop_specs: Mapping[str, Mapping[str, object]] | None,
+) -> tuple[_AnswerText, ...]:
+    rewritable_key: Final = key in ("value", "guess")
+    return tuple(
+        _AnswerText(
+            name=name,
+            key=key,
+            item=item,
+            prop=prop,
+            text=text,
+            rewritable=rewritable_key and _is_text_property(prop, prop_val, prop_specs),
+        )
+        for prop, prop_val in obj.items()
+        if (text := _scalar_text(prop_val, whole)) is not None
+    )
 
 
-def _value_texts(name: str, key: _AnswerKey, value: JsonValue) -> tuple[_AnswerText, ...]:
+def _list_item_texts(
+    name: str,
+    key: _AnswerKey,
+    index: int,
+    elem: JsonValue,
+    whole: bool,
+    rewritable: bool,
+    prop_specs: Mapping[str, Mapping[str, object]] | None,
+) -> tuple[_AnswerText, ...]:
+    if isinstance(elem, dict):
+        return _object_texts(name, key, index, elem, whole, prop_specs)
+    text: Final = _scalar_text(elem, whole)
+    if text is None:
+        return ()
+    return (
+        _AnswerText(
+            name=name,
+            key=key,
+            item=index,
+            prop=None,
+            text=text,
+            rewritable=rewritable and isinstance(elem, str),
+        ),
+    )
+
+
+def _value_texts(
+    name: str,
+    key: _AnswerKey,
+    value: JsonValue,
+    *,
+    rewritable: bool = False,
+    prop_specs: Mapping[str, Mapping[str, object]] | None = None,
+) -> tuple[_AnswerText, ...]:
     whole: Final = key in _STATISTIC_KEYS
+    if isinstance(value, dict):
+        return _object_texts(name, key, None, value, whole, prop_specs)
     if isinstance(value, list):
         return tuple(
-            _AnswerText(name=name, key=key, item=index, text=text) for index, text in _item_texts(value, whole)
+            chain.from_iterable(
+                _list_item_texts(name, key, index, elem, whole, rewritable, prop_specs)
+                for index, elem in enumerate(value)
+            )
         )
     text: Final = _scalar_text(value, whole)
-    return () if text is None else (_AnswerText(name=name, key=key, item=None, text=text),)
+    return (
+        ()
+        if text is None
+        else (_AnswerText(name=name, key=key, item=None, prop=None, text=text, rewritable=rewritable),)
+    )
 
 
 def _step_texts(name: str, step: JsonValue) -> tuple[_AnswerText, ...]:
@@ -127,10 +353,14 @@ def _step_texts(name: str, step: JsonValue) -> tuple[_AnswerText, ...]:
     return tuple(chain.from_iterable(_value_texts(name, key, step.get(key)) for key in _ESTIMATE_KEYS))
 
 
-def _answer_texts(name: str, answer: ExtractionAnswer) -> tuple[_AnswerText, ...]:
+def _answer_texts(
+    name: str, answer: ExtractionAnswer, spec: Mapping[str, object] | None = None
+) -> tuple[_AnswerText, ...]:
+    rewritable: Final = _is_text_answer(answer, spec)
+    prop_specs: Final = _object_property_specs(answer.type, spec)
     return (
-        *_value_texts(name, "value", answer.value),
-        *_value_texts(name, "guess", answer.guess),
+        *_value_texts(name, "value", answer.value, rewritable=rewritable, prop_specs=prop_specs),
+        *_value_texts(name, "guess", answer.guess, rewritable=rewritable, prop_specs=prop_specs),
         *_value_texts(name, "mean", answer.mean),
         *_value_texts(name, "median", answer.median),
         *_value_texts(name, "p10", answer.p10),
@@ -140,30 +370,45 @@ def _answer_texts(name: str, answer: ExtractionAnswer) -> tuple[_AnswerText, ...
     )
 
 
-def _guardrailed_value(value: JsonValue, scanned: Mapping[int | None, str]) -> JsonValue:
+def _scans_of(
+    key: _AnswerKey, scanned: Sequence[tuple[_AnswerText, str]]
+) -> Mapping[tuple[int | None, str | None], str]:
+    return {(text.item, text.prop): guardrailed for text, guardrailed in scanned if text.key == key}
+
+
+def _guardrailed_element(
+    index: int,
+    elem: JsonValue,
+    scans: Mapping[tuple[int | None, str | None], str],
+) -> JsonValue:
+    if isinstance(elem, dict):
+        return {prop: scans.get((index, prop), prop_val) for prop, prop_val in elem.items()}
+    return scans.get((index, None), elem)
+
+
+def _guardrailed_value(value: JsonValue, scans: Mapping[tuple[int | None, str | None], str]) -> JsonValue:
+    if isinstance(value, dict):
+        return {prop: scans.get((None, prop), prop_val) for prop, prop_val in value.items()}
     if isinstance(value, list):
-        return [scanned.get(index, item) for index, item in enumerate(value)]
-    return scanned.get(None, value)
-
-
-def _scans_of(key: _AnswerKey, scanned: Sequence[tuple[_AnswerText, str]]) -> Mapping[int | None, str]:
-    return {text.item: guardrailed for text, guardrailed in scanned if text.key == key}
+        return [_guardrailed_element(index, elem, scans) for index, elem in enumerate(value)]
+    return scans.get((None, None), value)
 
 
 def _guardrailed_answer(
     answer: ExtractionAnswer,
     scanned: Sequence[tuple[_AnswerText, str]],
     drop_spans: bool,
-    is_text: bool,
 ) -> ExtractionAnswer:
-    if not is_text and any(text.text != guardrailed for text, guardrailed in scanned):
+    changed: Final = tuple((text, guardrailed) for text, guardrailed in scanned if text.text != guardrailed)
+    if any(not text.rewritable for text, _ in changed):
         return answer.model_copy(update=_NULLED_ANSWER)
-    value_scans: Final = _scans_of("value", scanned if is_text else ())
-    guess_scans: Final = _scans_of("guess", scanned if is_text else ())
+    value_scans: Final = _scans_of("value", changed)
+    guess_scans: Final = _scans_of("guess", changed)
     update: Final = {
         **({"value": _guardrailed_value(answer.value, value_scans)} if value_scans else {}),
         **({"guess": _guardrailed_value(answer.guess, guess_scans)} if guess_scans else {}),
-        **({"span": None, "spans": None} if drop_spans else {}),
+        **({"raw": None, "printed_value": None} if changed else {}),
+        **({"span": None, "spans": None, "property_spans": None} if drop_spans else {}),
     }
     return answer.model_copy(update=update) if update else answer
 
@@ -240,11 +485,14 @@ class ExtractionHandler(BaseTranslation):
     ) -> object:
         if not isinstance(response, ExtractionResponse):
             return response
+        request: Final = request_data or {}
+        specs: Final = _FIELDS_ADAPTER.validate_python(request.get("fields") or {})
         texts: Final = tuple(
-            chain.from_iterable(_answer_texts(name, answer) for name, answer in response.answers.items())
+            chain.from_iterable(
+                _answer_texts(name, answer, specs.get(name)) for name, answer in response.answers.items()
+            )
         )
         state_texts: Final = (response.state_text,) if response.state_text else ()
-        request: Final = request_data or {}
         scanned: Final = (
             await _scanned_texts(
                 (*(text.text for text in texts), *state_texts),
@@ -259,7 +507,6 @@ class ExtractionHandler(BaseTranslation):
         )
         answer_scans: Final = _scans_by_name(zip(texts, scanned))
         state_text: Final = next(iter(scanned[len(texts) :]), response.state_text)
-        specs: Final = _FIELDS_ADAPTER.validate_python(request.get("fields") or {})
         return response.model_copy(
             update={
                 "answers": {
@@ -267,7 +514,6 @@ class ExtractionHandler(BaseTranslation):
                         answer,
                         answer_scans.get(name, ()),
                         drop_spans=state_text != response.state_text,
-                        is_text=_is_text_answer(answer, specs.get(name)),
                     )
                     for name, answer in response.answers.items()
                 },

@@ -366,8 +366,9 @@ async def extraction(
     """
     Read a `state` text and up to 4 images and get one typed answer per named field in `fields`.
 
-    Field types are `text`, `number`, `date`, `time`, `datetime`, `duration`, `list` (set `items`), `estimate`
-    (set `min` and `max`) and `forecast` (set `min`, `max` and `horizon`). Each answer carries its `value`, which is
+    Field types are `text`, `number`, `compute`, `date`, `time`, `datetime`, `duration`, `boolean`, `enum`
+    (set `enum`), `object` (set `properties`), `list` (set `items`), `estimate` (set `min` and `max`), and
+    `forecast` (set `min`, `max` and `horizon`). Each answer carries its `value`, which is
     null when the input does not determine it, plus `confidence`, `p_null`, text `span`s into the state and, for
     estimates, `mean`, `median`, `p10` and `p90`. Images are data URLs or `{content_type, base64}` objects, remote
     URLs are not accepted. An unknown field type, a field name that is not 1 to 64 letters, digits, `_`, `.` or `-`

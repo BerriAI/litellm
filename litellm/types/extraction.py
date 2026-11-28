@@ -19,8 +19,21 @@ from typing_extensions import ReadOnly, Required, Self, TypedDict
 from litellm.types.llms.base import LiteLLMPydanticObjectBase, StrAsGiven
 
 ExtractionFieldType: TypeAlias = Literal[
-    "text", "number", "date", "time", "datetime", "duration", "list", "estimate", "forecast"
+    "text",
+    "number",
+    "compute",
+    "date",
+    "time",
+    "datetime",
+    "duration",
+    "boolean",
+    "enum",
+    "object",
+    "list",
+    "estimate",
+    "forecast",
 ]
+ExtractionObjectPropertyType: TypeAlias = Literal["text", "number", "boolean", "enum"]
 ExtractionFieldName: TypeAlias = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.\-]{0,63}$")]
 JsonNumber: TypeAlias = StrictInt | StrictFloat
 ExtractionBound: TypeAlias = JsonNumber | StrictStr
@@ -41,14 +54,68 @@ class _ClairicObject(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
+class ExtractionObjectProperty(_ClairicObject):
+    type: Annotated[
+        ExtractionObjectPropertyType,
+        Field(description="The answer type for this object property"),
+    ]
+    instructions: Annotated[str | None, Field(description="What the property should contain")] = None
+    nullable: Annotated[StrictBool | None, Field(description="When false, the property value cannot be null")] = None
+    unit: Annotated[str | None, Field(description="Unit label for number properties")] = None
+    integer: Annotated[StrictBool | None, Field(description="Number properties only")] = None
+    decimals: Annotated[JsonNumber | None, Field(description="Number properties only, 0 to 6")] = None
+    enum: Annotated[
+        tuple[JsonValue, ...] | None,
+        Field(
+            min_length=1,
+            description="Allowed values. Required for enum properties; optional for text and number",
+        ),
+    ] = None
+
+    @model_validator(mode="after")
+    def _enum_properties_name_their_options(self) -> Self:
+        if self.type == "enum" and self.enum is None:
+            raise ValueError("enum properties need enum set to at least one value")
+        return self
+
+
+class ExtractionObjectListItem(_ClairicObject):
+    type: Literal["object"]
+    properties: Annotated[
+        Mapping[ExtractionFieldName, ExtractionObjectProperty],
+        Field(min_length=1, description="Property name to typed property spec for each list item"),
+    ]
+
+
+ExtractionListItem: TypeAlias = Literal["text", "number", "date"] | ExtractionObjectListItem
+
+
 class ExtractionField(_ClairicObject):
     type: Annotated[ExtractionFieldType, Field(description="The answer type for this field")]
     instructions: Annotated[str | None, Field(description="What the field should contain")] = None
+    nullable: Annotated[
+        StrictBool | None,
+        Field(description="When false, text, number, boolean, enum and object answers cannot be null"),
+    ] = None
     unit: Annotated[str | None, Field(description="Unit label. For durations, seconds through years")] = None
-    integer: Annotated[StrictBool | None, Field(description="Numbers and durations only")] = None
-    decimals: Annotated[JsonNumber | None, Field(description="Numbers, durations and number lists only, 0 to 6")] = None
+    integer: Annotated[StrictBool | None, Field(description="Numbers, compute and durations only")] = None
+    decimals: Annotated[
+        JsonNumber | None, Field(description="Numbers, compute, durations and number lists only, 0 to 6")
+    ] = None
+    enum: Annotated[
+        tuple[JsonValue, ...] | None,
+        Field(
+            min_length=1,
+            description="Allowed values. Required for enum fields; optional for text, number and list fields",
+        ),
+    ] = None
+    properties: Annotated[
+        Mapping[ExtractionFieldName, ExtractionObjectProperty] | None,
+        Field(min_length=1, description="Property name to typed property spec, required for object fields"),
+    ] = None
     items: Annotated[
-        Literal["text", "number", "date"] | None, Field(description="Item type, required for list fields")
+        ExtractionListItem | None,
+        Field(description="Item type or object item spec, required for list fields"),
     ] = None
     min: Annotated[ExtractionBound | None, Field(description="Estimate and forecast lower bound")] = None
     max: Annotated[ExtractionBound | None, Field(description="Estimate and forecast upper bound")] = None
@@ -61,9 +128,13 @@ class ExtractionField(_ClairicObject):
     interval: Literal["step", "minute", "hour", "day", "week", "month", "quarter", "year"] | None = None
 
     @model_validator(mode="after")
-    def _list_fields_name_their_item_type(self) -> Self:
+    def _validate_type_requirements(self) -> Self:
         if self.type == "list" and self.items is None:
-            raise ValueError("list fields need items set to text, number or date")
+            raise ValueError("list fields need items set to text, number, date or an object spec")
+        if self.type == "enum" and self.enum is None:
+            raise ValueError("enum fields need enum set to at least one value")
+        if self.type == "object" and self.properties is None:
+            raise ValueError("object fields need properties set to at least one property")
         return self
 
 
@@ -111,6 +182,9 @@ class ExtractionAnswer(_ClairicObject):
     confidence: OptionalFloat = None
     span: Annotated[tuple[int, ...] | None, _OMITTED_WHEN_NONE] = None
     spans: Annotated[tuple[tuple[int, ...], ...] | None, _OMITTED_WHEN_NONE] = None
+    property_spans: Annotated[tuple[Mapping[str, JsonValue], ...] | None, _OMITTED_WHEN_NONE] = None
+    raw: Annotated[str | None, _OMITTED_WHEN_NONE] = None
+    printed_value: Annotated[str | None, _OMITTED_WHEN_NONE] = None
     mean: OptionalJson = None
     median: OptionalJson = None
     p10: OptionalJson = None
