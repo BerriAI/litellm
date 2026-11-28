@@ -1269,13 +1269,29 @@ def admitted_prompt_token_counter(prompt_tokens: int | None) -> Callable[[], int
     return lambda: prompt_tokens
 
 
+def _mock_tool_call_response(model: str, content: str, mock_tool_calls: Sequence[Mapping[str, Any]]) -> ModelResponse:
+    return ModelResponse(
+        model=model,
+        choices=[
+            litellm.utils.Choices(
+                index=0,
+                message=litellm.utils.Message(
+                    role="assistant",
+                    content=content,
+                    tool_calls=[ChatCompletionMessageToolCall(**tool_call) for tool_call in mock_tool_calls],
+                ),
+            )
+        ],
+    )
+
+
 def mock_completion(
     model: str,
     messages: Sequence[object],
     stream: bool | None = False,
     n: int | None = None,
     mock_response: MOCK_RESPONSE_TYPE | None = "This is a mock request",
-    mock_tool_calls: list | None = None,
+    mock_tool_calls: Sequence[Mapping[str, Any]] | None = None,
     mock_timeout: bool | None = False,
     logging: LiteLLMLoggingObj | None = None,
     custom_llm_provider: str | None = None,
@@ -1355,11 +1371,16 @@ def mock_completion(
         if stream is True:
             model_response = ModelResponseStream()
             count_prompt_tokens: Final = admitted_prompt_token_counter(prompt_tokens)
+            stream_source: Final = (
+                convert_model_response_to_streaming(_mock_tool_call_response(model, mock_response, mock_tool_calls))
+                if isinstance(mock_response, str) and mock_tool_calls
+                else mock_response
+            )
             # don't try to access stream object,
             if kwargs.get("acompletion", False) is True:
                 return CustomStreamWrapper(
                     completion_stream=async_mock_completion_streaming_obj(
-                        model_response, mock_response=mock_response, model=model, n=n, prompt_tokens=prompt_tokens
+                        model_response, mock_response=stream_source, model=model, n=n, prompt_tokens=prompt_tokens
                     ),
                     model=model,
                     custom_llm_provider="openai",
@@ -1369,7 +1390,7 @@ def mock_completion(
                 )
             return CustomStreamWrapper(
                 completion_stream=mock_completion_streaming_obj(
-                    model_response, mock_response=mock_response, model=model, n=n, prompt_tokens=prompt_tokens
+                    model_response, mock_response=stream_source, model=model, n=n, prompt_tokens=prompt_tokens
                 ),
                 model=model,
                 custom_llm_provider="openai",

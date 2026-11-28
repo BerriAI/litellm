@@ -6117,6 +6117,49 @@ async def test_async_mock_streaming_request():
     ), f"Unexpected response got {complete_response}"
 
 
+_MOCK_TOOL_CALLS: Final = (
+    {"id": "call_a", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "SF"}'}},
+    {"id": "call_b", "type": "function", "function": {"name": "get_time", "arguments": '{"tz": "UTC"}'}},
+)
+
+
+def _tool_call_fields(tool_calls) -> list[tuple[str, str, str]]:
+    return [(call.id, call.function.name, call.function.arguments) for call in tool_calls or []]
+
+
+def test_mock_tool_calls_reach_the_stream_like_the_non_streaming_response():
+    kwargs: Final = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+        "mock_response": "checking",
+        "mock_tool_calls": list(_MOCK_TOOL_CALLS),
+    }
+    non_streaming: Final = litellm.completion(**kwargs)
+    rebuilt: Final = litellm.stream_chunk_builder(list(litellm.completion(**kwargs, stream=True)))
+
+    assert _tool_call_fields(rebuilt.choices[0].message.tool_calls) == _tool_call_fields(
+        non_streaming.choices[0].message.tool_calls
+    )
+    assert len(_tool_call_fields(rebuilt.choices[0].message.tool_calls)) == len(_MOCK_TOOL_CALLS)
+    assert rebuilt.choices[0].message.content == "checking"
+
+
+@pytest.mark.asyncio
+async def test_mock_tool_calls_reach_the_async_stream():
+    stream: Final = await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="checking",
+        mock_tool_calls=list(_MOCK_TOOL_CALLS),
+        stream=True,
+    )
+    chunks: Final = [chunk async for chunk in stream]
+
+    assert _tool_call_fields(litellm.stream_chunk_builder(chunks).choices[0].message.tool_calls) == [
+        (call["id"], call["function"]["name"], call["function"]["arguments"]) for call in _MOCK_TOOL_CALLS
+    ]
+
+
 def test_mock_request_n_greater_than_1():
     try:
         model = "gpt-3.5-turbo"
