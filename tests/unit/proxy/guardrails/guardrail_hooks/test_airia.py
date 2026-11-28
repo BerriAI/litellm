@@ -1,18 +1,26 @@
 import json
 import uuid
+from datetime import datetime, timezone
 from collections.abc import AsyncGenerator
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from mcp.types import CallToolResult, TextContent
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.exceptions import GuardrailRaisedException
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.guardrails.guardrail_hooks.airia.airia import AiriaGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,  # pyright: ignore[reportUnknownVariableType]  # untyped upstream
 )
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.airia import AiriaGuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -98,13 +106,238 @@ def test_airia_guardrail_config(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _timeout(registered[0]).read == 45.0
 
 
-def test_during_call_is_not_a_supported_event_hook() -> None:
-    """during_call runs concurrently with the upstream call, so a block can land too late."""
-    hooks = _make_guardrail().supported_event_hooks
+def test_tool_call_and_during_call_modes_register_through_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
+    monkeypatch.setattr(litellm, "callbacks", [])
+    modes: Final = ["pre_mcp_call", "during_call", "post_mcp_call"]
 
-    assert hooks is not None
-    assert GuardrailEventHooks.during_call not in hooks
-    assert list(hooks) == [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "airia-guard",
+                "litellm_params": {"guardrail": "airia", "mode": modes, "api_base": API_BASE, "api_key": API_KEY},
+            }
+        ],
+        config_file_path="",
+    )
+
+    registered: Final = [c for c in litellm.callbacks if isinstance(c, AiriaGuardrail)]
+    assert len(registered) == 1
+    assert registered[0].event_hook == modes
+
+
+@pytest.mark.asyncio
+async def test_pre_mcp_call_redaction_rewrites_the_tool_arguments() -> None:
+    guardrail: Final = _make_guardrail_with_response(
+        {"action": "GUARDRAIL_INTERVENED", "texts": ["[EmailAddress1]"]}, event_hook="pre_mcp_call", default_on=True
+    )
+
+    data: Final = await UnifiedLLMGuardrails().async_pre_call_hook(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # annotates data as a bare dict
+        user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+        cache=DualCache(),
+        data={  # mutable-ok: the hook writes the masked arguments back into the request
+            "guardrail_to_apply": guardrail,
+            "mcp_tool_name": "send_email",
+            "mcp_arguments": {"to": "ada@example.com"},
+        },
+        call_type="call_mcp_tool",
+    )
+
+    assert isinstance(data, dict)
+    assert data["mcp_arguments"] == {"to": "[EmailAddress1]"}
+    assert _post_mock(guardrail).call_args.kwargs["json"]["input_type"] == "request"
+    assert _post_mock(guardrail).call_args.kwargs["json"]["texts"] == ["ada@example.com"]
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] == "send_email"
+
+
+@pytest.mark.asyncio
+async def test_pre_mcp_call_block_stops_the_tool_call() -> None:
+    guardrail: Final = _make_guardrail_with_response(
+        {"action": "BLOCKED", "blocked_reason": "Tool not allowed"}, event_hook="pre_mcp_call", default_on=True
+    )
+
+    with pytest.raises(GuardrailRaisedException) as excinfo:
+        await UnifiedLLMGuardrails().async_pre_call_hook(  # pyright: ignore[reportUnknownMemberType]  # annotates data as a bare dict
+            user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+            cache=DualCache(),
+            data={"guardrail_to_apply": guardrail, "mcp_tool_name": "drop_table", "mcp_arguments": {"name": "users"}},
+            call_type="call_mcp_tool",
+        )
+
+    assert excinfo.value.blocked_content is True
+    assert "Tool not allowed" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_post_mcp_call_redaction_masks_the_tool_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    guardrail: Final = _make_guardrail_with_response(
+        {"action": "GUARDRAIL_INTERVENED", "texts": ["reach [EmailAddress1]"]},
+        event_hook="post_mcp_call",
+        default_on=True,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    checked: Final = await ProxyLogging(user_api_key_cache=UserApiKeyCache()).post_mcp_call_hook(
+        response=CallToolResult(content=[TextContent(type="text", text="reach ada@example.com")]),
+        request_data={"mcp_tool_call_metadata": {"name": "lookup_contact", "arguments": {}}},
+        user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+    )
+
+    assert checked.content == [TextContent(type="text", text="reach [EmailAddress1]")]
+    assert _post_mock(guardrail).call_args.kwargs["json"]["input_type"] == "response"
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] == "lookup_contact"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("logging_obj", [None, "acompletion"])
+async def test_mcp_keys_in_a_request_body_do_not_mark_model_traffic_as_a_tool_call(logging_obj: str | None) -> None:
+    guardrail: Final = _make_guardrail_with_response({"action": "NONE"}, event_hook="pre_call", default_on=True)
+    request_data: Final[dict[str, object]] = {"prompt": "draw a cat", "mcp_tool_name": "send_email"}
+    logger: Final = (
+        LiteLLMLoggingObj(
+            model="gpt-4o",
+            messages=[],
+            stream=False,
+            call_type=logging_obj,
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            litellm_call_id="call-1",
+            function_id="1",
+        )
+        if logging_obj
+        else None
+    )
+
+    assert guardrail.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.pre_call)
+    await guardrail.apply_guardrail(
+        inputs=_inputs(), request_data=request_data, input_type="request", logging_obj=logger
+    )
+
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_an_mcp_evaluation_does_not_mark_the_next_model_evaluation_as_a_tool_call() -> None:
+    guardrail: Final = _make_guardrail_with_response(
+        {"action": "NONE"}, event_hook=["pre_mcp_call", "pre_call"], default_on=True
+    )
+    tool_call: Final[dict[str, object]] = {"mcp_tool_name": "send_email"}
+    assert guardrail.should_run_guardrail(data=tool_call, event_type=GuardrailEventHooks.pre_mcp_call)
+    await guardrail.apply_guardrail(inputs=_inputs(), request_data=tool_call, input_type="request")
+
+    await guardrail.apply_guardrail(inputs=_inputs(), request_data=tool_call, input_type="request")
+
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {"mcp_tool_name": "send_email"},
+        {"mcp_tool_call_metadata": {"name": "send_email", "arguments": {}}},
+        {"metadata": {"mcp_tool_name": "send_email"}},
+    ],
+)
+async def test_client_supplied_mcp_markers_do_not_mark_model_traffic_as_a_tool_call(
+    marker: dict[str, object],
+) -> None:
+    guardrail: Final = _make_guardrail_with_response({"action": "NONE"}, event_hook="pre_call", default_on=True)
+
+    await UnifiedLLMGuardrails().async_pre_call_hook(  # pyright: ignore[reportUnknownMemberType]  # annotates data as a bare dict
+        user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+        cache=DualCache(),
+        data={"guardrail_to_apply": guardrail, "messages": [{"role": "user", "content": "hello"}], **marker},
+        call_type="completion",
+    )
+
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_hook_that_does_not_run_leaves_no_marker_for_the_next_evaluation() -> None:
+    guardrail: Final = _make_guardrail_with_response({"action": "NONE"}, event_hook="pre_call", default_on=True)
+    tool_call: Final[dict[str, object]] = {"mcp_tool_name": "send_email"}
+
+    assert not guardrail.should_run_guardrail(data=tool_call, event_type=GuardrailEventHooks.pre_mcp_call)
+    await guardrail.apply_guardrail(inputs=_inputs(), request_data=tool_call, input_type="request")
+
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_an_mcp_evaluation_without_a_tool_name_still_names_one_so_tool_filters_apply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = _make_guardrail_with_response({"action": "NONE"}, event_hook="post_mcp_call", default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    await ProxyLogging(user_api_key_cache=UserApiKeyCache()).post_mcp_call_hook(
+        response=CallToolResult(content=[TextContent(type="text", text="ok")]),
+        request_data={"mcp_tool_call_metadata": {"arguments": {}}},
+        user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+    )
+
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] == "unknown"
+
+
+def _during_call_request() -> dict[str, object]:
+    return {"model": "gpt-4o", "messages": [{"role": "user", "content": "mail ada@example.com"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        {"action": "BLOCKED", "blocked_reason": "Not allowed"},
+        {"action": "GUARDRAIL_INTERVENED", "texts": ["mail [EmailAddress1]"]},
+    ],
+)
+async def test_during_call_enforces_every_intervention_as_a_block(
+    verdict: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    guardrail: Final = _make_guardrail_with_response(verdict, event_hook="during_call", default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    with pytest.raises(GuardrailRaisedException) as excinfo:
+        await ProxyLogging(user_api_key_cache=UserApiKeyCache()).during_call_hook(  # pyright: ignore[reportUnknownMemberType]  # annotates data as a bare dict
+            data=_during_call_request(), user_api_key_dict=UserAPIKeyAuth(api_key="test"), call_type="completion"
+        )
+
+    assert excinfo.value.blocked_content is True
+    assert _post_mock(guardrail).call_args.kwargs["json"]["input_type"] == "request"
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_during_call_allow_lets_the_request_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    guardrail: Final = _make_guardrail_with_response({"action": "NONE"}, event_hook="during_call", default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    request: Final = _during_call_request()
+
+    await ProxyLogging(user_api_key_cache=UserApiKeyCache()).during_call_hook(  # pyright: ignore[reportUnknownMemberType]  # annotates data as a bare dict
+        data=request, user_api_key_dict=UserAPIKeyAuth(api_key="test"), call_type="completion"
+    )
+
+    assert request["messages"] == _during_call_request()["messages"]
+    _post_mock(guardrail).assert_called_once()
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_during_call_block_does_not_turn_later_redactions_into_blocks() -> None:
+    guardrail: Final = _make_guardrail_with_response(
+        {"action": "GUARDRAIL_INTERVENED", "texts": ["[Redacted]"]}, event_hook="during_call", default_on=True
+    )
+    with pytest.raises(GuardrailRaisedException):
+        await guardrail.async_moderation_hook(
+            data=_during_call_request(), user_api_key_dict=UserAPIKeyAuth(api_key="test"), call_type="completion"
+        )
+
+    result: Final = await guardrail.apply_guardrail(
+        inputs=_inputs(texts=["secret"]), request_data={}, input_type="request"
+    )
+
+    assert result.get("texts") == ["[Redacted]"]
 
 
 @pytest.mark.parametrize("missing", ["api_base", "api_key"])
@@ -391,6 +624,7 @@ async def test_streaming_redaction_actually_reaches_the_client() -> None:
         request_data={  # mutable-ok: one-shot request_data the framework requires as a plain dict
             "messages": [{"role": "user", "content": "share your contact"}],
             "stream": True,
+            "mcp_tool_name": "send_email",
         },
         guardrail_to_apply=guardrail,
     ):
@@ -401,6 +635,7 @@ async def test_streaming_redaction_actually_reaches_the_client() -> None:
     assert "[EmailAddress1]" in assembled
     assert "ada@example.com" not in assembled
     _post_mock(guardrail).assert_called_once()
+    assert _post_mock(guardrail).call_args.kwargs["json"]["mcp_tool_name"] is None
 
 
 def _streamed_request(route: str | None) -> dict[str, object]:
