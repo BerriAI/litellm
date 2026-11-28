@@ -3,10 +3,10 @@ use litellm_config::{RbacRole, RolePermissions, ScopeMapping};
 use super::{RoutePolicy, Target};
 use crate::{
     Error, JwtDenial, RbacDenial, Rows,
-    authn::jwt::{JwtSettings, managed_issuer_is_trusted},
+    authn::jwt::{Claims, JwtSettings, managed_issuer_is_trusted},
     identity::{
         Caller, CallerKind,
-        jwt::{AgentMode, UserInfo},
+        jwt::{AgentMode, UserInfo, rbac_role},
     },
     routes::RouteAllowlist,
 };
@@ -66,6 +66,22 @@ impl JwtSettings {
             .scope_mappings
             .as_deref()
             .filter(|mappings| self.config.enforce_scope_based_access && !mappings.is_empty())
+    }
+
+    /// Whether the scope mappings or the RBAC role of `claims` restrict which models the caller
+    /// may name, for a request whose model the proxy cannot read. Claims whose role cannot be read
+    /// count as restricted.
+    pub fn claims_limit_models(&self, claims: &Claims) -> bool {
+        if self.enforced_scope_mappings().is_some() {
+            return true;
+        }
+        if !self.config.enforce_rbac {
+            return false;
+        }
+        match rbac_role(claims, self) {
+            Ok(role) => role.and_then(|role| self.role_models(role)).is_some(),
+            Err(_) => true,
+        }
     }
 }
 
@@ -386,6 +402,83 @@ mod tests {
             ..defaults()
         };
         assert_eq!(settings.enforced_scope_mappings().is_some(), enforced);
+    }
+
+    fn claims(value: serde_json::Value) -> Claims {
+        match value {
+            serde_json::Value::Object(map) => Claims(map),
+            other => panic!("claims must be an object, got {other}"),
+        }
+    }
+
+    fn rbac_settings(role_permissions: Box<[RolePermissions]>) -> JwtSettings {
+        JwtSettings {
+            config: JwtAuthSettings {
+                enforce_rbac: true,
+                user_id_jwt_field: Some("sub".into()),
+                ..JwtAuthSettings::default()
+            },
+            role_permissions,
+            ..defaults()
+        }
+    }
+
+    fn role_models(role: RbacRole) -> Box<[RolePermissions]> {
+        Box::new([RolePermissions {
+            role,
+            models: Some(strings(&["gpt-a"])),
+            routes: None,
+        }])
+    }
+
+    #[rstest]
+    #[case::role_with_models(role_models(RbacRole::InternalUser), serde_json::json!({"sub": "u"}), true)]
+    #[case::other_role_with_models(role_models(RbacRole::Team), serde_json::json!({"sub": "u"}), false)]
+    #[case::no_role_permissions(Box::default(), serde_json::json!({"sub": "u"}), false)]
+    #[case::no_role(role_models(RbacRole::InternalUser), serde_json::json!({}), false)]
+    #[case::unreadable_role(role_models(RbacRole::InternalUser), serde_json::json!({"sub": "u", "scope": 1}), true)]
+    fn claims_limit_models_reads_the_rbac_role(
+        #[case] role_permissions: Box<[RolePermissions]>,
+        #[case] token: serde_json::Value,
+        #[case] limited: bool,
+    ) {
+        assert_eq!(
+            rbac_settings(role_permissions).claims_limit_models(&claims(token)),
+            limited
+        );
+    }
+
+    #[test]
+    fn claims_limit_models_ignores_role_models_without_rbac() {
+        let settings = JwtSettings {
+            config: JwtAuthSettings {
+                user_id_jwt_field: Some("sub".into()),
+                ..JwtAuthSettings::default()
+            },
+            ..rbac_settings(role_models(RbacRole::InternalUser))
+        };
+        assert!(!settings.claims_limit_models(&claims(serde_json::json!({"sub": "u"}))));
+    }
+
+    #[rstest]
+    #[case::enforced(true, true)]
+    #[case::not_enforced(false, false)]
+    fn claims_limit_models_follows_enforced_scope_mappings(
+        #[case] enforce_scope_based_access: bool,
+        #[case] limited: bool,
+    ) {
+        let settings = JwtSettings {
+            config: JwtAuthSettings {
+                enforce_scope_based_access,
+                scope_mappings: Some(scope_mappings()),
+                ..JwtAuthSettings::default()
+            },
+            ..defaults()
+        };
+        assert_eq!(
+            settings.claims_limit_models(&claims(serde_json::json!({"sub": "u"}))),
+            limited
+        );
     }
 
     #[rstest]

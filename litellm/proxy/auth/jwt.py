@@ -70,6 +70,11 @@ def claims(verified: Mapping[str, object], litellm_jwtauth: LiteLLM_JWTAuth) -> 
     return jwt_claims(dict(verified), litellm_jwtauth)
 
 
+def claims_limit_models(settings: RustAuthSettings, verified: Mapping[str, object]) -> bool:
+    """Whether the scope mappings or the RBAC role of a verified JWT restrict which models its caller may name."""
+    return settings.claims_limit_models(dict(verified))
+
+
 async def _drive(call: RustAuth, token: str, route: str = "") -> RustAuthOutcome:
     from litellm.proxy.auth.host.python import proxy_host  # noqa: PLC0415  # host.python imports user_api_key_auth
 

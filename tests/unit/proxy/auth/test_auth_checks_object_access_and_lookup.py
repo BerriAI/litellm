@@ -11854,6 +11854,125 @@ async def test_key_budget_error_keeps_the_masked_key_name(key_name):
     assert f"Key=prod-key ({key_name}) Current cost" in message
 
 
+class _UntouchedPrisma:
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"database reached through {name}")
+
+
+@pytest.mark.asyncio
+async def test_enforced_model_allowlists_treats_a_missing_user_row_as_unrestricted(fresh_user_lookups: None):
+    from litellm.proxy.auth.auth_checks import enforced_model_allowlists
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    cache = UserApiKeyCache()
+    scopes = await enforced_model_allowlists(
+        valid_token=UserAPIKeyAuth(token="hashed-fake", user_id="default_user_id"),
+        prisma_client=_UntouchedPrisma(),
+        user_api_key_cache=cache,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+    )
+
+    assert [list(scope) for scope in scopes] == [[], [], [], [], []]
+
+
+@pytest.mark.asyncio
+async def test_enforced_model_allowlists_surfaces_a_failed_user_lookup(
+    fresh_user_lookups: None, rust_auth_stores: RustAuthStores
+):
+    from litellm.proxy.auth.auth_checks import enforced_model_allowlists
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    rust_auth_stores.user.error = RuntimeError("database gone")
+    cache = UserApiKeyCache()
+    with pytest.raises(ValueError, match="database gone"):
+        await enforced_model_allowlists(
+            valid_token=UserAPIKeyAuth(token="hashed-fake", user_id="user-fake"),
+            prisma_client=_UntouchedPrisma(),
+            user_api_key_cache=cache,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+        )
+
+
+@pytest.mark.asyncio
+async def test_enforced_model_allowlists_reads_every_level_from_cache():
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_ProjectTableCachedObj,
+        LiteLLM_TeamMembership,
+        LiteLLM_TeamTableCachedObj,
+        LiteLLM_UserTable,
+    )
+    from litellm.proxy.auth.auth_checks import enforced_model_allowlists
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    cache = UserApiKeyCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=cache)
+    await cache.async_set_cache(
+        key=AuthObject.team("team-fake"), value=LiteLLM_TeamTableCachedObj(team_id="team-fake", models=["gpt-4o"])
+    )
+    await cache.async_set_cache(
+        key=AuthObject.team_membership_reservation(user_id="user-fake", team_id="team-fake"),
+        value=LiteLLM_TeamMembership(
+            user_id="user-fake",
+            team_id="team-fake",
+            litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["gpt-4o-mini"]),
+        ),
+    )
+    await cache.async_set_cache(
+        key=AuthObject.project("project-fake"),
+        value=LiteLLM_ProjectTableCachedObj(project_id="project-fake", models=["gpt-4.1"]),
+    )
+    await cache.async_set_cache(
+        key=AuthObject.user("user-fake"), value=LiteLLM_UserTable(user_id="user-fake", models=["o3"])
+    )
+    prisma_client = _UntouchedPrisma()
+
+    team_scoped = await enforced_model_allowlists(
+        valid_token=UserAPIKeyAuth(
+            token="hashed-fake",
+            models=["all-team-models"],
+            team_models=["gpt-4o", "gpt-4o-mini"],
+            user_id="user-fake",
+            team_id="team-fake",
+            project_id="project-fake",
+        ),
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    personal = await enforced_model_allowlists(
+        valid_token=UserAPIKeyAuth(token="hashed-fake", user_id="user-fake"),
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    without_database = await enforced_model_allowlists(
+        valid_token=UserAPIKeyAuth(
+            token="hashed-fake",
+            models=["gpt-4o"],
+            team_models=["gpt-4o-mini"],
+            user_id="user-fake",
+            team_id="team-fake",
+        ),
+        prisma_client=None,
+        user_api_key_cache=cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert [list(scope) for scope in team_scoped] == [
+        ["gpt-4o", "gpt-4o-mini"],
+        ["gpt-4o"],
+        ["gpt-4o-mini"],
+        [],
+        ["gpt-4.1"],
+    ]
+    assert [list(scope) for scope in personal] == [[], [], [], ["o3"], []]
+    assert [list(scope) for scope in without_database] == [["gpt-4o"], ["gpt-4o-mini"]]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("channel", ["team", "key"])
 async def test_access_group_model_fallback_uses_the_injected_database(

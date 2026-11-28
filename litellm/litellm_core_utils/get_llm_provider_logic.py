@@ -154,7 +154,19 @@ def handle_anthropic_text_model_custom_llm_provider(
 
 
 def declared_provider(model: str | None, custom_llm_provider: str | None = None) -> str | None:
-    return custom_llm_provider or (model.split("/", 1)[0] if model and "/" in model else None)
+    """The provider this pair names outright, or None when only get_llm_provider can tell.
+
+    get_llm_provider reads a named provider's API key and base on the way to returning it, and a hosted
+    secret manager answers each read with a network call, so a caller that needs only the name reads it here.
+    """
+    if custom_llm_provider:
+        return custom_llm_provider
+    if not model or "/" not in model:
+        return None
+    prefix: Final = model.split("/", 1)[0]
+    if prefix in litellm.provider_list or JSONProviderRegistry.exists(prefix) or is_registered_custom_provider(prefix):
+        return prefix
+    return None
 
 
 def declared_authenticating_provider(model: str | None, custom_llm_provider: str | None = None) -> str | None:

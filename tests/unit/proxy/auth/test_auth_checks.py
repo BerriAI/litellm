@@ -4,6 +4,7 @@
 import asyncio
 import hashlib
 import json
+import re
 import uuid
 
 import traceback
@@ -52,6 +53,7 @@ from litellm.proxy._types import (
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
     _team_soft_budget_check,
+    can_caller_call_resolved_model,
     can_team_access_model,
     check_opaque_inference_controls,
     common_checks,
@@ -2805,6 +2807,39 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
 
     assert refilled == []
     assert redis.redis == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("team_id", "refused"), [(None, True), ("live-team", False)], ids=["personal-key", "team-key"])
+async def test_can_caller_call_resolved_model_holds_a_personal_key_to_its_owners_models(
+    team_id: str | None, refused: bool
+) -> None:
+    owner_id: Final = f"live-owner-{uuid.uuid4()}"
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=AuthObject.user(owner_id), value=LiteLLM_UserTable(user_id=owner_id, models=["gemini-3.8-live"])
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gemini-3.8-live", "litellm_params": {"model": "vertex_ai/gemini-3.8-live"}},
+            {"model_name": "gemini-live-2.5-flash", "litellm_params": {"model": "vertex_ai/gemini-live-2.5-flash"}},
+        ]
+    )
+
+    call: Final = can_caller_call_resolved_model(
+        model="gemini-live-2.5-flash",
+        valid_token=UserAPIKeyAuth(api_key="sk-live", user_id=owner_id, team_id=team_id),
+        llm_router=router,
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    if refused:
+        with pytest.raises(ProxyException, match=re.escape("gemini-live-2.5-flash")):
+            await call
+    else:
+        await call
 
 
 class _DeleteAfterBroadcastRedisCache(_AuthRedisCache):
