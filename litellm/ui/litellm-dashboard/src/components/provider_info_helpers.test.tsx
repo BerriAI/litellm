@@ -451,7 +451,7 @@ describe("provider_info_helpers", () => {
     });
 
     it("should return a coralbricks/ placeholder for the CoralBricks provider", () => {
-      expect(getPlaceholder(Providers.CORALBRICKS)).toBe("coralbricks/glm-5.3-fast");
+      expect(getPlaceholder(Providers.CORALBRICKS)).toBe("coralbricks/deepseek-v4.1-flash-fast");
     });
 
     it("should return a perplexity_orchestrator/ placeholder for the Perplexity Orchestrator provider", () => {
