@@ -11909,3 +11909,212 @@ def test_text_completion_stream_carries_the_finish_chunks_choice_fields_only_on_
         (choice.finish_reason, getattr(choice, "provider_specific_fields", None))
         for choice in chain.from_iterable(chunk.choices for chunk in emitted)
     ] == [(None, None), *([(None, None)] if final_text else []), ("stop", _UPSTREAM_REASON_FIELDS)]
+
+
+def test_handle_special_delta_attributes_preserves_and_merges_provider_specific_fields(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+) -> None:
+    class MockImageDelta:
+        def __init__(self, provider_specific_fields: object) -> None:
+            self.images = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}, "index": 0}]
+            self.provider_specific_fields = provider_specific_fields
+
+    target_stream = ModelResponseStream(
+        id="test-psf",
+        created=1742056047,
+        model="gemini/gemini-3.1-flash-image-preview",
+        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content=None))],
+    )
+    initialized_custom_stream_wrapper._handle_special_delta_attributes(
+        MockImageDelta({"thought_signatures": ["sig-1"]}),
+        target_stream,
+    )
+    assert target_stream.choices[0].delta.images is not None
+    assert target_stream.choices[0].delta.provider_specific_fields == {"thought_signatures": ["sig-1"]}
+
+    preexisting = {"existing": "keep", "thought_signatures": ["old"]}
+    merged_stream = ModelResponseStream(
+        id="test-psf-merge",
+        created=1742056047,
+        model="gpt-4o-audio-preview",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content=None, provider_specific_fields=preexisting),
+            )
+        ],
+    )
+
+    class MockAudioDelta:
+        def __init__(self) -> None:
+            self.audio = {"transcript": "Hello"}
+            self.provider_specific_fields = {"thought_signatures": ["new"], "extra": 1}
+
+    initialized_custom_stream_wrapper._handle_special_delta_attributes(MockAudioDelta(), merged_stream)
+    assert merged_stream.choices[0].delta.audio == {"transcript": "Hello"}
+    assert merged_stream.choices[0].delta.provider_specific_fields == {
+        "existing": "keep",
+        "thought_signatures": ["new"],
+        "extra": 1,
+    }
+    assert preexisting == {"existing": "keep", "thought_signatures": ["old"]}
+
+    for ignored in (None, {}, MagicMock()):
+        empty_stream = ModelResponseStream(
+            id="test-psf-ignored",
+            created=1742056047,
+            model=None,
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content=None))],
+        )
+        initialized_custom_stream_wrapper._handle_special_delta_attributes(MockImageDelta(ignored), empty_stream)
+        assert empty_stream.choices[0].delta.provider_specific_fields is None
+
+
+@pytest.mark.parametrize(
+    ("delta_kwargs", "expected_attr", "expected_val", "expected_psf"),
+    [
+        pytest.param(
+            {
+                "images": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}, "index": 0}],
+                "provider_specific_fields": {"thought_signatures": ["sig-stream-1"]},
+            },
+            "images",
+            [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}, "index": 0}],
+            {"thought_signatures": ["sig-stream-1"]},
+            id="images",
+        ),
+        pytest.param(
+            {
+                "audio": {"data": "AAAA", "transcript": "hi"},
+                "provider_specific_fields": {"audio_meta": "v1"},
+            },
+            "audio",
+            {"data": "AAAA", "transcript": "hi"},
+            {"audio_meta": "v1"},
+            id="audio",
+        ),
+    ],
+)
+def test_special_delta_attributes_stream_keeps_provider_specific_fields_and_finishes(
+    logging_obj: Logging,
+    delta_kwargs: dict[str, object],
+    expected_attr: str,
+    expected_val: object,
+    expected_psf: dict[str, object],
+) -> None:
+    chunks: Final = [
+        ModelResponseStream(
+            id="chatcmpl-special",
+            created=1,
+            model="gemini/gemini-3.1-flash-image-preview",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=None, **delta_kwargs),
+                    finish_reason="stop",
+                )
+            ],
+        )
+    ]
+    emitted: Final = list(
+        CustomStreamWrapper(
+            completion_stream=ModelResponseListIterator(model_responses=chunks),
+            model="gemini/gemini-3.1-flash-image-preview",
+            custom_llm_provider="gemini",
+            logging_obj=logging_obj,
+        )
+    )
+
+    deltas: Final = [choice.delta for chunk in emitted for choice in chunk.choices]
+    assert [getattr(d, expected_attr, None) for d in deltas if getattr(d, expected_attr, None) is not None] == [
+        expected_val
+    ]
+    assert [d.provider_specific_fields for d in deltas if d.provider_specific_fields is not None] == [expected_psf]
+    assert [choice.finish_reason for chunk in emitted for choice in chunk.choices if choice.finish_reason] == ["stop"]
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=emitted)
+    assert assembled is not None
+    assembled_val: Final = getattr(assembled.choices[0].message, expected_attr, None)
+    if expected_attr == "audio":
+        assert assembled_val is not None
+        assert (assembled_val.data, assembled_val.transcript) == (expected_val["data"], expected_val["transcript"])
+    else:
+        assert assembled_val == expected_val
+    assert assembled.choices[0].message.provider_specific_fields == expected_psf
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_gemini_image_stream_preserves_thought_signatures_end_to_end(is_async: bool) -> None:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    signature: Final = "c2lnLWltYWdlLTFhYmM="
+    image_b64: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    text_chunk: Final = {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": "Here is the sailboat."}]}}],
+        "modelVersion": "gemini-3.1-flash-image-preview",
+    }
+    image_chunk: Final = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "inlineData": {"mimeType": "image/png", "data": image_b64},
+                            "thoughtSignature": signature,
+                        }
+                    ],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 1120, "totalTokenCount": 1124},
+        "modelVersion": "gemini-3.1-flash-image-preview",
+    }
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        if "streamGenerateContent" in request.url.path:
+            sse_body = "".join(f"data: {json.dumps(c)}\r\n\r\n" for c in (text_chunk, image_chunk)).encode()
+            return httpx.Response(200, content=sse_body, headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json=image_chunk)
+
+    transport: Final = httpx.MockTransport(handle_request)
+    common_kwargs: Final = {
+        "model": "gemini/gemini-3.1-flash-image-preview",
+        "messages": [{"role": "user", "content": "Draw a blue sailboat"}],
+        "modalities": ["image", "text"],
+        "api_key": "fake-key",
+    }
+
+    if not is_async:
+        sync_client: Final = HTTPHandler(client=httpx.Client(transport=transport))
+        non_stream = litellm.completion(**common_kwargs, stream=False, client=sync_client)
+        assert non_stream.choices[0].message.images
+        assert non_stream.choices[0].message.provider_specific_fields["thought_signatures"] == [signature]
+
+        chunks = list(litellm.completion(**common_kwargs, stream=True, client=sync_client))
+    else:
+        async_client: Final = AsyncHTTPHandler(transport=transport)
+        non_stream = await litellm.acompletion(**common_kwargs, stream=False, client=async_client)
+        assert non_stream.choices[0].message.images
+        assert non_stream.choices[0].message.provider_specific_fields["thought_signatures"] == [signature]
+
+        stream = await litellm.acompletion(**common_kwargs, stream=True, client=async_client)
+        chunks = [chunk async for chunk in stream]
+
+    deltas: Final = [choice.delta for chunk in chunks for choice in chunk.choices]
+    streamed_images: Final = [img for d in deltas for img in (getattr(d, "images", None) or [])]
+    streamed_signatures: Final = [
+        sig for d in deltas for sig in ((d.provider_specific_fields or {}).get("thought_signatures") or [])
+    ]
+    assert len(streamed_images) == 1
+    assert streamed_signatures == [signature]
+    assert [c.finish_reason for chunk in chunks for c in chunk.choices if c.finish_reason] == ["stop"]
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=chunks)
+    assert assembled is not None
+    assert assembled.choices[0].message.images == streamed_images
+    assert assembled.choices[0].message.provider_specific_fields["thought_signatures"] == [signature]
+
