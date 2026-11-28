@@ -3443,6 +3443,18 @@ ui_login_enabled: bool = True
 database_url_configured: bool = False  # rebind-ok: set once at startup so auth does not look the secret up per request
 prompt_injection_detection_obj: Final[OPTIONAL_PromptInjectionDetection | None] = None
 store_model_in_db: bool = False
+
+
+def _publish_store_model_in_db(value: bool) -> None:
+    """Mirror the effective flag into ``general_settings`` (read by /config/list) and the settings
+    store (read by /config/field/info). Neither sees the STORE_MODEL_IN_DB env var on its own."""
+    settings_store: Final[SettingsStore | None] = getattr(proxy_config, "settings", None)
+    if isinstance(settings_store, SettingsStore) and not settings_store.owned_by_config("store_model_in_db"):
+        settings_store["store_model_in_db"] = value
+    if general_settings is not settings_store:
+        general_settings["store_model_in_db"] = value
+
+
 open_telemetry_logger: OpenTelemetry | None = None
 ### GATEWAY REQUEST COUNTS (SGR) ###
 # Folded in memory by BillableRequestMetricsMiddleware, drained to
@@ -8530,8 +8542,7 @@ class ProxyConfig:
             return
         normalized: Final = coerce_bool(value)
         store_model_in_db = normalized if isinstance(normalized, bool) else bool(normalized)
-        if not self.settings.owned_by_config("store_model_in_db"):
-            self.settings["store_model_in_db"] = store_model_in_db
+        _publish_store_model_in_db(store_model_in_db)
 
     async def _apply_retention_settings(
         self,
@@ -11750,6 +11761,8 @@ class ProxyStartupEvent:
                         verbose_proxy_logger.info("store_model_in_db=True loaded from DB, overriding config/env")
             except Exception as e:
                 verbose_proxy_logger.debug("Failed to check DB for store_model_in_db: %s", str(e))
+
+        _publish_store_model_in_db(store_model_in_db)
 
         config_reload_interval_seconds = proxy_config_reload_interval_seconds
         if not isinstance(config_reload_interval_seconds, int) or config_reload_interval_seconds <= 0:
