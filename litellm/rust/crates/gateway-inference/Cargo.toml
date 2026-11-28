@@ -54,6 +54,7 @@ uuid.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+litellm-cost = { workspace = true, features = ["test-support"] }
 litellm-redis-client.workspace = true
 litellm-redis-testing.workspace = true
 litellm-callbacks.workspace = true
