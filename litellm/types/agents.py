@@ -501,7 +501,7 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     # A2A response fields
     id: str | StrictInt | None = None
     jsonrpc: str = "2.0"
-    result: dict[str, object] | None = None
+    result: dict[str, object] | list[object] | None = None
     error: dict[str, object] | None = None
 
     # LiteLLM usage tracking
