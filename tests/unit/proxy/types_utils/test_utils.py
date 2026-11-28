@@ -4,11 +4,12 @@ import sys
 import tempfile
 from collections.abc import Iterator, Mapping
 from pathlib import Path
+from typing import Literal
 
 import boto3
 import pytest
 
-from litellm.proxy.types_utils.utils import get_instance_fn
+from litellm.proxy.types_utils.utils import get_instance_fn, validate_custom_validate_return_type
 
 _PLUGIN_SOURCE = """
 class Handler:
@@ -248,3 +249,10 @@ def test_get_instance_fn_attributes_a_stacklevel_four_warning_from_a_bucket_plug
     assert result == "OLD_HANDLER"
     assert [Path(w.filename) for w in recorded if str(w.message) == "old_handler is deprecated"] == [Path(__file__)]
     assert plugin_bucket.requests == [("plugins-bucket", "loggers/warning_plugin.py")]
+
+
+def test_an_async_custom_validate_annotated_literal_true_passes_the_startup_check() -> None:
+    async def validate(claims: dict[str, object]) -> Literal[True]:
+        return True
+
+    assert validate_custom_validate_return_type(validate) is validate
