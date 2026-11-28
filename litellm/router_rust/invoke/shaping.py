@@ -768,7 +768,7 @@ def update_kwargs_with_deployment(
         metadata[BAGGAGE_MAPPED_TAGS_METADATA_KEY] = baggage_stamp
 
     credential_name: Final = deployment_params.get("litellm_credential_name")
-    if credential_name:
+    if credential_name and litellm.disable_credential_tagging is not True:
         credential_tag: Final = f"Credential: {credential_name}"
         existing_tags: Final = metadata.get("tags") or []  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
         if isinstance(existing_tags, list) and credential_tag not in existing_tags:
