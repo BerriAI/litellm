@@ -19,6 +19,7 @@ import re
 import secrets
 import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from types import MappingProxyType, TracebackType
@@ -1567,12 +1568,31 @@ def _enforce_duration_upperbound(
         raise _over_upperbound_error(key, value, upperbound_value)
 
 
-def _cap_key_duration(duration: str | None, ceiling: str | None) -> str | None:
+@dataclass(frozen=True, slots=True)
+class _InvalidKeyDuration:
+    cause: ValueError
+    from_request: bool = False
+
+
+def _key_duration_or_raise(result: str | None | _InvalidKeyDuration) -> str | None:
+    if not isinstance(result, _InvalidKeyDuration):
+        return result
+    if result.from_request:
+        raise HTTPException(
+            status_code=400, detail={"error": "Invalid duration format. Use a duration such as '1d' or '1w'."}
+        ) from result.cause
+    raise result.cause
+
+
+def _cap_key_duration(duration: str | None, ceiling: str | None) -> str | None | _InvalidKeyDuration:
     if ceiling is None or ceiling == "-1":
         return duration
-    if duration is None or duration == "-1" or duration_in_seconds(duration) >= duration_in_seconds(ceiling):
+    if duration is None or duration == "-1":
         return ceiling
-    return duration
+    try:
+        return ceiling if duration_in_seconds(duration) >= duration_in_seconds(ceiling) else duration
+    except ValueError as error:
+        return _InvalidKeyDuration(error)
 
 
 def _team_member_key_duration(
@@ -1581,7 +1601,7 @@ def _team_member_key_duration(
     fallback_duration: str | None,
     *,
     generating: bool = False,
-) -> str | None:
+) -> str | None | _InvalidKeyDuration:
     metadata: Final = as_str_mapping(attribute_or_none(team, "metadata"))
     configured: Final = metadata.get("team_member_key_duration") if metadata is not None else None
     team_duration: Final = configured.strip() if isinstance(configured, str) else ""
@@ -1599,10 +1619,12 @@ def _team_member_key_duration(
         try:
             requested_seconds: Final = duration_in_seconds(requested_duration)
         except ValueError as error:
-            raise HTTPException(
-                status_code=400, detail={"error": "Invalid duration format. Use a duration such as '1d' or '1w'."}
-            ) from error
-        if requested_seconds < duration_in_seconds(team_duration):
+            return _InvalidKeyDuration(error, from_request=True)
+        try:
+            team_seconds: Final = duration_in_seconds(team_duration)
+        except ValueError as error:
+            return _InvalidKeyDuration(error)
+        if requested_seconds < team_seconds:
             return requested_duration
     return _cap_key_duration(team_duration, proxy_duration)
 
@@ -1810,11 +1832,13 @@ async def _common_key_generation_helper(
             elif key == "metadata" and value == {}:
                 setattr(normalized_data, key, litellm.default_key_generate_params.get(key, {}))
 
-    duration: Final = _team_member_key_duration(
-        team_table if normalized_data.user_id is not None else None,
-        requested_duration,
-        normalized_data.duration,
-        generating=True,
+    duration: Final = _key_duration_or_raise(
+        _team_member_key_duration(
+            team_table if normalized_data.user_id is not None else None,
+            requested_duration,
+            normalized_data.duration,
+            generating=True,
+        )
     )
     bounded_data: Final = (
         normalized_data.model_copy(update={"duration": duration})
@@ -3509,7 +3533,10 @@ async def prepare_key_update_data(
     moved_to_team: Final = (
         "team_id" in data.model_fields_set and data.team_id is not None and data.team_id != existing_key_row.team_id
     )
-    if duration_requested or moved_to_team:
+    assigned_first_owner: Final = (
+        "user_id" in data.model_fields_set and data.user_id is not None and existing_key_row.user_id is None
+    )
+    if duration_requested or moved_to_team or assigned_first_owner:
         team_id: Final = (
             (data.team_id if "team_id" in data.model_fields_set else existing_key_row.team_id)
             if team_obj is not None or user_api_key_cache is not None
@@ -3530,7 +3557,9 @@ async def prepare_key_update_data(
         )
         duration_input: Final = requested_duration if duration_requested else None
         duration: Final = (
-            _team_member_key_duration(effective_team, duration_input, duration_input) if is_member else duration_input
+            _key_duration_or_raise(_team_member_key_duration(effective_team, duration_input, duration_input))
+            if is_member
+            else duration_input
         )
         upperbound: Final = litellm.upperbound_key_generate_params
         if duration_requested and upperbound is not None:

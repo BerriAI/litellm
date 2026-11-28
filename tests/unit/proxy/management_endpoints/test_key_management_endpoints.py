@@ -10670,6 +10670,31 @@ async def test_move_member_key_without_duration_applies_destination_team_ceiling
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("key_duration_clock")
+@pytest.mark.parametrize(
+    ("stored_expiry", "expected"),
+    [
+        pytest.param(None, {"expires": _KEY_DURATION_NOW + timedelta(days=30)}, id="no-expiry"),
+        pytest.param(
+            _KEY_DURATION_NOW + timedelta(days=90),
+            {"expires": _KEY_DURATION_NOW + timedelta(days=30)},
+            id="later-expiry",
+        ),
+        pytest.param(_KEY_DURATION_NOW + timedelta(days=1), {}, id="earlier-expiry"),
+    ],
+)
+async def test_assigning_a_key_owner_without_duration_applies_member_ceiling(
+    stored_expiry: datetime | None, expected: dict[str, datetime]
+) -> None:
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team", metadata={"team_member_key_duration": "30d"})
+    stored: Final = LiteLLM_VerificationToken(token="token", user_id=None, team_id="team", expires=stored_expiry)
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key=stored.token, user_id="member"), stored, team_obj=team
+    )
+    assert {key: prepared[key] for key in prepared if key == "expires"} == expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("duration", ("", " \t"), ids=["empty", "whitespace"])
 async def test_blank_team_member_update_duration_keeps_expiry_with_proxy_upperbound(
     monkeypatch: pytest.MonkeyPatch, duration: str
