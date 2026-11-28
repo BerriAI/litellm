@@ -165,7 +165,8 @@ pub(crate) async fn inference_over(
     .with_body_check(litellm_gateway_inference::BodyCheck::new(
         &config.general_settings,
     ))
-    .with_use_x_forwarded_for(config.general_settings.use_x_forwarded_for);
+    .with_use_x_forwarded_for(config.general_settings.use_x_forwarded_for)
+    .with_max_base64_length_for_logging(variables.max_base64_length_for_logging);
     Ok(Inference {
         gateway: Arc::new(gateway),
         key_limiter,

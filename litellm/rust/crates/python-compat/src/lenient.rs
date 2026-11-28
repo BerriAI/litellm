@@ -10,6 +10,7 @@
 //! | [`LaxBoolOr`] | `TypeAdapter(bool).validate_python(value)`, or the fallback where pydantic raises |
 //! | [`LaxBool`] | `core_helpers.lax_bool(value)` |
 //! | [`UintOrUnset`] | `get_env_int_or_none(name)`, unset for a negative value too |
+//! | [`LimitOrUnset`] | `get_env_int_or_none(name)` for a limit `<= 0` turns off, a negative value as 0 |
 //! | [`FloatOrUnset`] | `get_env_float_or_none(name)` |
 //!
 //! The bool rules are `serde_with` adapters, used as `#[serde_as(as = "IsTrue")]` on a `bool`, and
@@ -77,6 +78,20 @@ impl<'de> DeserializeAs<'de, Option<u64>> for UintOrUnset {
     fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
         let text = String::deserialize(deserializer)?;
         Ok(int(&text).and_then(|value| u64::try_from(value).ok()))
+    }
+}
+
+/// `get_env_int_or_none` for a limit Python turns off with `<= 0`: a negative value reads as 0,
+/// which turns it off the same way, and one past `u64` as `u64::MAX`.
+pub struct LimitOrUnset;
+
+impl<'de> DeserializeAs<'de, Option<u64>> for LimitOrUnset {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Ok(int(&text).map(|value| match value.sign() {
+            num_bigint::Sign::Minus => 0,
+            _ => u64::try_from(value).unwrap_or(u64::MAX),
+        }))
     }
 }
 

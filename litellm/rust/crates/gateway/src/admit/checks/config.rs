@@ -132,6 +132,7 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         max_decompressed_request_bodies_in_flight_mb: _,
         non_llm_connection_timeout: _,
         litellm_rate_limit_window_size: _,
+        max_base64_length_for_logging: _,
         litellm_tpm_token_reservation_enabled: _,
         proxy_batch_write_at: _,
         spend_log_queue_max_bytes: _,

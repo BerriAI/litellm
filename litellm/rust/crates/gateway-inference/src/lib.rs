@@ -70,6 +70,9 @@ pub struct Gateway<H> {
     body_check: BodyCheck,
     /// `general_settings.use_x_forwarded_for`, which decides the requester address a call logs.
     use_x_forwarded_for: bool,
+    /// `MAX_BASE64_LENGTH_FOR_LOGGING`, the longest base64 payload a call logs whole, 0 for no
+    /// limit.
+    max_base64_length_for_logging: usize,
 }
 
 impl<H: Host> Gateway<H> {
@@ -80,6 +83,18 @@ impl<H: Host> Gateway<H> {
     pub fn with_use_x_forwarded_for(self, use_x_forwarded_for: bool) -> Self {
         Self {
             use_x_forwarded_for,
+            ..self
+        }
+    }
+
+    /// `configured` being the `MAX_BASE64_LENGTH_FOR_LOGGING` the environment sets, its default
+    /// when unset.
+    pub fn with_max_base64_length_for_logging(self, configured: Option<u64>) -> Self {
+        Self {
+            max_base64_length_for_logging: configured.map_or(
+                litellm_standard_logging::MAX_BASE64_LENGTH_FOR_LOGGING,
+                |limit| usize::try_from(limit).unwrap_or(usize::MAX),
+            ),
             ..self
         }
     }
@@ -150,6 +165,7 @@ impl<H: Host> Gateway<H> {
             http,
             body_check: BodyCheck::new(&litellm_config::GeneralSettings::default()),
             use_x_forwarded_for: false,
+            max_base64_length_for_logging: litellm_standard_logging::MAX_BASE64_LENGTH_FOR_LOGGING,
         })
     }
 }
