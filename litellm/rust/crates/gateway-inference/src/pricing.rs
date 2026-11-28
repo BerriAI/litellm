@@ -144,6 +144,32 @@ pub(crate) async fn priced_as(
     }))
 }
 
+/// A region no cost map row names, standing in for whatever region a deployment's secrets name.
+const REGION_WITHOUT_A_ROW: &str = "region-without-a-row";
+
+/// Whether the route prices a call to `deployment` over `catalog` in whatever region it is sent to.
+/// Its region is read from its params as the route reads it, but not from its secrets, so the call
+/// is priced both in the region it takes when its secrets name none and in a region with no row of
+/// its own, which is where any region its secrets could name and the cost map does not list prices.
+pub(crate) fn priced_wherever_served(
+    pricing: &dyn Pricing,
+    deployment: &Deployment,
+    catalog: &Catalog,
+) -> bool {
+    [None, Some(REGION_WITHOUT_A_ROW)]
+        .into_iter()
+        .all(|secret| {
+            identity(deployment, catalog, &|_| secret.map(str::to_owned)).is_some_and(|identity| {
+                litellm_inference_messages::priced(
+                    pricing,
+                    &deployment.params.model,
+                    deployment.params.custom_llm_provider.as_deref(),
+                    identity,
+                )
+            })
+        })
+}
+
 /// A deployment whose price reads where it is served.
 enum Regional {
     Vertex,
@@ -400,6 +426,65 @@ mod tests {
         assert_eq!(
             (identity.region.as_deref(), identity.vertex_location),
             (Some(expected), None)
+        );
+    }
+
+    /// The gateway's unpriced check passes only a deployment the route prices in whatever region it
+    /// is sent to, so it never passes one the route leaves `Deferred` in the region its secrets name.
+    #[rstest]
+    #[case::a_mantle_row_for_the_default_region_only(json!({"model": "bedrock/mantle/claude-gateway-test"}), r#""bedrock/us-west-2/mantle/claude-gateway-test""#, (false, false))]
+    #[case::a_mantle_region_in_its_params_with_its_own_row(json!({"model": "bedrock/mantle/claude-gateway-test", "aws_region_name": "us-west-2"}), r#""bedrock/us-west-2/mantle/claude-gateway-test""#, (true, true))]
+    #[case::a_mantle_row_for_every_region(json!({"model": "bedrock/mantle/claude-gateway-test"}), r#""bedrock/mantle/claude-gateway-test""#, (true, true))]
+    #[case::a_vertex_ai_location_in_its_params(json!({"model": "vertex_ai/claude-gateway-test", "vertex_location": "europe-west1"}), r#""vertex_ai/claude-gateway-test""#, (true, true))]
+    #[case::a_vertex_ai_location_left_to_its_secrets(json!({"model": "vertex_ai/claude-gateway-test"}), r#""vertex_ai/claude-gateway-test""#, (true, true))]
+    fn a_deployment_passes_the_unpriced_check_only_if_priced_where_its_secrets_send_it(
+        #[case] params: Value,
+        #[case] row: &str,
+        #[case] expected: (bool, bool),
+    ) {
+        let cost_map = CostMap::read(
+            format!(
+                r#"{{{row}: {{"litellm_provider": "{}", "mode": "chat", "input_cost_per_token": 0.001, "output_cost_per_token": 0.01, "supported_regions": ["us-east5", "europe-west1"]}}}}"#,
+                match row.contains("vertex_ai") {
+                    true => "vertex_ai-anthropic_models",
+                    false => "bedrock",
+                }
+            )
+            .as_bytes(),
+            None,
+            IntegrityLimits::UNCHECKED,
+        )
+        .unwrap();
+        let installed = Arc::new(ArcSwap::from_pointee(cost_map));
+        let pricing = CostMapPricing::new(installed.clone());
+        let cost_map = installed.load_full();
+        let catalog = cost_map.catalog();
+        let deployment = deployment(params, json!({"id": "deployment-1"}));
+        let secrets = [
+            ("AWS_REGION_NAME", "eu-west-1"),
+            ("VERTEX_LOCATION", "europe-west1"),
+        ];
+        let routed = identity(&deployment, catalog, &|name| {
+            secrets
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_owned())
+        })
+        .is_some_and(|identity| {
+            litellm_inference_messages::priced(
+                &pricing,
+                &deployment.params.model,
+                deployment.params.custom_llm_provider.as_deref(),
+                identity,
+            )
+        });
+
+        assert_eq!(
+            (
+                priced_wherever_served(&pricing, &deployment, catalog),
+                routed
+            ),
+            expected
         );
     }
 

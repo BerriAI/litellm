@@ -1,9 +1,11 @@
 # With the budget reservation disabled, a key's own budget is checked natively at read time
 # (`callbacks/budget_check.rs`), so a key that holds `max_budget`, `budget_duration` or
 # `budget_reset_at` is served. `admit` lets a key over its budget through, since the native app
-# refuses it with Python's error. Every other budget a key can hold still goes to Python. Admission
-# needs no price while the reservation is disabled, so a model group the cost map does not name is
-# served too, and the budget check treats it as paid.
+# refuses it with Python's error. Every other budget a key can hold still goes to Python. A budgeted
+# key is charged what the native route prices its call at, so a call the route cannot price goes to
+# Python: a body with thinking or the web search server tool, or a model group, its fallbacks'
+# included, with a deployment the cost map does not price. A key without a budget is charged
+# nothing either way, so its calls stay native.
 config:
   model_list:
     - model_name: claude-haiku-5-5
@@ -14,6 +16,13 @@ config:
       litellm_params:
         model: anthropic/claude-unlisted-9
         api_key: provider-key
+    - model_name: haiku-then-unpriced
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    fallbacks:
+      - haiku-then-unpriced: [unpriced]
   general_settings:
     master_key: gateway-key
     disable_budget_reservation: true
@@ -93,11 +102,78 @@ requests:
   - name: a key with a max budget calling a model the gateway cannot price
     headers: {authorization: Bearer sk-budget}
     body: {model: unpriced, max_tokens: 16, messages: []}
-    expect: rust
+    expect: python
+    reason: model
+    over: unpriced model_list.litellm_params.model anthropic/claude-unlisted-9
 
   - name: a key over its max budget calling a model the gateway cannot price
     headers: {authorization: Bearer sk-spent}
     body: {model: unpriced, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: unpriced model_list.litellm_params.model anthropic/claude-unlisted-9
+
+  - name: a key with a max budget calling a group that falls back to a model the gateway cannot price
+    headers: {authorization: Bearer sk-budget}
+    body: {model: haiku-then-unpriced, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: unpriced model_list.litellm_params.model anthropic/claude-unlisted-9
+
+  - name: a key with a max budget asking for the web search server tool
+    headers: {authorization: Bearer sk-budget}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: [], tools: [{type: web_search_20250305, name: web_search}]}
+    expect: python
+    reason: body
+    over: unpriced web_search
+
+  - name: a key whose budget resets asking for the web search server tool
+    headers: {authorization: Bearer sk-reset}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: [], stream: true, tools: [{type: web_search_20250305, name: web_search}]}
+    expect: python
+    reason: body
+    over: unpriced web_search
+
+  - name: a key with a max budget asking for thinking
+    headers: {authorization: Bearer sk-budget}
+    body: {model: claude-haiku-5-5, max_tokens: 2048, messages: [], thinking: {type: enabled, budget_tokens: 1024}}
+    expect: python
+    reason: body
+    over: unpriced thinking
+
+  - name: a key with a max budget turning thinking off
+    headers: {authorization: Bearer sk-budget}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: [], thinking: {type: disabled}}
+    expect: rust
+
+  - name: a key with a max budget sending a tool it runs itself
+    headers: {authorization: Bearer sk-budget}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: [], tools: [{name: get_weather, input_schema: {type: object}}]}
+    expect: rust
+
+  - name: a key with a max budget asking for a server tool priced by its tokens
+    headers: {authorization: Bearer sk-budget}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: [], tools: [{type: web_fetch_20250910, name: web_fetch}]}
+    expect: rust
+
+  - name: a key without a budget asking for the web search server tool
+    headers: {authorization: Bearer sk-plain}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: [], tools: [{type: web_search_20250305, name: web_search}]}
+    expect: rust
+
+  - name: a key without a budget asking for thinking
+    headers: {authorization: Bearer sk-plain}
+    body: {model: claude-haiku-5-5, max_tokens: 2048, messages: [], thinking: {type: enabled, budget_tokens: 1024}}
+    expect: rust
+
+  - name: the master key asking for the web search server tool
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: [], tools: [{type: web_search_20250305, name: web_search}]}
+    expect: rust
+
+  - name: a key without a budget calling a group that falls back to a model the gateway cannot price
+    headers: {authorization: Bearer sk-plain}
+    body: {model: haiku-then-unpriced, max_tokens: 16, messages: []}
     expect: rust
 
   - name: a key without a budget calling a model the gateway cannot price

@@ -22,7 +22,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     AppState, Gateway, StoredConfig,
-    callbacks::parallel_request_limiter,
+    callbacks::{budgets, parallel_request_limiter},
     host::{self, NativeHost, NativeRows, auth::AuthStore},
     middleware::request_allowlist,
 };
@@ -200,6 +200,41 @@ impl Admit {
             .then(|| Reason::new(Refused::Credential, "model_access_group_budget"))
     }
 
+    /// A caller with a budget is charged what the native route prices its call at, so a call the
+    /// route leaves unpriced would charge it nothing and never bring it nearer its budget. Such a
+    /// call goes to Python, which prices it: a body asking for what the route leaves unpriced, or a
+    /// model group the call can be served by, its fallbacks' too, with a deployment the route does
+    /// not price. One unpriced deployment anywhere in the group or its fallbacks sends the whole
+    /// call to Python on purpose, since that is the safe direction for budgets.
+    fn unpriced(&self, caller: &Authenticated<NativeRows>, fields: &Fields) -> Option<Reason> {
+        if budgets::counters(caller, budgets::Settings::default()).is_empty() {
+            return None;
+        }
+        if let Some(unpriced) = litellm_inference_messages::unpriced(fields) {
+            let over = format!("unpriced {}", <&str>::from(unpriced));
+            return Some(Reason::new(Refused::Body, over));
+        }
+        let model = fields.get("model")?.as_str()?;
+        let inference = self.inference.as_ref()?;
+        self.router
+            .reach(model)?
+            .iter()
+            .flat_map(|reached| {
+                self.router.registry().deployments(&DeploymentFilter {
+                    model_name: Some(&reached.group),
+                    ..DeploymentFilter::default()
+                })
+            })
+            .find(|deployment| !inference.prices(deployment))
+            .map(|deployment| {
+                let over = format!(
+                    "unpriced model_list.litellm_params.model {}",
+                    deployment.params.model
+                );
+                Reason::new(Refused::Model, over)
+            })
+    }
+
     /// The caller with the end user its body names. The request goes to Python when that end
     /// user's row holds what the native app does not apply, when the row could not be read, or when
     /// the proxy reads a database the gateway cannot sign in to. One whose record holds a column
@@ -275,6 +310,7 @@ impl Admit {
         let over_its_caller = authenticated.as_ref().ok().and_then(|caller| {
             self.model_access(caller, &fields)
                 .or_else(|| self.access_group_budget(caller))
+                .or_else(|| self.unpriced(caller, &fields))
                 .or_else(|| token_estimate(caller, parts.uri.path(), &mut fields))
         });
         if let Some(reason) = over_its_caller {

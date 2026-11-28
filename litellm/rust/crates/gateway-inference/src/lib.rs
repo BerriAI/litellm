@@ -58,6 +58,8 @@ pub struct Gateway<H> {
     routing: Arc<RoutingCache>,
     /// The cost map every request reads. It starts as the bundled one.
     cost_map: Arc<ArcSwap<CostMap>>,
+    /// What the messages route prices its calls with, over `cost_map`.
+    pricing: Arc<pricing::CostMapPricing>,
     /// What `litellm_settings` sets for a messages call to any deployment.
     messages_settings: MessagesSettings,
     pub messages: MessagesRoute,
@@ -102,6 +104,17 @@ impl<H: Host> Gateway<H> {
         self.cost_map.load_full()
     }
 
+    /// Whether the messages route prices a call to `deployment` over the installed cost map,
+    /// whichever region the deployment's secrets send it to. A call it does not price is left
+    /// `Deferred`, so nothing charges its caller for it.
+    pub fn prices(&self, deployment: &litellm_router_core::Deployment) -> bool {
+        pricing::priced_wherever_served(
+            self.pricing.as_ref(),
+            deployment,
+            self.cost_map().catalog(),
+        )
+    }
+
     /// Has every request from now on read `cost_map`.
     pub fn install(&self, cost_map: CostMap) {
         self.cost_map.store(Arc::new(cost_map));
@@ -119,14 +132,16 @@ impl<H: Host> Gateway<H> {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
         let auth = resources.auth.clone();
         let cost_map = Arc::new(ArcSwap::from_pointee(CostMap::bundled()));
+        let pricing = Arc::new(pricing::CostMapPricing::new(cost_map.clone()));
         Ok(Self {
             host,
             cache: None,
             routing: routing.into(),
             messages_settings,
             messages: MessagesRoute::new(provider, auth.clone(), secrets.clone())
-                .with_pricing(Arc::new(pricing::CostMapPricing::new(cost_map.clone()))),
+                .with_pricing(pricing.clone()),
             cost_map,
+            pricing,
             ocr: OcrRoute::new(OcrClient::new(
                 &resources.pool,
                 &http,

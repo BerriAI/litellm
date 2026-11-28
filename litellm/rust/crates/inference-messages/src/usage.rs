@@ -8,6 +8,7 @@ use litellm_cost::query::{CacheReads, CacheWrites, Modalities, TokenUsage, WebSe
 use litellm_llms_types::formats::messages::{
     CacheCreationUsage, MessagesUsage, Speed as WireSpeed, UsageIteration,
 };
+use serde_json::{Map, Value};
 
 /// A call's billed quantities and the service tier the provider says it served
 #[derive(Clone, Debug, PartialEq)]
@@ -25,9 +26,51 @@ pub(crate) struct UsageContext {
     pub(crate) thinking: bool,
 }
 
-/// The billed quantities of `usage`. `None` for what main prices outside the Rust token path: thinking whose token
-/// count main estimates with a tokenizer, and server web searches, which main bills from the response's citations
-pub(crate) fn metered(usage: &MessagesUsage, context: UsageContext) -> Option<Metered> {
+/// What main prices outside the Rust token path, so a call whose answer uses it is left `Deferred`. Each variant
+/// names both the answer that leaves a call unpriced ([`metered`]) and the request that can get such an answer
+/// ([`Unpriced::asked_by`]), so a caller that must know before the call reads the same rule
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr, strum::VariantArray)]
+pub enum Unpriced {
+    /// Thinking text without reported counts, whose tokens main estimates with a tokenizer
+    #[strum(serialize = "thinking")]
+    Thinking,
+    /// Server web searches, which main bills from the response's citations
+    #[strum(serialize = "web_search")]
+    WebSearch,
+}
+
+impl Unpriced {
+    /// Whether `request` can get an answer this leaves unpriced: thinking it does not turn off, or a web search
+    /// server tool among its tools
+    pub fn asked_by(self, request: &Map<String, Value>) -> bool {
+        match self {
+            Self::Thinking => request
+                .get("thinking")
+                .filter(|thinking| !thinking.is_null())
+                .is_some_and(|thinking| {
+                    thinking.get("type").and_then(Value::as_str) != Some("disabled")
+                }),
+            Self::WebSearch => request
+                .get("tools")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|tool| tool.get("type")?.as_str())
+                .any(|kind| kind.starts_with("web_search_")),
+        }
+    }
+}
+
+/// The first of [`Unpriced`] that `request` can get an answer priced by, before it is sent
+pub fn unpriced(request: &Map<String, Value>) -> Option<Unpriced> {
+    <Unpriced as strum::VariantArray>::VARIANTS
+        .iter()
+        .copied()
+        .find(|unpriced| unpriced.asked_by(request))
+}
+
+/// The billed quantities of `usage`, or what in it main prices outside the Rust token path
+pub(crate) fn metered(usage: &MessagesUsage, context: UsageContext) -> Result<Metered, Unpriced> {
     let iterations = usage.iterations.as_deref().filter(|its| !its.is_empty());
     let counts = match iterations {
         Some(iterations) => Counts::summed(iterations),
@@ -37,7 +80,7 @@ pub(crate) fn metered(usage: &MessagesUsage, context: UsageContext) -> Option<Me
         .and_then(iteration_thinking_tokens)
         .or_else(|| thinking_tokens(usage));
     if context.thinking && reported_thinking.is_none() {
-        return None;
+        return Err(Unpriced::Thinking);
     }
     let web_search = match usage
         .server_tool_use
@@ -48,7 +91,7 @@ pub(crate) fn metered(usage: &MessagesUsage, context: UsageContext) -> Option<Me
             requests: 0,
             context: None,
         }),
-        Some(_) => return None,
+        Some(_) => return Err(Unpriced::WebSearch),
         None => None,
     };
     let reasoning = reported_thinking.map_or(0, |thinking| thinking.min(counts.output));
@@ -60,7 +103,7 @@ pub(crate) fn metered(usage: &MessagesUsage, context: UsageContext) -> Option<Me
         Some(served) => served == WireSpeed::Fast,
         None => context.requested_fast,
     };
-    Some(Metered {
+    Ok(Metered {
         usage: TokenUsage {
             prompt_tokens: counts.input + counts.cache_creation + counts.cache_read,
             input: Modalities {
@@ -217,7 +260,7 @@ mod tests {
             },
         );
         match (thinking, reported) {
-            (true, None) => assert_eq!(metered, None),
+            (true, None) => assert_eq!(metered, Err(Unpriced::Thinking)),
             _ => {
                 let billed = metered.unwrap().usage;
                 assert_eq!(billed.reasoning, reported.unwrap_or(0));
@@ -257,12 +300,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_search(json!(null), Some(None))]
-    #[case::zero_searches_are_reported(json!({"web_search_requests": 0}), Some(Some(0)))]
-    #[case::searches_are_left_to_main(json!({"web_search_requests": 3}), None)]
+    #[case::no_search(json!(null), Ok(None))]
+    #[case::zero_searches_are_reported(json!({"web_search_requests": 0}), Ok(Some(0)))]
+    #[case::searches_are_left_to_main(json!({"web_search_requests": 3}), Err(Unpriced::WebSearch))]
     fn web_search_counts_reach_the_core_only_when_nothing_was_searched(
         #[case] server_tool_use: serde_json::Value,
-        #[case] expected: Option<Option<u64>>,
+        #[case] expected: Result<Option<u64>, Unpriced>,
     ) {
         let read = usage(
             json!({"input_tokens": 1, "output_tokens": 1, "server_tool_use": server_tool_use}),
@@ -288,5 +331,65 @@ mod tests {
             .cache_write;
         assert_eq!(writes.default + writes.one_hour, 600);
         assert_eq!(writes.one_hour, 200);
+    }
+
+    #[rstest]
+    #[case::thinking_turned_on(json!({"thinking": {"type": "enabled", "budget_tokens": 1024}}), Some(Unpriced::Thinking))]
+    #[case::adaptive_thinking(json!({"thinking": {"type": "adaptive"}}), Some(Unpriced::Thinking))]
+    #[case::thinking_turned_off(json!({"thinking": {"type": "disabled"}}), None)]
+    #[case::thinking_sent_as_null(json!({"thinking": null}), None)]
+    #[case::the_web_search_server_tool(
+        json!({"tools": [{"type": "web_search_20250305", "name": "web_search"}]}),
+        Some(Unpriced::WebSearch)
+    )]
+    #[case::a_later_web_search_version(
+        json!({"tools": [{"type": "web_search_20260209", "name": "web_search"}]}),
+        Some(Unpriced::WebSearch)
+    )]
+    #[case::a_client_tool_named_web_search(
+        json!({"tools": [{"name": "web_search", "input_schema": {"type": "object"}}]}),
+        None
+    )]
+    #[case::a_server_tool_priced_by_its_tokens(
+        json!({"tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}]}),
+        None
+    )]
+    #[case::no_tools(json!({"messages": []}), None)]
+    fn a_request_names_what_can_leave_its_answer_unpriced(
+        #[case] request: serde_json::Value,
+        #[case] expected: Option<Unpriced>,
+    ) {
+        assert_eq!(unpriced(request.as_object().unwrap()), expected);
+    }
+
+    #[rstest]
+    #[case::thinking(
+        json!({"thinking": {"type": "enabled", "budget_tokens": 1024}}),
+        json!({"input_tokens": 1, "output_tokens": 50}),
+        true
+    )]
+    #[case::web_search(
+        json!({"tools": [{"type": "web_search_20250305", "name": "web_search"}]}),
+        json!({"input_tokens": 1, "output_tokens": 1, "server_tool_use": {"web_search_requests": 1}}),
+        false
+    )]
+    fn an_answer_left_unpriced_was_named_by_its_request(
+        #[case] request: serde_json::Value,
+        #[case] answered: serde_json::Value,
+        #[case] thinking: bool,
+    ) {
+        let left = metered(
+            &usage(answered),
+            UsageContext {
+                thinking,
+                ..UsageContext::default()
+            },
+        )
+        .err();
+
+        assert_eq!(
+            (left.is_some(), unpriced(request.as_object().unwrap())),
+            (true, left)
+        );
     }
 }
