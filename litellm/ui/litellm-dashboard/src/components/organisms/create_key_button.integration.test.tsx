@@ -28,6 +28,8 @@ const state = vi.hoisted(() => ({
   accessGroups: [] as { access_group_id: string; access_group_name: string }[],
   projects: [] as { project_id: string; project_alias: string; team_id?: string | null; models?: string[] }[],
   lensServiceError: false,
+  includeAdvancedJsonFields: false,
+  requiredAdvancedFields: [] as string[],
 }));
 
 vi.mock("@/lib/toast", () => ({
@@ -124,6 +126,11 @@ const OPENAPI_SCHEMA = {
       },
     },
   },
+};
+
+const ADVANCED_JSON_FIELDS = {
+  enforced_params: { type: "object", title: "Enforced Params" },
+  schema_json: { type: "string", format: "json", title: "Schema JSON" },
 };
 
 const SECTIONS = {
@@ -248,6 +255,8 @@ describe("CreateKey", () => {
     state.projects = [];
     state.accessGroups = [];
     state.lensServiceError = false;
+    state.includeAdvancedJsonFields = false;
+    state.requiredAdvancedFields = [];
     vi.mocked(keyCreateCall).mockClear().mockResolvedValue({ key: "sk-created", soft_budget: null });
     vi.mocked(keyCreateServiceAccountCall)
       .mockClear()
@@ -266,7 +275,17 @@ describe("CreateKey", () => {
           return Response.json({ configured: true });
         }
         if (url.includes("openapi.json")) {
-          return { ok: true, status: 200, json: async () => OPENAPI_SCHEMA } as unknown as Response;
+          if (!state.includeAdvancedJsonFields && state.requiredAdvancedFields.length === 0) {
+            return { ok: true, status: 200, json: async () => OPENAPI_SCHEMA } as unknown as Response;
+          }
+          const GenerateKeyRequest = {
+            properties: {
+              ...OPENAPI_SCHEMA.components.schemas.GenerateKeyRequest.properties,
+              ...(state.includeAdvancedJsonFields ? ADVANCED_JSON_FIELDS : {}),
+            },
+            required: state.requiredAdvancedFields,
+          };
+          return Response.json({ components: { schemas: { GenerateKeyRequest } } });
         }
         return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
       }),
@@ -603,6 +622,44 @@ describe("CreateKey", () => {
       const payload = await createdPayload();
       expect(payload).not.toHaveProperty("key");
       expect(payload).toHaveProperty("soft_budget");
+    });
+
+    it.each(["Enforced Params", "Schema JSON"])("blocks submission while %s contains malformed JSON", async (label) => {
+      state.includeAdvancedJsonFields = true;
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await openSection(SECTIONS.advanced);
+      const field = await screen.findByRole("textbox", { name: label });
+
+      fireEvent.change(field, { target: { value: "{" } });
+      await waitFor(() => expect(field).toHaveAttribute("aria-invalid", "true"));
+      await submit();
+      expect(keyCreateCall).not.toHaveBeenCalled();
+      expect(toast.fromError).not.toHaveBeenCalled();
+
+      fireEvent.change(field, { target: { value: "{}" } });
+      await waitFor(() => expect(field).not.toHaveAttribute("aria-invalid"));
+      await submit();
+      await createdPayload();
+    });
+
+    it("blocks submission until a required advanced field is filled", async () => {
+      state.requiredAdvancedFields = ["soft_budget"];
+      await openModal();
+      await nameTheKey();
+      await openSection(/Optional Settings/i);
+      await openSection(SECTIONS.advanced);
+      const field = await screen.findByRole("spinbutton", { name: "Soft Budget" });
+
+      await submit();
+      await waitFor(() => expect(field).toHaveAttribute("aria-invalid", "true"));
+      expect(keyCreateCall).not.toHaveBeenCalled();
+
+      fireEvent.change(field, { target: { value: "12" } });
+      await waitFor(() => expect(field).not.toHaveAttribute("aria-invalid"));
+      await submit();
+      expect((await createdPayload()).soft_budget).toBe(12);
     });
 
     it("drops the policy and prompt keys entirely for a role that cannot see those fields", async () => {

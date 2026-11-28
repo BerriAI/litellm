@@ -27,17 +27,23 @@ interface OpenAPISchema {
   required?: string[];
 }
 
+export interface OpenAPIFieldValidation {
+  readonly name: string;
+  readonly requiredLabel: string | undefined;
+  readonly json: boolean;
+}
+
 interface SchemaFormFieldsProps {
   schemaComponent: string;
   excludedFields?: string[];
   setValue: UseFormSetValue<MountedFormValues>;
   overrideLabels?: { [key: string]: string };
   overrideTooltips?: { [key: string]: string };
-  customValidation?: {
-    [key: string]: (rule: unknown, value: unknown) => Promise<void>;
-  };
+  onValidationFields: (fields: readonly OpenAPIFieldValidation[]) => void;
   defaultValues?: { [key: string]: unknown };
 }
+
+const emptyLabels: Readonly<Record<string, string | undefined>> = {};
 
 // Define which fields should be parsed as JSON
 export const jsonFields = ["metadata", "config", "enforced_params", "aliases"];
@@ -47,27 +53,12 @@ const isJSONField = (key: string, property: SchemaProperty): boolean => {
   return jsonFields.includes(key) || property.format === "json";
 };
 
-// Helper function to validate JSON input
-const validateJSON = (value: string): boolean => {
-  if (!value) return true;
-  try {
-    JSON.parse(value);
-    return true;
-  } catch {
-    return false;
-  }
-};
-
-const isBlank = (value: unknown): boolean => value === undefined || value === null || value === "";
-
 const toSchemaNumber = (raw: string, isInteger: boolean): number | null => {
   if (raw === "") return null;
   const parsed = Number(raw);
   if (!Number.isFinite(parsed)) return null;
   return isInteger ? Math.trunc(parsed) : parsed;
 };
-
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const getFieldHelp = (key: string, property: SchemaProperty, type: string): string => {
   // Default help text based on type
@@ -116,9 +107,9 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
   schemaComponent,
   excludedFields = [],
   setValue,
-  overrideLabels = {},
+  overrideLabels = emptyLabels,
   overrideTooltips = {},
-  customValidation = {},
+  onValidationFields,
   defaultValues = {},
 }) => {
   const { t } = useTranslation();
@@ -151,6 +142,21 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
     fetchOpenAPISchema();
   }, [schemaComponent, setValue, excludedFields, t]);
 
+  useEffect(() => {
+    if (error || !schemaProperties?.properties) return;
+    const fields = Object.entries(schemaProperties.properties)
+      .filter(([key]) => !excludedFields.includes(key))
+      .map(([name, property]) => ({
+        name,
+        requiredLabel: schemaProperties.required?.includes(name)
+          ? overrideLabels[name] || property.title || formatLabel(name)
+          : undefined,
+        json: isJSONField(name, property),
+      }));
+    onValidationFields(fields);
+    return () => onValidationFields([]);
+  }, [error, excludedFields, onValidationFields, overrideLabels, schemaProperties]);
+
   const getPropertyType = (property: SchemaProperty): string => {
     if (property.type) {
       return property.type;
@@ -170,29 +176,6 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
     const label = overrideLabels[key] || property.title || formatLabel(key);
     const tooltip = overrideTooltips[key] || property.description;
 
-    const validate = {
-      ...(isRequired && {
-        required: (value: unknown) =>
-          isBlank(value) ? t("commonComponents.checkOpenapiSchema.required", { label }) : true,
-      }),
-      ...(customValidation[key] && {
-        custom: async (value: unknown) => {
-          try {
-            await customValidation[key](null, value);
-            return true;
-          } catch (thrown) {
-            return messageOf(thrown);
-          }
-        },
-      }),
-      ...(isJSONField(key, property) && {
-        json: (value: unknown) =>
-          value && !validateJSON(value as string)
-            ? t("commonComponents.checkOpenapiSchema.invalidJson")
-            : (true as const),
-      }),
-    };
-
     const formLabel = tooltip ? (
       <span>
         {label}{" "}
@@ -211,7 +194,6 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
         name={key}
         className="mt-8"
         required={isRequired}
-        rules={Object.keys(validate).length > 0 ? { validate } : undefined}
         defaultValue={defaultValues[key]}
         help={<div className="text-xs text-muted-foreground">{getFieldHelp(key, property, type)}</div>}
       >
