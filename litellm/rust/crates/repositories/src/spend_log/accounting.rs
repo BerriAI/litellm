@@ -215,6 +215,12 @@ pub(super) struct EntityCharge<'a> {
 
 type Identity<'a> = (&'a str, Option<&'a str>);
 
+/// An auth cache record affected by a committed accounting batch.
+pub enum AccountingCacheEntry {
+    Project(String),
+    TeamMembership { team_id: String, user_id: String },
+}
+
 #[derive(Default)]
 pub(super) struct EntityCharges<'a>(BTreeMap<Entity, BTreeMap<Identity<'a>, f64>>);
 
@@ -317,6 +323,27 @@ impl<'a> EntityCharges<'a> {
                 .collect();
             (entity, charges)
         })
+    }
+
+    pub(super) fn cache_entries(&self) -> Vec<AccountingCacheEntry> {
+        self.0
+            .get(&Entity::Project)
+            .into_iter()
+            .flat_map(|rows| rows.keys())
+            .map(|&(id, _)| AccountingCacheEntry::Project(id.to_owned()))
+            .chain(
+                self.0
+                    .get(&Entity::TeamMember)
+                    .into_iter()
+                    .flat_map(|rows| rows.keys())
+                    .filter_map(|&(team, user)| {
+                        Some(AccountingCacheEntry::TeamMembership {
+                            team_id: team.to_owned(),
+                            user_id: user?.to_owned(),
+                        })
+                    }),
+            )
+            .collect()
     }
 }
 

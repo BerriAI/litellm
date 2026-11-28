@@ -1,13 +1,16 @@
 //! The standalone account delivery schedule and its last pass after the spend-log writer drains.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use litellm_config::Environment;
 use litellm_env::Lookup;
 use litellm_repositories::SpendLogRepository;
 use tokio::time::Instant;
 
-use crate::periodic::{self, PeriodicJob};
+use crate::{
+    host::auth::AuthStore,
+    periodic::{self, PeriodicJob},
+};
 
 const PASS_DEADLINE: Duration = Duration::from_secs(5);
 
@@ -21,6 +24,7 @@ struct Settings {
 
 pub(crate) fn start(
     repository: SpendLogRepository,
+    auth_store: Arc<AuthStore>,
     variables: &Environment,
     environment: &dyn Lookup,
 ) -> PeriodicJob {
@@ -39,8 +43,9 @@ pub(crate) fn start(
     };
     PeriodicJob::start(periodic::batch_write_interval(variables), move || {
         let repository = repository.clone();
+        let auth_store = auth_store.clone();
         async move {
-            if let Err(error) = flush(&repository, settings).await {
+            if let Err(error) = flush(&repository, &auth_store, settings).await {
                 tracing::error!(error = %litellm_error::Report::new(&error), "Accounting delivery pass failed");
             }
         }
@@ -49,6 +54,7 @@ pub(crate) fn start(
 
 async fn flush(
     repository: &SpendLogRepository,
+    auth_store: &AuthStore,
     settings: Settings,
 ) -> Result<(), litellm_db::Error> {
     let size = usize::try_from(settings.batch_size).unwrap_or(1);
@@ -61,6 +67,9 @@ async fn flush(
             let batch = repository
                 .apply_accounting_batch(settings.batch_size, retry, settings.lock_timeout_ms)
                 .await?;
+            auth_store
+                .invalidate_accounting_entries(batch.cache_entries)
+                .await;
             if batch.parked != 0 {
                 tracing::error!(
                     deliveries = batch.parked,

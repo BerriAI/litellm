@@ -28,9 +28,9 @@ use litellm_redis_store::{
     },
 };
 use litellm_repositories::{
-    BudgetRepository, CustomerHierarchyRepository, Database, EndUserRepository, KeyRepository,
-    ObjectPermissionRepository, OrganizationRepository, ProjectRepository, Side,
-    TeamMembershipRepository, TeamRepository, UserRepository,
+    AccountingCacheEntry, BudgetRepository, CustomerHierarchyRepository, Database,
+    EndUserRepository, KeyRepository, ObjectPermissionRepository, OrganizationRepository,
+    ProjectRepository, Side, TeamMembershipRepository, TeamRepository, UserRepository,
 };
 use tokio::sync::Mutex;
 
@@ -72,6 +72,26 @@ pub enum EndUserRead {
 }
 
 impl AuthStore {
+    pub(crate) async fn invalidate_accounting_entries(&self, entries: Vec<AccountingCacheEntry>) {
+        let keys: Vec<_> = entries
+            .into_iter()
+            .map(|entry| match entry {
+                AccountingCacheEntry::Project(id) => AuthObject::Project(id).key(),
+                AccountingCacheEntry::TeamMembership { team_id, user_id } => {
+                    AuthObject::TeamMembershipReservation { team_id, user_id }.key()
+                }
+            })
+            .collect();
+        if !keys.is_empty()
+            && let Err(error) = self.cache.delete(&keys).await
+        {
+            tracing::warn!(
+                error = %litellm_error::Report::new(&error),
+                "Committed accounting entries could not be evicted from the auth cache"
+            );
+        }
+    }
+
     /// The store over `database`, with a repository for each object it reads.
     pub fn new(cache: Arc<AuthCache>, database: Database) -> Self {
         let object_permissions = Arc::new(ObjectPermissionRepository::new(database.clone()));

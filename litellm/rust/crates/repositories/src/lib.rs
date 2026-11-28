@@ -67,8 +67,8 @@ pub use project::{Project, ProjectRepository};
 pub use proxy_model::{ProxyModel, ProxyModelRepository};
 pub use raw_json::RawJson;
 pub use spend_log::{
-    AccountingBatch, JsonText, SpendLogDelivery, SpendLogOwner, SpendLogRecord, SpendLogRepository,
-    SpendLogWrite,
+    AccountingBatch, AccountingCacheEntry, JsonText, SpendLogDelivery, SpendLogOwner,
+    SpendLogRecord, SpendLogRepository, SpendLogWrite,
 };
 pub use stored_objects::{StoredObjects, StoredObjectsRepository};
 pub use tag::{Tag, TagRepository};

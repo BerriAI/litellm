@@ -188,6 +188,7 @@ impl AppState {
         let logs = self.spend_logs.as_ref()?;
         Some(crate::accounting::start(
             logs.repository.clone(),
+            self.auth_store.as_ref()?.clone(),
             &self.variables,
             &*self.environment,
         ))

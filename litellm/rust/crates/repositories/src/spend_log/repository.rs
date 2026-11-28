@@ -20,7 +20,7 @@ use serde_json::{Value, value::RawValue};
 use sqlx::{PgConnection, types::Json};
 
 use super::accounting::rollups::Rollups;
-use super::accounting::{self, EntityCharges, Payload};
+use super::accounting::{self, AccountingCacheEntry, EntityCharges, Payload};
 use super::queries;
 use super::record::{SpendLogDelivery, SpendLogRecord, SpendLogWrite};
 use crate::{Database, Side, database::Connections};
@@ -69,6 +69,7 @@ pub struct AccountingBatch {
     pub applied: usize,
     pub parked: usize,
     pub failed: usize,
+    pub cache_entries: Vec<AccountingCacheEntry>,
 }
 
 /// Whose spend a window sum adds up.
@@ -83,7 +84,7 @@ pub enum SpendLogOwner {
 async fn apply_affiliation(
     transaction: &mut impl Connections,
     payloads: &[Payload],
-) -> Result<(), Error> {
+) -> Result<Vec<AccountingCacheEntry>, Error> {
     let charges = EntityCharges::project(payloads);
     let teams = charges.teams();
     if !teams.is_empty() {
@@ -144,7 +145,7 @@ async fn apply_affiliation(
             })
             .await?;
     }
-    Ok(())
+    Ok(charges.cache_entries())
 }
 
 /// Reads `LiteLLM_SpendLogs`.
@@ -225,7 +226,9 @@ impl SpendLogRepository {
                                 })
                                 .await?;
                         }
-                        if !payloads.is_empty() {
+                        let cache_entries = if payloads.is_empty() {
+                            Vec::new()
+                        } else {
                             *claimed.lock().expect("accounting claims lock") = attempts;
                             transaction
                                 .with(Side::Writer, async |executor| {
@@ -233,17 +236,19 @@ impl SpendLogRepository {
                                         .await
                                 })
                                 .await?;
-                            apply_affiliation(transaction, &payloads).await?;
+                            let cache_entries = apply_affiliation(transaction, &payloads).await?;
                             transaction
                                 .with(Side::Writer, async |executor| {
                                     queries::mark_applied(executor, &ids).await
                                 })
                                 .await?;
-                        }
+                            cache_entries
+                        };
                         Ok(AccountingBatch {
                             applied: ids.len(),
                             parked: undecodable.len(),
                             failed: 0,
+                            cache_entries,
                         })
                     }),
                 )
@@ -274,6 +279,7 @@ impl SpendLogRepository {
             applied: 0,
             parked: if park { updated } else { 0 },
             failed: claimed.len(),
+            cache_entries: Vec::new(),
         })
     }
 

@@ -194,6 +194,8 @@ def proxies(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Proxies]:
 general_settings:
   master_key: {MASTER_KEY}
   disable_budget_reservation: false
+litellm_settings:
+  enable_redis_auth_cache: true
 """
         )
         environment: Final = {
@@ -342,3 +344,55 @@ def test_python_and_rust_claim_concurrently_without_applying_a_delivery_twice(pr
     expected: Final = [{"state": "applied", "attempts": 0}, {"state": "applied", "attempts": 0}]
     assert eventually(delivered, lambda rows: rows == expected) == expected
     assert identity.persisted(proxies.database) == pytest.approx(0.375)
+
+
+def test_standalone_evicts_project_and_membership_after_applying_spend(proxies: Proxies) -> None:
+    identity: Final = _identity(proxies.database, Case())
+    assert identity.team is not None
+    project: Final = uuid.uuid4().hex
+    keys: Final = (f"project_id:{project}", f"team_membership:{identity.user}:{identity.team}")
+    charge: Final = 0.125
+    process: Final = psutil.Process(proxies.python_pid)
+    process.suspend()
+    try:
+        eventually(process.status, lambda status: status == psutil.STATUS_STOPPED)
+        with psycopg.connect(proxies.database) as connection:
+            connection.execute(
+                """
+                INSERT INTO "LiteLLM_ProjectTable" (project_id, created_by, updated_by)
+                VALUES (%s, 'parity', 'parity')
+                """,
+                (project,),
+            )
+            assert proxies.redis.mset(dict.fromkeys(keys, b'{"spend":0}'))
+            assert proxies.redis.exists(*keys) == len(keys)
+            connection.execute(
+                """
+                INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, is_batch, accounting_payload)
+                VALUES (%s, %s, false, %s)
+                """,
+                (
+                    project,
+                    project,
+                    Jsonb(
+                        {
+                            "spend": charge,
+                            "metadata": {
+                                "accounting_entities": {
+                                    "project_id": project,
+                                    "user": identity.user,
+                                    "team_id": identity.team,
+                                }
+                            },
+                        }
+                    ),
+                ),
+            )
+
+        assert eventually(lambda: proxies.redis.exists(*keys), lambda count: count == 0) == 0
+        assert identity.persisted(proxies.database) == pytest.approx(charge)
+        assert read_rows(
+            'SELECT spend FROM "LiteLLM_ProjectTable" WHERE project_id = %s', (project,), database_url=proxies.database
+        ) == [{"spend": charge}]
+    finally:
+        process.resume()
