@@ -38,6 +38,7 @@ from litellm.llms.anthropic.messages.utils import (
     prompt_cache_key_from_user_id,
     reasoning_off_level,
     thinking_off_switch,
+    validate_anthropic_tool_choice,
 )
 from litellm.responses.utils import auto_reasoning_summary
 
@@ -937,6 +938,7 @@ class LiteLLMAnthropicMessagesAdapter:
     def translate_anthropic_tool_choice_to_openai(
         self, tool_choice: AnthropicMessagesToolChoice
     ) -> ChatCompletionToolChoiceValues:
+        validate_anthropic_tool_choice(tool_choice)
         if tool_choice["type"] == "any":
             return "required"
         elif tool_choice["type"] == "auto":
@@ -1191,7 +1193,7 @@ class LiteLLMAnthropicMessagesAdapter:
         if "tool_choice" not in anthropic_message_request:
             return
         tool_choice: Final = anthropic_message_request["tool_choice"]
-        if not tool_choice:
+        if tool_choice is None:
             return
         new_kwargs["tool_choice"] = self.translate_anthropic_tool_choice_to_openai(
             tool_choice=cast(AnthropicMessagesToolChoice, tool_choice)

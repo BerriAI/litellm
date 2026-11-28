@@ -7,6 +7,7 @@ import copy
 import json
 import os
 from collections.abc import Mapping, Sequence
+from functools import partial
 from typing import Any, Dict, Final, List, Literal, cast
 from unittest.mock import MagicMock
 
@@ -49,6 +50,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthropicMessagesRequest,
+    AnthropicMessagesToolChoice,
     AnthropicOutputConfig,
 )
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -3223,6 +3225,37 @@ def test_a_function_tool_keeps_its_prompt_cache_breakpoint():
     assert kwargs["tools"] == [
         {**_ADAPTER.translate_tools_to_responses_api([LOOKUP_TOOL])[0], "prompt_cache_breakpoint": breakpoint}
     ]
+
+@pytest.mark.parametrize(
+    ("tool_choice", "message"),
+    [
+        ({}, "tool_choice.type: Field required"),
+        ({"name": "get_weather"}, "tool_choice.type: Field required"),
+        (
+            {"type": "web_search"},
+            "tool_choice: Input tag 'web_search' found using 'type' "
+            "does not match any of the expected tags: 'auto', 'any', 'tool', 'none'",
+        ),
+    ],
+)
+@pytest.mark.parametrize("through_request", [False, True])
+def test_invalid_tool_choice_is_bad_request(tool_choice: dict[str, str], message: str, through_request: bool) -> None:
+    request: Final = AnthropicMessagesRequest(
+        model="test-model",
+        max_tokens=128,
+        messages=[{"role": "user", "content": "Hello"}],
+        tool_choice=tool_choice,
+    )
+    translate: Final = (
+        partial(_ADAPTER.translate_request, request)
+        if through_request
+        else partial(_ADAPTER.translate_tool_choice_to_responses_api, cast(AnthropicMessagesToolChoice, tool_choice))
+    )
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        translate()
+
+    assert exc_info.value.status_code == 400
+    assert message in exc_info.value.message
 
 
 class TestTranslateChatBridgedResponse:

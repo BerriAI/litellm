@@ -17,8 +17,10 @@ from litellm.constants import (
     SESSION_ID_INHERITED_METADATA_KEY,
     X_LITELLM_DISABLE_CALLBACKS,
 )
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
+from litellm.types.llms.anthropic import AnthropicMessagesToolChoice
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.utils import TRUSTED_CALLBACK_VARS_FIELD, ModelInfo, StandardCallbackDynamicParams
@@ -663,3 +665,21 @@ def normalize_reasoning_effort_value(
 
     accepted_tiers: Final = tuple(level for level in supported if level != REASONING_EFFORT_OFF)
     return next((level for level in (*chain, *accepted_tiers) if level in supported), chain[-1])
+
+
+def validate_anthropic_tool_choice(tool_choice: AnthropicMessagesToolChoice) -> None:
+    if "type" not in tool_choice:
+        raise BadRequestError(
+            message="tool_choice.type: Field required",
+            model="",
+            llm_provider="anthropic",
+        )
+    if tool_choice["type"] not in ("auto", "any", "tool", "none"):
+        raise BadRequestError(
+            message=(
+                f"tool_choice: Input tag {tool_choice['type']!r} found using 'type' "
+                "does not match any of the expected tags: 'auto', 'any', 'tool', 'none'"
+            ),
+            model="",
+            llm_provider="anthropic",
+        )
