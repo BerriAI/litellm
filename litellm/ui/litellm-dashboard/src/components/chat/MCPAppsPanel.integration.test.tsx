@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, waitForElementToBeRemoved, act } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import MCPAppsPanel, { type LockedOn, type ServerListReport } from "./MCPAppsPanel";
@@ -585,5 +585,158 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
     });
 
     expect(screen.queryByText("revoked_srv")).not.toBeInTheDocument();
+  });
+});
+
+describe("MCPAppsPanel saved OAuth logins the gateway rejects", () => {
+  const savedLogin = {
+    server_id: "s-oauth",
+    has_credential: true,
+    is_expired: false,
+  } as MCPOAuthUserCredentialStatus;
+  const refused = { tools: [], error: "http_401", status: 401 };
+
+  const ChatSelection = ({ initial }: { initial: string[] }) => {
+    const [selected, setSelected] = React.useState<string[]>(initial);
+    return (
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MCPAppsPanel accessToken="tok" selectedServers={selected} onChange={setSelected} />
+        <output aria-label="selected servers">{selected.join(",")}</output>
+      </QueryClientProvider>
+    );
+  };
+
+  const holdToolLists = () => {
+    let answer: (toolsData: Awaited<ReturnType<typeof listMCPTools>>) => void = () => {};
+    vi.mocked(listMCPTools).mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    return async (toolsData: Awaited<ReturnType<typeof listMCPTools>>) => {
+      const panelDone = waitForElementToBeRemoved(() => screen.queryByText("Loading tools..."));
+      await act(async () => answer(toolsData));
+      await panelDone;
+    };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    oauthReturn.serverId = null;
+    oauthReturn.status = "idle";
+    oauthReturn.onSuccess = () => {};
+    vi.mocked(fetchMCPServers).mockResolvedValue([oauthServer]);
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockResolvedValue(savedLogin);
+  });
+
+  it("offers Connect and drops the server from the chat when its tool list is refused with a 401", async () => {
+    vi.mocked(listMCPTools).mockResolvedValue(refused);
+
+    render(<ChatSelection initial={["oauth_srv"]} />);
+
+    expect(await screen.findByText("Connect", { exact: true })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("selected servers")).toHaveTextContent(/^$/));
+  });
+
+  it("keeps a saved login whose tool list fails for another reason", async () => {
+    const answerToolLists = holdToolLists();
+
+    render(<ChatSelection initial={[]} />);
+
+    await waitFor(() => expect(screen.getByLabelText("selected servers")).toHaveTextContent("oauth_srv"));
+    await answerToolLists({ tools: [], error: "unreachable", status: 502 });
+    expect(screen.queryByText("Connect", { exact: true })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("selected servers")).toHaveTextContent("oauth_srv");
+  });
+
+  it("leaves a server without a per-user login selected when its tool list is refused with a 401", async () => {
+    vi.mocked(fetchMCPServers).mockResolvedValue([
+      { server_id: "s-key", server_name: "key_srv", auth_type: "api_key" },
+    ] as MCPServer[]);
+    const answerToolLists = holdToolLists();
+
+    render(<ChatSelection initial={["key_srv"]} />);
+
+    await screen.findByText("key_srv", { selector: "div" });
+    await answerToolLists(refused);
+    expect(screen.getByLabelText("selected servers")).toHaveTextContent("key_srv");
+  });
+
+  it("shows the server as signed in again after a new login following a refusal", async () => {
+    oauthReturn.serverId = "s-oauth";
+    vi.mocked(listMCPTools).mockResolvedValue(refused);
+
+    render(<ChatSelection initial={[]} />);
+    expect(await screen.findByText("Connect", { exact: true })).toBeInTheDocument();
+
+    act(() => oauthReturn.onSuccess());
+
+    await waitFor(() => expect(screen.queryByText("Connect", { exact: true })).not.toBeInTheDocument());
+    expect(screen.getByLabelText("selected servers")).toHaveTextContent("oauth_srv");
+  });
+
+  it("ignores a refusal to a tool list requested before the login that just finished", async () => {
+    oauthReturn.serverId = "s-oauth";
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockResolvedValue({ ...savedLogin, has_credential: false });
+    const answerToolLists = holdToolLists();
+
+    render(<ChatSelection initial={[]} />);
+    await screen.findByText("Connect", { exact: true });
+    act(() => oauthReturn.onSuccess());
+    await waitFor(() => expect(screen.getByLabelText("selected servers")).toHaveTextContent("oauth_srv"));
+
+    await answerToolLists(refused);
+
+    expect(screen.queryByText("Connect", { exact: true })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("selected servers")).toHaveTextContent("oauth_srv");
+  });
+
+  it("offers Connect and drops the server when the tool list opened from its detail page is refused with a 401", async () => {
+    vi.mocked(listMCPTools).mockResolvedValueOnce({ tools: [] }).mockResolvedValue(refused);
+
+    render(<ChatSelection initial={["oauth_srv"]} />);
+    fireEvent.click(await screen.findByText("oauth_srv", { selector: "div" }));
+
+    expect(await screen.findByRole("button", { name: "Connect" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("selected servers")).toHaveTextContent(/^$/));
+  });
+
+  it("shows the server as signed in again when a later tool list for it succeeds", async () => {
+    vi.mocked(listMCPTools).mockResolvedValueOnce(refused).mockResolvedValue({ tools: [] });
+
+    render(<ChatSelection initial={["oauth_srv"]} />);
+    await screen.findByText("Connect", { exact: true });
+    expect(screen.getByLabelText("selected servers")).toHaveTextContent(/^$/);
+
+    fireEvent.click(screen.getByText("oauth_srv", { selector: "div" }));
+
+    await waitForElementToBeRemoved(() => screen.queryByRole("button", { name: "Connect" }));
+    expect(await screen.findByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+    expect(screen.getByLabelText("selected servers")).toHaveTextContent("oauth_srv");
+  });
+
+  it("keeps a server that signs in while another server is refused in the same render", async () => {
+    oauthReturn.serverId = "s-beta";
+    vi.mocked(fetchMCPServers).mockResolvedValue([
+      { ...oauthServer, server_id: "s-alpha", server_name: "alpha_srv" },
+      { ...oauthServer, server_id: "s-beta", server_name: "beta_srv" },
+    ]);
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockImplementation(async (_token, serverId) => ({
+      ...savedLogin,
+      server_id: serverId,
+      has_credential: serverId === "s-alpha",
+    }));
+    let refuseAlpha: () => void = () => {};
+    vi.mocked(listMCPTools).mockImplementation((_token, serverId) =>
+      serverId === "s-alpha"
+        ? new Promise((resolve) => (refuseAlpha = () => resolve(refused)))
+        : Promise.resolve({ tools: [] }),
+    );
+
+    render(<ChatSelection initial={[]} />);
+    await screen.findByText("alpha_srv", { selector: "output" });
+
+    await act(async () => {
+      oauthReturn.onSuccess();
+      refuseAlpha();
+    });
+
+    expect(screen.getByLabelText("selected servers")).toHaveTextContent(/^beta_srv$/);
   });
 });

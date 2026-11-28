@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -11989,3 +11990,67 @@ async def test_mcp_register_application_type_reaches_upstream_or_is_rejected(
             assert posted["application_type"] == application_type
     finally:
         mgmt_endpoints._temporary_mcp_servers.pop(server.server_id, None)
+
+
+_STATUS_REFRESH_BUFFER_SECONDS: Final = 100 * 365 * 24 * 3600
+_LONG_EXPIRED: Final = "2000-01-01T00:00:00+00:00"
+_INSIDE_REFRESH_BUFFER: Final = "2100-01-01T00:00:00+00:00"
+_LONG_LIVED: Final = "9999-01-01T00:00:00+00:00"
+
+
+def _stored_oauth_cred(expires_at: str | None, refresh_token: str | None) -> Mapping[str, str]:
+    expiry: Final = {} if expires_at is None else {"expires_at": expires_at}
+    refresh: Final = {} if refresh_token is None else {"refresh_token": refresh_token}
+    return {
+        "type": "oauth2",
+        "access_token": "status-access-token",
+        "connected_at": "2026-01-01T00:00:00+00:00",
+        **expiry,
+        **refresh,
+    }
+
+
+def _stored_oauth_credential_row(cred: Mapping[str, str]) -> SimpleNamespace:
+    return SimpleNamespace(credential_b64=base64.urlsafe_b64encode(json.dumps(cred).encode()).decode())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("expires_at", "refresh_token", "expected_is_expired"),
+    [
+        pytest.param(_LONG_LIVED, None, False, id="live_token"),
+        pytest.param(_LONG_EXPIRED, "status-refresh-token", False, id="expired_with_refresh_token"),
+        pytest.param(_LONG_EXPIRED, None, True, id="expired_without_refresh_token"),
+        pytest.param(None, None, False, id="no_expiry"),
+        pytest.param(_INSIDE_REFRESH_BUFFER, None, True, id="inside_refresh_buffer"),
+        pytest.param(
+            _INSIDE_REFRESH_BUFFER, "status-refresh-token", False, id="inside_refresh_buffer_with_refresh_token"
+        ),
+        pytest.param("not-a-date", None, False, id="unparseable_expiry"),
+    ],
+)
+async def test_oauth_credential_status_is_expired_only_when_gateway_cannot_use_it(
+    monkeypatch: pytest.MonkeyPatch,
+    expires_at: str | None,
+    refresh_token: str | None,
+    expected_is_expired: bool,
+) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.mcp_server.db.MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", _STATUS_REFRESH_BUFFER_SECONDS
+    )
+    cred: Final = _stored_oauth_cred(expires_at, refresh_token)
+    prisma: Final = MagicMock()
+    prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=_stored_oauth_credential_row(cred))
+    with patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma):
+        result: Final = await mgmt_endpoints.get_mcp_oauth_user_credential_status(
+            server_id="status-server",
+            user_api_key_dict=UserAPIKeyAuth(user_id="status-user"),
+        )
+
+    assert result.model_dump() == {
+        "server_id": "status-server",
+        "has_credential": True,
+        "expires_at": cred.get("expires_at"),
+        "is_expired": expected_is_expired,
+        "connected_at": "2026-01-01T00:00:00+00:00",
+    }

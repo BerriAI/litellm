@@ -189,6 +189,29 @@ const MCPAppsPanel: React.FC<Props> = ({
   const [loadingCounts, setLoadingCounts] = useState(false);
   const [oauthConnected, setOauthConnected] = useState<Set<string>>(new Set());
   const [oauthChecking, setOauthChecking] = useState<Set<string>>(new Set());
+  const [oauthRejected, setOauthRejected] = useState<Set<string>>(new Set());
+  const signedIn = useMemo(
+    () => new Set([...oauthConnected].filter((id) => !oauthRejected.has(id))),
+    [oauthConnected, oauthRejected],
+  );
+  const requestClock = useRef(0);
+  const loginSettledAt = useRef(new Map<string, number>());
+  const clearRejection = useCallback((serverId: string) => {
+    setOauthRejected((prev) => {
+      if (!prev.has(serverId)) return prev;
+      const next = new Set(prev);
+      next.delete(serverId);
+      return next;
+    });
+  }, []);
+  const markSignedIn = useCallback(
+    (serverId: string) => {
+      loginSettledAt.current.set(serverId, ++requestClock.current);
+      setOauthConnected((prev) => new Set(prev).add(serverId));
+      clearRejection(serverId);
+    },
+    [clearRejection],
+  );
 
   const serversRef = useRef<MCPServer[]>([]);
   const commitServers = useCallback((next: MCPServer[]) => {
@@ -229,23 +252,37 @@ const MCPAppsPanel: React.FC<Props> = ({
   const returningOAuth = useUserMcpOAuthFlow({
     accessToken,
     serverId: returningServerId,
-    onSuccess: useCallback(() => {
-      setOauthConnected((prev) => new Set(prev).add(returningServerId));
-    }, [returningServerId]),
+    onSuccess: useCallback(() => markSignedIn(returningServerId), [markSignedIn, returningServerId]),
   });
+
+  const syncLoginWithToolList = useCallback(
+    (server: MCPServer, toolsData: { status?: number; error?: unknown } | undefined, startedAt: number) => {
+      if (getMcpOAuthMode(server) !== "authorization_code") return;
+      if (startedAt < (loginSettledAt.current.get(server.server_id) ?? 0)) return;
+      if (toolsData?.status === 401) {
+        loginSettledAt.current.set(server.server_id, startedAt);
+        setOauthRejected((prev) => new Set(prev).add(server.server_id));
+      } else if (toolsData && !toolsData.error) {
+        clearRejection(server.server_id);
+      }
+    },
+    [clearRejection],
+  );
 
   const fetchToolCount = useCallback(
     async (server: MCPServer, isCurrentLoad: () => boolean) => {
+      const startedAt = ++requestClock.current;
       try {
         const toolsData = await listMCPTools(accessToken, server.server_id);
         if (!isCurrentLoad()) return;
+        syncLoginWithToolList(server, toolsData, startedAt);
         const tools: MCPTool[] = Array.isArray(toolsData?.tools) ? toolsData.tools : [];
         setToolCounts((prev) => ({ ...prev, [nameOf(server)]: tools.length }));
       } catch {
         // ignore
       }
     },
-    [accessToken],
+    [accessToken, syncLoginWithToolList],
   );
 
   const checkOauthCredential = useCallback(
@@ -311,19 +348,15 @@ const MCPAppsPanel: React.FC<Props> = ({
   }, [accessToken, connectMode, commitServers, fetchToolCount, checkOauthCredential]);
 
   useEffect(() => {
-    if (oauthConnected.size === 0) return;
+    const rejectedNames = serversRef.current.filter((s) => oauthRejected.has(s.server_id)).map(nameOf);
+    const kept = selectedServersRef.current.filter((name) => !rejectedNames.includes(name));
     const namesToAdd = serversRef.current
-      .filter(
-        (s) =>
-          oauthConnected.has(s.server_id) &&
-          !selectedServersRef.current.includes(nameOf(s)) &&
-          connectUnavailabilityLabel(s) === null,
-      )
+      .filter((s) => signedIn.has(s.server_id) && !kept.includes(nameOf(s)) && connectUnavailabilityLabel(s) === null)
       .map(nameOf);
-    if (namesToAdd.length > 0) {
-      onChangeRef.current([...selectedServersRef.current, ...namesToAdd]);
+    if (kept.length < selectedServersRef.current.length || namesToAdd.length > 0) {
+      onChangeRef.current([...kept, ...namesToAdd]);
     }
-  }, [oauthConnected, connectUnavailabilityLabel]);
+  }, [signedIn, oauthRejected, connectUnavailabilityLabel]);
 
   const handleToggle = async (server: MCPServer, checked: boolean) => {
     const serverName = nameOf(server);
@@ -390,7 +423,7 @@ const MCPAppsPanel: React.FC<Props> = ({
     const mode = getMcpOAuthMode(server);
     if (mode === "m2m") return <CheckCircle className="h-3.5 w-3.5 text-success shrink-0" />;
     if (mode !== "authorization_code") return null;
-    if (oauthConnected.has(server.server_id)) {
+    if (signedIn.has(server.server_id)) {
       return <CheckCircle className="h-3.5 w-3.5 text-success shrink-0" />;
     }
     if (
@@ -406,12 +439,7 @@ const MCPAppsPanel: React.FC<Props> = ({
             {t("chat.mcpAppsPanel.signInToUse")}
           </span>
         )}
-        <OAuth2ConnectButton
-          server={server}
-          accessToken={accessToken}
-          onConnect={(id) => setOauthConnected((prev) => new Set(prev).add(id))}
-          variant="badge"
-        />
+        <OAuth2ConnectButton server={server} accessToken={accessToken} onConnect={markSignedIn} variant="badge" />
       </>
     );
   };
@@ -441,7 +469,12 @@ const MCPAppsPanel: React.FC<Props> = ({
 
   const { data: detailToolsResult, isLoading: loadingTools } = useQuery({
     queryKey: ["mcp-apps-panel-detail-tools", detailServer?.server_id],
-    queryFn: () => listMCPTools(accessToken, detailServer!.server_id),
+    queryFn: async () => {
+      const startedAt = ++requestClock.current;
+      const toolsData = await listMCPTools(accessToken, detailServer!.server_id);
+      syncLoginWithToolList(detailServer!, toolsData, startedAt);
+      return toolsData;
+    },
     enabled: !!detailServer,
   });
   const detailTools: MCPTool[] = Array.isArray(detailToolsResult?.tools) ? detailToolsResult.tools : [];
@@ -504,7 +537,7 @@ const MCPAppsPanel: React.FC<Props> = ({
           </Button>
         );
       }
-      if (oauthConnected.has(detailServer.server_id)) {
+      if (signedIn.has(detailServer.server_id)) {
         return (
           <Button
             variant="destructive"
@@ -531,9 +564,7 @@ const MCPAppsPanel: React.FC<Props> = ({
         <OAuth2ConnectButton
           server={detailServer}
           accessToken={accessToken}
-          onConnect={(id) => {
-            setOauthConnected((prev) => new Set(prev).add(id));
-          }}
+          onConnect={markSignedIn}
           variant="button"
         />
       );
