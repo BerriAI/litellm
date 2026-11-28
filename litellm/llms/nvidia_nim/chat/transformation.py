@@ -55,9 +55,9 @@ class NvidiaNimConfig(OpenAIGPTConfig, MapsAllowedOpenAIParams):
             "google/gemma-2-9b-it",
             "gemma-2-9b-it",
         ]:
-            return ["stream", "temperature", "top_p", "max_tokens", "stop", "seed"]
+            supported_openai_params = ["stream", "temperature", "top_p", "max_tokens", "stop", "seed"]
         elif model == "nvidia/nemotron-4-340b-instruct":
-            return [
+            supported_openai_params = [
                 "stream",
                 "temperature",
                 "top_p",
@@ -65,12 +65,12 @@ class NvidiaNimConfig(OpenAIGPTConfig, MapsAllowedOpenAIParams):
                 "max_completion_tokens",
             ]
         elif model == "nvidia/nemotron-4-340b-reward":
-            return [
+            supported_openai_params = [
                 "stream",
             ]
         elif model in ["google/codegemma-1.1-7b"]:
             # most params - but no 'seed' :(
-            return [
+            supported_openai_params = [
                 "stream",
                 "temperature",
                 "top_p",
@@ -103,7 +103,7 @@ class NvidiaNimConfig(OpenAIGPTConfig, MapsAllowedOpenAIParams):
             # "meta/llama3-8b-instruct",
             # "meta/llama2-70b",
             # "meta/codellama-70b",
-            return [
+            supported_openai_params = [
                 "stream",
                 "temperature",
                 "top_p",
@@ -119,6 +119,12 @@ class NvidiaNimConfig(OpenAIGPTConfig, MapsAllowedOpenAIParams):
                 "response_format",
                 *(("logprobs", "top_logprobs") if _serves_logprobs(model) else ()),
             ]
+        # Client-side OpenAI SDK param. Without it, OpenAIChatCompletion.completion
+        # falls back to inference_params.pop("max_retries", 2) and a 5xx or timeout
+        # is sent three times even when the caller set max_retries=0.
+        if "max_retries" not in supported_openai_params:
+            supported_openai_params.append("max_retries")
+        return supported_openai_params
 
     def map_openai_params(
         self,
