@@ -324,6 +324,53 @@ def test_get_supported_openai_params_includes_input_fidelity(
     assert "input_fidelity" in supported
 
 
+def test_gpt_image_edit_drops_response_format_from_supported_params(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    # OpenAI rejects response_format on gpt-image edits with unknown_parameter,
+    # reported in BerriAI/litellm#53069 on 2026-11-20. gpt-image models always
+    # return base64, so litellm never forwards the field for them.
+    assert image_edit_config.get_supported_openai_params(model="gpt-image-2") == [
+        "image",
+        "prompt",
+        "background",
+        "input_fidelity",
+        "mask",
+        "model",
+        "n",
+        "quality",
+        "size",
+        "user",
+        "extra_headers",
+        "extra_query",
+        "extra_body",
+        "timeout",
+    ]
+    assert "response_format" in image_edit_config.get_supported_openai_params(model="dall-e-2")
+
+
+def test_gpt_image_edit_response_format_dropped_when_drop_params(
+    image_edit_config: OpenAIImageEditConfig,
+):
+    import litellm
+
+    mapped = ImageEditRequestUtils.get_optional_params_image_edit(
+        model="gpt-image-2",
+        image_edit_provider_config=image_edit_config,
+        image_edit_optional_params={"response_format": "b64_json", "size": "1024x1024"},  # type: ignore[arg-type]
+        drop_params=True,
+    )
+    assert mapped == {"size": "1024x1024"}
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        ImageEditRequestUtils.get_optional_params_image_edit(
+            model="gpt-image-2",
+            image_edit_provider_config=image_edit_config,
+            image_edit_optional_params={"response_format": "b64_json"},  # type: ignore[arg-type]
+            drop_params=False,
+        )
+
+
 def test_input_fidelity_passes_through_optional_param_filter():
     """Test that input_fidelity is not dropped by get_requested_image_edit_optional_param"""
     params = {
