@@ -16,7 +16,10 @@ class ConductGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
     )
     tool_name: str | None = Field(
         default="llm_call",
-        description="Conduct tool name the prompt is evaluated under. Match the tool your rules target.",
+        description=(
+            "Accepted for backward compatibility and ignored. "
+            "Prompts are evaluated against the workspace's prompt rules."
+        ),
     )
     timeout: float | None = Field(
         default=8.0,
@@ -35,7 +38,7 @@ class ConductGuardrailConfigModel(GuardrailConfigModel[ConductGuardrailConfigMod
         description="Conduct agent token. Env: CONDUCT_AGENT_TOKEN.",
     )
     api_base: str | None = Field(
-        default="https://api.conductai.ai",
+        default="https://gateway.conductai.ai",
         description="Conduct API base URL. The MCP endpoint is derived as <api_base>/mcp.",
     )
 
