@@ -1026,7 +1026,8 @@ class TestLangfuseOtelResponsesAPI:
             assert len(trace_output_calls) > 0, "trace.output should be set"
             assert trace_output_calls[0].args[2] == output_json
 
-    def test_responses_api_with_function_calls(self):
+    @pytest.mark.parametrize("namespace", (None, "weather", ""))
+    def test_responses_api_with_function_calls(self, namespace: str | None) -> None:
         """Test Langfuse OTEL logger with Responses API function_call output."""
         from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
         from openai.types.responses import ResponseFunctionToolCall
@@ -1040,6 +1041,7 @@ class TestLangfuseOtelResponsesAPI:
                     id="fc-123",
                     type="function_call",
                     name="get_weather",
+                    namespace=namespace,
                     call_id="call-abc",
                     arguments='{"location": "San Francisco", "unit": "celsius"}',
                     status="completed",
@@ -1070,17 +1072,16 @@ class TestLangfuseOtelResponsesAPI:
             output_json = output_calls[0].args[2]
             output_data = json.loads(output_json)
 
-            # Verify output contains function call
-            assert isinstance(output_data, list)
-            assert len(output_data) == 1
-
-            # Verify function call details
-            assert output_data[0]["type"] == "function_call"
-            assert output_data[0]["id"] == "fc-123"
-            assert output_data[0]["name"] == "get_weather"
-            assert output_data[0]["call_id"] == "call-abc"
-            assert output_data[0]["arguments"]["location"] == "San Francisco"
-            assert output_data[0]["arguments"]["unit"] == "celsius"
+            assert output_data == [
+                {
+                    "type": "function_call",
+                    "id": "fc-123",
+                    "name": "get_weather",
+                    "call_id": "call-abc",
+                    "arguments": {"location": "San Francisco", "unit": "celsius"},
+                    **({"namespace": namespace} if namespace is not None else {}),
+                }
+            ]
 
     def test_responses_api_function_call_with_redacted_arguments(self):
         """Sentinel arguments (invalid JSON) must not kill the whole observation output."""
