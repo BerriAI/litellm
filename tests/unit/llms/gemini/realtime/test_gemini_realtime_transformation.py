@@ -2503,6 +2503,18 @@ def test_gemini_provider_realtime_config_carries_drop_params(drop_params):
     assert (rejection is None) is drop_params
 
 
+def test_gemini_eager_setup_ignores_a_text_only_row_that_only_vertex_ai_lists(monkeypatch):
+    monkeypatch.setattr(
+        litellm, "model_cost", {"vertex_ai/gemini-synthetic-transcribe-live": {"mode": "audio_transcription"}}
+    )
+
+    setup = json.loads(GeminiRealtimeConfig().session_configuration_request("gemini-synthetic-transcribe-live"))[
+        "setup"
+    ]
+
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
 def test_gemini_chat_model_with_text_output_modalities_keeps_audio_eager_setup(
     patch_gemini_transcribe_live_cost_map_entry,
 ):
