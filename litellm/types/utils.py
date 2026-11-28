@@ -3890,6 +3890,19 @@ class StandardLoggingEvalInformation(TypedDict, total=False):
     threshold: float | None
 
 
+# The `guardrail_action` a run logs, with `general_settings.guardrail_log_skip_passed` on, when it
+# acted while its status reads as success: it changed the
+# content and let the request through, its pre_call hook returned a rejection message, or it detected
+# a violation and let the request through. Spend-log redaction keeps `guardrail_action`, so such a
+# run stays recognizable when prompts are not stored.
+GUARDRAIL_ACTION_MASK: Final = "mask"
+GUARDRAIL_ACTION_BLOCK: Final = "block"
+GUARDRAIL_ACTION_FLAG: Final = "flag"
+# The `guardrail_action` of a run that did not act, logged with the setting on. The request log
+# writer skips only runs that carry it, so a run logged while the setting was off keeps its row.
+GUARDRAIL_ACTION_NONE: Final = "none"
+
+
 class GuardrailTracingDetail(TypedDict, total=False):
     """
     Typed fields for guardrail tracing metadata.

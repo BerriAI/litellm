@@ -6074,6 +6074,12 @@
           "label": "Spend Logs Cleanup Batch Timeout (Optional)",
           "placeholder": "e.g., 30s",
           "hint": "Postgres statement and lock timeout applied to each cleanup batch, so cleanup never monopolizes a connection (e.g., '30s'). Leave empty to use the default of 30s."
+        },
+        "guardrailLogSkipPassed": {
+          "label": "Skip Passed Guardrail Runs in the Request Log",
+          "hint": "On: only blocked, flagged and masked guardrail runs are saved to the Guardrails Monitor request log. Off: every run is saved. Guardrails Monitor counts always include every run.",
+          "description": "On: only blocked, flagged and masked runs are saved. Off: every run is saved.",
+          "configOwned": "Set in the config file. Change it there."
         }
       },
       "savingAriaLabel": "loading",

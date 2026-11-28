@@ -35,6 +35,7 @@ from typing_extensions import ReadOnly, TypedDict, Unpack
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    acting_runs_are_logged,
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, iter_items, redact_nested_match_and_regex_keys
@@ -45,6 +46,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
+    GUARDRAIL_ACTION_NONE,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
     StandardLoggingGuardrailInformation,
@@ -273,6 +275,8 @@ class XecGuardGuardrail(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 masked_entity_count=None,
             )
+            if guardrail_status == "success" and acting_runs_are_logged():
+                slg["guardrail_action"] = GUARDRAIL_ACTION_NONE
             existing: Final = kwargs["standard_logging_object"].get("guardrail_information")
             if isinstance(existing, list):
                 existing.append(slg)

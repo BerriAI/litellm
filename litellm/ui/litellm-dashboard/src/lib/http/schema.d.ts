@@ -33241,6 +33241,12 @@ export interface components {
              */
             global_max_parallel_requests?: number | null;
             /**
+             * Guardrail Log Skip Passed
+             * @description If True, only blocked, flagged and masked guardrail runs are saved to the Guardrails Monitor request log. If False, every run is saved. Guardrails Monitor counts always include every run. Default is False.
+             * @default false
+             */
+            guardrail_log_skip_passed: boolean;
+            /**
              * Health Check Concurrency
              * @description limit concurrent health checks per cycle; when unset, health checks run without a concurrency cap
              */

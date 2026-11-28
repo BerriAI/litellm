@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
-from typing import Any
+from itertools import chain
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -687,3 +688,183 @@ async def test_disabled_log_deliveries_do_not_enable_guardrail_analytics():
     prisma.db.litellm_dailyguardrailmetrics.upsert.assert_not_awaited()
     prisma.db.litellm_spendlogguardrailindex.create_many.assert_not_awaited()
     prisma.db.litellm_dailyguardrailusageunits.upsert.assert_not_awaited()
+
+
+def _entries_payload(request_id: str, entries: list[dict[str, object]]) -> dict[str, object]:
+    return {**_payload(request_id), "metadata": json.dumps({"guardrail_information": entries})}
+
+
+def _indexed(prisma: MagicMock) -> list[tuple[str, str, str | None]]:
+    rows: Final = chain.from_iterable(
+        call.kwargs["data"] for call in prisma.db.litellm_spendlogguardrailindex.create_many.call_args_list
+    )
+    return sorted((row["request_id"], row["guardrail_id"], row["policy_id"]) for row in rows)
+
+
+def _skip_passed(monkeypatch: pytest.MonkeyPatch, value: object) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", value)
+
+
+_ONE_RUN_PER_OUTCOME: Final = [
+    _entries_payload("passed", [{"guardrail_id": "g", "guardrail_status": "success", "guardrail_action": "none"}]),
+    _entries_payload(
+        "masked", [{"guardrail_id": "g", "guardrail_status": "success", "masked_entity_count": {"EMAIL": 0, "SSN": 2}}]
+    ),
+    _entries_payload("blocked", [{"guardrail_id": "g", "guardrail_status": "guardrail_intervened"}]),
+    _entries_payload("flagged", [{"guardrail_id": "g", "guardrail_status": "guardrail_flagged"}]),
+    _entries_payload("not_run", [{"guardrail_id": "g", "guardrail_status": "not_run", "guardrail_action": "none"}]),
+    _entries_payload(
+        "passed-empty-counts",
+        [
+            {
+                "guardrail_id": "g",
+                "guardrail_status": "success",
+                "guardrail_action": "none",
+                "masked_entity_count": {"SSN": 0, "EMAIL": True},
+            }
+        ],
+    ),
+]
+
+
+_EVERY_RUN: Final = ["blocked", "flagged", "masked", "not_run", "passed", "passed-empty-counts"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("skip_passed", "kept"),
+    [
+        (True, ["blocked", "flagged", "masked"]),
+        (False, _EVERY_RUN),
+        (None, _EVERY_RUN),
+        ("true", _EVERY_RUN),
+        (1, _EVERY_RUN),
+    ],
+)
+async def test_guardrail_log_skip_passed_keeps_index_rows_only_for_runs_that_acted(monkeypatch, skip_passed, kept):
+    _skip_passed(monkeypatch, skip_passed)
+    prisma: Final = _prisma()
+
+    await process_spend_logs_guardrail_usage(prisma, _ONE_RUN_PER_OUTCOME)
+
+    assert [request_id for request_id, _, _ in _indexed(prisma)] == kept
+    metrics_create: Final = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
+    assert metrics_create == {
+        "guardrail_id": "g",
+        "date": "2026-08-17",
+        "requests_evaluated": 5,
+        "passed_count": 3,
+        "blocked_count": 1,
+        "flagged_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("skip_passed", "kept"),
+    [
+        (True, ["anonymized", "let-through", "masked-no-counts", "masked-prompts-not-stored", "not-text", "rejected"]),
+        (
+            None,
+            [
+                "allowed",
+                "anonymized",
+                "let-through",
+                "masked-no-counts",
+                "masked-prompts-not-stored",
+                "no-action",
+                "not-text",
+                "rejected",
+            ],
+        ),
+    ],
+)
+async def test_guardrail_log_skip_passed_keeps_a_run_that_acted_with_a_passed_status(
+    monkeypatch: pytest.MonkeyPatch, skip_passed: object, kept: list[str]
+) -> None:
+    _skip_passed(monkeypatch, skip_passed)
+    prisma: Final = _prisma()
+    passed: Final = {"guardrail_id": "g", "guardrail_status": "success"}
+    logs: Final = [
+        _entries_payload("masked-no-counts", [{**passed, "guardrail_response": "mask", "guardrail_action": "mask"}]),
+        _entries_payload(
+            "masked-prompts-not-stored", [{**passed, "guardrail_response": None, "guardrail_action": "mask"}]
+        ),
+        _entries_payload("anonymized", [{**passed, "guardrail_action": "GUARDRAIL_INTERVENED"}]),
+        _entries_payload("rejected", [{**passed, "guardrail_response": None, "guardrail_action": "block"}]),
+        _entries_payload("let-through", [{**passed, "guardrail_response": None, "guardrail_action": "flag"}]),
+        _entries_payload("no-action", [{**passed, "guardrail_action": "NONE"}]),
+        _entries_payload("allowed", [{**passed, "guardrail_response": "allow", "guardrail_action": "allow"}]),
+        _entries_payload("not-text", [{**passed, "guardrail_action": ["mask"]}]),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    assert [request_id for request_id, _, _ in _indexed(prisma)] == kept
+
+
+@pytest.mark.asyncio
+async def test_guardrail_log_skip_passed_keeps_a_run_logged_while_the_setting_was_off(monkeypatch):
+    """A run logged with the setting off carries no action even when it acted, so a flush after
+    the setting turns on keeps its row. A run logged with the setting on says it did not act."""
+    _skip_passed(monkeypatch, True)
+    passed: Final = {"guardrail_id": "g", "guardrail_status": "success"}
+    logs: Final = [
+        _entries_payload("logged-with-setting-off", [passed]),
+        _entries_payload("logged-with-setting-on", [{**passed, "guardrail_action": "none"}]),
+    ]
+    prisma: Final = _prisma()
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    assert [request_id for request_id, _, _ in _indexed(prisma)] == ["logged-with-setting-off"]
+
+
+@pytest.mark.asyncio
+async def test_guardrail_log_skip_passed_keeps_the_row_when_any_run_of_the_guardrail_acted(monkeypatch):
+    _skip_passed(monkeypatch, True)
+    prisma: Final = _prisma()
+    logs: Final = [
+        _entries_payload(
+            "r1",
+            [
+                {
+                    "guardrail_name": "cf",
+                    "guardrail_id": "cf-uuid",
+                    "policy_id": "pol-1",
+                    "guardrail_status": "success",
+                    "guardrail_action": "none",
+                },
+                {"guardrail_name": "cf", "guardrail_id": "cf-uuid", "guardrail_status": "guardrail_intervened"},
+                {
+                    "guardrail_name": "other",
+                    "guardrail_id": "other-uuid",
+                    "guardrail_status": "success",
+                    "guardrail_action": "none",
+                },
+            ],
+        ),
+        _entries_payload(
+            "r2",
+            [
+                {
+                    "guardrail_name": "cf",
+                    "guardrail_id": "cf-uuid",
+                    "guardrail_status": "success",
+                    "guardrail_action": "none",
+                },
+                {
+                    "guardrail_name": "cf",
+                    "guardrail_id": "cf-uuid",
+                    "guardrail_status": "success",
+                    "guardrail_action": "none",
+                },
+            ],
+        ),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    assert _indexed(prisma) == [("r1", "cf-uuid", "pol-1")]

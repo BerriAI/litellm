@@ -1006,6 +1006,39 @@ async def test_invalid_decisions_are_errors_on_the_legacy_entrypoint(payload: by
         await guardrail.run_grayswan_guardrail({"messages": [{"role": "user", "content": "hello"}]})
 
 
+def _monitor_run_logged(score: float) -> GraySwanGuardrail:
+    guardrail: Final = _guardrail_answering(json.dumps({"violation": score, "error": False}).encode())
+    guardrail.on_flagged_action = "monitor"
+    return guardrail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("skip_passed", "score", "logged_action"),
+    [(True, 1.0, "flag"), (True, 0.1, "none"), (False, 1.0, None)],
+    ids=["violation_let_through", "clean", "setting_off"],
+)
+async def test_monitor_mode_logs_a_flagging_action_for_a_violation_it_lets_through(
+    monkeypatch: pytest.MonkeyPatch, skip_passed: bool, score: float, logged_action: str | None
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", skip_passed)
+    request_data: Final[dict[str, object]] = {"metadata": {}}
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["hello"]}
+
+    returned: Final = await _monitor_run_logged(score).apply_guardrail(
+        inputs=inputs, request_data=request_data, input_type="request"
+    )
+
+    assert returned == {"texts": ["hello"]}
+    metadata: Final = request_data["metadata"]
+    assert isinstance(metadata, dict)
+    (run,) = metadata["standard_logging_guardrail_information"]
+    assert run["guardrail_status"] == "success"
+    assert run.get("guardrail_action") == logged_action
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("score", [0, 0.49, 0.5, 1])
 async def test_valid_decisions_keep_threshold_semantics(score: float) -> None:

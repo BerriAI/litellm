@@ -5,11 +5,24 @@ import hashlib
 import json
 import os
 import secrets
+import sys
 from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, TypeAlias, cast, get_args
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Final,
+    Literal,
+    NamedTuple,
+    Optional,
+    Protocol,
+    TypeAlias,
+    cast,
+    get_args,
+)
 
 import httpx
 from pydantic import BaseModel, TypeAdapter
@@ -19,6 +32,7 @@ from litellm._logging import verbose_logger
 from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
     redact_nested_match_and_regex_keys,
@@ -39,6 +53,10 @@ from litellm.types.guardrails import (
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
+    GUARDRAIL_ACTION_BLOCK,
+    GUARDRAIL_ACTION_FLAG,
+    GUARDRAIL_ACTION_MASK,
+    GUARDRAIL_ACTION_NONE,
     CallTypes,
     GenericGuardrailAPIInputs,
     GuardrailStatus,
@@ -90,6 +108,48 @@ DEFAULT_ADVISORY_MESSAGE: Final = (
 
 _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
     "litellm_guardrail_self_recorded", default=False
+)
+
+
+# Whether the current hook run logs its acting detail, read once when the run starts so every
+# part of the entry it logs agrees.
+_run_logs_acting_detail: Final[contextvars.ContextVar[bool | None]] = contextvars.ContextVar(
+    "litellm_guardrail_run_logs_acting_detail", default=None
+)
+
+
+def _skip_passed_is_on() -> bool:
+    if "litellm.proxy.proxy_server" not in sys.modules:
+        return False
+    from litellm.proxy.proxy_server import current_general_settings
+
+    return current_general_settings().get("guardrail_log_skip_passed") is True
+
+
+def acting_runs_are_logged() -> bool:
+    """True when ``general_settings.guardrail_log_skip_passed`` was on when the current hook run
+    started, or is on now outside a run. Only then does a run log a ``guardrail_action``: its own
+    when it acted with a success status, and none when it did not act, which is what lets the
+    request log writer skip it."""
+    during_run: Final = _run_logs_acting_detail.get()
+    return _skip_passed_is_on() if during_run is None else during_run
+
+
+# The run the current hook last logged, so a guardrail that logs its verdict and then rejects
+# the request can mark that run as blocking.
+_last_logged_run: Final[contextvars.ContextVar[StandardLoggingGuardrailInformation | None]] = contextvars.ContextVar(
+    "litellm_guardrail_last_logged_run", default=None
+)
+
+# Set by a hook that found a violation and let the request continue, so the run it logs with a
+# success status carries the flag action.
+_run_let_a_violation_through: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
+    "litellm_guardrail_run_let_a_violation_through", default=False
+)
+
+# A logged run whose OTel span waits until its hook has decided whether to reject the request.
+_run_with_held_span: Final[contextvars.ContextVar[StandardLoggingGuardrailInformation | None]] = contextvars.ContextVar(
+    "litellm_guardrail_run_with_held_span", default=None
 )
 
 ScannedTextScope: TypeAlias = Literal["texts", "tool_calls"]
@@ -1659,6 +1719,7 @@ class CustomGuardrail(CustomLogger):
         guardrail_provider: str | None = None,
         event_type: GuardrailEventHooks | None = None,
         tracing_detail: GuardrailTracingDetail | None = None,
+        hold_span: bool = False,
     ) -> None:
         """
         Builds `StandardLoggingGuardrailInformation` and adds it to the request metadata so it can be used for logging to DataDog, Langfuse, etc.
@@ -1667,6 +1728,8 @@ class CustomGuardrail(CustomLogger):
             tracing_detail: Optional typed dict with provider-specific tracing fields
                 (guardrail_id, policy_template, detection_method, confidence_score,
                 classification, match_details, patterns_checked, alert_recipients).
+            hold_span: Keep the run's OTel span until ``emit_held_run_span`` is called, for a
+                guardrail that logs its verdict before it decides whether to reject the request.
         """
         if isinstance(guardrail_json_response, Exception):
             guardrail_json_response = str(guardrail_json_response)
@@ -1723,7 +1786,7 @@ class CustomGuardrail(CustomLogger):
             end_time=end_time,
             duration=duration,
             masked_entity_count=masked_entity_count,
-            **(tracing_detail or {}),
+            **self._tracing_detail_with_flag(tracing_detail, guardrail_status),
         )
 
         def _append_guardrail_info(container: dict[str, object]) -> None:
@@ -1742,16 +1805,62 @@ class CustomGuardrail(CustomLogger):
         _sync_guardrail_info_to_logging_obj(request_data, request_data.get("litellm_logging_obj"))
 
         _guardrail_self_recorded.set(True)
+        _last_logged_run.set(slg)
 
+        if hold_span:
+            _run_with_held_span.set(slg)
+            return
         # Emit the otel guardrail span here, where every guardrail execution lands,
         # rather than relying on a post-call hook that does not fire on every path
         # (e.g. a pass-through request that passes its guardrails).
+        self._emit_run_span(slg)
+
+    @staticmethod
+    def _emit_run_span(run: StandardLoggingGuardrailInformation) -> None:
         try:
             from litellm.integrations.otel.logger import emit_guardrail_span
 
-            emit_guardrail_span(slg)
+            emit_guardrail_span(run)
         except Exception:
             pass
+
+    def emit_held_run_span(self) -> None:
+        """Emit the OTel span of the run this guardrail logged with ``hold_span``, once the hook has
+        decided whether to reject the request. Does nothing when no span is held."""
+        run: Final = _run_with_held_span.get()
+        if run is not None and "guardrail_name" in run and run["guardrail_name"] == self.guardrail_name:
+            _run_with_held_span.set(None)
+            self._emit_run_span(run)
+
+    @staticmethod
+    def _tracing_detail_with_flag(
+        tracing_detail: GuardrailTracingDetail | None, guardrail_status: GuardrailStatus
+    ) -> GuardrailTracingDetail:
+        """``tracing_detail`` with a ``guardrail_action`` added for a run that logs a success or
+        not_run status with no action of its own: flag when it called ``mark_run_as_flagging``,
+        else none. Added only with ``general_settings.guardrail_log_skip_passed`` on."""
+        detail: Final[GuardrailTracingDetail] = tracing_detail or {}
+        has_action: Final = "guardrail_action" in detail and detail["guardrail_action"] is not None
+        if has_action or guardrail_status not in ("success", "not_run") or not acting_runs_are_logged():
+            return detail
+        flagged: Final = _run_let_a_violation_through.get() and guardrail_status == "success"
+        return {**detail, "guardrail_action": GUARDRAIL_ACTION_FLAG if flagged else GUARDRAIL_ACTION_NONE}
+
+    def mark_run_as_flagging(self) -> None:
+        """Record that this run found a violation and let the request continue, for a guardrail
+        in a monitor mode. The run it logs with a success status then carries ``guardrail_action``
+        flag, with ``general_settings.guardrail_log_skip_passed`` on."""
+        _run_let_a_violation_through.set(True)
+
+    def mark_logged_run_as_blocking(self) -> None:
+        """Set ``guardrail_action`` to block on the run this guardrail just logged, for a guardrail
+        that logs its verdict with a success status and then rejects the request. Does nothing with
+        ``general_settings.guardrail_log_skip_passed`` off."""
+        run: Final = _last_logged_run.get()
+        if not acting_runs_are_logged():
+            return
+        if run is not None and "guardrail_name" in run and run["guardrail_name"] == self.guardrail_name:
+            run["guardrail_action"] = GUARDRAIL_ACTION_BLOCK
 
     async def apply_guardrail(
         self,
@@ -1798,10 +1907,14 @@ class CustomGuardrail(CustomLogger):
 
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
-        guardrail_response: Final = self._summarize_guardrail_response(
-            response=response,
+        # A pre_call hook that returns None keeps the request it was handed, edits included.
+        kept_request: Final = response is None and event_type == GuardrailEventHooks.pre_call
+        guardrail_response, changed_content = self._summary_and_change(
+            response=request_data if kept_request else response,
             original_inputs=original_inputs,
             event_type=event_type,
+            kept_request=kept_request,
+            handed_response=_handed_response.get(),
         )
 
         verbose_logger.debug("Guardrail response: %s", response)
@@ -1814,8 +1927,62 @@ class CustomGuardrail(CustomLogger):
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
+            tracing_detail=self._acted_tracing_detail(isinstance(response, str), changed_content, event_type),
         )
         return response
+
+    @staticmethod
+    def _acted_tracing_detail(
+        returned_text: bool, changed_content: bool, event_type: GuardrailEventHooks | None
+    ) -> GuardrailTracingDetail | None:
+        """The ``guardrail_action`` of a run that acted while its status reads as success: a pre_call
+        hook that returned its rejection message, which the proxy turns into a 400, or a hook that
+        changed the content. Logged only with ``general_settings.guardrail_log_skip_passed`` on."""
+        if not acting_runs_are_logged():
+            return None
+        if returned_text:
+            return {"guardrail_action": GUARDRAIL_ACTION_BLOCK} if event_type == GuardrailEventHooks.pre_call else None
+        return {"guardrail_action": GUARDRAIL_ACTION_MASK} if changed_content else None
+
+    @staticmethod
+    def _returned_a_changed_value(
+        response: object, original_inputs: Mapping[str, object] | None, event_type: GuardrailEventHooks | None
+    ) -> bool:
+        """True when the hook's return value changed the content. A pre_call hook returns the whole
+        request, so a content key it removed is a change. ``apply_guardrail`` may return only some
+        of its inputs, so only the keys it returned are compared. A key that is missing on one side
+        and empty on the other is not a change."""
+        returned: Final = as_str_mapping(response)
+        if original_inputs is None or returned is None:
+            return False
+        compared_keys: Final = (
+            _PRE_CALL_CONTENT_KEYS
+            if event_type == GuardrailEventHooks.pre_call
+            else returned.keys() - _STREAM_CONTROL_KEYS
+        )
+        return any(_holds_another_value(original_inputs.get(key), returned.get(key)) for key in compared_keys)
+
+    def _summary_and_change(
+        self,
+        response: object,
+        original_inputs: Mapping[str, object] | None,
+        event_type: GuardrailEventHooks | None,
+        kept_request: bool = False,
+        handed_response: "_HandedResponse | None" = None,
+    ) -> tuple[object, bool]:
+        """The loggable summary of a hook's return value, and whether the hook changed the content.
+
+        With ``kept_request``, ``response`` is the request a pre_call hook returned None for: it is
+        compared for edits made in place and summarized as the None the hook returned. A post_call
+        hook that returns None keeps the response it was handed."""
+        return (
+            self._summarize_guardrail_response(None if kept_request else response, original_inputs, event_type),
+            self._returned_a_changed_value(response, original_inputs, event_type)
+            or (
+                handed_response is not None
+                and handed_response.changed_into(handed_response.response if response is None else response)
+            ),
+        )
 
     def _summarize_guardrail_response(
         self,
@@ -2003,6 +2170,70 @@ _PRE_CALL_CONTENT_KEYS: Final = frozenset(
 _STREAM_CONTROL_KEYS: Final = frozenset({"stream_holdback_chars"})
 
 
+def _holds_another_value(before: object, after: object) -> bool:
+    """False when both are equal, or both are empty (a missing key reads as None)."""
+    return before != after and bool(before or after)
+
+
+# Where a chat completion, a Responses API response and an Anthropic message hold generated content.
+_RESPONSE_CONTENT_KEYS: Final = frozenset({"choices", "output", "content"})
+
+
+def _comparable_response(response: object) -> object:
+    """A copy of the generated content of a post_call response that later edits to the response
+    cannot reach, or None when the response is not a model or a mapping. Only the content keys
+    are copied, so a large embedding response costs nothing."""
+    if isinstance(response, BaseModel):
+        return response.model_dump(include=set(_RESPONSE_CONTENT_KEYS))
+    mapping: Final = as_str_mapping(response)
+    if mapping is None:
+        return None
+    return {key: copy.deepcopy(value) for key, value in mapping.items() if key in _RESPONSE_CONTENT_KEYS}
+
+
+class _HandedResponse(NamedTuple):
+    """The response a post_call hook was handed, with a copy taken before the hook ran."""
+
+    response: object
+    before: object
+
+    def changed_into(self, after: object) -> bool:
+        """True when the hook edited the response in place or returned another one."""
+        if self.before is None:
+            return False
+        comparable_after: Final = _comparable_response(after)
+        return comparable_after is not None and comparable_after != self.before
+
+
+# The response the running post_call hook was handed. A context variable, since subclasses
+# override _process_response with the signature it had before this was tracked.
+_handed_response: Final[contextvars.ContextVar[_HandedResponse | None]] = contextvars.ContextVar(
+    "litellm_guardrail_handed_response", default=None
+)
+
+
+class _HookBaseline(NamedTuple):
+    """What a hook was handed, kept from before it ran so its changes can be told apart."""
+
+    inputs: dict[str, object] | None  # mutable-ok: matches _process_response(original_inputs=) signature
+    response: _HandedResponse | None
+
+
+def _hook_baseline(
+    func_name: str,
+    kwargs: Mapping[str, object],
+    request_data: Mapping[str, object],
+    event_type: GuardrailEventHooks | None,
+) -> _HookBaseline:
+    handed: Final = kwargs.get("response")
+    return _HookBaseline(
+        inputs=_original_inputs_for(func_name, kwargs, request_data, event_type),
+        response=_HandedResponse(handed, _comparable_response(handed))
+        if event_type == GuardrailEventHooks.post_call
+        else None,
+    )
+
+
 def _original_inputs_for(
     func_name: str,
     kwargs: Mapping[str, object],
@@ -2087,10 +2318,13 @@ def log_guardrail_information(func):
         event_type: Final = _infer_event_type_from_function_name(func.__name__)
 
         # Store original inputs for comparison (for apply_guardrail functions)
-        original_inputs: Final = _original_inputs_for(func.__name__, kwargs, request_data, event_type)
+        baseline: Final = _hook_baseline(func.__name__, kwargs, request_data, event_type)
 
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
+        flagging_token: Final = _run_let_a_violation_through.set(False)
+        acting_detail_token: Final = _run_logs_acting_detail.set(_skip_passed_is_on())
+        handed_response_token: Final = _handed_response.set(baseline.response)
         try:
             response: Final = await func(*args, **kwargs)
             if self.records_own_guardrail_information or _guardrail_self_recorded.get():
@@ -2102,7 +2336,7 @@ def log_guardrail_information(func):
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
-                original_inputs=original_inputs,
+                original_inputs=baseline.inputs,
             )
         except Exception as e:
             if _guardrail_self_recorded.get():
@@ -2116,6 +2350,9 @@ def log_guardrail_information(func):
                 event_type=event_type,
             )
         finally:
+            _handed_response.reset(handed_response_token)
+            _run_logs_acting_detail.reset(acting_detail_token)
+            _run_let_a_violation_through.reset(flagging_token)
             _guardrail_self_recorded.reset(self_recorded_token)
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
@@ -2137,6 +2374,8 @@ def log_guardrail_information(func):
 
         logging_obj: Final = kwargs.get("logging_obj") or request_data.get("litellm_logging_obj")
         self_recorded_token: Final = _guardrail_self_recorded.set(False)
+        flagging_token: Final = _run_let_a_violation_through.set(False)
+        acting_detail_token: Final = _run_logs_acting_detail.set(_skip_passed_is_on())
         try:
             response: Final = func(*args, **kwargs)
             if self.records_own_guardrail_information or _guardrail_self_recorded.get():
@@ -2158,6 +2397,8 @@ def log_guardrail_information(func):
                 event_type=event_type,
             )
         finally:
+            _run_logs_acting_detail.reset(acting_detail_token)
+            _run_let_a_violation_through.reset(flagging_token)
             _guardrail_self_recorded.reset(self_recorded_token)
             _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 

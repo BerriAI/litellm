@@ -14,6 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
+    acting_runs_are_logged,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
@@ -39,7 +40,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIRequest,
     LakeraAIResponse,
 )
-from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
+from litellm.types.utils import GUARDRAIL_ACTION_FLAG, CallTypesLiteral, GuardrailStatus, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.types.utils import LLMResponseTypes
@@ -437,6 +438,9 @@ class LakeraAIGuardrail(CustomGuardrail):
                 guardrail_json_response = copy_lakera_response_dict
             else:
                 guardrail_json_response = exception_str
+            flagged_run_is_logged: Final = (
+                lakera_response is not None and lakera_response.get("flagged") is True and acting_runs_are_logged()
+            )
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response=guardrail_json_response,
                 guardrail_status=status,
@@ -446,6 +450,9 @@ class LakeraAIGuardrail(CustomGuardrail):
                 duration=(datetime.now() - start_time).total_seconds(),
                 masked_entity_count=masked_entity_count,
                 event_type=event_type,
+                tracing_detail={"guardrail_action": GUARDRAIL_ACTION_FLAG} if flagged_run_is_logged else None,
+                # The hook may still reject the request, which turns the flag into a block.
+                hold_span=flagged_run_is_logged,
             )
 
     def _mask_pii_in_messages(
@@ -671,6 +678,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 3. Add the guardrail to the applied guardrails header ##########
         #########################################################
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+        self.emit_held_run_span()
 
         return data
 
@@ -745,6 +753,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 3. Add the guardrail to the applied guardrails header ##########
         #########################################################
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+        self.emit_held_run_span()
 
         return data
 
@@ -788,16 +797,17 @@ class LakeraAIGuardrail(CustomGuardrail):
         post_call_messages: Final = list(copy.deepcopy(original_messages)) + response_messages
 
         # Call Lakera guardrail
-        lakera_guardrail_response, _ = await self.call_v2_guard(
+        lakera_guardrail_response, logged_entity_count = await self.call_v2_guard(
             messages=post_call_messages,
             request_data=data,
             event_type=GuardrailEventHooks.post_call,
         )
+        # The logged run counts the entities masked here only with guardrail_log_skip_passed on.
+        masked_entity_count: Final[dict[str, int]] = logged_entity_count if acting_runs_are_logged() else {}
 
         # Handle flagged content
         if lakera_guardrail_response.get("flagged") is True:
             if self._is_only_pii_violation(lakera_guardrail_response) and self.on_flagged != "block":
-                masked_entity_count: Final[dict[str, int]] = {}
                 masked_messages: Final = self._mask_pii_in_messages(
                     messages=post_call_messages,
                     lakera_response=lakera_guardrail_response,
@@ -809,6 +819,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                         choice_idx = choice_indices[idx]
                         response_dict["choices"][choice_idx]["message"]["content"] = msg.get("content", "")
                 add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+                self.emit_held_run_span()
                 return ModelResponse(**_RESPONSE_FIELDS.validate_python(response_dict))
 
             # inject_system_message has nothing left to inject into once a response
@@ -823,6 +834,7 @@ class LakeraAIGuardrail(CustomGuardrail):
 
         # Record applied guardrail
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+        self.emit_held_run_span()
 
         return response
 
@@ -852,7 +864,12 @@ class LakeraAIGuardrail(CustomGuardrail):
     def _get_http_exception_for_blocked_guardrail(self, lakera_response: LakeraAIResponse | None) -> HTTPException:
         """
         Get the HTTP exception for a blocked guardrail, similar to Bedrock's implementation.
+
+        ``call_v2_guard`` already logged this run with a success status, so the logged run is
+        marked as blocking here.
         """
+        self.mark_logged_run_as_blocking()
+        self.emit_held_run_span()
         return HTTPException(
             status_code=400,
             detail={

@@ -32,9 +32,13 @@ export const storedValuesToForm = (
   maximum_spend_logs_cleanup_max_batches: String(storedValue("maximum_spend_logs_cleanup_max_batches") ?? ""),
   maximum_spend_logs_cleanup_run_budget: String(storedValue("maximum_spend_logs_cleanup_run_budget") ?? ""),
   maximum_spend_logs_cleanup_batch_timeout: String(storedValue("maximum_spend_logs_cleanup_batch_timeout") ?? ""),
+  guardrail_log_skip_passed: storedValue("guardrail_log_skip_passed") === true,
 });
 
-export const formToPayload = (formValues: LoggingSettingsFormValues): StoreRequestInSpendLogsParams => {
+export const formToPayload = (
+  formValues: LoggingSettingsFormValues,
+  saveSkipPassed: boolean,
+): StoreRequestInSpendLogsParams => {
   const retentionPeriod = duration(formValues.maximum_spend_logs_retention_period);
   const batchSize = count(formValues.maximum_spend_logs_cleanup_batch_size);
   const maxBatches = count(formValues.maximum_spend_logs_cleanup_max_batches);
@@ -48,6 +52,7 @@ export const formToPayload = (formValues: LoggingSettingsFormValues): StoreReque
     ...(maxBatches !== undefined && { maximum_spend_logs_cleanup_max_batches: maxBatches }),
     ...(runBudget !== undefined && { maximum_spend_logs_cleanup_run_budget: runBudget }),
     ...(batchTimeout !== undefined && { maximum_spend_logs_cleanup_batch_timeout: batchTimeout }),
+    ...(saveSkipPassed && { guardrail_log_skip_passed: formValues.guardrail_log_skip_passed }),
   };
 };
 

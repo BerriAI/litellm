@@ -75,6 +75,8 @@ const OPTIONAL_FIELDS: readonly OptionalField[] = [
   },
 ];
 
+const SKIP_PASSED_FIELD_NAME = "guardrail_log_skip_passed";
+
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
     {label}
@@ -88,6 +90,7 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
 interface LoggingSettingsFormProps {
   initialValues: LoggingSettingsFormValues;
   describeField: (name: string, fallback: string) => string;
+  skipPassedEditable: boolean;
   isSaving: boolean;
   onSubmit: (formValues: LoggingSettingsFormValues) => void;
 }
@@ -95,6 +98,7 @@ interface LoggingSettingsFormProps {
 const LoggingSettingsForm: React.FC<LoggingSettingsFormProps> = ({
   initialValues,
   describeField,
+  skipPassedEditable,
   isSaving,
   onSubmit,
 }) => {
@@ -155,6 +159,31 @@ const LoggingSettingsForm: React.FC<LoggingSettingsFormProps> = ({
               }
             </FormField>
           ))}
+
+          <FormField
+            control={form.control}
+            name={SKIP_PASSED_FIELD_NAME}
+            label={labelWithHint(
+              t("adminPanel.loggingSettings.fields.guardrailLogSkipPassed.label"),
+              describeField(SKIP_PASSED_FIELD_NAME, t("adminPanel.loggingSettings.fields.guardrailLogSkipPassed.hint")),
+            )}
+            description={t(
+              skipPassedEditable
+                ? "adminPanel.loggingSettings.fields.guardrailLogSkipPassed.description"
+                : "adminPanel.loggingSettings.fields.guardrailLogSkipPassed.configOwned",
+            )}
+          >
+            {({ id, value, onChange, onBlur }) => (
+              <Switch
+                id={id}
+                disabled={!skipPassedEditable}
+                checked={Boolean(value)}
+                onCheckedChange={onChange}
+                onBlur={onBlur}
+                className="w-fit"
+              />
+            )}
+          </FormField>
         </FieldGroup>
 
         <Button type="submit" className="mt-6" disabled={isSaving}>
@@ -185,6 +214,9 @@ const LoggingSettings: React.FC = () => {
     (name: string) => proxyConfigData?.find((field) => field.field_name === name)?.field_value,
     [proxyConfigData],
   );
+
+  const skipPassedEditable =
+    proxyConfigData?.find((field) => field.field_name === SKIP_PASSED_FIELD_NAME)?.editable !== false;
 
   const isStored = (name: GeneralSettingsFieldName) => {
     const value = storedValue(name);
@@ -225,7 +257,10 @@ const LoggingSettings: React.FC = () => {
   };
 
   const handleFormSubmit = (formValues: LoggingSettingsFormValues) => {
-    const updateParams = formToPayload(formValues);
+    // A value the config file owns is rejected by the proxy when it changes, so it is only sent when editable.
+    const saveSkipPassed =
+      skipPassedEditable && formValues.guardrail_log_skip_passed !== initialValues.guardrail_log_skip_passed;
+    const updateParams = formToPayload(formValues, saveSkipPassed);
     const submitUpdate = () =>
       mutate(updateParams, {
         onSuccess: () => toast.success(t("adminPanel.loggingSettings.toasts.updated")),
@@ -275,6 +310,7 @@ const LoggingSettings: React.FC = () => {
             <LoggingSettingsForm
               initialValues={initialValues}
               describeField={describeField}
+              skipPassedEditable={skipPassedEditable}
               isSaving={isPending || isDeletingField}
               onSubmit={handleFormSubmit}
             />

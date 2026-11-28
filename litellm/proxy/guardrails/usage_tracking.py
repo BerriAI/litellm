@@ -18,7 +18,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import billed_guardrail_cost_by_unit
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.spend_log_batching import spend_log_write_batches
@@ -29,6 +29,7 @@ from litellm.repositories.table_repositories import (
     DailyGuardrailUsageUnitsRepository,
     SpendLogGuardrailIndexRepository,
 )
+from litellm.types.utils import GUARDRAIL_ACTION_BLOCK, GUARDRAIL_ACTION_FLAG, GUARDRAIL_ACTION_MASK
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -217,6 +218,30 @@ def guardrail_status_to_action(status: object) -> str:
     return "passed"
 
 
+# The `guardrail_action` values of a run that acted while its status reads as passed: the shared
+# guardrail logging's own for a masked run and for a rejection message returned by a pre_call hook,
+# a detected violation that was let through, and a provider's action for a request it anonymized.
+_ACTED_WITH_A_PASSED_STATUS: Final = frozenset(
+    {GUARDRAIL_ACTION_MASK, GUARDRAIL_ACTION_BLOCK, GUARDRAIL_ACTION_FLAG, "guardrail_intervened"}
+)
+
+
+def guardrail_ran_without_acting(entry: Mapping[str, object]) -> bool:
+    """True for a run `general_settings.guardrail_log_skip_passed` drops from the request log: the guardrail
+    passed or did not run, reported no masked entity and logged a `guardrail_action` that is not masking,
+    blocking or flagging. A run with no `guardrail_action` was logged with the setting off, when a run
+    that acted logs none either, so it keeps its row."""
+    if guardrail_status_to_action(entry.get("guardrail_status")) not in ("passed", "not_run"):
+        return False
+    action: Final = entry.get("guardrail_action")
+    if not isinstance(action, str) or action.lower() in _ACTED_WITH_A_PASSED_STATUS:
+        return False
+    counts: Final = as_str_mapping(entry.get("masked_entity_count"))
+    if counts is None:
+        return True
+    return not any(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in counts.values())
+
+
 def _parse_guardrail_info_from_payload(payload: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
     """Extract guardrail_information from spend log payload metadata."""
     meta = payload.get("metadata")
@@ -400,6 +425,10 @@ async def _record_guardrail_usage(
         }
     )
     index_rows_by_key: Final[dict[tuple[str, str], dict[str, object]]] = {}
+    from litellm.proxy.proxy_server import current_general_settings
+
+    skip_passed: Final = current_general_settings().get("guardrail_log_skip_passed") is True
+    kept_index_keys: Final[set[tuple[str, str]]] = set()  # mutable-ok: filled by the pass that builds index_rows_by_key
 
     for payload in (row for row in logs_to_process if row.get("accounting_log_disabled") is not True):
         request_id = payload.get("request_id")
@@ -432,6 +461,8 @@ async def _record_guardrail_usage(
                     daily_guardrail[key]["blocked_count"] += 1
                 else:
                     daily_guardrail[key]["flagged_count"] += 1
+            if not (skip_passed and guardrail_ran_without_acting(entry)):
+                kept_index_keys.add((request_id, guardrail_id))
             policy_id = entry.get("policy_id")
             prior = index_rows_by_key.get((request_id, guardrail_id))
             if prior is None or (prior["policy_id"] is None and policy_id is not None):
@@ -441,7 +472,7 @@ async def _record_guardrail_usage(
                     "policy_id": policy_id,
                     "start_time": start_time,
                 }
-    index_rows: Final = tuple(index_rows_by_key.values())
+    index_rows: Final = tuple(row for key, row in index_rows_by_key.items() if key in kept_index_keys)
 
     async with pending.lock:
         pending_metrics: Final = pending.metrics

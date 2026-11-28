@@ -177,6 +177,15 @@ class NomaV2Guardrail(CustomGuardrail):
 
         raise ValueError("Noma v2 response missing valid action")
 
+    @staticmethod
+    def _verdict_acts(response_json: object) -> bool:
+        """True when Noma answered with an action other than NONE, which monitor mode lets through."""
+        verdict: Final = as_str_mapping(response_json)
+        return verdict is not None and verdict.get("action") in {
+            _Action.BLOCKED.value,
+            _Action.GUARDRAIL_INTERVENED.value,
+        }
+
     def _build_scan_payload(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -353,6 +362,8 @@ class NomaV2Guardrail(CustomGuardrail):
             response_json = await self._call_noma_scan(payload=payload)
             if self.monitor_mode:
                 action = _Action.NONE
+                if self._verdict_acts(response_json):
+                    self.mark_run_as_flagging()
             else:
                 action = self._resolve_action_from_response(response_json=require_get(response_json))
             guardrail_json_response = response_json

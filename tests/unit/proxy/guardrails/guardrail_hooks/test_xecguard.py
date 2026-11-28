@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from typing import Final
 
 from fastapi.exceptions import HTTPException
 from litellm.proxy.guardrails.guardrail_hooks.xecguard.xecguard import (
@@ -1652,6 +1653,35 @@ class TestXecGuardLoggingHook:
         assert info["guardrail_name"] == "test-xecguard"
         assert info["guardrail_status"] == "success"
         assert info["guardrail_response"]["trace_id"] == "lg-1"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("skip_passed", "decision", "logged_action"),
+        [(True, "SAFE", "none"), (True, "UNSAFE", None), (False, "SAFE", None)],
+        ids=["clean", "unsafe", "setting_off"],
+    )
+    async def test_async_logging_hook_says_a_clean_run_did_not_act_with_skip_passed_on(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        xecguard_guardrail: XecGuardGuardrail,
+        mock_request_data: dict[str, object],
+        skip_passed: bool,
+        decision: str,
+        logged_action: str | None,
+    ) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.guardrails.usage_tracking import guardrail_ran_without_acting
+
+        monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_skip_passed", skip_passed)
+        resp: Final = _make_response({"decision": decision, "trace_id": "lg-1"})
+        kwargs: Final = {**mock_request_data, "standard_logging_object": {}}
+        with patch.object(xecguard_guardrail.async_handler, "post", return_value=resp):
+            await xecguard_guardrail.async_logging_hook(
+                kwargs=kwargs, result=_build_model_response("some answer"), call_type="acompletion"
+            )
+        logged_runs: Final = kwargs["standard_logging_object"]["guardrail_information"]
+        assert [run.get("guardrail_action") for run in logged_runs] == [logged_action]
+        assert guardrail_ran_without_acting(logged_runs[0]) is (logged_action == "none")
 
     @pytest.mark.asyncio
     async def test_async_logging_hook_appends_to_existing_guardrail_info(
