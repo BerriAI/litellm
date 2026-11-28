@@ -36,6 +36,11 @@ def test_team_key_duration_is_the_default_and_the_cap(requested: str | None, exp
     assert _member_key(requested, "30d") == expected
 
 
+@pytest.mark.parametrize(("requested", "expected"), [(None, "-1"), ("7d", "7d"), ("-1", "-1"), ("soon", "-1")])
+def test_a_never_expiring_team_duration_is_a_default_with_no_cap(requested: str | None, expected: str) -> None:
+    assert _member_key(requested, "-1") == expected
+
+
 @pytest.mark.parametrize("team_duration", [None, "", "   ", 30])
 def test_no_usable_team_key_duration_leaves_the_member_request_alone(team_duration: object) -> None:
     assert _member_key("365d", team_duration) == "365d"

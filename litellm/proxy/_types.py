@@ -2046,7 +2046,7 @@ def _blank_key_duration_as_unset(value: object) -> object:
 
 
 def _parseable_key_duration(value: str | None) -> str | None:
-    if value is not None:
+    if value is not None and value != "-1":
         duration_in_seconds(value)
     return value
 

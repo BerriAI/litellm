@@ -14474,7 +14474,7 @@ async def test_clearing_team_member_key_duration_writes_no_top_level_column():
     assert "team_member_key_duration" not in update_mock.call_args.kwargs["data"]
 
 
-@pytest.mark.parametrize("bad", ["soon", "d7", "-1"])
+@pytest.mark.parametrize("bad", ["soon", "d7", "-2"])
 def test_update_team_request_rejects_an_unparseable_key_duration(bad):
     from pydantic import ValidationError
 
@@ -14482,6 +14482,12 @@ def test_update_team_request_rejects_an_unparseable_key_duration(bad):
 
     with pytest.raises(ValidationError, match="team_member_key_duration"):
         UpdateTeamRequest(team_id="t", team_member_key_duration=bad)
+
+
+def test_update_team_request_accepts_never_expires_as_a_key_duration():
+    from litellm.proxy._types import UpdateTeamRequest
+
+    assert UpdateTeamRequest(team_id="t", team_member_key_duration="-1").team_member_key_duration == "-1"
 
 
 @pytest.mark.asyncio

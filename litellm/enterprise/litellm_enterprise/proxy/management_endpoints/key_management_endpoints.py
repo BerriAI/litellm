@@ -9,13 +9,21 @@ from litellm.proxy._types import GenerateKeyRequest, LiteLLM_TeamTable
 _METADATA: Final = TypeAdapter(Mapping[str, object])
 
 
-def _is_within(requested: str | None, cap: str) -> bool:
-    if requested is None or requested == "-1":
-        return False
+def _seconds(duration: str) -> float | None:
+    if duration == "-1":
+        return float("inf")
     try:
-        return duration_in_seconds(requested) <= duration_in_seconds(cap)
+        return duration_in_seconds(duration)
     except ValueError:
+        return None
+
+
+def _is_within(requested: str | None, cap: str) -> bool:
+    if requested is None:
         return False
+    requested_seconds: Final = _seconds(requested)
+    cap_seconds: Final = _seconds(cap)
+    return requested_seconds is not None and cap_seconds is not None and requested_seconds <= cap_seconds
 
 
 def add_team_member_key_duration(
