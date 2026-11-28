@@ -17,7 +17,13 @@ export type KubernetesPodRouting = {
   selection: "round_robin" | "session_affinity" | "session_affinity_retry";
 };
 
-export type LogEntry = {
+export type SessionPromptCacheTotals = {
+  session_cache_read_tokens?: number | null;
+  session_cache_write_tokens?: number | null;
+  session_provider_prompt_tokens?: number | null;
+};
+
+export type LogEntry = SessionPromptCacheTotals & {
   request_id: string;
   litellm_call_id?: string | null;
   api_key: string;

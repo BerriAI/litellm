@@ -88,7 +88,14 @@ const sessionLogs = [
 ];
 
 const renderSessionDrawer = () => {
-  vi.mocked(sessionSpendLogsCall).mockResolvedValue({ data: sessionLogs, total: 4, total_pages: 1 });
+  vi.mocked(sessionSpendLogsCall).mockResolvedValue({
+    data: sessionLogs,
+    total: 5,
+    total_pages: 1,
+    session_cache_read_tokens: 800,
+    session_cache_write_tokens: 100,
+    session_provider_prompt_tokens: 1_000,
+  });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const drawer = (open: boolean) => (
     <QueryClientProvider client={queryClient}>
@@ -103,6 +110,15 @@ const sidebarEventNames = () =>
   screen.queryAllByText(/^(llm-early|llm-late|tool-early|tool-late)$/).map((el) => el.textContent);
 
 describe("LogDetailsDrawer session sidebar sorting", () => {
+  it("shows full-session prompt cache totals and labels the response-cache counter", async () => {
+    renderSessionDrawer();
+
+    expect(
+      await screen.findByText("Prompt cache: 800 read / 100 written (80% of input read from cache)"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("0/4 response cache hits")).toBeInTheDocument();
+  });
+
   it("defaults to duration order, longest call first across LLM and MCP calls", async () => {
     renderSessionDrawer();
     await waitFor(() => expect(sidebarEventNames()).toHaveLength(4));

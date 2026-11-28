@@ -2521,11 +2521,21 @@ async def test_ui_view_session_spend_logs_rehydrates_metadata_jsonb_text(client,
         async def count(self, *args, **kwargs):
             return 1
 
-        async def query_raw(self, sql_query, session_id, page_size, skip, *scope_params):
+        async def query_raw(self, sql_query, session_id, *params):
+            if not params:
+                return [
+                    {
+                        "total_records": 1,
+                        "session_cache_read_tokens": None,
+                        "session_cache_write_tokens": None,
+                        "session_provider_prompt_tokens": None,
+                    }
+                ]
             return [dict(raw_row)]
 
     class MockPrismaClient:
         read_db = property(lambda self: ReadTargetOf(self.db))
+
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
@@ -2548,18 +2558,24 @@ async def test_ui_view_session_spend_logs_rehydrates_metadata_jsonb_text(client,
 @pytest.mark.asyncio
 async def test_ui_view_session_spend_logs_includes_permitted_team_logs(client, monkeypatch):
     class MockDB:
-        async def count(self, *args, **kwargs):
-            assert kwargs.get("where") == {
-                "session_id": "session-123",
-                "OR": [
-                    {"user": "user-1"},
-                    {"team_id": {"in": ["team-9"]}},
-                ],
-            }
-            return 1
-
-        async def query_raw(self, sql_query, session_id, page_size, skip, scoped_user, team_ids):
+        async def query_raw(self, sql_query, session_id, *params):
             assert session_id == "session-123"
+            if len(params) == 2:
+                scoped_user, team_ids = params
+                assert scoped_user == "user-1"
+                assert tuple(team_ids) == ("team-9",)
+                assert '("user" = $2 OR team_id = ANY($3::text[]))' in sql_query
+                return [
+                    {
+                        "total_records": 2,
+                        "session_cache_read_tokens": 80,
+                        "session_cache_write_tokens": 10,
+                        "session_provider_prompt_tokens": 100,
+                    }
+                ]
+            page_size, skip, scoped_user, team_ids = params
+            assert page_size == 1
+            assert skip == 0
             assert scoped_user == "user-1"
             assert tuple(team_ids) == ("team-9",)
             assert '("user" = $4 OR team_id = ANY($5::text[]))' in sql_query
@@ -2575,6 +2591,7 @@ async def test_ui_view_session_spend_logs_includes_permitted_team_logs(client, m
 
     class MockPrismaClient:
         read_db = property(lambda self: ReadTargetOf(self.db))
+
         def __init__(self):
             self.db = MockDB()
             self.db.litellm_spendlogs = self.db
@@ -2593,13 +2610,17 @@ async def test_ui_view_session_spend_logs_includes_permitted_team_logs(client, m
     try:
         response = client.get(
             "/spend/logs/session/ui",
-            params={"session_id": "session-123", "page": 1, "page_size": 50},
+            params={"session_id": "session-123", "page": 1, "page_size": 1},
             headers={"Authorization": "Bearer sk-test"},
         )
 
         assert response.status_code == 200
         data = response.json()
-        assert data["total"] == 1
+        assert data["total"] == 2
+        assert data["total_pages"] == 2
+        assert data["session_cache_read_tokens"] == 80
+        assert data["session_cache_write_tokens"] == 10
+        assert data["session_provider_prompt_tokens"] == 100
         assert [row["request_id"] for row in data["data"]] == ["req2"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
@@ -5653,6 +5674,9 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_tokens():
                 "mcp_tool_call_count": 0,
                 "mcp_tool_call_spend": 0.0,
                 "session_total_prompt_tokens": 42,
+                "session_cache_read_tokens": 10,
+                "session_cache_write_tokens": 6,
+                "session_provider_prompt_tokens": 40,
                 "session_total_completion_tokens": 18,
                 "session_total_tokens": 60,
             }
@@ -5674,6 +5698,9 @@ async def test_build_ui_spend_logs_response_sums_multi_round_session_tokens():
     session_rows = rows[:2]
     assert [row["session_total_tokens"] for row in session_rows] == [60, 60]
     assert [row["session_total_prompt_tokens"] for row in session_rows] == [42, 42]
+    assert [row["session_cache_read_tokens"] for row in session_rows] == [10, 10]
+    assert [row["session_cache_write_tokens"] for row in session_rows] == [6, 6]
+    assert [row["session_provider_prompt_tokens"] for row in session_rows] == [40, 40]
     assert [row["session_total_completion_tokens"] for row in session_rows] == [18, 18]
     assert [(row["total_tokens"], row["prompt_tokens"], row["completion_tokens"]) for row in session_rows] == [
         (10, 7, 3),
