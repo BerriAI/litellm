@@ -1748,6 +1748,83 @@ async def test_get_user_object_upsert_that_loses_to_a_concurrent_sign_in_returns
     mock_add_to_team.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("row_already_written", "default_params", "expected_alerts"),
+    [(False, None, ["new_jwt_user"]), (False, {"user_role": "org_admin"}, ["new_jwt_user"]), (True, None, [])],
+    ids=[
+        "this_sign_in_created_the_user",
+        "this_sign_in_created_a_user_with_a_role_user_new_does_not_take",
+        "a_concurrent_sign_in_created_the_user",
+    ],
+)
+async def test_get_user_object_upsert_alerts_new_internal_user_created_only_for_the_insert_that_wrote_the_user(
+    rust_auth_stores: RustAuthStores,
+    monkeypatch,
+    row_already_written: bool,
+    default_params: dict[str, str] | None,
+    expected_alerts: list[str],
+):
+    monkeypatch.setattr(litellm, "default_internal_user_params", default_params)
+    rust_auth_stores.user.writer = (
+        {"new_jwt_user": {"user_id": "new_jwt_user", "user_role": "internal_user"}} if row_already_written else {}
+    )
+    slack_alerting: Final = MagicMock()
+    slack_alerting.send_virtual_key_event_slack = AsyncMock()
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", SimpleNamespace(slack_alerting_instance=slack_alerting))
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+
+    await get_user_object(
+        user_id="new_jwt_user",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+        user_id_upsert=True,
+        proxy_logging_obj=None,
+    )
+    await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+
+    alerts: Final = [call.kwargs for call in slack_alerting.send_virtual_key_event_slack.await_args_list]
+    assert [alert["key_event"].request_kwargs["data"].user_id for alert in alerts] == expected_alerts
+    assert all(
+        (alert["alert_type"], alert["event_name"]) == ("new_internal_user_created", "New Internal User Created")
+        for alert in alerts
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_upsert_alerts_new_internal_user_created_even_when_default_team_setup_fails(
+    rust_auth_stores: RustAuthStores, monkeypatch
+):
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"teams": ["default-team"]})
+    rust_auth_stores.user.writer = {}
+    slack_alerting: Final = MagicMock()
+    slack_alerting.send_virtual_key_event_slack = AsyncMock()
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", SimpleNamespace(slack_alerting_instance=slack_alerting))
+    cache: Final = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+
+    with patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.add_new_user_to_default_team",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("team lookup failed"),
+    ):
+        with pytest.raises(ValueError, match="team lookup failed"):
+            await get_user_object(
+                user_id="new_jwt_user",
+                prisma_client=MagicMock(),
+                user_api_key_cache=cache,
+                user_id_upsert=True,
+                proxy_logging_obj=None,
+            )
+    await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+
+    alerts: Final = [call.kwargs for call in slack_alerting.send_virtual_key_event_slack.await_args_list]
+    assert [alert["key_event"].request_kwargs["data"].user_id for alert in alerts] == ["new_jwt_user"]
+
+
 def _user_read_raising(stores: RustAuthStores, error: Exception) -> tuple[MagicMock, MagicMock]:
     prisma_client = MagicMock()
     stores.user.error = error
@@ -5752,7 +5829,8 @@ async def test_team_max_budget_check_dispatches_team_alert_from_the_shared_spend
 @pytest.mark.parametrize("send_percentage_alerts", [False, True])
 @pytest.mark.asyncio
 async def test_team_max_budget_check_still_rejects_over_budget_after_dispatching_the_alert(
-    send_percentage_alerts: bool, monkeypatch: pytest.MonkeyPatch,
+    send_percentage_alerts: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     team_object: Final = LiteLLM_TeamTable(
         team_id="team-1",

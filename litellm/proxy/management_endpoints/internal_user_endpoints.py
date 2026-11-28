@@ -103,6 +103,7 @@ from litellm.proxy.management_helpers.utils import (
     BUDGET_WINDOWS_ADAPTER,
     budget_windows_json,
     management_endpoint_wrapper,
+    send_management_endpoint_alert,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows, run_off_loop_if_fips
 from litellm.redis.stores.auth_cache import AuthObject
@@ -521,6 +522,41 @@ async def add_new_user_to_default_team(
                 max_budget_in_team=membership.max_budget_in_team,
                 user_role=membership.user_role,
             )
+
+
+_ROLES_NEW_USER_ACCEPTS: Final = frozenset(
+    {
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        LitellmUserRoles.INTERNAL_USER,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    }
+)
+
+
+async def announce_user_created_at_sign_in(user: LiteLLM_UserTable) -> None:
+    """Sends the alert, audit log and created hook `/user/new` gives its users for a user created at sign-in."""
+    creator: Final = UserAPIKeyAuth(user_id=user.user_id)
+    identity: Final = {
+        "user_id": user.user_id,
+        "user_email": user.user_email,
+        "user_role": user.user_role if user.user_role in _ROLES_NEW_USER_ACCEPTS else None,
+    }
+    data: Final = NewUserRequest.model_validate({**identity, "auto_create_key": False})
+    response: Final = NewUserResponse.model_validate(
+        {
+            **identity,
+            "key": "",
+            "user_alias": user.user_alias,
+            "max_budget": user.max_budget,
+            "created_at": user.created_at,
+            "updated_at": user.updated_at,
+        }
+    )
+    await send_management_endpoint_alert(
+        request_kwargs={"data": data}, user_api_key_dict=creator, function_name="new_user"
+    )
+    await UserManagementEventHooks.async_user_created_hook(data=data, response=response, user_api_key_dict=creator)
 
 
 async def _memberships_on_team_member_budget(
