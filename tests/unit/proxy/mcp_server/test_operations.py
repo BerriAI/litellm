@@ -47,6 +47,7 @@ from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPResourceURIMatch, MCPServer
+from tests._support.clock_loops import AutojumpClockLoop
 
 
 class _CatalogHookCapture(CustomLogger):
@@ -582,6 +583,76 @@ async def test_resource_read_continuation_preserves_requested_uri(monkeypatch: p
     assert completed == ReadResourceResult(contents=[TextResourceContents(uri=stale_uri, text="resumed-ok")])
     assert read_calls.get_nowait() == ("owner.example", stale_uri, "upstream-step-1")
     assert list_calls.qsize() == 2
+
+
+@pytest.mark.parametrize("slow_method", ("initialize", "resources/list", "DELETE"))
+@pytest.mark.parametrize("stalled_host", ("owner.example", "other.example"))
+def test_resource_read_times_out_an_incomplete_lookup_without_remembering_the_failure(
+    monkeypatch: pytest.MonkeyPatch, slow_method: str, stalled_host: str
+) -> None:
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import ReadResourceRequest, ReadResourceRequestParams
+
+    uri: Final = "test://resource"
+    message: Final = TypeAdapter(JSONRPCMessage)
+    entered: Final[asyncio.Queue[str]] = asyncio.Queue()
+    monkeypatch.setattr(operations, "MCP_TOOL_LISTING_TIMEOUT", 1.0)
+    monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", "0" if slow_method == "DELETE" else "60")
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "GET":
+            return httpx2.Response(405)
+        if request.method == "DELETE":
+            if request.url.host == stalled_host and entered.empty():
+                entered.put_nowait(slow_method)
+                await asyncio.sleep(2)
+            return httpx2.Response(200)
+        payload: Final = message.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        owner: Final = request.url.host == "owner.example"
+        if request.url.host == stalled_host and payload.method == slow_method and entered.empty():
+            entered.put_nowait(slow_method)
+            await asyncio.sleep(2)
+        result: Final = {
+            "initialize": {
+                "protocolVersion": "2025-03-26",
+                "serverInfo": {"name": "upstream", "version": "1"},
+                "capabilities": {"resources": {}},
+            },
+            "resources/list": {"resources": [{"uri": uri, "name": "resource"}] if owner else []},
+            "resources/read": {"contents": [{"uri": uri, "text": request.url.host}]},
+        }[payload.method]
+        headers: Final = {"Mcp-Session-Id": "discovery"} if slow_method == "DELETE" else {}
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result}, headers=headers)
+
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    for name in ("owner", "other"):
+        monkeypatch.setitem(
+            manager.config_mcp_servers,
+            name,
+            MCPServer(
+                server_id=name,
+                name=name,
+                url=f"https://{name}.example/mcp",
+                transport=MCPTransport.http,
+                allow_all_keys=True,
+            ),
+        )
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    context: Final = prepare_context(UserAPIKeyAuth(api_key=hash_token("sk-resource-read")))
+    request: Final = ReadResourceRequest(params=ReadResourceRequestParams(uri=uri))
+
+    expected: Final = ReadResourceResult(contents=[TextResourceContents(uri=uri, text="owner.example")])
+    with asyncio.Runner(loop_factory=AutojumpClockLoop) as runner:
+        if stalled_host == "owner.example":
+            with pytest.raises(MCPError, match="resource owner is unknown"):
+                runner.run(GatewayOperations().execute(request, context))
+        else:
+            assert runner.run(GatewayOperations().execute(request, context)) == expected
+        assert runner.get_loop().time() == pytest.approx(1)
+        assert runner.run(GatewayOperations().execute(request, context)) == expected
 
 
 def _listing_client() -> SimpleNamespace:

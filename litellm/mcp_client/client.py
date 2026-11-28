@@ -27,6 +27,8 @@ from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._stream_protocols import ReadStream, WriteStream
+from mcp.shared.dispatcher import CallOptions
+from mcp.shared.jsonrpc_dispatcher import JSONRPCDispatcher
 from mcp.shared.message import SessionMessage
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -35,6 +37,9 @@ _TransportStreams: TypeAlias = tuple[
     WriteStream[SessionMessage],
 ]
 _TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
+_DispatcherFactory: TypeAlias = Callable[
+    [ReadStream[SessionMessage | Exception], WriteStream[SessionMessage]], JSONRPCDispatcher
+]
 _SessionCallbackName: TypeAlias = Literal["sampling_callback", "elicitation_callback", "logging_callback"]
 
 
@@ -82,6 +87,7 @@ from mcp.types import (
     LoggingMessageNotificationParams,
     PaginatedRequestParams,
     Prompt,
+    RequestId,
     ResourceTemplate,
     SamplingCapability,
     ServerNotification,
@@ -479,6 +485,34 @@ def _notify_cleanup(callback: Callable[[], None] | None) -> None:
         callback()
 
 
+class _OwnerDiscoveryDispatcher(JSONRPCDispatcher):
+    ttl_present: bool = False
+
+    async def send_raw_request(
+        self,
+        method: str,
+        params: Mapping[str, object] | None,
+        opts: CallOptions | None = None,
+        *,
+        _related_request_id: RequestId | None = None,
+    ) -> dict[str, object]:  # mutable-ok: the SDK dispatcher contract requires a dictionary result
+        raw: Final = await super().send_raw_request(method, params, opts, _related_request_id=_related_request_id)
+        if method == "resources/list":
+            self.ttl_present = "ttlMs" in raw
+        return raw
+
+
+class _OwnerDiscovery:
+    dispatcher: _OwnerDiscoveryDispatcher | None = None
+
+    def create_dispatcher(
+        self, read_stream: ReadStream[SessionMessage | Exception], write_stream: WriteStream[SessionMessage]
+    ) -> _OwnerDiscoveryDispatcher:
+        dispatcher: Final = _OwnerDiscoveryDispatcher(read_stream, write_stream)
+        self.dispatcher = dispatcher
+        return dispatcher
+
+
 class _UnvalidatedClientSession(ClientSession):
     """Skips the SDK's output check, which lists the upstream's tools on a session with no schema cached."""
 
@@ -759,6 +793,7 @@ class MCPClient:
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
         on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
+        dispatcher_factory: _DispatcherFactory | None = None,
     ) -> TSessionResult:
         """
         Execute an operation within a transport and session context.
@@ -791,9 +826,13 @@ class MCPClient:
                     session_type: Final = (
                         _UnvalidatedClientSession if self.skip_tool_output_validation else ClientSession
                     )
+                    discovery_dispatcher: Final = (
+                        dispatcher_factory(read_stream, write_stream) if dispatcher_factory is not None else None
+                    )
                     session_ctx: Final = session_type(
-                        read_stream,
-                        write_stream,
+                        read_stream if discovery_dispatcher is None else None,
+                        write_stream if discovery_dispatcher is None else None,
+                        dispatcher=discovery_dispatcher,
                         read_timeout_seconds=self.timeout,
                         message_handler=partial(
                             _receive_session_message, stream_error=stream_error, on_notification=on_notification
@@ -866,6 +905,7 @@ class MCPClient:
         on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
         on_cleanup: Callable[[], None] | None = None,
         on_notification: Callable[[ServerNotification], Awaitable[None]] | None = None,
+        dispatcher_factory: _DispatcherFactory | None = None,
     ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up.
 
@@ -885,8 +925,14 @@ class MCPClient:
                     on_stream_error=on_stream_error,
                     on_cleanup=on_cleanup,
                     on_notification=on_notification,
+                    dispatcher_factory=dispatcher_factory,
                 )
-                if on_stream_error is not None or on_cleanup is not None or on_notification is not None
+                if (
+                    on_stream_error is not None
+                    or on_cleanup is not None
+                    or on_notification is not None
+                    or dispatcher_factory is not None
+                )
                 else self._execute_session_operation(transport_ctx, operation, http_client=http_client)
             )
             result: Final = await execution
@@ -1283,18 +1329,31 @@ class MCPClient:
             # Return a default error result instead of raising
             return self.error_tool_result(e)
 
-    async def _run_optional_discovery(self, operation: Callable[[ClientSession], Awaitable[_ListPage]]) -> _ListPage:
+    async def _run_optional_discovery(
+        self,
+        operation: Callable[[ClientSession], Awaitable[_ListPage]],
+        *,
+        dispatcher_factory: _DispatcherFactory | None = None,
+    ) -> _ListPage:
         async def timed_operation(session: ClientSession) -> tuple[_ListPage, float]:
             result: Final = await operation(session)
             return result, time.monotonic()
 
-        result, received = await self.run_with_session(timed_operation)
+        result, received = (
+            await self.run_with_session(timed_operation)
+            if dispatcher_factory is None
+            else await self.run_with_session(timed_operation, dispatcher_factory=dispatcher_factory)
+        )
+        if dispatcher_factory is not None and "ttl_ms" not in result.model_fields_set:
+            return result
         return age_freshness(result, time.monotonic() - received)
 
     async def _list_optional_pages(
         self,
         fetch_page: Callable[[PaginatedRequestParams | None], Awaitable[_ListPage]],
         items_of: Callable[[_ListPage], Sequence[_ListItem]],
+        *,
+        preserve_ttl_omission: bool = False,
     ) -> tuple[list[_ListItem], CacheableResult]:
         items: Final[list[_ListItem]] = []  # mutable-ok: bounded iterative page accumulation
         pages: Final[list[tuple[CacheableResult, float]]] = []  # mutable-ok: bounded pagination evidence
@@ -1311,15 +1370,20 @@ class MCPClient:
                 pages.append((page, time.monotonic()))
                 items.extend(items_of(page))
                 if not page.next_cursor:
-                    now: Final = time.monotonic()
-                    return items, aggregate_freshness(
-                        tuple(age_freshness(value, now - received) for value, received in pages)
-                    )
+                    break
                 if page.next_cursor in cursors:
                     raise RuntimeError("MCP list pagination repeated a cursor")
                 cursors.add(page.next_cursor)
                 cursor = page.next_cursor
-        raise RuntimeError(f"MCP list pagination exceeded {MCP_TOOL_LISTING_MAX_PAGES} pages")
+            else:
+                raise RuntimeError(f"MCP list pagination exceeded {MCP_TOOL_LISTING_MAX_PAGES} pages")
+            now: Final = time.monotonic()
+            freshness: Final = aggregate_freshness(
+                tuple(age_freshness(value, now - received) for value, received in pages)
+            )
+            if preserve_ttl_omission and all("ttl_ms" not in value.model_fields_set for value, _ in pages):
+                return items, CacheableResult(cache_scope=freshness.cache_scope)
+            return items, freshness
 
     async def list_prompts(self, *, raise_on_error: bool = False) -> list[Prompt]:
         return (await self.list_prompts_result(raise_on_error=raise_on_error)).prompts
@@ -1437,18 +1501,36 @@ class MCPClient:
     async def list_resources(self, *, raise_on_error: bool = False) -> list[Resource]:
         return (await self.list_resources_result(raise_on_error=raise_on_error)).resources
 
-    async def list_resources_result(self, *, raise_on_error: bool = False) -> ListResourcesResult:
+    async def list_resources_result(
+        self, *, raise_on_error: bool = False, for_owner_lookup: bool = False
+    ) -> ListResourcesResult:
         """List available resources from the server."""
         verbose_logger.debug("MCP client listing resources from %s", self.server_url or "stdio")
 
+        discovery: Final = _OwnerDiscovery() if for_owner_lookup else None
+
         async def _list_resources_operation(session: ClientSession) -> ListResourcesResult:
             capabilities: Final = session.server_capabilities
+            empty: Final = (
+                ListResourcesResult(resources=[], ttl_ms=0) if for_owner_lookup else ListResourcesResult(resources=[])
+            )
             if capabilities is not None and capabilities.resources is None:
-                return ListResourcesResult(resources=[])
+                return empty
+
+            async def fetch_page(params: PaginatedRequestParams | None) -> ListResourcesResult:
+                page: Final = await session.list_resources(params=params)
+                dispatcher: Final = discovery.dispatcher if discovery is not None else None
+                # Legacy sessions strip ttlMs before parsing. A stripped hint must not become a default TTL.
+                if dispatcher is not None and dispatcher.ttl_present and "ttl_ms" not in page.model_fields_set:
+                    return page.model_copy(update={"ttl_ms": 0})
+                return page
+
             try:
                 items, freshness = await self._list_optional_pages(
-                    lambda params: session.list_resources(params=params), lambda page: page.resources
+                    fetch_page, lambda page: page.resources, preserve_ttl_omission=for_owner_lookup
                 )
+                if "ttl_ms" not in freshness.model_fields_set:
+                    return ListResourcesResult(resources=items, cache_scope=freshness.cache_scope)
                 return ListResourcesResult(resources=items, ttl_ms=freshness.ttl_ms, cache_scope=freshness.cache_scope)
             except MCPError as error:
                 if error.error.code != METHOD_NOT_FOUND:
@@ -1456,10 +1538,12 @@ class MCPClient:
                 verbose_logger.debug(
                     "MCP client list_resources is unsupported by %s: %s", self.server_url or "stdio", error
                 )
-                return ListResourcesResult(resources=[])
+                return empty
 
         try:
-            result: Final = await self._run_optional_discovery(_list_resources_operation)
+            result: Final = await self._run_optional_discovery(
+                _list_resources_operation, dispatcher_factory=discovery.create_dispatcher if discovery else None
+            )
             resource_count: Final = len(result.resources)
             resource_names: Final = [resource.name for resource in result.resources]
             verbose_logger.info(

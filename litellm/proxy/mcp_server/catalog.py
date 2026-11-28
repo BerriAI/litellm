@@ -8,7 +8,7 @@ import hashlib
 import json
 import time
 from collections import UserDict
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, MutableMapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Container, Mapping, MutableMapping, Sequence
 from contextlib import ExitStack, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -1369,6 +1369,9 @@ class _Expiring(Protocol):
     @property
     def ttl_ms(self) -> int: ...
 
+    @property
+    def model_fields_set(self) -> Container[str]: ...
+
     def model_copy(self, *, update: Mapping[str, object] | None = None, deep: bool = False) -> Self: ...
 
 
@@ -1419,15 +1422,21 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
                 self._pending.pop(key)
 
     @staticmethod
-    def _observe_completion(task: asyncio.Task[_DiscoveryPage]) -> None:
+    def _observe_completion(task: asyncio.Future[_DiscoveryPage]) -> None:
         if not task.cancelled():
             task.exception()
 
     async def get(
-        self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]], *, capped: bool = True
+        self,
+        key: _DiscoveryKey,
+        fetch: Callable[[], Awaitable[_DiscoveryPage]],
+        *,
+        capped: bool = True,
+        default_on_omission: bool = False,
+        isolate_uncached: bool = False,
     ) -> _DiscoveryPage:
         if self._ttl <= 0:
-            return await fetch()
+            return await (self._fetch_uncached(fetch) if isolate_uncached else fetch())
         entry: Final[object] = self._entries.get_cache(json.dumps(key))
         if entry is not None:
             expires_at, payload = _DISCOVERY_ENTRY.validate_python(entry)
@@ -1439,11 +1448,20 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         if pending is not None:
             return await self._await_fetch(key, pending)
         if len(self._pending) >= _DISCOVERY_CACHE_LIMIT:
-            return await fetch()
-        task: Final = asyncio.create_task(self._fetch(key, fetch, capped))
+            return await (self._fetch_uncached(fetch) if isolate_uncached else fetch())
+        task: Final = asyncio.create_task(self._fetch(key, fetch, capped, default_on_omission))
         self._pending[key] = task
         task.add_done_callback(self._observe_completion)
         return await self._await_fetch(key, task)
+
+    async def _fetch_uncached(self, fetch: Callable[[], Awaitable[_DiscoveryPage]]) -> _DiscoveryPage:
+        task: Final = asyncio.ensure_future(fetch())
+        task.add_done_callback(self._observe_completion)
+        try:
+            return await asyncio.shield(task)
+        finally:
+            if not task.done():
+                task.cancel()
 
     async def _await_fetch(self, key: _DiscoveryKey, task: asyncio.Task[_DiscoveryPage]) -> _DiscoveryPage:
         self._waiters[task] = self._waiters.get(task, 0) + 1
@@ -1461,19 +1479,27 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
                     task.cancel()
 
     async def _fetch(
-        self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]], capped: bool
+        self,
+        key: _DiscoveryKey,
+        fetch: Callable[[], Awaitable[_DiscoveryPage]],
+        capped: bool,
+        default_on_omission: bool,
     ) -> _DiscoveryPage:
         try:
             items: Final = await fetch()
             if self._pending.get(key) is asyncio.current_task():
-                self.keep(key, items, capped=capped)
+                self.keep(key, items, capped=capped, default_on_omission=default_on_omission)
             return items
         finally:
             if self._pending.get(key) is asyncio.current_task():
                 self._pending.pop(key)
 
-    def keep(self, key: _DiscoveryKey, items: _DiscoveryPage, *, capped: bool = True) -> None:
-        declared: Final = items.ttl_ms / 1000
+    def keep(
+        self, key: _DiscoveryKey, items: _DiscoveryPage, *, capped: bool = True, default_on_omission: bool = False
+    ) -> None:
+        declared: Final = (
+            self._ttl if default_on_omission and "ttl_ms" not in items.model_fields_set else items.ttl_ms / 1000
+        )
         ttl: Final = min(self._ttl, declared) if capped else declared
         if ttl <= 0 or (self._storable is not None and not self._storable(items)):
             return
