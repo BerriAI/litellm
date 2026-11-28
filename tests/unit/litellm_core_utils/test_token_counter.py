@@ -416,6 +416,36 @@ def test_token_counter_legacy_function_call_counts_arguments():
     assert fc_tokens > 500, f"4000-char arguments payload must contribute real tokens, got {fc_tokens}"
 
 
+def test_token_counter_counts_custom_tool_call_input():
+    """
+    An assistant `tool_calls` entry with `type="custom"` carries a free-form
+    `custom.input` string instead of `function.arguments` (#53092). It must be
+    counted like the equivalent function call, not raise ValueError.
+    """
+    long_input = "A" * 4000
+
+    def messages(tool_call):
+        return [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+        ]
+
+    custom_tokens = token_counter(
+        model="gpt-4o",
+        messages=messages(
+            {"id": "call_1", "type": "custom", "custom": {"name": "edit_note", "input": long_input}}
+        ),
+    )
+    function_tokens = token_counter(
+        model="gpt-4o",
+        messages=messages(
+            {"id": "call_1", "type": "function", "function": {"name": "edit_note", "arguments": long_input}}
+        ),
+    )
+    assert custom_tokens == function_tokens
+    assert custom_tokens > 500
+
+
 @pytest.mark.parametrize(
     "message_count_pair",
     MESSAGES_TEXT,
