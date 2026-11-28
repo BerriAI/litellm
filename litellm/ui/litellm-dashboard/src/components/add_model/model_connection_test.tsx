@@ -110,26 +110,24 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
     requestBody: Record<string, any>,
     requestHeaders: Record<string, string>,
   ) => {
-    const formattedBody = JSON.stringify(requestBody, null, 2)
-      .split("\n")
-      .map((line) => `  ${line}`)
-      .join("\n");
+    const formattedBody = JSON.stringify(requestBody, null, 2);
 
-    const headerString = Object.entries(requestHeaders)
+    const hasContentType = Object.keys(requestHeaders).some(
+      (key) => key.toLowerCase() === "content-type",
+    );
+
+    const headers = { ...requestHeaders };
+    if (!hasContentType) {
+      headers["Content-Type"] = "application/json";
+    }
+
+    const headerString = Object.entries(headers)
       .map(([key, value]) => `-H '${key}: ${value}'`)
       .join(" \\\n  ");
 
     return `curl -X POST \\
   ${apiBase} \\
-  ${
-    headerString
-      ? `${headerString} \\
-  `
-      : ""
-  }-H 'Content-Type: application/json' \\
-  -d '{
-${formattedBody}
-  }'`;
+  ${headerString ? `${headerString} \\\n  ` : ""}-d '${formattedBody}'`;
   };
 
   const curlCommand = rawResponse

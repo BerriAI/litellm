@@ -90,7 +90,48 @@ describe("ModelConnectionTest", () => {
     fireEvent.click(screen.getByRole("button", { name: /Copy to Clipboard/ }));
 
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining("https://api.example.test/v1/chat/completions"));
+    const copiedCommand = writeText.mock.calls[0][0] as string;
+    const contentTypeMatches = copiedCommand.match(/-H 'Content-Type: application\/json'/g);
+    expect(contentTypeMatches?.length).toBe(1);
+    const payloadMatch = copiedCommand.match(/-d '([^']+)'/s);
+    expect(payloadMatch).not.toBeNull();
+    const parsedPayload = JSON.parse(payloadMatch![1]);
+    expect(parsedPayload).toEqual({ model: "gpt-4o-mini" });
     expect(toast.success).toHaveBeenCalledWith("Copied to clipboard");
+  });
+
+  it("does not duplicate Content-Type header if already present in request headers", async () => {
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    vi.mocked(testConnectionRequest).mockResolvedValue({
+      status: "error",
+      result: {
+        error: "test error",
+        raw_request_typed_dict: {
+          raw_request_api_base: "https://api.example.test/v1",
+          raw_request_body: { prompt: "hi" },
+          raw_request_headers: {
+            Authorization: "Bearer test",
+            "Content-Type": "application/json",
+          },
+        },
+      },
+    } as never);
+
+    render(
+      <ModelConnectionTest
+        formValues={{ model: "test" }}
+        accessToken="sk-test"
+        testMode="chat"
+        modelName="Test"
+      />,
+    );
+    await finishConnectionTest();
+    fireEvent.click(screen.getByRole("button", { name: /Copy to Clipboard/ }));
+
+    const copied = writeText.mock.calls[0][0] as string;
+    const matches = copied.match(/-H 'Content-Type: application\/json'/gi);
+    expect(matches?.length).toBe(1);
   });
 
   it("asks for the required fields instead of crashing when nothing could be prepared", async () => {
