@@ -1,0 +1,132 @@
+# A deployment's cache_control_injection_points are prompt cache breakpoints LiteLLM adds to a call.
+# The native route places every point on the system prompt or on a message as Python does. A
+# point on the tools, and a value Python's hook reads some other way, sends the group to Python.
+config:
+  model_list:
+    - model_name: system-and-last-message
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        cache_control_injection_points:
+          - location: message
+            role: system
+            control: {type: ephemeral, ttl: 1h}
+          - location: message
+            index: -1
+            control: {type: ephemeral, ttl: 5m}
+    - model_name: every-user-message
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        cache_control_injection_points:
+          - location: message
+            role: user
+    - model_name: no-points
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        cache_control_injection_points: []
+    - model_name: tools
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        cache_control_injection_points:
+          - location: message
+            role: system
+          - location: tool_config
+    - model_name: index-as-text
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        cache_control_injection_points:
+          - location: message
+            index: "-1"
+    - model_name: no-target
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        cache_control_injection_points:
+          - location: message
+    - model_name: not-a-list
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        cache_control_injection_points: {location: message, role: system}
+    - model_name: backed-by-tools
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    fallbacks:
+      - backed-by-tools: [tools]
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: a point on the system prompt and one on the last message
+    headers: {authorization: Bearer gateway-key}
+    body: {model: system-and-last-message, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a point on every message of a role
+    headers: {authorization: Bearer gateway-key}
+    body: {model: every-user-message, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: an empty list of points
+    headers: {authorization: Bearer gateway-key}
+    body: {model: no-points, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a point on the tools
+    headers: {authorization: Bearer gateway-key}
+    body: {model: tools, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.cache_control_injection_points
+
+  - name: an index written as text
+    headers: {authorization: Bearer gateway-key}
+    body: {model: index-as-text, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.cache_control_injection_points
+
+  - name: a point that names no role and no index
+    headers: {authorization: Bearer gateway-key}
+    body: {model: no-target, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.cache_control_injection_points
+
+  - name: points that are no list
+    headers: {authorization: Bearer gateway-key}
+    body: {model: not-a-list, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.cache_control_injection_points
+
+  - name: a group that falls back to one with a point on the tools
+    headers: {authorization: Bearer gateway-key}
+    body: {model: backed-by-tools, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: "router_settings fallback to tools: model_list.litellm_params.cache_control_injection_points"
+
+  - name: points the request names itself
+    headers: {authorization: Bearer gateway-key}
+    body:
+      model: no-points
+      max_tokens: 16
+      messages: []
+      cache_control_injection_points: [{location: message, role: system}]
+    expect: python
+    reason: body
+    over: unread_key
+
+  - name: automatic caching the request asks for
+    headers: {authorization: Bearer gateway-key}
+    body: {model: system-and-last-message, max_tokens: 16, messages: [], cache_control: {type: ephemeral}}
+    expect: python
+    reason: body
+    over: cache_control

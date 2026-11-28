@@ -918,6 +918,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 api_base: Some(upstream.uri()),
                 shaping: MessagesShaping {
                     vertex: Default::default(),
+                    cache_points: Default::default(),
                     capabilities,
                     settings: MessagesSettings {
                         drop_params,
@@ -1013,6 +1014,7 @@ async fn additional_drop_params_clear_a_param_the_model_does_not_support(call: M
         api_base: Some(upstream.uri()),
         shaping: MessagesShaping {
             vertex: Default::default(),
+            cache_points: Default::default(),
             capabilities: sampling_removed(),
             settings: MessagesSettings {
                 additional_drop_params: vec!["top_k".into()],
@@ -1047,6 +1049,7 @@ async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
                 vertex: Default::default(),
+                cache_points: Default::default(),
                 settings: MessagesSettings {
                     reasoning_auto_summary: true,
                     ..MessagesSettings::default()

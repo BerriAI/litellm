@@ -30,6 +30,7 @@ litellm-inference-ocr.workspace = true
 litellm-host-http.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
+litellm-cache-control-injection.workspace = true
 litellm-llms.workspace = true
 litellm-model-catalog.workspace = true
 litellm-router-core.workspace = true

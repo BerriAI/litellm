@@ -5906,3 +5906,730 @@ def test_cache_control_as_prompt_cache_breakpoints_leaves_unmarked_parts_with_no
         unmarked_part,
         {"type": "text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
     ]
+
+
+@pytest.mark.parametrize(
+    ("points", "request_body", "sent"),
+    [
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {"system": "be terse", "messages": [{"role": "user", "content": "hi"}]},
+            {
+                "system": [{"type": "text", "text": "be terse", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+                        ],
+                    }
+                ],
+            },
+            id="first_turn_text_system",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "system": "be terse",
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {"role": "assistant", "content": "hello"},
+                    {"role": "user", "content": "more"},
+                ],
+            },
+            {
+                "system": [{"type": "text", "text": "be terse", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "more", "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+                        ],
+                    },
+                ],
+            },
+            id="continued_turn",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {"messages": [{"role": "user", "content": "hi"}]},
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+                        ],
+                    }
+                ]
+            },
+            id="no_system",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "system": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}],
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+            },
+            {
+                "system": [
+                    {"type": "text", "text": "a"},
+                    {"type": "text", "text": "b", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                ],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+                        ],
+                    }
+                ],
+            },
+            id="block_system",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {"system": [], "messages": [{"role": "user", "content": "hi"}]},
+            {
+                "system": [],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+                        ],
+                    }
+                ],
+            },
+            id="empty_block_system",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "system": [
+                    {"type": "text", "text": "a", "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": "b"},
+                ],
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            {
+                "system": [
+                    {"type": "text", "text": "a", "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": "b"},
+                ],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+                        ],
+                    }
+                ],
+            },
+            id="caller_marked_system",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "system": "s",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "x", "cache_control": {"type": "ephemeral"}},
+                            {"type": "text", "text": "y"},
+                        ],
+                    }
+                ],
+            },
+            {
+                "system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "x", "cache_control": {"type": "ephemeral"}},
+                            {"type": "text", "text": "y"},
+                        ],
+                    }
+                ],
+            },
+            id="caller_marked_first_block_of_last_message",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "system": "s",
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": None}]}],
+            },
+            {
+                "system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "5m"}}
+                        ],
+                    }
+                ],
+            },
+            id="null_mark_is_no_mark",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "system": "s",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "1", "cache_control": {"type": "ephemeral"}},
+                            {"type": "text", "text": "2", "cache_control": {"type": "ephemeral"}},
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "3", "cache_control": {"type": "ephemeral"}},
+                            {"type": "text", "text": "4", "cache_control": {"type": "ephemeral"}},
+                        ],
+                    },
+                    {"role": "user", "content": "q"},
+                ],
+            },
+            {
+                "system": "s",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "1", "cache_control": {"type": "ephemeral"}},
+                            {"type": "text", "text": "2", "cache_control": {"type": "ephemeral"}},
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "3", "cache_control": {"type": "ephemeral"}},
+                            {"type": "text", "text": "4", "cache_control": {"type": "ephemeral"}},
+                        ],
+                    },
+                    {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                ],
+            },
+            id="four_caller_marks",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "system": "s",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "1", "cache_control": {"type": "ephemeral"}},
+                            {"type": "text", "text": "2", "cache_control": {"type": "ephemeral"}},
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "3", "cache_control": {"type": "ephemeral"}}],
+                    },
+                    {"role": "user", "content": "q"},
+                ],
+            },
+            {
+                "system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "1", "cache_control": {"type": "ephemeral"}},
+                            {"type": "text", "text": "2", "cache_control": {"type": "ephemeral"}},
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "3", "cache_control": {"type": "ephemeral"}}],
+                    },
+                    {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                ],
+            },
+            id="three_caller_marks_leave_one_slot",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "system": "s",
+                "tools": [
+                    {"name": "a", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}},
+                    {"name": "b", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}},
+                    {"name": "c", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}},
+                ],
+                "messages": [{"role": "user", "content": "q"}],
+            },
+            {
+                "system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                "tools": [
+                    {"name": "a", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}},
+                    {"name": "b", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}},
+                    {"name": "c", "input_schema": {"type": "object"}, "cache_control": {"type": "ephemeral"}},
+                ],
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "q"}]}],
+            },
+            id="three_marked_tools_leave_one_slot",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "system": "s",
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "a", "parameters": {}, "cache_control": {"type": "ephemeral"}},
+                    },
+                    {
+                        "type": "function",
+                        "function": {"name": "b", "parameters": {}, "cache_control": {"type": "ephemeral"}},
+                    },
+                    {
+                        "type": "function",
+                        "function": {"name": "c", "parameters": {}, "cache_control": {"type": "ephemeral"}},
+                    },
+                ],
+                "messages": [{"role": "user", "content": "q"}],
+            },
+            {
+                "system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "a", "parameters": {}, "cache_control": {"type": "ephemeral"}},
+                    },
+                    {
+                        "type": "function",
+                        "function": {"name": "b", "parameters": {}, "cache_control": {"type": "ephemeral"}},
+                    },
+                    {
+                        "type": "function",
+                        "function": {"name": "c", "parameters": {}, "cache_control": {"type": "ephemeral"}},
+                    },
+                ],
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "q"}]}],
+            },
+            id="tool_openai_shape_mark",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+                {"location": "message", "role": "user"},
+            ],
+            {
+                "system": "s",
+                "cache_control": {"type": "ephemeral"},
+                "messages": [
+                    {"role": "user", "content": "1"},
+                    {"role": "assistant", "content": "2"},
+                    {"role": "user", "content": "3"},
+                    {"role": "assistant", "content": "4"},
+                    {"role": "user", "content": "5"},
+                ],
+            },
+            {
+                "system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                "cache_control": {"type": "ephemeral"},
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "1", "cache_control": {"type": "ephemeral"}}],
+                    },
+                    {"role": "assistant", "content": [{"type": "text", "text": "2"}]},
+                    {"role": "user", "content": [{"type": "text", "text": "3"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "4"}]},
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "5", "cache_control": {"type": "ephemeral", "ttl": "5m"}}],
+                    },
+                ],
+            },
+            id="automatic_caching_takes_a_slot",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "messages": [
+                    {"role": "user", "content": "q"},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "answer"},
+                            {"type": "thinking", "thinking": "hm", "signature": "s"},
+                        ],
+                    },
+                ]
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "answer", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
+                            {"type": "thinking", "thinking": "hm", "signature": "s"},
+                        ],
+                    },
+                ]
+            },
+            id="thinking_is_never_marked",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "messages": [
+                    {"role": "user", "content": "q"},
+                    {"role": "assistant", "content": [{"type": "redacted_thinking", "data": "x"}]},
+                ]
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                    {"role": "assistant", "content": [{"type": "redacted_thinking", "data": "x"}]},
+                ]
+            },
+            id="only_thinking_is_left_unmarked",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "messages": [
+                    {"role": "user", "content": "q"},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "f", "input": {}}]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+                ]
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "q"}]},
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "f", "input": {}}]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "t1",
+                                "content": "ok",
+                                "cache_control": {"type": "ephemeral", "ttl": "5m"},
+                            }
+                        ],
+                    },
+                ]
+            },
+            id="tool_result_is_marked",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {"messages": [{"role": "user", "content": []}]},
+            {"messages": [{"role": "user", "content": []}]},
+            id="empty_content_list",
+        ),
+        pytest.param(
+            [{"location": "message", "role": "user"}],
+            {
+                "messages": [
+                    {"role": "user", "content": "1"},
+                    {"role": "assistant", "content": "2"},
+                    {"role": "user", "content": "3"},
+                    {"role": "assistant", "content": "4"},
+                    {"role": "user", "content": "5"},
+                    {"role": "assistant", "content": "6"},
+                    {"role": "user", "content": "7"},
+                    {"role": "assistant", "content": "8"},
+                    {"role": "user", "content": "9"},
+                ]
+            },
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "1", "cache_control": {"type": "ephemeral"}}],
+                    },
+                    {"role": "assistant", "content": [{"type": "text", "text": "2"}]},
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "3", "cache_control": {"type": "ephemeral"}}],
+                    },
+                    {"role": "assistant", "content": [{"type": "text", "text": "4"}]},
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "5", "cache_control": {"type": "ephemeral"}}],
+                    },
+                    {"role": "assistant", "content": [{"type": "text", "text": "6"}]},
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "7", "cache_control": {"type": "ephemeral"}}],
+                    },
+                    {"role": "assistant", "content": [{"type": "text", "text": "8"}]},
+                    {"role": "user", "content": [{"type": "text", "text": "9"}]},
+                ]
+            },
+            id="role_points_stop_at_the_limit",
+        ),
+        pytest.param(
+            [{"location": "message", "index": 1, "role": "user"}],
+            {
+                "messages": [
+                    {"role": "user", "content": "1"},
+                    {"role": "assistant", "content": "2"},
+                    {"role": "user", "content": "3"},
+                ]
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "1"}]},
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "2", "cache_control": {"type": "ephemeral"}}],
+                    },
+                    {"role": "user", "content": [{"type": "text", "text": "3"}]},
+                ]
+            },
+            id="index_wins_over_role",
+        ),
+        pytest.param(
+            [{"location": "message", "index": 5}, {"location": "message", "index": -4}],
+            {
+                "messages": [
+                    {"role": "user", "content": "1"},
+                    {"role": "assistant", "content": "2"},
+                    {"role": "user", "content": "3"},
+                ]
+            },
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "1"}]},
+                    {"role": "assistant", "content": [{"type": "text", "text": "2"}]},
+                    {"role": "user", "content": [{"type": "text", "text": "3"}]},
+                ]
+            },
+            id="index_out_of_range",
+        ),
+        pytest.param(
+            [{"location": "message", "role": "system", "index": 0}],
+            {"system": "s", "messages": [{"role": "user", "content": "1"}]},
+            {
+                "system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}],
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "1"}]}],
+            },
+            id="system_role_ignores_its_index",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "5m"}},
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+            {"system": "s", "messages": [{"role": "user", "content": "1"}]},
+            {
+                "system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral", "ttl": "5m"}}],
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "1"}]}],
+            },
+            id="first_system_point_wins",
+        ),
+        pytest.param(
+            [{"location": "message", "role": "system"}, {"location": "message", "index": -1, "control": {}}],
+            {"system": "s", "messages": [{"role": "user", "content": "1"}]},
+            {
+                "system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}}],
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "1", "cache_control": {"type": "ephemeral"}}]}
+                ],
+            },
+            id="no_control_is_ephemeral",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {"messages": [{"role": "user", "content": "1"}]},
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "1", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                    }
+                ]
+            },
+            id="earlier_point_wins_a_message",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {"system": "s", "messages": [{"role": "user", "content": "hi", "cache_control": {"type": "ephemeral"}}]},
+            {
+                "system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "hi"}],
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            id="message_level_mark_counts",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "system": "s",
+                "messages": [
+                    {"role": "user", "content": "1"},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hi", "cache_control": "x"},
+                            {"type": "text", "text": "b"},
+                        ],
+                    },
+                    {"role": "user", "content": [{"type": "text", "text": 5}, {"type": "text", "text": "last"}]},
+                ],
+            },
+            {
+                "system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "1"}]},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hi", "cache_control": "x"},
+                            {"type": "text", "text": "b"},
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": 5},
+                            {"type": "text", "text": "last", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
+                        ],
+                    },
+                ],
+            },
+            id="unparsed_message",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {
+                "system": [{"type": "text", "text": 5}, {"type": "text", "text": "b"}],
+                "messages": [{"role": "user", "content": "1"}],
+            },
+            {
+                "system": [
+                    {"type": "text", "text": 5},
+                    {"type": "text", "text": "b", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                ],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "1", "cache_control": {"type": "ephemeral", "ttl": "5m"}}],
+                    }
+                ],
+            },
+            id="unparsed_system",
+        ),
+        pytest.param(
+            [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            {"system": "", "messages": [{"role": "user", "content": "1"}]},
+            {
+                "system": [{"type": "text", "text": "", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "1", "cache_control": {"type": "ephemeral", "ttl": "5m"}}],
+                    }
+                ],
+            },
+            id="empty_text_system",
+        ),
+    ],
+)
+def test_messages_points_match_the_rust_route(
+    points: list[dict[str, object]], request_body: dict[str, object], sent: dict[str, object]
+) -> None:
+    """The cases `litellm/rust/crates/cache-control-injection/src/messages.rs` holds the Rust route to."""
+    body: Final = copy.deepcopy(request_body)
+    kwargs: Final[dict[str, object]] = {
+        "cache_control_injection_points": copy.deepcopy(points),
+        **({"cache_control": body["cache_control"]} if "cache_control" in body else {}),
+    }
+
+    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+        cast(list[dict], body["messages"]),
+        cast(str | list | None, body.get("system")),
+        kwargs,
+        model="claude-sonnet-5-5",
+        custom_llm_provider="anthropic",
+        tools=cast(list[object] | None, body.get("tools")),
+    )
+
+    assert {**body, "messages": messages, **({} if system is None else {"system": system})} == sent

@@ -3712,6 +3712,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-cache-control-injection"
+version = "0.1.0"
+dependencies = [
+ "litellm-llms-types",
+ "rstest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "litellm-cache-disk"
 version = "0.1.0"
 dependencies = [
@@ -4230,6 +4240,7 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-store",
+ "litellm-cache-control-injection",
  "litellm-call-scope",
  "litellm-callbacks",
  "litellm-callbacks-budgets",
@@ -4378,6 +4389,7 @@ dependencies = [
  "jiff",
  "litellm-auth",
  "litellm-cache",
+ "litellm-cache-control-injection",
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-call-scope",
@@ -4589,6 +4601,7 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-auth-gcp",
  "litellm-cache",
+ "litellm-cache-control-injection",
  "litellm-cache-memory",
  "litellm-cache-response",
  "litellm-call-scope",
@@ -5158,6 +5171,8 @@ version = "0.1.0"
 dependencies = [
  "jiff",
  "litellm-auth-types",
+ "litellm-cache-control-injection",
+ "litellm-llms-types",
  "litellm-python-compat",
  "litellm-secret-value",
  "rstest",

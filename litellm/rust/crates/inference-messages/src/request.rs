@@ -21,6 +21,7 @@
 use std::time::Duration;
 
 use litellm_auth::{AuthServices, CredentialPlacement};
+use litellm_cache_control_injection::messages::inject;
 use litellm_core_utils::{
     dot_notation_indexing::{OverlappingPaths, delete_nested_values},
     get_provider_specific_headers::get_provider_specific_headers,
@@ -341,6 +342,7 @@ pub(super) async fn provider_call(
 /// The request as it takes effect, before auth or any provider rewrite, and what the call logs:
 /// - Shape: the config cleans up the messages, validates `metadata` and sets the thinking
 ///   auto-summary
+/// - Cache: the deployment's prompt cache breakpoints are added to the cleaned messages
 /// - Trim: the top-level `additional_drop_params` are dropped; nested paths go after logging
 /// - Gate: effort is clamped, and params the model or provider does not support are dropped or
 ///   rejected
@@ -355,7 +357,7 @@ fn effective_request(
         .shape_request(request, shaping.settings.shape_options())?;
     requested_optional_params(
         without_additional_drop_params(
-            shaped,
+            inject(shaped, &shaping.cache_points),
             &top_level_paths(&shaping.settings.additional_drop_params),
         )?,
         provider,

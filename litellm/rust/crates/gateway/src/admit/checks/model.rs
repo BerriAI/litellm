@@ -5,6 +5,7 @@
 //! serve as Python does sends its whole group to Python, and so does a fallback to such a group.
 
 use axum::http::Uri;
+use litellm_cache_control_injection::messages::CachePoints;
 use litellm_config::{LitellmParams, Model, Spelled};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_inference::provider::resolve_llm_provider;
@@ -207,9 +208,10 @@ fn signs_itself(params: &LitellmParams) -> bool {
     .is_ok_and(|resolved| CLOUD_CREDENTIAL_PROVIDERS.contains(&resolved.provider))
 }
 
-/// `rpm` and `tpm` are honored as the shuffle's weights. A deployment with no `api_key` outside
-/// the cloud credential providers gets its credential from a flow the proxy can host and the
-/// gateway may not, as Entra and workload identity are.
+/// `rpm` and `tpm` are honored as the shuffle's weights. `cache_control_injection_points` are
+/// honored while the messages route places every one of them, which `CachePoints::served` says.
+/// A deployment with no `api_key` outside the cloud credential providers gets its credential from
+/// a flow the proxy can host and the gateway may not, as Entra and workload identity are.
 fn params(params: &LitellmParams) -> Vec<Box<str>> {
     let needs_api_key = !signs_itself(params);
     let LitellmParams {
@@ -226,6 +228,7 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
         drop_params: _,
         aws_bedrock_project_id: _,
         claude_platform: _,
+        cache_control_injection_points,
         api_key,
         api_base,
         timeout,
@@ -258,6 +261,12 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
         (
             "request_timeout",
             is_no_seconds(extra.get("request_timeout")),
+        ),
+        (
+            "cache_control_injection_points",
+            cache_control_injection_points
+                .as_ref()
+                .is_some_and(|points| CachePoints::served(points).is_none()),
         ),
     ]
     .into_iter()
@@ -509,8 +518,8 @@ mod tests {
     #[rstest]
     #[case::a_typed_param("      max_retries: 2\n", "model_list.litellm_params.max_retries")]
     #[case::a_param_the_router_does_not_read(
-        "      cache_control_injection_points: [{location: message, role: system}]\n",
-        "model_list.litellm_params.cache_control_injection_points"
+        "      mock_response: hello\n",
+        "model_list.litellm_params.mock_response"
     )]
     #[case::an_api_base_without_a_scheme(
         "      api_base: api.anthropic.com\n",

@@ -254,6 +254,7 @@ impl Sent {
 )]
 #[case::pre_call_checks("pre_call_checks")]
 #[case::claude_only_providers("claude_only_providers")]
+#[case::cache_control_injection_points("cache_control_injection_points")]
 #[case::cloud_providers("cloud_providers")]
 #[case::budget_features("budget_features")]
 #[case::proxy_budget("proxy_budget")]
