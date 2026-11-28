@@ -10,7 +10,7 @@ class MaxParallelRequestsLimit:
     of waiting for one to free up."""
 
     def __init__(self, max_parallel_requests: int, model_id: str, model_group: str) -> None:
-        self.max_parallel_requests: Final = max_parallel_requests
+        self.max_parallel_requests: int = max_parallel_requests
         self.model_id: Final = model_id
         self.model_group: Final = model_group
         self.in_flight = 0
