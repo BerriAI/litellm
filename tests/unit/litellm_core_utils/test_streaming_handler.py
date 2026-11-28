@@ -856,6 +856,31 @@ async def test_usage_chunk_has_empty_choices_only_for_callers_that_asked(
     assert chunks[-1].usage.total_tokens == 6
 
 
+def test_draining_a_sync_stream_after_usage_keeps_the_original_cached_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache: Final = litellm.Cache(type="local")
+    monkeypatch.setattr(litellm, "cache", cache)
+    request: Final = {
+        "model": "openai/test-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "mock_response": "hi",
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    stream: Final = completion(**request)
+    assert isinstance(stream, CustomStreamWrapper)
+    content: Final = next(stream)
+    assert content.choices[0].delta.content == "hi"
+    assert next(stream).choices[0].finish_reason == "stop"
+    usage: Final = next(stream)
+    assert usage.choices == [] and usage.usage is not None
+    cached: Final = cache.get_cache(**request)
+    assert cached["choices"][0]["message"]["content"] == "hi"
+
+    content.choices[0].delta.content = "caller edit"
+    assert next(stream, None) is None
+    assert cache.get_cache(**request) == cached
+
+
 @pytest.mark.asyncio
 async def test_plain_iterator_stream_keeps_usage_on_its_chunk_when_usage_was_not_requested():
     usage: Final = Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6)

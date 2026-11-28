@@ -2692,9 +2692,11 @@ class CustomStreamWrapper:
                 self.close()
                 self._handle_stream_fallback_error(error)
             if self.sent_last_chunk is True:
+                if self.sent_stream_usage:
+                    self.close()
+                    raise
                 complete_streaming_response: Final = self._build_complete_streaming_response()
                 response = self._new_usage_chunk()
-                logs_stream_end: Final = not self.sent_stream_usage
                 if complete_streaming_response is not None:
                     self._propagate_usage_cost_to_hidden_params(
                         complete_streaming_response, self.custom_llm_provider, self.chunks
@@ -2717,9 +2719,8 @@ class CustomStreamWrapper:
                         processed_chunk=_cache_copy,
                         cache_hit=cache_hit,
                     )
-                    if logs_stream_end:
-                        executor.submit(self.logging_obj.stream_end_success_handler, _log_copy, cache_hit)
-                elif logs_stream_end:
+                    executor.submit(self.logging_obj.stream_end_success_handler, _log_copy, cache_hit)
+                else:
                     executor.submit(self.logging_obj.stream_end_success_handler, response, cache_hit)
                 # Update hidden_params with final usage from
                 # stream_chunk_builder.  Some providers (e.g. OpenRouter)
@@ -2737,7 +2738,7 @@ class CustomStreamWrapper:
                     if final_usage is not None:
                         self._last_returned_hidden_params["usage"] = final_usage
 
-                if self.sent_stream_usage is False and self.send_stream_usage is True:
+                if self.send_stream_usage:
                     self.sent_stream_usage = True
                     return response
                 self.close()
