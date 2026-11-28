@@ -5147,3 +5147,269 @@ class TestToolPermissionGuardrailGenerateContentStream:
 
         with pytest.raises(GuardrailRaisedException, match="could not be verified"):
             await self._drain(guardrail, chunks)
+
+
+_VAULT_NAMESPACE: Final = "mcp__vault"
+_VAULT_TOOL: Final = "read_the_current_secret_value_from_the_vault_that_this_codex_session_was_given"
+_VAULT_FULL_NAME: Final = f"{_VAULT_NAMESPACE}__{_VAULT_TOOL}"
+_VAULT_SENT_NAME: Final = "mcp__vault__read_the_current_secret_value_from_the_vaul_f96e7908"
+_DENY_VAULT_ALLOW_MCP: Final = [
+    {"id": "deny_vault_read", "tool_name": f"^{_VAULT_FULL_NAME}$", "decision": "deny"},
+    {"id": "allow_mcp", "tool_name": r"^mcp__.*$", "decision": "allow"},
+]
+
+
+def _bridged_vault_request(event_hook: GuardrailEventHooks) -> dict[str, object]:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.litellm_core_utils.tool_fields import NamespaceMember
+
+    logging_obj: Final = Logging(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=1.0,
+        litellm_call_id="bridged-vault",
+        function_id="test",
+    )
+    logging_obj.record_bridged_tool_names({_VAULT_SENT_NAME: NamespaceMember(_VAULT_NAMESPACE, _VAULT_TOOL)})
+    return {
+        "guardrails": [f"vault-{event_hook.value}"],
+        "tools": [{"type": "function", "function": {"name": _VAULT_SENT_NAME, "parameters": {"type": "object"}}}],
+        "litellm_logging_obj": logging_obj,
+    }
+
+
+class TestToolPermissionOnBridgedNamespaceTools:
+    """The Responses bridge sends a long namespace tool under a shortened name. Rules are written against the
+    name the caller sees, so the guardrail has to judge the shortened name as the caller's tool."""
+
+    @staticmethod
+    def _guardrail(event_hook: GuardrailEventHooks, action: Literal["block", "rewrite"]) -> ToolPermissionGuardrail:
+        return ToolPermissionGuardrail(
+            guardrail_name=f"vault-{event_hook.value}",
+            rules=_DENY_VAULT_ALLOW_MCP,
+            default_action="deny",
+            on_disallowed_action=action,
+            event_hook=event_hook,
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_returned_call_to_a_shortened_name_is_denied_by_the_rule_on_its_full_name(self) -> None:
+        guardrail: Final = self._guardrail(GuardrailEventHooks.post_call, "rewrite")
+        response: Final = ModelResponse(
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    message={
+                        "tool_calls": [
+                            {
+                                "id": "call_vault",
+                                "type": "function",
+                                "function": Function(name=_VAULT_SENT_NAME, arguments="{}"),
+                            }
+                        ]
+                    },
+                )
+            ]
+        )
+
+        await guardrail.async_post_call_success_hook(
+            data=_bridged_vault_request(GuardrailEventHooks.post_call),
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=response,
+        )
+
+        message: Final = response.choices[0].message
+        assert [call.function.name for call in message.tool_calls or ()] == []
+        assert "deny_vault_read" in (message.content or "")
+
+    @pytest.mark.asyncio
+    async def test_a_sent_tool_under_a_shortened_name_is_denied_by_the_rule_on_its_full_name(self) -> None:
+        guardrail: Final = self._guardrail(GuardrailEventHooks.pre_call, "block")
+
+        with pytest.raises(HTTPException) as raised:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(),
+                data=_bridged_vault_request(GuardrailEventHooks.pre_call),
+                call_type="acompletion",
+            )
+
+        assert raised.value.status_code == 400
+        assert "deny_vault_read" in json.dumps(raised.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_a_name_map_sent_by_the_client_does_not_rename_a_denied_tool(self) -> None:
+        guardrail: Final = self._guardrail(GuardrailEventHooks.pre_call, "block")
+        forged: Final = {
+            "guardrails": ["vault-pre_call"],
+            "tools": [{"type": "function", "function": {"name": "drop_tables", "parameters": {"type": "object"}}}],
+            "litellm_logging_obj": {
+                "model_call_details": {"litellm_bridged_tool_names": {"drop_tables": "mcp__safe__read"}}
+            },
+            "litellm_bridged_tool_names": {"drop_tables": "mcp__safe__read"},
+        }
+
+        with pytest.raises(HTTPException):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=forged, call_type="acompletion"
+            )
+
+
+class _CapturedBridgedCall(Exception):
+    def __init__(self, kwargs: dict[str, object]) -> None:
+        super().__init__("bridged call captured")
+        self.kwargs = kwargs
+
+
+def _bridged_completion_kwargs(
+    request_input: list[dict[str, object]], tools: list[dict[str, object]]
+) -> dict[str, object]:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.responses.litellm_completion_transformation.handler import LiteLLMCompletionTransformationHandler
+
+    def capture(**kwargs: object) -> None:
+        raise _CapturedBridgedCall(dict(kwargs))
+
+    logging_obj: Final = Logging(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[],
+        stream=False,
+        call_type="responses",
+        start_time=1.0,
+        litellm_call_id="bridged-identity",
+        function_id="test",
+    )
+    with (
+        patch("litellm.completion", capture),  # test-quality-ok: no DI seam; the bridge calls litellm.completion
+        pytest.raises(_CapturedBridgedCall) as captured,
+    ):
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="anthropic/claude-sonnet-5-5",
+            input=request_input,
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+            _is_async=False,
+            litellm_logging_obj=logging_obj,
+        )
+    return captured.value.kwargs
+
+
+def _history_call(namespace: str, name: str) -> list[dict[str, object]]:
+    return [
+        {"type": "message", "role": "user", "content": "go on"},
+        {"type": "function_call", "call_id": "call_earlier", "namespace": namespace, "name": name, "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_earlier", "output": "done"},
+    ]
+
+
+def _returns_a_call_to(name: str) -> ModelResponse:
+    return ModelResponse(
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message={
+                    "tool_calls": [
+                        {"id": "call_now", "type": "function", "function": Function(name=name, arguments="{}")}
+                    ]
+                },
+            )
+        ]
+    )
+
+
+_JUDGED_AS_RETURNED: Final = {
+    "a namespace tool known only from history": (
+        _history_call("exec", "run"),
+        [],
+        "exec__run",
+        "^exec$",
+        {"type": "function_call", "namespace": "exec", "name": "run"},
+    ),
+    "a custom tool named like a shortened tool in history": (
+        _history_call(_VAULT_NAMESPACE, _VAULT_TOOL),
+        [{"type": "custom", "name": _VAULT_SENT_NAME}],
+        _VAULT_SENT_NAME,
+        f"^{_VAULT_SENT_NAME}$",
+        {"type": "custom_tool_call", "name": _VAULT_SENT_NAME},
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("request_input", "tools", "returned_name", "denied_pattern", "caller_sees"),
+    _JUDGED_AS_RETURNED.values(),
+    ids=_JUDGED_AS_RETURNED.keys(),
+)
+@pytest.mark.asyncio
+async def test_a_bridged_call_is_judged_as_the_tool_the_caller_gets_back(
+    request_input: list[dict[str, object]],
+    tools: list[dict[str, object]],
+    returned_name: str,
+    denied_pattern: str,
+    caller_sees: dict[str, str],
+) -> None:
+    from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+
+    completion_kwargs: Final = _bridged_completion_kwargs(request_input, tools)
+    returned_items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+        _returns_a_call_to(returned_name), {"tools": tools}, request_input
+    )
+    assert [{key: getattr(item, key, None) for key in caller_sees} for item in returned_items] == [caller_sees]
+
+    guardrail: Final = ToolPermissionGuardrail(
+        guardrail_name="bridged-identity",
+        rules=[
+            {"id": "deny_what_the_caller_gets", "tool_name": denied_pattern, "decision": "deny"},
+            {"id": "allow_everything_else", "tool_name": "^.*$", "decision": "allow"},
+        ],
+        default_action="deny",
+        on_disallowed_action="rewrite",
+        event_hook=GuardrailEventHooks.post_call,
+    )
+    response: Final = _returns_a_call_to(returned_name)
+
+    await guardrail.async_post_call_success_hook(
+        data={**completion_kwargs, "guardrails": ["bridged-identity"]},
+        user_api_key_dict=UserAPIKeyAuth(),
+        response=response,
+    )
+
+    message: Final = response.choices[0].message
+    assert message.tool_calls in (None, [])
+    assert "deny_what_the_caller_gets" in (message.content or "")
+
+
+@pytest.mark.asyncio
+async def test_a_deferred_top_level_tool_is_judged_by_its_own_name_not_as_a_namespace_member() -> None:
+    from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
+
+    tools: Final = [
+        {"type": "function", "name": "read", "defer_loading": True, "parameters": {"type": "object"}},
+    ]
+    request_input: Final = [{"type": "message", "role": "user", "content": "read it"}]
+    completion_kwargs: Final = _bridged_completion_kwargs(request_input, tools)
+    returned_items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+        _returns_a_call_to("read"), {"tools": tools}, request_input
+    )
+    assert [(item.name, getattr(item, "namespace", None)) for item in returned_items] == [("read", "read")]
+
+    guardrail: Final = ToolPermissionGuardrail(
+        guardrail_name="bridged-identity",
+        rules=[{"id": "allow_read_namespace", "tool_name": "^read__.*$", "decision": "allow"}],
+        default_action="deny",
+        on_disallowed_action="rewrite",
+        event_hook=GuardrailEventHooks.post_call,
+    )
+    response: Final = _returns_a_call_to("read")
+
+    await guardrail.async_post_call_success_hook(
+        data={**completion_kwargs, "guardrails": ["bridged-identity"]},
+        user_api_key_dict=UserAPIKeyAuth(),
+        response=response,
+    )
+
+    message: Final = response.choices[0].message
+    assert message.tool_calls in (None, [])
+    assert "Tool 'read'" in (message.content or "")

@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import functools
 import json
 import logging
 import time
@@ -27,7 +28,7 @@ from litellm_enterprise.proxy.hooks.managed_files import (
 from litellm import Router
 from litellm.caching import DualCache
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import get_format_from_file_id
-from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, UserAPIKeyAuth
+from litellm.proxy._types import CallTypes, LiteLLM_ManagedFileTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     TeamProviderDeployment,
@@ -157,6 +158,14 @@ class _InMemoryManagedFileTable:
         where: Mapping[str, object],
         **_query: object,
     ) -> list[LiteLLM_ManagedFileTable]:
+        unified_file_ids: Final = where.get("unified_file_id")
+        if isinstance(unified_file_ids, Mapping) and "in" in unified_file_ids:
+            return [row for row in self.rows.values() if row.unified_file_id in unified_file_ids["in"]]
+        raw_file_ids: Final = where.get("flat_model_file_ids")
+        if isinstance(raw_file_ids, Mapping) and "hasSome" in raw_file_ids:
+            return [
+                row for row in self.rows.values() if not set(row.flat_model_file_ids).isdisjoint(raw_file_ids["hasSome"])
+            ]
         if "OR" not in where or len(where) != 1:
             return list(self.rows.values())
         return [
@@ -403,6 +412,39 @@ async def test_list_user_batches_limit_zero_returns_empty_page_without_db_query(
 
     assert page == {"object": "list", "data": [], "first_id": None, "last_id": None, "has_more": False}
     prisma_client.db.litellm_managedobjecttable.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_forget_unified_file_id_drops_the_cached_and_stored_owner_row() -> None:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(unified_file_id="file-team-a", flat_model_file_ids=["file-team-a"]),
+            MagicMock(unified_file_id="managed-two-copies", flat_model_file_ids=["file-team-a", "file-b"]),
+        ]
+    )
+    prisma_client.db.litellm_managedfiletable.delete_many = AsyncMock(return_value=1)
+    proxy_managed_files: Final = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=prisma_client)
+    await proxy_managed_files.internal_usage_cache.async_set_cache(
+        key="file-team-a",
+        value=LiteLLM_ManagedFileTable(
+            unified_file_id="file-team-a",
+            model_mappings={"_provider_upload_openai": "file-team-a"},
+            flat_model_file_ids=["file-team-a"],
+            created_by="user-a",
+            team_id="team-a",
+        ).model_dump(),
+    )
+    cached_before: Final = await proxy_managed_files.get_unified_file_id("file-team-a")
+
+    await proxy_managed_files.forget_unified_file_id(file_id="file-team-a", litellm_parent_otel_span=None)
+
+    assert cached_before is not None and cached_before.team_id == "team-a"
+    assert await proxy_managed_files.get_unified_file_id("file-team-a") is None
+    prisma_client.db.litellm_managedfiletable.delete_many.assert_awaited_once_with(
+        where={"unified_file_id": {"in": ["file-team-a"]}}
+    )
 
 
 @pytest.mark.asyncio
@@ -6806,6 +6848,40 @@ async def test_enforce_provider_file_access_still_passes_a_file_nobody_registere
     assert await managed_files.enforce_provider_file_access("files/batch-other", stranger) is None
 
 
+@pytest.mark.asyncio
+async def test_provider_file_ids_denied_to_names_only_the_spellings_of_another_keys_file():
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    stranger: Final = UserAPIKeyAuth(user_id="stranger", team_id="team-stranger")
+    asked: Final = (*_GEMINI_OUTPUT_SPELLINGS, "files/batch-other", "files/nobody-registered")
+
+    assert await managed_files.provider_file_ids_denied_to(asked, stranger) == _GEMINI_OUTPUT_SPELLINGS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller",
+    [
+        UserAPIKeyAuth(user_id="owner", team_id="team-owner"),
+        UserAPIKeyAuth(user_id="teammate", team_id="team-owner"),
+        UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    ],
+    ids=["owner", "teammate", "admin"],
+)
+async def test_provider_file_ids_denied_to_denies_nothing_to_a_caller_who_may_read_the_file(caller: UserAPIKeyAuth):
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+
+    assert await managed_files.provider_file_ids_denied_to(_GEMINI_OUTPUT_SPELLINGS, caller) == ()
+
+
+@pytest.mark.asyncio
+async def test_provider_file_ids_denied_to_finds_another_keys_file_past_the_first_lookup_chunk():
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    stranger: Final = UserAPIKeyAuth(user_id="stranger", team_id="team-stranger")
+    asked: Final = (*(f"files/filler-{n}" for n in range(2_000)), "files/zz-last/../batch-out1", "files/batch-out1")
+
+    assert await managed_files.provider_file_ids_denied_to(asked, stranger) == ("files/batch-out1",)
+
+
 _GEMINI_UPLOAD_URI: Final = "https://generativelanguage.googleapis.com/v1beta/files/upload-1"
 
 
@@ -6931,3 +7007,76 @@ async def test_get_unified_file_ids_for_provider_file_ids_maps_every_spelling_on
         "files/upload-1": "file-encoded-gemini-upload",
         "upload-1": "file-encoded-gemini-upload",
     }
+
+
+_TEAM_A_IMAGE_FILE_ID: Final = base64.urlsafe_b64encode(
+    b"litellm_proxy:image/png;unified_id,7d6e3c2a-image-edit;target_model_names,gpt-image-1"
+).decode()
+
+
+def _team_a_image_row() -> LiteLLM_ManagedFileTable:
+    return LiteLLM_ManagedFileTable(
+        unified_file_id=_TEAM_A_IMAGE_FILE_ID,
+        file_object=OpenAIFileObject(
+            id=_TEAM_A_IMAGE_FILE_ID,
+            object="file",
+            bytes=0,
+            created_at=1,
+            filename="tree.png",
+            purpose="vision",
+            status="processed",
+        ),
+        model_mappings={"gpt-image-1": "file-team-a-tree"},
+        flat_model_file_ids=["file-team-a-tree"],
+        created_by="user_a",
+        team_id="team_a",
+    )
+
+
+def _deeply_nested(value: object, depth: int) -> object:
+    return functools.reduce(lambda inner, _: {"images": [inner]}, range(depth), value)
+
+
+_IMAGE_EDIT_BODIES_REFERENCING_TEAM_A_FILE: Final = {
+    "images": {"images": [{"image_url": "https://images.example/hat.png"}, {"file_id": _TEAM_A_IMAGE_FILE_ID}]},
+    "mask": {"images": [{"image_url": "https://images.example/hat.png"}], "mask": {"file_id": _TEAM_A_IMAGE_FILE_ID}},
+    "extra_body": {"extra_body": {"images": [{"file_id": _TEAM_A_IMAGE_FILE_ID}]}},
+    "deeply_nested": {"extra_body": _deeply_nested({"file_id": _TEAM_A_IMAGE_FILE_ID}, 3000)},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["aimage_edit", "image_edit"])
+@pytest.mark.parametrize(
+    "body", _IMAGE_EDIT_BODIES_REFERENCING_TEAM_A_FILE.values(), ids=_IMAGE_EDIT_BODIES_REFERENCING_TEAM_A_FILE.keys()
+)
+async def test_team_b_cannot_edit_an_image_from_team_a_managed_file(call_type: str, body: Mapping[str, object]):
+    proxy_managed_files, _ = _managed_files_with_fake_prisma(_team_a_image_row())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_managed_files.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(user_id="user_b", team_id="team_b", parent_otel_span=MagicMock()),
+            cache=MagicMock(),
+            data={"model": "gpt-image-1", "prompt": "add a hat", **body},
+            call_type=call_type,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body", _IMAGE_EDIT_BODIES_REFERENCING_TEAM_A_FILE.values(), ids=_IMAGE_EDIT_BODIES_REFERENCING_TEAM_A_FILE.keys()
+)
+async def test_same_team_can_edit_an_image_from_its_managed_file(body: Mapping[str, object]):
+    proxy_managed_files, _ = _managed_files_with_fake_prisma(_team_a_image_row())
+    data: Final = {"model": "gpt-image-1", "prompt": "add a hat", **body}
+
+    result = await proxy_managed_files.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(user_id="teammate_of_a", team_id="team_a", parent_otel_span=MagicMock()),
+        cache=MagicMock(),
+        data=data,
+        call_type="aimage_edit",
+    )
+
+    assert result == data

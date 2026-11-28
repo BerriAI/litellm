@@ -43,7 +43,12 @@ struct Recording {
     answer: Answer,
 }
 
-const ENDED: [Field; 3] = [Field::Outcome, Field::Usage, Field::LoggedModelGroup];
+const ENDED: [Field; 4] = [
+    Field::Outcome,
+    Field::Usage,
+    Field::LoggedModelGroup,
+    Field::Cost,
+];
 
 impl Recording {
     fn answering(answer: Answer) -> Arc<Self> {
@@ -227,6 +232,56 @@ async fn a_stream_is_logged_when_its_body_ends_and_never_reaches_post_call_succe
     );
 }
 
+/// `test-model` at rates this test sets, so the price follows from the counts the answer reports.
+fn pricing_test_model() -> Value {
+    json!({"test-model": {"litellm_provider": "anthropic", "mode": "chat",
+        "input_cost_per_token": 0.001, "output_cost_per_token": 0.01,
+        "cache_read_input_token_cost": 0.0001}})
+}
+
+#[rstest]
+#[case::a_complete_answer(false, pricing_test_model(), Some(8.0 * 0.001 + 100.0 * 0.0001 + 14.0 * 0.01))]
+#[case::a_stream_read_to_its_end(true, pricing_test_model(), Some(3.0 * 0.001 + 5.0 * 0.01))]
+#[case::a_model_the_cost_map_does_not_price(
+    false,
+    json!({"other-model": {"litellm_provider": "anthropic", "mode": "chat", "input_cost_per_token": 0.001, "output_cost_per_token": 0.01}}),
+    None
+)]
+#[tokio::test]
+async fn the_success_log_reads_the_price_of_what_the_call_used(
+    #[case] stream: bool,
+    #[case] rows: Value,
+    #[case] expected: Option<f64>,
+) {
+    let upstream = answering(match stream {
+        true => ResponseTemplate::new(200).set_body_raw(STREAM, "text/event-stream"),
+        false => message(),
+    })
+    .await;
+    let recording = Recording::silent();
+    let callback: Arc<dyn ErasedCallback> = recording.clone();
+    let (app, gateway) = support::app_and_gateway_with_callbacks(
+        "anthropic/test-model",
+        &upstream.uri(),
+        vec![callback],
+    );
+    gateway.install(support::cost_map(rows));
+
+    let response = ask(app, stream).await;
+    to_bytes(response.into_body(), 4096).await.unwrap();
+
+    let seen = recording.seen(if stream { 3 } else { 4 }).await;
+    let (hook, read) = seen.last().unwrap();
+    let nanodollars = |cost: f64| (cost * 1e9).round();
+    let cost = read
+        .get("Cost")
+        .and_then(|cost| cost["response_cost"].as_f64());
+    assert_eq!(
+        (*hook, cost.map(nanodollars)),
+        (Hook::AttemptEnded, expected.map(nanodollars))
+    );
+}
+
 #[rstest]
 #[tokio::test]
 async fn a_stream_the_client_drops_before_its_end_tells_neither_log() {
@@ -393,5 +448,172 @@ async fn every_route_asks_the_pre_call_hook_before_it_reaches_a_provider(#[case]
             0,
             vec![Hook::PreCall, Hook::PostCallFailure, Hook::AttemptEnded]
         )
+    );
+}
+
+const FACTS: [Field; 5] = [
+    Field::KeyIdentity,
+    Field::LoggedKeyIdentity,
+    Field::Deployment,
+    Field::AttemptTiming,
+    Field::SpendLogId,
+];
+
+/// A callback that keeps what the success log hands it of the call: the facts of `FACTS` and the
+/// call's own facts.
+#[derive(Default)]
+struct Facts {
+    seen: Mutex<Option<(Map<String, Value>, Value)>>,
+}
+
+impl Callback for Facts {
+    type State = ();
+
+    fn manifest(&self) -> &Manifest {
+        static MANIFEST: std::sync::OnceLock<Manifest> = std::sync::OnceLock::new();
+        MANIFEST.get_or_init(|| Manifest {
+            selection: Selection::named("facts"),
+            subscriptions: vec![Subscription {
+                reads: FieldSet::of(&FACTS),
+                ..Subscription::on(Hook::AttemptEnded)
+            }],
+            has_request_state: false,
+        })
+    }
+
+    fn handle<'a>(
+        &'a self,
+        input: &'a HookInput,
+        _state: Option<&'a ()>,
+    ) -> BoxFuture<'a, HookOutput> {
+        let read = FACTS
+            .into_iter()
+            .filter_map(|field| {
+                let value = input.fields.raw(field).ok()??.clone();
+                Some((format!("{field:?}"), value))
+            })
+            .collect();
+        let call = serde_json::to_value(&input.call).unwrap();
+        *self.seen.lock() = Some((read, call));
+        Box::pin(async { Ok(None) })
+    }
+}
+
+impl Facts {
+    async fn seen(&self) -> (Map<String, Value>, Value) {
+        for _ in 0..200 {
+            if let Some(seen) = self.seen.lock().clone() {
+                return seen;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("the success log never ran")
+    }
+}
+
+/// A logged UTC `Moment`'s fields, most significant first, which order as the moments do.
+fn in_order(moment: &Value) -> [i64; 7] {
+    [
+        "year",
+        "month",
+        "day",
+        "hour",
+        "minute",
+        "second",
+        "microsecond",
+    ]
+    .map(|field| moment[field].as_i64().unwrap())
+}
+
+#[rstest]
+#[case::a_complete_answer(false)]
+#[case::a_stream(true)]
+#[tokio::test]
+async fn the_success_log_is_told_who_called_which_deployment_answered_when_and_under_what_id(
+    #[case] stream: bool,
+) {
+    let template = if stream {
+        ResponseTemplate::new(200).set_body_raw(STREAM, "text/event-stream")
+    } else {
+        message()
+    };
+    let upstream = answering(template).await;
+    let facts = Arc::new(Facts::default());
+    let callback: Arc<dyn ErasedCallback> = facts.clone();
+    let app = support::app_with_callbacks("anthropic/test-model", &upstream.uri(), vec![callback]);
+
+    let response = ask(app, stream).await;
+    to_bytes(response.into_body(), 4096).await.unwrap();
+    let (read, call) = facts.seen().await;
+
+    let timing = &read["AttemptTiming"];
+    let order = ["start", "api_call_start", "completion_start", "end"]
+        .map(|moment| in_order(&timing[moment]));
+    let deployment_id = read["Deployment"]["model_info"]["id"].clone();
+    assert_eq!(
+        (
+            read["KeyIdentity"]["key_hash"].clone(),
+            read["KeyIdentity"]["user_id"].clone(),
+            read["LoggedKeyIdentity"]["key_hash"].clone(),
+            read["LoggedKeyIdentity"]["request_route"].clone(),
+            read["Deployment"]["provider"].clone(),
+            deployment_id.is_string(),
+            call["target"]["deployment_id"] == deployment_id,
+            call["target"]["provider"].clone(),
+            read["SpendLogId"]["id"].clone(),
+            order.is_sorted(),
+        ),
+        (
+            json!("litellm_proxy_master_key"),
+            json!("default_user_id"),
+            json!("litellm_proxy_master_key"),
+            json!("/v1/messages"),
+            json!("anthropic"),
+            true,
+            true,
+            json!("anthropic"),
+            json!("msg_1"),
+            true,
+        )
+    );
+}
+
+/// A spend log row for an answer that names no id of its own is written under the call id the
+/// gateway's call id layer resolved, which the call's facts carry too.
+#[rstest]
+#[tokio::test]
+async fn an_answer_without_an_id_is_logged_under_the_call_id() {
+    let upstream = answering(
+        ResponseTemplate::new(200).set_body_json(json!({"type": "message",
+        "role": "assistant", "model": "test-model", "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn", "usage": {"input_tokens": 8, "output_tokens": 14}})),
+    )
+    .await;
+    let facts = Arc::new(Facts::default());
+    let callback: Arc<dyn ErasedCallback> = facts.clone();
+    let app = support::app_with_callbacks("anthropic/test-model", &upstream.uri(), vec![callback]);
+    let body = json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16});
+    let mut request = Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .header("x-request-id", "not-the-call-id")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(tower_http::request_id::RequestId::new(
+            axum::http::HeaderValue::from_static("call-7"),
+        ));
+
+    let response = app.oneshot(request).await.unwrap();
+    to_bytes(response.into_body(), 4096).await.unwrap();
+    let (read, call) = facts.seen().await;
+
+    assert_eq!(
+        (
+            read["SpendLogId"]["id"].clone(),
+            call["ids"]["call_id"].clone()
+        ),
+        (json!("call-7"), json!("call-7"))
     );
 }

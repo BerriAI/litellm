@@ -52,7 +52,7 @@ mod tests {
         #[case] enabled: bool,
     ) {
         let floors = Floors::new();
-        floors.refresh([30, floor]);
+        floors.refresh([30, floor, 30]);
         assert_eq!(floors.enabled(PythonLogger::Proxy, level), enabled);
         assert_eq!(floors.enabled(PythonLogger::Sdk, level), level >= 30);
     }

@@ -113,7 +113,6 @@ const CONSTANT_CAUSE_LABELS: Record<string, ParseKeys> = {
   heuristic_v2: "logs.detail.routing.cause.heuristicV2",
   capability_classifier: "logs.detail.routing.cause.capabilityClassifier",
   capability_classifier_fallback: "logs.detail.routing.cause.capabilityClassifierFallback",
-  llm_v2_classifier: "logs.detail.routing.cause.llmV2Classifier",
   llm_v2_fallback: "logs.detail.routing.cause.llmV2Fallback",
   heuristic_first_short_circuit: "logs.detail.routing.cause.heuristicFirstShortCircuit",
   hybrid_short_circuit: "logs.detail.routing.cause.hybridShortCircuit",
@@ -144,6 +143,8 @@ function describeCause(decision: RoutingDecision, t: TFunction): string {
   if (constant) return t(constant);
 
   switch (cause) {
+    case "llm_v2_classifier":
+      return "FUSE v2";
     case "reasoning_override":
       return describeReasoningOverride(tierLabel, overrideFloor, t);
     case "llm_classifier":

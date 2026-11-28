@@ -88,7 +88,7 @@ class AmazonAI21Config(AmazonInvokeConfig, BaseConfig):
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "max_tokens":
                 optional_params["maxTokens"] = v

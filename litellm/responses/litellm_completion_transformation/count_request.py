@@ -53,6 +53,7 @@ class ChatCountRequest:
 @dataclass(frozen=True, slots=True)
 class ChatCountBridgeError:
     message: str
+    param: str | None = None
 
 
 def _plain(item: object) -> object:
@@ -243,6 +244,6 @@ async def chat_count_request(
             ),
         )
     except BadRequestError as e:
-        return ChatCountBridgeError(message=str(e.message))
+        return ChatCountBridgeError(message=str(e.message), param=e.param)
     except (ValidationError, ValueError, KeyError) as e:
         return ChatCountBridgeError(message=f"Invalid request for token counting: {e}")

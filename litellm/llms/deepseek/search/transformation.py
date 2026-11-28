@@ -41,11 +41,11 @@ class DeepSeekSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: BaseSearchConfig.validate_environment signature
+        headers: dict[str, object],  # mutable-ok: BaseSearchConfig.validate_environment signature
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.validate_environment signature
-    ) -> dict[str, str]:  # mutable-ok: the http handler passes this straight to httpx as headers
+    ) -> dict[str, object]:  # mutable-ok: the http handler passes this straight to httpx as headers
         resolved_key: Final = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,

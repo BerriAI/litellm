@@ -17,7 +17,7 @@ def get_optional_rerank_params(
     max_tokens_per_doc: int | None = None,
     instruction: str | None = None,
     non_default_params: dict[str, object] | None = None,
-) -> dict:
+) -> dict[str, object]:
     all_non_default_params: Final = non_default_params or {}
     if query is not None:
         all_non_default_params["query"] = query

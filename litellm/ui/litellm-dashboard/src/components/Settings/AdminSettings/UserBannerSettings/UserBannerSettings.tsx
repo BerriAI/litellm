@@ -1,13 +1,13 @@
 "use client";
 
 import type { ParseKeys } from "i18next";
-import React, { useState } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useUpdateUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUpdateUserBanner";
 import { useUserBanner } from "@/app/(dashboard)/hooks/userBanner/useUserBanner";
 import { toast } from "@/lib/toast";
-import { UserBanner, UserBannerSeverity, UserBannerUpdate } from "@/components/networking";
+import { UserBanner, UserBannerSeverity } from "@/components/networking";
 import { Alert, AlertDescription } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,6 +17,9 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SEVERITY_ICONS, UserBannerMarkdown } from "@/components/UserBanner";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { toUserBannerFields } from "./mapper";
+import { isBannerMessageMissing, userBannerSchema } from "./schema";
 
 const SEVERITY_LABELS: Record<UserBannerSeverity, ParseKeys> = {
   info: "adminPanel.userBannerSettings.severity.options.info",
@@ -57,16 +60,19 @@ interface UserBannerSettingsFormProps {
 
 function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }: UserBannerSettingsFormProps) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState<UserBannerUpdate>({
-    enabled: persisted.enabled,
-    message: persisted.message,
-    severity: persisted.severity,
+  const { control, getValues } = useZodForm(userBannerSchema, {
+    defaultValues: toUserBannerFields(persisted),
   });
+  const { field: enabled } = useController({ control, name: "enabled" });
+  const { field: message } = useController({ control, name: "message" });
+  const { field: severity } = useController({ control, name: "severity" });
 
-  const messageMissing = draft.enabled && draft.message.trim() === "";
+  const messageMissing = isBannerMessageMissing({ enabled: enabled.value, message: message.value });
 
   const handleSave = () => {
-    saveBanner(draft, {
+    const draft = userBannerSchema.safeParse(getValues());
+    if (!draft.success) return;
+    saveBanner(draft.data, {
       onSuccess: () => {
         toast.success(t("adminPanel.userBannerSettings.toasts.updated"));
       },
@@ -89,8 +95,8 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-3">
               <Switch
-                checked={draft.enabled}
-                onCheckedChange={(checked: boolean) => setDraft({ ...draft, enabled: checked })}
+                checked={enabled.value}
+                onCheckedChange={enabled.onChange}
                 aria-label={t("adminPanel.userBannerSettings.publish")}
               />
               <Label>{t("adminPanel.userBannerSettings.publish")}</Label>
@@ -100,13 +106,11 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
               <Label htmlFor="user-banner-message">{t("adminPanel.userBannerSettings.message.label")}</Label>
               <Textarea
                 id="user-banner-message"
-                value={draft.message}
+                value={message.value}
                 maxLength={4000}
                 rows={3}
                 placeholder={t("adminPanel.userBannerSettings.message.placeholder")}
-                onChange={(event: React.ChangeEvent<HTMLTextAreaElement>) =>
-                  setDraft({ ...draft, message: event.target.value })
-                }
+                onChange={message.onChange}
               />
               {messageMissing && (
                 <p className="text-sm text-destructive">{t("adminPanel.userBannerSettings.message.missing")}</p>
@@ -117,10 +121,8 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
               <Label>{t("adminPanel.userBannerSettings.severity.label")}</Label>
               <Select
                 items={SEVERITY_ITEMS.map((item) => ({ value: item.value, label: t(item.label) }))}
-                value={draft.severity}
-                onValueChange={(value: string | null) =>
-                  setDraft({ ...draft, severity: (value ?? "info") as UserBannerSeverity })
-                }
+                value={severity.value}
+                onValueChange={(value) => severity.onChange(value ?? EMPTY_BANNER.severity)}
               >
                 <SelectTrigger className="w-48" aria-label={t("adminPanel.userBannerSettings.severity.ariaLabel")}>
                   <SelectValue placeholder={t("adminPanel.userBannerSettings.severity.placeholder")} />
@@ -135,13 +137,13 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
               </Select>
             </div>
 
-            {draft.message.trim() !== "" && (
+            {message.value.trim() !== "" && (
               <div className="flex flex-col gap-2">
                 <Label>{t("adminPanel.userBannerSettings.preview")}</Label>
-                <Alert variant={draft.severity}>
-                  {SEVERITY_ICONS[draft.severity]}
+                <Alert variant={severity.value}>
+                  {SEVERITY_ICONS[severity.value]}
                   <AlertDescription>
-                    <UserBannerMarkdown message={draft.message} />
+                    <UserBannerMarkdown message={message.value} />
                   </AlertDescription>
                 </Alert>
               </div>

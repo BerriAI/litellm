@@ -47,6 +47,7 @@ CREATE_DATA = {
     "endpoint": "/v1/chat/completions",
     "input_file_id": "file-abc",
 }
+FIRST_TRY_HEADERS = {"x-stainless-retry-count": "0"}
 RETRIEVE_DATA = {"batch_id": "batch-123"}
 CANCEL_DATA = {"batch_id": "batch-123"}
 
@@ -74,7 +75,10 @@ def _sdk_response(batch_dict: dict) -> MagicMock:
 
 def _sync_client() -> MagicMock:
     """A sync Azure client (passes ``isinstance(.., AzureOpenAI)``)."""
-    return MagicMock(spec=AzureOpenAI)
+    client = MagicMock(spec=AzureOpenAI)
+    client.with_options.return_value = client
+    client.max_retries = 2
+    return client
 
 
 def _async_client() -> MagicMock:
@@ -88,6 +92,8 @@ def _async_client() -> MagicMock:
     client.batches.retrieve = AsyncMock()
     client.batches.cancel = AsyncMock()
     client.batches.list = AsyncMock()
+    client.with_options.return_value = client
+    client.max_retries = 2
     return client
 
 
@@ -122,7 +128,7 @@ def test_create_sync_forwards_auth_to_client_seam(handler):
     assert kw["litellm_params"] == {}
 
     # PAYLOAD: request data forwarded verbatim to the SDK as kwargs.
-    client.batches.create.assert_called_once_with(**CREATE_DATA)
+    client.batches.create.assert_called_once_with(**CREATE_DATA, extra_headers=FIRST_TRY_HEADERS)
     # sibling SDK seams untouched.
     client.batches.retrieve.assert_not_called()
     client.batches.cancel.assert_not_called()
@@ -191,7 +197,7 @@ async def test_create_async_returns_coroutine_and_awaits_async_client(handler):
         result = await coro
 
     assert get_client.call_args.kwargs["_is_async"] is True
-    client.batches.create.assert_awaited_once_with(**CREATE_DATA)
+    client.batches.create.assert_awaited_once_with(**CREATE_DATA, extra_headers=FIRST_TRY_HEADERS)
     assert isinstance(result, LiteLLMBatch)
     assert result.id == "batch-123"
 
@@ -219,7 +225,7 @@ async def test_acreate_batch_parses_response(handler):
         create_batch_data=CREATE_DATA, azure_client=client
     )
 
-    client.batches.create.assert_awaited_once_with(**CREATE_DATA)
+    client.batches.create.assert_awaited_once_with(**CREATE_DATA, extra_headers=FIRST_TRY_HEADERS)
     assert isinstance(result, LiteLLMBatch)
     assert result.status == "validating"
 
@@ -465,6 +471,8 @@ async def test_alist_batches_returns_raw_response(handler):
 
 def test_create_sync_accepts_plain_openai_client(handler):
     client = MagicMock(spec=OpenAI)
+    client.with_options.return_value = client
+    client.max_retries = 2
     client.batches.create.return_value = _sdk_response(_batch_dict())
 
     with patch(GET_CLIENT, return_value=client):
@@ -478,6 +486,8 @@ def test_create_sync_accepts_plain_openai_client(handler):
 @pytest.mark.asyncio
 async def test_create_async_accepts_plain_async_openai_client(handler):
     client = MagicMock(spec=AsyncOpenAI)
+    client.with_options.return_value = client
+    client.max_retries = 2
     client.batches.create = AsyncMock(return_value=_sdk_response(_batch_dict()))
 
     with patch(GET_CLIENT, return_value=client):

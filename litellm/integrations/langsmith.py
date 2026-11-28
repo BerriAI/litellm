@@ -22,6 +22,7 @@ from litellm.integrations.langsmith_mock_client import (
     create_mock_langsmith_client,
     should_use_langsmith_mock,
 )
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -33,8 +34,9 @@ from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPa
 _RUN_RESPONSE: Final = TypeAdapter(object)
 
 
-class _DynamicParamsKwargs(TypedDict, total=False):
+class _DynamicParamsKwargs(TypedDict, total=False, extra_items=object):
     standard_callback_dynamic_params: ReadOnly[StandardCallbackDynamicParams | None]
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
 
 
 def is_serializable(value: object):
@@ -133,7 +135,7 @@ class LangsmithLogger(CustomBatchLogger):
             LANGSMITH_TENANT_ID=_credentials_tenant_id,
         )
 
-    def _extract_metadata_fields(self, metadata: Mapping[str, object], credentials: LangsmithCredentialsObject):
+    def _extract_metadata_fields(self, metadata: SupportsGet, credentials: LangsmithCredentialsObject):
         return {
             "project_name": metadata.get("project_name", credentials["LANGSMITH_PROJECT"]),
             "run_name": metadata.get("run_name", self.langsmith_default_run_name),
@@ -196,17 +198,17 @@ class LangsmithLogger(CustomBatchLogger):
 
     def _prepare_log_data(
         self,
-        kwargs,
+        kwargs: _DynamicParamsKwargs,
         response_obj: object,
         start_time: object,
         end_time: object,
         credentials: LangsmithCredentialsObject,
     ):
         try:
-            _litellm_params: Final = kwargs.get("litellm_params", {}) or {}
-            metadata = _litellm_params.get("metadata", {}) or {}
-
-            fields: Final = self._extract_metadata_fields(metadata, credentials)
+            _litellm_params: Final = require_get(kwargs.get("litellm_params", {}) or {})
+            fields: Final = self._extract_metadata_fields(
+                require_get(_litellm_params.get("metadata", {}) or {}), credentials
+            )
             # the proxy header fan-out mirrors one value into both keys, and LangSmith
             # rejects the whole ingest batch when run-body session_id is not an
             # existing tracer-session uuid
@@ -257,7 +259,9 @@ class LangsmithLogger(CustomBatchLogger):
         except Exception:
             raise
 
-    def log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
+    def log_success_event(
+        self, kwargs: _DynamicParamsKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         try:
             sampling_rate: Final = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
             random_sample: Final = random.random()
@@ -294,7 +298,9 @@ class LangsmithLogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Langsmith Layer Error - log_success_event error")
 
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
+    async def async_log_success_event(
+        self, kwargs: _DynamicParamsKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         try:
             self._ensure_periodic_flush_task()
             sampling_rate: Final = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)
@@ -333,7 +339,9 @@ class LangsmithLogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Langsmith Layer Error - error logging async success event.")
 
-    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object):
+    async def async_log_failure_event(
+        self, kwargs: _DynamicParamsKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         try:
             self._ensure_periodic_flush_task()
             sampling_rate: Final = self._get_sampling_rate_to_use_for_request(kwargs=kwargs)

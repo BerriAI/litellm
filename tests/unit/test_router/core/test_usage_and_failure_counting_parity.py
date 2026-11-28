@@ -29,7 +29,9 @@ from tests.unit.test_router.core.retries_health_helpers import (
     fresh,
     not_found,
     plain_error,
+    previous_response_rejected,
     rate_limited,
+    usage_since,
 )
 from tests.unit.test_router.core.scripted_host import Call, deployment, server_error, timeout
 from tests.unit.test_router.core.streaming_helpers import chat_stream, collect_texts, request_logging
@@ -176,29 +178,31 @@ async def test_a_realtime_session_counts_no_request_against_a_limited_deployment
 
 
 async def test_every_failure_on_a_shared_logging_object_counts_a_request(
-    make_core: MakeCore, host: SharedLoggingHost
+    make_core: MakeCore, host: SharedLoggingHost, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     core: Final = chain(make_core)
     host.answer("*", fresh(server_error))
+    started: Final = datetime.now(timezone.utc)
 
     _ = await attempt(core, "a", litellm_logging_obj=request_logging())
 
-    assert await core.health().usage("a") == (None, 1)
-    assert await core.health().usage("b") == (None, 1)
-    assert await core.health().usage("c") == (None, 1)
+    assert await usage_since(core, monkeypatch, "a", started) == (None, 1)
+    assert await usage_since(core, monkeypatch, "b", started) == (None, 1)
+    assert await usage_since(core, monkeypatch, "c", started) == (None, 1)
 
 
 async def test_every_failure_counts_a_request_when_each_call_logs_on_its_own(
-    make_core: MakeCore, host: SharedLoggingHost
+    make_core: MakeCore, host: SharedLoggingHost, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     core: Final = chain(make_core)
     host.answer("*", fresh(server_error))
+    started: Final = datetime.now(timezone.utc)
 
     _ = await attempt(core, "a")
 
-    assert await core.health().usage("a") == (None, 1)
-    assert await core.health().usage("b") == (None, 1)
-    assert await core.health().usage("c") == (None, 1)
+    assert await usage_since(core, monkeypatch, "a", started) == (None, 1)
+    assert await usage_since(core, monkeypatch, "b", started) == (None, 1)
+    assert await usage_since(core, monkeypatch, "c", started) == (None, 1)
 
 
 async def test_a_retry_past_the_first_logged_failure_is_recorded(make_core: MakeCore, host: SharedLoggingHost) -> None:
@@ -311,8 +315,15 @@ def selection_failure() -> Exception:
         (selection_failure, False, 1, None),
         (timeout, True, 0, None),
         (timeout, False, 1, 1),
+        (previous_response_rejected, False, 0, None),
     ],
-    ids=["server-error", "selection-tag-not-exempt", "stream-stall-exempt", "plain-timeout"],
+    ids=[
+        "server-error",
+        "selection-tag-not-exempt",
+        "stream-stall-exempt",
+        "plain-timeout",
+        "previous-response-rejected-exempt",
+    ],
 )
 async def test_a_failed_hop_past_the_first_logged_failure_takes_the_fallback_paths_exits(
     make_core: MakeCore,

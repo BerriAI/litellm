@@ -8,7 +8,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CircleHelp, Info, Save, TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useEffect, useState } from "react";
-import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -22,13 +21,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { Providers, provider_map } from "@/components/provider_info_helpers";
 import { fetchSearchTools } from "@/components/networking";
-
-interface WebSearchInterceptionStoredValues {
-  enabled?: boolean;
-  enabled_providers?: string[];
-  search_tool_name?: string | null;
-  max_agentic_loops?: number | null;
-}
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { formToPayload, parseLoops, storedValuesToForm, toStoredValues } from "./mapper";
+import { webSearchInterceptionSchema, type WebSearchInterceptionFormValues } from "./schema";
 
 interface WebSearchInterceptionFieldSchema {
   properties?: {
@@ -37,13 +32,6 @@ interface WebSearchInterceptionFieldSchema {
     search_tool_name?: { description?: string };
     max_agentic_loops?: { description?: string };
   };
-}
-
-interface WebSearchInterceptionFormValues {
-  enabled: boolean;
-  enabled_providers: string[];
-  search_tool_name: string | null;
-  max_agentic_loops: number | null;
 }
 
 const NO_STORED_VALUES: Readonly<Record<string, unknown>> = {};
@@ -66,26 +54,6 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
     </Tooltip>
   </>
 );
-
-const parseLoops = (raw: string, rawAsNumber: number): number | null =>
-  raw === "" || Number.isNaN(rawAsNumber) ? null : rawAsNumber;
-
-const isStringArray = (value: unknown): value is string[] =>
-  Array.isArray(value) && value.every((entry) => typeof entry === "string");
-
-const toStoredValues = (raw: Readonly<Record<string, unknown>>): WebSearchInterceptionStoredValues => ({
-  enabled: typeof raw.enabled === "boolean" ? raw.enabled : undefined,
-  enabled_providers: isStringArray(raw.enabled_providers) ? raw.enabled_providers : undefined,
-  search_tool_name: typeof raw.search_tool_name === "string" ? raw.search_tool_name : null,
-  max_agentic_loops: typeof raw.max_agentic_loops === "number" ? raw.max_agentic_loops : null,
-});
-
-const toFormValues = (values: WebSearchInterceptionStoredValues): WebSearchInterceptionFormValues => ({
-  enabled: values.enabled ?? false,
-  enabled_providers: values.enabled_providers ?? [],
-  search_tool_name: values.search_tool_name ?? null,
-  max_agentic_loops: values.max_agentic_loops ?? null,
-});
 
 const readSearchToolNames = (response: unknown): string[] => {
   const payload = response as { search_tools?: unknown; data?: unknown } | null;
@@ -134,11 +102,11 @@ function WebSearchInterceptionForm({ accessToken, initial, schema }: WebSearchIn
     error: updateError,
   } = useUpdateWebSearchInterceptionSettings(accessToken);
   const { searchTools, loadingSearchTools } = useSearchToolNames(accessToken);
-  const form = useForm<WebSearchInterceptionFormValues>({ defaultValues: initial });
+  const form = useZodForm(webSearchInterceptionSchema, { defaultValues: initial });
   const isDirty = form.formState.isDirty;
 
   const handleSave = (formValues: WebSearchInterceptionFormValues) => {
-    updateSettings(formValues, {
+    updateSettings(formToPayload(formValues), {
       onSuccess: () => {
         form.reset(formValues);
         toast.success(t("adminPanel.webSearchInterception.toasts.updated"));
@@ -293,7 +261,7 @@ export default function WebSearchInterceptionSettings() {
     );
   }
 
-  const values: WebSearchInterceptionStoredValues = toStoredValues(data?.values ?? NO_STORED_VALUES);
+  const values = toStoredValues(data?.values ?? NO_STORED_VALUES);
   const notAppliedHere = values.enabled === true && data?.active_on_this_pod === false;
 
   return (
@@ -315,7 +283,7 @@ export default function WebSearchInterceptionSettings() {
       <WebSearchInterceptionForm
         key={JSON.stringify(values)}
         accessToken={accessToken}
-        initial={toFormValues(values)}
+        initial={storedValuesToForm(values)}
         schema={data?.field_schema}
       />
     </div>

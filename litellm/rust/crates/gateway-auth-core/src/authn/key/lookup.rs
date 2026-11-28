@@ -19,7 +19,9 @@ pub(super) async fn presented<H: AuthHost>(
     requested_end_user: Option<&str>,
     settings: &KeySettings,
 ) -> Result<Lookup<H>, Refused<H::Rows>> {
-    let end_user = request_end_user(host, Some(token), requested_end_user, settings).await?;
+    let end_user = request_end_user(host, Some(token), requested_end_user, settings)
+        .await
+        .map_err(Error::into_end_user_refusal)?;
     let hash = token.hash();
     let key = found_key(host, token, settings, &hash).await?;
     Ok(Lookup {
@@ -108,7 +110,7 @@ async fn cached_team_values<H: AuthHost>(
     let Some(team) = Error::absent_unless_declined(host.cached_team(team_id).await)? else {
         return Ok(key);
     };
-    match (team.refreshed_at, key.record.last_refreshed_at) {
+    match (team.at, key.record.last_refreshed_at) {
         (Some(team_refreshed), Some(key_refreshed)) if team_refreshed > key_refreshed => {
             Ok(Keyed {
                 row: host.with_team(&key.row, &team.row).await?,

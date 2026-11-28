@@ -128,7 +128,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         optional_params: dict[str, object],
         api_key: str | None,
         data: dict | str,
-        messages: list,
+        messages: list[AllMessageValues],
         print_verbose: object,
         encoding: object,
         json_mode: bool | None,

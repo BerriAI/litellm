@@ -16,6 +16,7 @@ use crate::{
     error::Error,
     health_routing::WhenAllUnhealthy,
     host::{RouterHost, RouterRequest, RoutingContext, SelectStage},
+    precall::PreCallFacts,
     registry::{Deployment, Registry, ResolveKind},
     resolve::{Caller, resolve_request},
     strategy::{StrategyScope, request_override, routing_context},
@@ -85,6 +86,7 @@ pub struct Candidates {
     /// The group the host stamped the pick as served for when a pre-routing hook rewrote the name
     /// (a Claude Code subagent's bound router): a fallback lookup key.
     pub served_as: Option<String>,
+    pub pre_call: PreCallFacts,
 }
 
 impl Candidates {
@@ -127,6 +129,7 @@ pub(crate) struct SelectInputs {
     pub failed_ids: Vec<String>,
     /// A weighted failover hop's `_excluded_deployment_ids`: never picked.
     pub excluded_ids: Arc<[String]>,
+    pub refused_ids: Vec<String>,
     /// Stop before the plugins, order and skip filters: the group less cooldowns and blocked
     /// deployments, which `_async_get_healthy_deployments` counts when deciding whether to retry.
     pub count_only: bool,
@@ -136,6 +139,7 @@ pub(crate) struct SelectInputs {
     /// A fallback hop: `run_async_fallback` pops the request's `_target_order`, so only the
     /// hop's own order applies.
     pub fallback_hop: bool,
+    pub refuse_uncertain: bool,
 }
 
 /// `simple_shuffle`: weighted by `_router_weights[group]`, else `weight`, else `rpm`, else
@@ -568,12 +572,13 @@ impl<H: RouterHost> Call<'_, H> {
                 skips_batch_only: skip_batch_only,
                 wildcard_request,
                 served_as: None,
+                pre_call: PreCallFacts::default(),
             });
         }
 
         if listed {
-            if settings.enable_pre_call_checks && !resolution.kind.is_single() {
-                healthy = self
+            let pre_call = if settings.enable_pre_call_checks && !resolution.kind.is_single() {
+                let (filtered, facts) = self
                     .pre_call_checks(
                         snapshot,
                         op,
@@ -584,7 +589,16 @@ impl<H: RouterHost> Call<'_, H> {
                         healthy,
                     )
                     .await?;
-            }
+                healthy = crate::precall::settle(
+                    &resolution.group,
+                    filtered.kept,
+                    &filtered.uncertain,
+                    inputs.refuse_uncertain,
+                )?;
+                facts
+            } else {
+                PreCallFacts::default()
+            };
             // Only a priority group narrows a listed pass-through pick by order.
             let priority = resolution.kind == ResolveKind::RoutingGroup
                 && registry.routing_groups().iter().any(|g| {
@@ -607,6 +621,7 @@ impl<H: RouterHost> Call<'_, H> {
                 skips_batch_only: skip_batch_only,
                 wildcard_request,
                 served_as: None,
+                pre_call,
             });
         }
 
@@ -625,19 +640,24 @@ impl<H: RouterHost> Call<'_, H> {
                 .await?;
         }
 
-        if settings.enable_pre_call_checks && !resolution.kind.is_single() {
-            healthy = self
-                .pre_call_checks(
-                    snapshot,
-                    op,
-                    request,
-                    &resolution.group,
-                    name,
-                    &all,
-                    healthy,
-                )
-                .await?;
-        }
+        let (uncertain, pre_call) =
+            if settings.enable_pre_call_checks && !resolution.kind.is_single() {
+                let (filtered, facts) = self
+                    .pre_call_checks(
+                        snapshot,
+                        op,
+                        request,
+                        &resolution.group,
+                        name,
+                        &all,
+                        healthy,
+                    )
+                    .await?;
+                healthy = filtered.kept;
+                (filtered.uncertain, facts)
+            } else {
+                (BTreeMap::new(), PreCallFacts::default())
+            };
 
         if request.filter_tags && !healthy.is_empty() {
             let mut ctx = self.context(
@@ -706,6 +726,13 @@ impl<H: RouterHost> Call<'_, H> {
             }
         }
 
+        healthy = crate::precall::settle(
+            &resolution.group,
+            healthy,
+            &uncertain,
+            inputs.refuse_uncertain,
+        )?;
+
         // `deployments_admitting_embedding_batch`: an embedding pick keeps the deployments whose
         // input limit admits the batch; when none does, the host keeps what the pick waits for or
         // the 400 names.
@@ -749,7 +776,9 @@ impl<H: RouterHost> Call<'_, H> {
         }
 
         healthy.retain(|d| {
-            !request.excluded_ids.contains(&d.id) && !inputs.excluded_ids.contains(&d.id)
+            !request.excluded_ids.contains(&d.id)
+                && !inputs.excluded_ids.contains(&d.id)
+                && !inputs.refused_ids.contains(&d.id)
         });
 
         if !inputs.skipped_ids.is_empty() || !request.retry_skipped_ids.is_empty() {
@@ -787,6 +816,7 @@ impl<H: RouterHost> Call<'_, H> {
             skips_batch_only: skip_batch_only,
             wildcard_request,
             served_as: None,
+            pre_call,
         })
     }
 
@@ -801,7 +831,7 @@ impl<H: RouterHost> Call<'_, H> {
         name: &str,
         pool: &[Arc<Deployment>],
         healthy: Vec<Arc<Deployment>>,
-    ) -> Result<Vec<Arc<Deployment>>, Error> {
+    ) -> Result<(crate::precall::Filtered, PreCallFacts), Error> {
         let mut ctx = self.context(
             snapshot,
             op,
@@ -812,7 +842,8 @@ impl<H: RouterHost> Call<'_, H> {
         );
         ctx.pool = pool;
         let facts = self.host.pre_call_facts(&ctx, &healthy).await?;
-        crate::precall::filter(model_group, healthy, pool, &facts)
+        let filtered = crate::precall::filter(model_group, healthy, pool, &facts)?;
+        Ok((filtered, facts))
     }
 
     /// Pick one of `candidates.healthy` with the group's strategy.

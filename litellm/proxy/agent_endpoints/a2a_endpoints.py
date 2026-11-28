@@ -1027,7 +1027,7 @@ async def invoke_agent_a2a(
         if _agent_guardrails:
             if not isinstance(_agent_guardrails, list):
                 _agent_guardrails = [_agent_guardrails]
-            _existing_guardrails: list = data.get("guardrails") or []
+            _existing_guardrails: list[object] = data.get("guardrails") or []
             if not isinstance(_existing_guardrails, list):
                 _existing_guardrails = [_existing_guardrails]
             data["guardrails"] = _existing_guardrails + [g for g in _agent_guardrails if g not in _existing_guardrails]

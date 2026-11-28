@@ -666,6 +666,26 @@ def _logging_only_scope_error(
     return None
 
 
+def _tool_descriptions_scope_error(
+    custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
+) -> str | None:
+    if litellm_params.scan_tool_descriptions_as_text is not True:
+        return None
+    hooks: Final = configured_event_hooks(litellm_params.mode)
+    scans_logged_request: Final = (
+        GuardrailEventHooks.logging_only.value in hooks
+        and litellm_params.logging_only_scope != "output"
+        and custom_guardrail_callback.supports_logging_only_scope()
+    )
+    if GuardrailEventHooks.pre_call.value in hooks or scans_logged_request:
+        return None
+    return (
+        f"Guardrail {guardrail_name}: scan_tool_descriptions_as_text is set, but mode has neither pre_call nor a "
+        "logging_only hook that scans the request, so tool descriptions would never be scanned. Add pre_call to "
+        "mode or remove scan_tool_descriptions_as_text."
+    )
+
+
 def _logging_only_continue_error(guardrail_name: str, litellm_params: LitellmParams) -> str | None:
     if litellm_params.logging_only_continue_on_input_failure is True and (
         GuardrailEventHooks.logging_only.value not in configured_event_hooks(litellm_params.mode)
@@ -689,8 +709,11 @@ def _configure_callback_scoping(
         custom_guardrail_callback, guardrail_name, litellm_params
     )
     logging_only_continue_error: Final = _logging_only_continue_error(guardrail_name, litellm_params)
+    tool_descriptions_scope_error: Final = _tool_descriptions_scope_error(
+        custom_guardrail_callback, guardrail_name, litellm_params
+    )
     if reject_invalid_logging_only_scope:
-        for error in (logging_only_scope_error, logging_only_continue_error):
+        for error in (logging_only_scope_error, logging_only_continue_error, tool_descriptions_scope_error):
             if error is not None:
                 raise ValueError(error)
     if logging_only_scope_error is not None:
@@ -702,6 +725,11 @@ def _configure_callback_scoping(
         verbose_proxy_logger.error(
             "%s Ignoring logging_only_continue_on_input_failure; the guardrail keeps its configured mode.",
             logging_only_continue_error.replace("\r", "").replace("\n", ""),
+        )
+    if tool_descriptions_scope_error is not None:
+        verbose_proxy_logger.error(
+            "%s Ignoring scan_tool_descriptions_as_text; the guardrail keeps its configured mode.",
+            tool_descriptions_scope_error.replace("\r", "").replace("\n", ""),
         )
     logging_only_scope: Final = None if logging_only_scope_error is not None else litellm_params.logging_only_scope
     custom_guardrail_callback.logging_only_scope = logging_only_scope
@@ -717,10 +745,12 @@ def _configure_callback_scoping(
         "skip_system_message_in_guardrail",
         "skip_tool_message_in_guardrail",
         "scan_only_tool_results",
-        "scan_tool_descriptions_as_text",
         "scan_tool_calls_as_text",
     ):
         setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
+    custom_guardrail_callback.scan_tool_descriptions_as_text = (  # rebind-ok: callback configuration set at init
+        None if tool_descriptions_scope_error is not None else litellm_params.scan_tool_descriptions_as_text
+    )
     if (
         litellm_params.scan_tool_descriptions_as_text is True
         and not custom_guardrail_callback.supports_scan_tool_descriptions_as_text()
@@ -980,6 +1010,7 @@ class InMemoryGuardrailHandler:
             for error in (
                 _logging_only_scope_error(custom_guardrail_callback, guardrail_name, litellm_params),
                 _logging_only_continue_error(guardrail_name, litellm_params),
+                _tool_descriptions_scope_error(custom_guardrail_callback, guardrail_name, litellm_params),
             ):
                 if error is not None:
                     raise ValueError(error)

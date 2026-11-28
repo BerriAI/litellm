@@ -78,7 +78,7 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
     ) -> dict:

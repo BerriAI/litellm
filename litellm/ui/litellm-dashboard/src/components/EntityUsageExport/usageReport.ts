@@ -39,6 +39,7 @@ interface UsageReportInput {
   dateRange: DateRangePickerValue;
   selectedFilters: readonly string[];
   generatedAt: Date;
+  language: string;
   t: TFunction;
 }
 
@@ -76,6 +77,13 @@ const breakdownColumn = (
 const sum = (rows: readonly UsageReportRow[], pick: (row: UsageReportRow) => number): number =>
   rows.reduce((total, row) => total + pick(row), 0);
 
+const EXPORT_TYPE_KEYS = {
+  daily: "usage.export.type.daily.title",
+  daily_with_keys: "usage.export.type.dailyWithKeys.title",
+  daily_with_models: "usage.export.type.dailyWithModels.title",
+  daily_with_users: "usage.export.type.dailyWithUsers.title",
+} as const satisfies Record<ExportType, string>;
+
 export const buildUsageReportHtml = ({
   title,
   heading,
@@ -85,6 +93,7 @@ export const buildUsageReportHtml = ({
   dateRange,
   selectedFilters,
   generatedAt,
+  language,
   t,
 }: UsageReportInput): string => {
   const breakdown = breakdownColumn(exportType, t);
@@ -102,7 +111,7 @@ export const buildUsageReportHtml = ({
   ];
   const headers = [
     t("usage.export.report.columns.date"),
-    t(`usage.export.modal.entities.${entityType}`),
+    t(`usage.entityLabels.title.${entityType}`),
     ...(breakdown ? [breakdown.label] : []),
     t("usage.export.report.columns.spend"),
     t("usage.export.report.columns.requests"),
@@ -122,14 +131,16 @@ export const buildUsageReportHtml = ({
     formatCount(row.prompt_tokens),
     formatCount(row.completion_tokens),
   ];
-  const range = `${dateRange.from?.toLocaleDateString() ?? "-"} - ${dateRange.to?.toLocaleDateString() ?? "-"}`;
+  const locale = language.startsWith("en") ? undefined : language;
+  const range = `${dateRange.from?.toLocaleDateString(locale) ?? "-"} - ${dateRange.to?.toLocaleDateString(locale) ?? "-"}`;
+  const exportTypeLabel = t(EXPORT_TYPE_KEYS[exportType], { entityType: t(`usage.entityLabels.inline.${entityType}`) });
   const meta: readonly (readonly [string, string])[] = [
     [t("usage.export.report.meta.dateRange"), range],
-    [t("usage.export.report.meta.exportType"), exportType],
+    [t("usage.export.report.meta.exportType"), exportTypeLabel],
     ...(selectedFilters.length > 0
       ? [[t("usage.export.report.meta.filters"), selectedFilters.join(", ")] as const]
       : []),
-    [t("usage.export.report.meta.generated"), generatedAt.toLocaleString()],
+    [t("usage.export.report.meta.generated"), generatedAt.toLocaleString(locale)],
   ];
 
   return `<!DOCTYPE html>

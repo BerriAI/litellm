@@ -1,5 +1,6 @@
 "use client";
 
+import { displayDate } from "@/i18n/displayDate";
 import React, { useMemo, useState } from "react";
 import type { TFunction } from "i18next";
 import { Trans, useTranslation } from "react-i18next";
@@ -505,7 +506,7 @@ const previousSummary = (job: ShadowEvalJob, t: TFunction): string => {
 };
 
 const PreviousJob: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const { data: detail, isError } = useShadowEvalJob(expanded ? job.job_id : null);
   const shown = detail ?? job;
@@ -528,7 +529,7 @@ const PreviousJob: React.FC<{ job: ShadowEvalJob }> = ({ job }) => {
                   errored: (shown.error_count ?? 0).toLocaleString(),
                   spend: usd(totalSpend(shown)),
                 })}
-              {new Date(shown.created_at).toLocaleDateString()}
+              {displayDate(new Date(shown.created_at), locale.language)}
             </p>
           </div>
         </div>

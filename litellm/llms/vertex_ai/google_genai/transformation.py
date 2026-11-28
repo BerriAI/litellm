@@ -85,7 +85,7 @@ class VertexAIGoogleGenAIConfig(GoogleGenAIConfig):
         model: str,
         contents: object,
         tools: object | None,
-        generate_content_config_dict: dict,
+        generate_content_config_dict: dict[str, object],
         system_instruction: object | None = None,
     ) -> dict[str, object]:
         """

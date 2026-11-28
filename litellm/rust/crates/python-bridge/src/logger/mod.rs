@@ -14,4 +14,4 @@ mod process;
 mod route;
 
 pub(crate) use machine::LoggedMachine;
-pub(crate) use process::{capture, process};
+pub(crate) use process::{capture, delivered, process};

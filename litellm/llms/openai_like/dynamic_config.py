@@ -475,7 +475,7 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             headers: dict[str, object],
             model: str,
             litellm_params: GenericLiteLLMParams | None,
-        ) -> dict:
+        ) -> dict[str, object]:
             litellm_params = litellm_params or GenericLiteLLMParams()
             api_key: Final = litellm_params.api_key or provider.api_key_from(get_secret_str)
             if api_key:

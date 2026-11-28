@@ -5,8 +5,12 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { RotateCw, Save } from "lucide-react";
 import React, { useEffect, useState } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
+import { emptyMemberPermissions, togglePermission } from "./member_permissions_form/mapper";
+import { memberPermissionsSchema } from "./member_permissions_form/schema";
 import { getPermissionInfo } from "./permission_definitions";
 
 interface MemberPermissionsProps {
@@ -18,7 +22,9 @@ interface MemberPermissionsProps {
 const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessToken, canEditTeam }) => {
   const { t } = useTranslation();
   const [permissions, setPermissions] = useState<string[]>([]);
-  const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
+  const form = useZodForm(memberPermissionsSchema, { defaultValues: emptyMemberPermissions });
+  const { field: selectedPermissionsField } = useController({ control: form.control, name: "team_member_permissions" });
+  const selectedPermissions = selectedPermissionsField.value;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
@@ -31,7 +37,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
       const allPermissions = response.all_available_permissions || [];
       setPermissions(allPermissions);
       const teamPermissions = response.team_member_permissions || [];
-      setSelectedPermissions(teamPermissions);
+      form.reset({ team_member_permissions: teamPermissions });
       setHasChanges(false);
     } catch (error) {
       toast.fromError(t("teams.memberPermissions.toasts.loadFailed"));
@@ -46,10 +52,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
   }, [teamId, accessToken]);
 
   const handlePermissionChange = (permission: string, checked: boolean) => {
-    const newSelectedPermissions = checked
-      ? [...selectedPermissions, permission]
-      : selectedPermissions.filter((p) => p !== permission);
-    setSelectedPermissions(newSelectedPermissions);
+    selectedPermissionsField.onChange(togglePermission(selectedPermissions, permission, checked));
     setHasChanges(true);
   };
 
@@ -57,7 +60,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
     try {
       if (!accessToken) return;
       setSaving(true);
-      await teamPermissionsUpdateCall(accessToken, teamId, selectedPermissions);
+      await teamPermissionsUpdateCall(accessToken, teamId, form.getValues("team_member_permissions"));
       toast.success(t("teams.memberPermissions.toasts.updated"));
       setHasChanges(false);
     } catch (error) {

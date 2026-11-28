@@ -45,12 +45,12 @@ output "s3_bucket" {
 
 output "master_key_secret_arn" {
   description = "Secrets Manager ARN holding LITELLM_MASTER_KEY. Fetch with `aws secretsmanager get-secret-value --secret-id <arn>`."
-  value       = aws_secretsmanager_secret.master_key.arn
+  value       = local.master_key_secret_arn
 }
 
 output "db_master_password_secret_arn" {
   description = "Secrets Manager ARN holding the Aurora master credentials (bootstrap-only). Used to create the IAM-authed application user. Null when `create_database = false`."
-  value       = one(aws_secretsmanager_secret.db_master_password[*].arn)
+  value       = local.db_master_password_secret_arn
 }
 
 # Pre-baked SQL to run once as the master user, creating the IAM-authed

@@ -18,6 +18,7 @@ from openai.types import (
     ImagesResponse,
 )
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
@@ -39,6 +40,10 @@ _KNOWN_EVENTS: Final[Mapping[str, type[BaseModel]]] = {
 ImageStreamExceptionMapper: TypeAlias = Callable[[Exception], Exception]
 
 
+class _ImageResponseExtras(TypedDict, total=False, extra_items=object):
+    pass
+
+
 def image_stream_requested(value: object) -> bool:
     try:
         return _STREAM_FLAG.validate_python(value)
@@ -55,16 +60,22 @@ def is_completed_image_event(event: BaseModel) -> bool:
     return isinstance(event_type, str) and event_type.endswith(_COMPLETED_SUFFIX)
 
 
+def _image_response_extras(payload: Mapping[str, object]) -> _ImageResponseExtras:
+    return _ImageResponseExtras(
+        **{
+            field: payload[field]
+            for field in ("usage", "size", "quality", "output_format", "background")
+            if field in payload
+        }
+    )
+
+
 def image_response_from_completed_event(event: BaseModel) -> ImageResponse:
     payload: Final = event.model_dump(exclude_none=True)
     return ImageResponse(
         created=payload.get("created_at"),
         data=[ImageObject(b64_json=payload.get("b64_json"))],
-        **{
-            field: payload[field]
-            for field in ("usage", "size", "quality", "output_format", "background")
-            if field in payload
-        },
+        **_image_response_extras(payload),
     )
 
 

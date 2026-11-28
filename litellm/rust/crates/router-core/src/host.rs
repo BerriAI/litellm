@@ -263,8 +263,6 @@ pub enum ModelInfoLookup {
     /// The queried deployment's own `model_info`, read when the merge reaches it (a malformed one
     /// raises there).
     UserModelInfo,
-    /// A log record, emitted where the Python router logs it.
-    Log { level: LogLevel, message: String },
     /// Group info: deployment `index`'s validated params (`LiteLLM_Params(**litellm_params)`, which
     /// raises on bad params): answered with `{"model", "configurable_clientside_auth_params"}`.
     GroupParams { index: usize },
@@ -288,13 +286,6 @@ pub enum ModelInfoLookup {
     GroupSeed { info: Map<String, Value> },
     /// `intersect_supported_reasoning_efforts(current, resolved)`, in the host's advertisement order.
     ReasoningIntersect { current: Value, resolved: Value },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LogLevel {
-    Debug,
-    Error,
 }
 
 /// One attempt against one deployment.
@@ -328,6 +319,8 @@ pub struct Attempt {
     pub max_retries: u32,
     /// How many deployments `get_model_list` lists for the level's group (`model_group_size`).
     pub model_group_size: usize,
+    pub refused_ids: Vec<String>,
+    pub provider_refused_window: bool,
 }
 
 /// What a successful attempt returns: the host's own response, which the core hands back
@@ -597,6 +590,11 @@ pub enum RouterEvent {
         model: String,
         cause: RetryCause,
     },
+    ContextWindowRaised {
+        level: u32,
+        deployment_id: Option<String>,
+        stream_origin: bool,
+    },
     /// The first failure of a hop serving `model` read a request `num_retries` that raises
     /// ([`UncountedRetries::Raises`]): the hop ends with that error (the host raises it, from the
     /// failure `cause` names), and falls back as from any plain exception.
@@ -756,6 +754,11 @@ pub trait RouterHost: Send + Sync {
     ) -> impl Future<Output = Result<PreCallFacts, Error>> + Send {
         let _ = (ctx, candidates);
         async { Ok(PreCallFacts::default()) }
+    }
+
+    fn provider_model_id<'a>(&self, model_id: &'a str, provider: &str) -> &'a str {
+        let _ = provider;
+        model_id
     }
 
     /// `f"{provider}/{model}"` for `ctx.name`, which `PatternMatchRouter.get_pattern` tries when

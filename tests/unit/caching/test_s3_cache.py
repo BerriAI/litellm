@@ -386,3 +386,27 @@ def test_s3_cache_stream_azure(
 
     assert "".join(chunk.choices[0].delta.content or "" for chunk in first_chunks) == "stream cached in s3"
     assert "".join(chunk.choices[0].delta.content or "" for chunk in second_chunks) == "stream cached in s3"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_write", [False, True])
+async def test_s3_response_cache_refresh_stores_refreshed_payload_with_request_ttl(
+    mock_s3_dependencies: dict[str, MagicMock], async_write: bool
+) -> None:
+    cache: Final = Cache(type="s3", s3_bucket_name="test-bucket")
+    cache.add_cache({"id": "first"}, cache_key="entry", cache={"ttl": 60})
+    refresh_kwargs: Final = {"cache_key": "entry", "cache": {"no-cache": True, "ttl": 10}}
+    if async_write:
+        await cache.async_add_cache({"id": "refreshed"}, **refresh_kwargs)
+    else:
+        cache.add_cache({"id": "refreshed"}, **refresh_kwargs)
+
+    puts: Final = [c.kwargs for c in mock_s3_dependencies["s3_client"].put_object.call_args_list]
+    assert [put["Key"] for put in puts] == ["entry", "entry"]
+    assert [put["CacheControl"] for put in puts] == [
+        "immutable, max-age=60, s-maxage=60",
+        "immutable, max-age=10, s-maxage=10",
+    ]
+    stored: Final = [json.loads(put["Body"]) for put in puts]
+    assert [set(entry) for entry in stored] == [{"timestamp", "response"}, {"timestamp", "response"}]
+    assert [entry["response"] for entry in stored] == [{"id": "first"}, {"id": "refreshed"}]

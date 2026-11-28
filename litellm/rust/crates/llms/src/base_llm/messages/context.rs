@@ -28,6 +28,7 @@ impl SupportedEffortTiers {
 pub struct MessagesShapeOptions {
     pub reasoning_auto_summary: bool,
     pub presanitized: bool,
+    pub drops_unsupported_params: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

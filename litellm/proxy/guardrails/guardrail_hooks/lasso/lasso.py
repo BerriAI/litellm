@@ -71,7 +71,7 @@ class LassoResponse(TypedDict):
 
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.lasso import LassoGuardrailConfigModel
 
 
 class LassoGuardrailMissingSecrets(Exception):
@@ -453,7 +453,7 @@ class LassoGuardrail(CustomGuardrail):
         message_type: Literal["PROMPT", "COMPLETION"],
         messages: Sequence[Mapping[str, object]],
         messages_count: int,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Handle masking with classifix endpoint.
 
         ``messages_count`` is the number of inspected items derived from
@@ -1014,7 +1014,7 @@ class LassoGuardrail(CustomGuardrail):
         return with_server_tool_call_arguments(server_tool_call, json.dumps(masked_input))
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[LassoGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.lasso import (
             LassoGuardrailConfigModel,
         )

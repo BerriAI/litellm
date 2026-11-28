@@ -15,7 +15,7 @@ class TelegramBotApiTokenDetector(RegexBasedDetector):
         return "Telegram Bot API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             re.compile(
                 r"""(?i)(?:^|[^0-9])([0-9]{5,16}:A[a-zA-Z0-9_\-]{34})(?:$|[^a-zA-Z0-9_\-])"""

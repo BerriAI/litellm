@@ -465,9 +465,9 @@ mod tests {
 
     use super::*;
     use crate::{
+        Affiliation, Holder,
         authn::key::KeyRecord,
         commit::{self, Grant, Grants},
-        identity::jwt::JwtRows,
         testing::{Labels, ScriptedHost},
     };
 
@@ -500,7 +500,12 @@ mod tests {
             end_user_id: None,
             agent_id: None,
             managed_agent: None,
-            rows: JwtRows::default(),
+            affiliation: Affiliation {
+                holder: Holder::Nobody,
+                org: None,
+                project: None,
+            },
+            end_user: None,
         }
     }
 

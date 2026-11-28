@@ -23,6 +23,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     delta_event,
     duration_usage,
     error_event,
+    ignored_session_settings,
     json_object,
     parse_transcription_session_update,
     speech_event,
@@ -154,11 +155,6 @@ def _language_hints(
 
 def _uses_endpoint_detection(update: TranscriptionSessionUpdate, drop_params: bool) -> bool:
     return uses_server_vad(update, "Soniox realtime", drop_params, SonioxProtocolError)
-
-
-def _ignored_settings(update: TranscriptionSessionUpdate) -> tuple[str, ...]:
-    vad_tuning: Final = (f"turn_detection.{key}" for key in sorted(update.turn_detection or {}) if key != "type")
-    return (*update.unsupported_transcription_keys, *vad_tuning)
 
 
 def build_start_request(
@@ -510,7 +506,7 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
             raise SonioxProtocolError("Soniox realtime takes OpenAI realtime events, and this message has no type")
         if event_type in SESSION_UPDATE_EVENT_TYPES:
             update: Final = parse_transcription_session_update(message, SonioxProtocolError)
-            ignored: Final = _ignored_settings(update)
+            ignored: Final = ignored_session_settings(update)
             if ignored:
                 verbose_logger.warning("Soniox realtime: ignoring unsupported session settings %s", ignored)
             return self._start(model, update)

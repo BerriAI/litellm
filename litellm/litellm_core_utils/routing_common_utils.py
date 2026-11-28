@@ -401,7 +401,7 @@ def add_model_file_id_mappings(
 def filter_team_based_models(
     healthy_deployments: list[dict] | dict,
     request_kwargs: dict | None = None,
-) -> list[dict] | dict:
+) -> list[dict[str, object]] | dict[str, object]:
     """
     If a model has a team_id
 
@@ -524,7 +524,7 @@ def is_web_search_request(request_kwargs: Mapping[str, object]) -> bool:
 def filter_web_search_deployments(
     healthy_deployments: list[dict] | dict,
     request_kwargs: Mapping[str, object] | None = None,
-) -> list[dict] | dict:
+) -> list[dict[str, object]] | dict[str, object]:
     """
     If the request is websearch, filter out deployments that don't support web search
     """

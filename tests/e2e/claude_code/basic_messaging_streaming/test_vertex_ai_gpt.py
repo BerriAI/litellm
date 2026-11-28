@@ -1,7 +1,7 @@
-"""basic_messaging_streaming x Vertex AI (GPT-5.6) — not applicable.
+"""basic_messaging_streaming x Vertex AI (GPT-6) — not applicable.
 
 GCP is the only one of the big-three clouds without OpenAI's
-closed-weight GPT-5.6 family (Sol / Terra / Luna); Vertex AI Model
+closed-weight GPT-6 family (Sol / Terra / Luna / Astra); Vertex AI Model
 Garden carries only the open-weight gpt-oss MaaS models. The cell
 reports `not_applicable` so the published matrix documents the gap
 explicitly instead of leaving a `not_tested` hole.

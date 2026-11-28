@@ -24,7 +24,7 @@ _OPENAI_REGIONAL_HOSTS: Final[dict[str, str]] = {
 }
 
 
-def infer_openai_data_residency(custom_llm_provider: str | None, api_base: str | None) -> str | None:
+def infer_openai_data_residency(custom_llm_provider: object, api_base: object) -> str | None:
     """
     Derive the OpenAI data-residency region from an api_base URL.
 
@@ -41,7 +41,7 @@ def infer_openai_data_residency(custom_llm_provider: str | None, api_base: str |
     resolved_api_base: Final = (
         api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
     )
-    if not resolved_api_base:
+    if not isinstance(resolved_api_base, str) or not resolved_api_base:
         return None
     try:
         host: Final = urlparse(resolved_api_base).hostname

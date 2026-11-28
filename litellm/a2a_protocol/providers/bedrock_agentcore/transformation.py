@@ -142,7 +142,7 @@ class BedrockAgentCoreA2ATransformation:
         method: str = "message/send",
         stream: bool = False,
         agent_extra_headers: Mapping[str, str] | None = None,
-    ) -> tuple[str, dict, bytes]:
+    ) -> tuple[str, dict[str, object], bytes]:
         """
         Build the AgentCore URL, construct a JSON-RPC envelope, and sign the request.
 

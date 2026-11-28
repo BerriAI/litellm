@@ -581,11 +581,9 @@ async def _prepare_spend_counter_increment(
     2. If not found, reseed from the DB via `SpendCounterReseed.coalesced`.
        Falls back to the cached object's `.spend` via user_api_key_cache
        only if prisma is unavailable, since that value can lag the flusher.
-    3. Seed counter via async_increment_cache (not async_set_cache) to avoid a
-       check-then-set race: if two pods cold-start simultaneously, both may see
-       the counter as absent and seed it. Using increment means the worst case
-       is over-counting (conservative, blocks slightly early) rather than
-       under-counting (would allow overspend).
+    3. That cached fallback only raises the counter to the cached spend:
+       requests and pods that all see the counter as absent leave the largest
+       cached spend in it, where an increment from each would multiply it.
     4. Increment is returned for the caller to apply via pipeline
     """
     from litellm.proxy import proxy_server

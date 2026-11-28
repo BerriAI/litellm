@@ -1,11 +1,15 @@
+locals {
+  lb_ip = local.private_lb ? one(google_compute_address.private_lb[*].address) : one(google_compute_global_address.lb[*].address)
+}
+
 output "lb_ip" {
-  description = "Global anycast IP of the external HTTPS load balancer. Null when create_runtime is false."
-  value       = var.create_runtime ? one(google_compute_global_address.lb[*].address) : null
+  description = "Load balancer IP, private for internal ingress and global anycast for public ingress. Null when create_runtime is false."
+  value       = local.lb_ip
 }
 
 output "lb_url" {
   description = "Proxy URL, or null when create_runtime is false. Switches scheme based on whether lb_domains is set."
-  value       = var.create_runtime ? (local.tls_enabled ? "https://${var.lb_domains[0]}" : "http://${one(google_compute_global_address.lb[*].address)}") : null
+  value       = var.create_runtime ? (local.tls_enabled ? "https://${var.lb_domains[0]}" : "http://${local.lb_ip}") : null
 }
 
 output "gateway_service_url" {
@@ -40,7 +44,7 @@ output "redis_endpoint" {
 
 output "runtime_service_account_email" {
   description = "Runtime service account email for Cloud Run or GKE Workload Identity."
-  value       = google_service_account.runtime.email
+  value       = local.runtime_service_account_email
 }
 
 output "redis_host" {
@@ -75,12 +79,12 @@ output "gcs_bucket" {
 
 output "master_key_secret_id" {
   description = "Secret Manager resource ID holding LITELLM_MASTER_KEY. Fetch with `gcloud secrets versions access latest --secret=<id>`."
-  value       = google_secret_manager_secret.master_key.secret_id
+  value       = local.create_master_key_secret ? google_secret_manager_secret.master_key[0].secret_id : basename(var.litellm_master_key_secret_id)
 }
 
 output "db_password_secret_id" {
   description = "Secret Manager resource ID holding the Cloud SQL app-user password."
-  value       = google_secret_manager_secret.db_password.secret_id
+  value       = local.create_db_password ? google_secret_manager_secret.db_password[0].secret_id : basename(var.db_password_secret_id)
 }
 
 output "migration_run_command" {

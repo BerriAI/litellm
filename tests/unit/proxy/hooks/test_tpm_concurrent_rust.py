@@ -2120,11 +2120,11 @@ _QUOTA_JSON_TEXT: Final = '{"type":"input_image","image_url":"data:image/png;bas
             (0, 16),
         ),
         ("aresponses", {"input": _QUOTA_TEXT, "max_output_tokens": 16}, (100, 16)),
-        ("aresponses", {"input": _QUOTA_TEXT, "instructions": "b" * 400, "max_output_tokens": 16}, (100, 16)),
+        ("aresponses", {"input": _QUOTA_TEXT, "instructions": "b" * 400, "max_output_tokens": 16}, (200, 16)),
         (
             "aresponses",
             {"input": [{"role": "user", "content": _QUOTA_TEXT}], "instructions": "b" * 400, "max_output_tokens": 16},
-            (107, 16),
+            (207, 16),
         ),
         (
             "aresponses",
@@ -2158,7 +2158,7 @@ _QUOTA_JSON_TEXT: Final = '{"type":"input_image","image_url":"data:image/png;bas
             },
             (32, 16),
         ),
-        ("aresponses", {"input": "", "instructions": "b" * 400}, (0, 0)),
+        ("aresponses", {"input": "", "instructions": "b" * 400}, (100, 1024)),
         ("aembedding", {"input": [_QUOTA_TEXT]}, (100, 0)),
         ("atext_completion", {"prompt": [_QUOTA_TEXT], "max_tokens": 16}, (100, 16)),
     ],

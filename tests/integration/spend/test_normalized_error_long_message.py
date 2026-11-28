@@ -30,7 +30,6 @@ BENIGN_288KB_MODEL: Final = "x" * len(CRAFTED_MODEL)
 CRAFTED_SLOWDOWN_FACTOR: Final = 10
 FAST_SECONDS: Final = 10.0
 LIVELINESS_STALL_BUDGET_SECONDS: Final = 5.0
-BURST_STALL_BUDGET_SECONDS: Final = 5.0
 ROW_SECONDS: Final = 70
 CHAT: Final = "/v1/chat/completions"
 MESSAGES: Final = "/v1/messages"
@@ -390,10 +389,10 @@ def _assert_burst_rejections_fast(results: tuple[_BurstResult, ...], control: tu
     benign: Final = tuple(result for result in control if result.label.startswith("crafted"))
     assert crafted and all(result.status == 400 for result in crafted), crafted
     assert benign and all(result.status == 400 for result in benign), benign
-    assert_not_delayed_by(
-        (result.seconds for result in crafted),
-        control=(result.seconds for result in benign),
-        injected_delay=BURST_STALL_BUDGET_SECONDS,
+    assert_within_factor_of_control(
+        max(result.seconds for result in crafted),
+        control=max(result.seconds for result in benign),
+        factor=CRAFTED_SLOWDOWN_FACTOR,
     )
 
 

@@ -228,11 +228,11 @@ class BingGroundingSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: BaseSearchConfig.validate_environment signature
+        headers: dict[str, object],  # mutable-ok: BaseSearchConfig.validate_environment signature
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.validate_environment signature
-    ) -> dict[str, str]:  # mutable-ok: the http handler passes this straight to httpx as headers
+    ) -> dict[str, object]:  # mutable-ok: the http handler passes this straight to httpx as headers
         """
         Validate environment and return headers.
 

@@ -87,7 +87,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         timeout: float | httpx.Timeout | None,
         aimg_generation: bool = False,
         api_base: str | None = None,
-        extra_headers: dict | None = None,
+        extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         api_key: str | None = None,
     ):
@@ -211,7 +211,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         model: str,
         optional_params: dict[str, object],
         api_base: str | None,
-        extra_headers: dict | None,
+        extra_headers: dict[str, object] | None,
         logging_obj: LitellmLogging,
         prompt: str,
         api_key: str | None,

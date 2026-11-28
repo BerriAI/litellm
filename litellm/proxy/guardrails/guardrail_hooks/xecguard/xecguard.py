@@ -54,16 +54,14 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObj,
     )
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import (
-        GuardrailConfigModel,
-    )
+    from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import XecGuardConfigModel
 
 
 def _dict_fields(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, dict) else None
 
 
-def _sanitize_scan_result_for_logging(scan_result: Mapping[str, object]) -> dict:
+def _sanitize_scan_result_for_logging(scan_result: Mapping[str, object]) -> dict[str, object]:
     without_secrets: Final = {key: value for key, value in scan_result.items() if key != "secret_fields"}
     redacted: Final = redact_nested_match_and_regex_keys(without_secrets)
     masked: Final = mask_credentials_in_payload(redacted if isinstance(redacted, dict) else without_secrets)
@@ -143,7 +141,7 @@ class XecGuardGuardrail(CustomGuardrail):
         super().__init__(**forwarded)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[XecGuardConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
             XecGuardConfigModel,
         )
@@ -214,7 +212,7 @@ class XecGuardGuardrail(CustomGuardrail):
         kwargs: dict,
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:
+    ) -> tuple[dict[str, object], object]:
         """Observe-only scan for logging_only mode.
 
         Never blocks, never raises - all errors are swallowed. Records a
@@ -290,10 +288,10 @@ class XecGuardGuardrail(CustomGuardrail):
 
     def logging_hook(
         self,
-        kwargs: dict,
+        kwargs: dict[str, object],
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:
+    ) -> tuple[dict[str, object], object]:
         """Sync counterpart to ``async_logging_hook``.
 
         Runs the async version on an available loop, swallowing every

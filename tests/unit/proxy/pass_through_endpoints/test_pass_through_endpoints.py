@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import uuid
 import zlib
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
@@ -38,6 +39,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.lens.policy import LENS_LOGGING_POLICY_PARAM
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
+from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -1953,6 +1955,91 @@ async def test_pass_through_request_uses_resolved_timeout():
 
             mock_get_client.assert_called_once()
             assert mock_get_client.call_args[1]["params"]["timeout"] == 1500
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_logs_anthropic_base64_source_as_placeholder_and_forwards_it_whole():
+    image: Final = "QUJD" * 4096
+    body: Final = {
+        "model": "claude-haiku-5-5",
+        "max_tokens": 16,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": image}},
+                    {"type": "text", "text": "What is this?"},
+                ],
+            }
+        ],
+    }
+    logging_obj, sent_body = await _send_pass_through_with_upstream_down(body)
+
+    logged: Final = (
+        logging_obj.model_call_details["messages"][0]["content"],
+        logging_obj.model_call_details["input"][0]["content"],
+    )
+    assert all(image not in text and "[base64_data truncated: 12.0KB]" in text for text in logged)
+    assert json.loads(sent_body)["messages"][0]["content"][0]["source"]["data"] == image
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_copies_a_long_history_for_logging_off_the_event_loop():
+    turns: Final = tuple(
+        {"role": "user" if turn % 2 == 0 else "assistant", "content": f"turn {turn} " + "x" * 1_000}
+        for turn in range(300)
+    )
+    body: Final = {"model": "claude-haiku-5-5", "max_tokens": 16, "messages": list(turns)}
+    scan_threads: Final[list[int]] = []
+    original_scan: Final = logging_utils._truncate_base64_in_string
+
+    def recording_scan(value: str) -> str:
+        scan_threads.append(threading.get_ident())
+        return original_scan(value)
+
+    with patch.object(logging_utils, "_truncate_base64_in_string", recording_scan):
+        logging_obj, _ = await _send_pass_through_with_upstream_down(body)
+
+    assert scan_threads
+    assert threading.get_ident() not in scan_threads
+    assert all(
+        "turn 299 " in logging_obj.model_call_details[field][0]["content"] for field in ("messages", "input")
+    )
+
+
+async def _send_pass_through_with_upstream_down(body: dict[str, object]) -> tuple[LiteLLMLoggingObj, bytes]:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({})
+    mock_request.query_params = QueryParams({})
+
+    sent_bodies: Final[list[bytes]] = []
+    logging_objs: Final[list[LiteLLMLoggingObj]] = []
+
+    def refuse_upstream(upstream_request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(upstream_request.read())
+        raise httpx.ConnectError("upstream down", request=upstream_request)
+
+    def capture_logging_obj(**kwargs):
+        logging_objs.append(kwargs["data"]["litellm_logging_obj"])
+        return kwargs["data"]
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client") as mock_get_client,
+    ):
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=capture_logging_obj)
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+        mock_get_client.return_value.client = httpx.AsyncClient(transport=httpx.MockTransport(refuse_upstream))
+        with pytest.raises(ProxyException):
+            await pass_through_request(
+                request=mock_request,
+                target="http://test.com/v1/messages",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(),
+                custom_body=body,
+            )
+    return logging_objs[0], sent_bodies[0]
 
 
 @pytest.mark.asyncio
@@ -6495,8 +6582,11 @@ async def test_pass_through_request_propagates_active_trace_context(span_source:
     assert propagated.get_span_context().span_id == span.get_span_context().span_id
 
 
-async def _relay_with_trace_headers(inbound_headers: dict[str, str], forward_headers: bool):
+async def _relay_with_trace_headers(
+    inbound_headers: dict[str, str] | Headers, forward_headers: bool, *, preserve_trace_context: bool = False
+):
     from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
     captured: dict[str, httpx.Headers] = {}
 
@@ -6509,16 +6599,17 @@ async def _relay_with_trace_headers(inbound_headers: dict[str, str], forward_hea
     try:
         with ExitStack() as stack:
             _enter_relay_logging_mocks(stack, {})
-            span = tracer.start_span("litellm_request")
+            span = tracer.start_span("litellm_request", context=TraceContextTextMapPropagator().extract(inbound_headers))
             stack.callback(span.end)
             request = _relay_client_request(method="POST")
-            request.headers = Headers(inbound_headers)
+            request.headers = inbound_headers if isinstance(inbound_headers, Headers) else Headers(inbound_headers)
             response = await pass_through_request(
                 request=request,
                 target="http://internal-api.test/v1/generate",
                 custom_headers={},
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", parent_otel_span=span),
                 forward_headers=forward_headers,
+                preserve_trace_context=preserve_trace_context,
             )
     finally:
         cleanup()
@@ -6540,6 +6631,44 @@ async def test_pass_through_request_keeps_x_pass_trace_headers_when_otel_span_is
     assert upstream_headers["traceparent"] == caller_traceparent
     assert upstream_headers["tracestate"] == "vendor=caller"
     assert format(span.get_span_context().trace_id, "032x") not in upstream_headers["traceparent"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward_headers", [False, True])
+async def test_pass_through_request_preserves_caller_trace_context_when_enabled(forward_headers: bool):
+    caller_traceparent = "00-11111111111111111111111111111111-2222222222222222-01"
+    upstream_headers, _ = await _relay_with_trace_headers(
+        {"traceparent": caller_traceparent, "tracestate": "vendor=caller", "baggage": "key=value"},
+        forward_headers=forward_headers,
+        preserve_trace_context=True,
+    )
+
+    assert upstream_headers["traceparent"] == caller_traceparent
+    assert upstream_headers["tracestate"] == "vendor=caller"
+    assert upstream_headers.get("baggage") == ("key=value" if forward_headers else None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward_headers", [False, True])
+async def test_pass_through_request_preserves_multiple_tracestate_values(forward_headers: bool):
+    upstream_headers, _ = await _relay_with_trace_headers(
+        Headers(raw=[(b"tracestate", b"first=value"), (b"tracestate", b"second=value")]),
+        forward_headers=forward_headers,
+        preserve_trace_context=True,
+    )
+
+    assert upstream_headers["tracestate"] == "first=value,second=value"
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_does_not_inject_proxy_trace_context_when_preserving():
+    upstream_headers, _ = await _relay_with_trace_headers(
+        {"x-pass-anthropic-beta": "beta-1"}, forward_headers=False, preserve_trace_context=True
+    )
+
+    assert "traceparent" not in upstream_headers
+    assert "tracestate" not in upstream_headers
+    assert upstream_headers["anthropic-beta"] == "beta-1"
 
 
 @pytest.mark.asyncio
