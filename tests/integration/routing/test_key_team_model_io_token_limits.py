@@ -121,6 +121,137 @@ def test_key_model_itpm_limit_counts_the_input_the_provider_billed_and_ignores_o
         assert _limited_by(over, "model_per_key_itpm"), over.text
 
 
+BATCH_ROWS: Final = 3
+BATCH_ROW_MAX_TOKENS: Final = 100
+BATCH_ROW_WORDS: Final = 200
+
+
+def _batch_lines(model: str) -> bytes:
+    return "".join(
+        json.dumps(
+            {
+                "custom_id": f"r{index}",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": model,
+                    "max_tokens": BATCH_ROW_MAX_TOKENS,
+                    "messages": [{"role": "user", "content": "enqueued " * BATCH_ROW_WORDS}],
+                },
+            }
+        )
+        + "\n"
+        for index in range(BATCH_ROWS)
+    ).encode()
+
+
+def _batch_provider(lines: bytes) -> Callable[[Request], Reply]:
+    def reply(request: Request) -> Reply:
+        path: Final = request.target.split("?", 1)[0]
+        if request.method == "POST" and path == "/v1/files":
+            return Reply(
+                body=json.dumps(
+                    {
+                        "id": f"file-in-{uuid.uuid4().hex}",
+                        "object": "file",
+                        "purpose": "batch",
+                        "bytes": len(lines),
+                        "created_at": 1,
+                        "filename": "in.jsonl",
+                        "status": "processed",
+                    }
+                ).encode()
+            )
+        if request.method == "GET" and path.startswith("/v1/files/") and path.endswith("/content"):
+            return Reply(body=lines, content_type="application/jsonl")
+        if request.method == "POST" and path == "/v1/batches":
+            return Reply(
+                body=json.dumps(
+                    {
+                        "id": f"batch-{uuid.uuid4().hex}",
+                        "object": "batch",
+                        "endpoint": "/v1/chat/completions",
+                        "input_file_id": "file-in",
+                        "completion_window": "24h",
+                        "status": "validating",
+                        "created_at": 1,
+                    }
+                ).encode()
+            )
+        return Reply(status=404, body=json.dumps({"error": {"message": f"unscripted {request.target}"}}).encode())
+
+    return reply
+
+
+def _submit_batch(gateway: Gateway, key: str, model: str) -> httpx.Response:
+    uploaded: Final = gateway.request_multipart(
+        "/v1/files",
+        {"purpose": "batch", "model": model},
+        {"file": ("in.jsonl", _batch_lines(model), "application/jsonl")},
+        key=key,
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    return gateway.request(
+        "POST",
+        "/v1/batches",
+        {
+            "input_file_id": uploaded.json()["id"],
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "model": model,
+        },
+        key=key,
+    )
+
+
+def _batches_created(requests: tuple[Request, ...]) -> int:
+    return sum(
+        1 for request in requests if (request.method, request.target.split("?", 1)[0]) == ("POST", "/v1/batches")
+    )
+
+
+@contextmanager
+def _batch_model(gateway: Gateway) -> Iterator[tuple[Scenario, str, Callable[[], tuple[Request, ...]]]]:
+    model: Final = f"integration-batch-io-{uuid.uuid4().hex}"
+    with wire_server(_batch_provider(_batch_lines(model))) as wire, gateway.scenario() as scenario:
+        yield scenario, scenario.model(name=model, api_base=f"{wire.url}/v1"), wire.drain
+
+
+def test_a_batch_over_the_key_model_itpm_limit_is_refused_as_an_itpm_limit_before_it_reaches_the_provider(
+    gateway: Gateway,
+) -> None:
+    with _batch_model(gateway) as (scenario, model, drain):
+        limited: Final = scenario.key(metadata={"model_itpm_limit": {model: BATCH_ROW_WORDS}})
+        other: Final = scenario.key()
+
+        refused: Final = _submit_batch(gateway, limited, model)
+        assert refused.status_code == 429, refused.text
+        assert "model_per_key_itpm" in refused.text and "ITPM limit" in refused.text, refused.text
+        assert _batches_created(drain()) == 0
+
+        admitted: Final = _submit_batch(gateway, other, model)
+        assert admitted.status_code == 200, admitted.text
+        assert _batches_created(drain()) == 1
+
+
+def test_a_batch_whose_rows_may_produce_more_than_the_team_model_otpm_limit_is_refused_as_an_otpm_limit(
+    gateway: Gateway,
+) -> None:
+    with _batch_model(gateway) as (scenario, model, drain):
+        team: Final = scenario.team(metadata={"model_otpm_limit": {model: BATCH_ROWS * BATCH_ROW_MAX_TOKENS - 1}})
+        member: Final = scenario.key(team_id=team)
+        outsider: Final = scenario.key()
+
+        refused: Final = _submit_batch(gateway, member, model)
+        assert refused.status_code == 429, refused.text
+        assert "model_per_team_otpm" in refused.text and "OTPM limit" in refused.text, refused.text
+        assert _batches_created(drain()) == 0
+
+        admitted: Final = _submit_batch(gateway, outsider, model)
+        assert admitted.status_code == 200, admitted.text
+        assert _batches_created(drain()) == 1
+
+
 def test_key_model_tpm_limit_alone_still_counts_input_and_output_together(gateway: Gateway) -> None:
     with _model(gateway, prompt_tokens=ACTUAL_INPUT, completion_tokens=ACTUAL_OUTPUT) as (scenario, model):
         limited: Final = scenario.key(metadata={"model_tpm_limit": {model: LIMIT}})
