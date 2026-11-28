@@ -487,7 +487,7 @@ mod tests {
     fn served() -> ServedCall {
         ServedCall {
             model_group: "claude".to_owned(),
-            deployment: None,
+            deployment: litellm_gateway_inference::record::test_deployment("d1"),
             response_id: None,
             usage: None,
             first_event: None,

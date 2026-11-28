@@ -26,10 +26,13 @@ use axum::{
 };
 use http_body::{Frame, SizeHint};
 use litellm_call_scope::Call;
+use litellm_router_core::Deployment;
 use parking_lot::Mutex;
 use serde_json::Value;
 use tokio::task::futures::TaskLocalFuture;
 
+#[cfg(any(test, feature = "test-support"))]
+pub use self::attempt::test_deployment;
 pub use self::{
     attempt::{AttemptRecord, Recorder, ServedDeployment},
     entries::{CallState, Charged, Ended, ErrorResponse, HeadSent, unix},
@@ -86,20 +89,23 @@ pub(crate) fn default_header(
     write(|entries| entries.add_default_header(name.into(), value.into())).unwrap_or(Ok(()))
 }
 
-/// Runs `future` as one attempt of the call, and hands back what it recorded next to its output.
-/// The call's record stays in scope. A failed attempt's record also goes into the call's
-/// `failed_attempts`, with the provider's answer its error carries, since the core hands no
-/// interceptor a failed response.
-pub async fn attempt<T, F>(future: F) -> (Result<T, crate::Error>, AttemptRecord)
+/// Runs `future` as one attempt of the call on `deployment`, and hands back what it recorded next
+/// to its output. The call's record stays in scope. A failed attempt's record also goes into the
+/// call's `failed_attempts`, with the provider's answer its error carries, since the core hands
+/// no interceptor a failed response.
+pub async fn attempt<T, F>(
+    deployment: &Arc<Deployment>,
+    future: F,
+) -> (Result<T, crate::Error>, AttemptRecord)
 where
     F: Future<Output = Result<T, crate::Error>>,
 {
     let record = Arc::new(Mutex::new(AttemptRecord {
         started: Some(Instant::now()),
-        ..AttemptRecord::default()
+        ..AttemptRecord::on(deployment.clone())
     }));
     let output = ATTEMPT.scope(record.clone(), future).await;
-    let mut record = std::mem::take(&mut *record.lock());
+    let mut record = record.lock().clone();
     if let Err(error) = &output {
         record.record_failure(error);
         write(|state| state.failed_attempts.push(record.clone()));

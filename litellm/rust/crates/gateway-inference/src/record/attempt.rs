@@ -2,22 +2,29 @@
 //! runs in its own [`AttemptRecord`], which [`Recorder`] fills from the core's interceptor hooks,
 //! and only the served attempt's reaches the call's record.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use litellm_host::interceptors::{
     Cost, ExecutionFacts, Interceptors, RawResponse, RequestContext, ResultSource, RetriedRequest,
     WireRequest,
 };
 
+use litellm_router_core::Deployment;
+
 use crate::Error;
 
-/// What one attempt saw of its provider: where it called, when it began, its request went out,
-/// its response head came back and its result was ready, the headers that head carried, where
-/// its result came from and what it cost.
+/// What one attempt saw of its provider: the deployment it ran on, where it called, when it
+/// began, its request went out, its response head came back and its result was ready, the headers
+/// that head carried, where its result came from and what it cost.
 /// [`Recorder`] fills it; readers get it through the call's record, which only lends it out.
-/// `Debug` hides the URL and the headers, which can carry credentials.
-#[derive(Clone, Default, PartialEq, veil::Redact)]
+/// `Debug` hides the deployment, the URL and the headers, which can carry credentials.
+#[derive(Clone, PartialEq, veil::Redact)]
 pub struct AttemptRecord {
+    #[redact(with = "[REDACTED]")]
+    pub deployment: Arc<Deployment>,
     /// The wire URL the attempt called.
     #[redact(with = "[REDACTED]")]
     pub url: Option<String>,
@@ -41,6 +48,22 @@ pub struct AttemptRecord {
 }
 
 impl AttemptRecord {
+    /// An attempt on `deployment` that recorded nothing yet.
+    pub fn on(deployment: Arc<Deployment>) -> Self {
+        Self {
+            deployment,
+            url: None,
+            started: None,
+            sent: None,
+            head: None,
+            wait: None,
+            ready: None,
+            provider_headers: Vec::new(),
+            source: None,
+            cost: None,
+        }
+    }
+
     /// The key of the cached response the attempt was served from.
     pub fn cache_key(&self) -> Option<&str> {
         match self.source.as_ref()? {
@@ -85,9 +108,22 @@ impl AttemptRecord {
             source: Some(ResultSource::Cache {
                 key: key.to_owned(),
             }),
-            ..Self::default()
+            ..Self::on(test_deployment("d1"))
         }
     }
+}
+
+/// A deployment `id` of `anthropic/test-model` whose api key is `credential-value`, for tests.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn test_deployment(id: &str) -> Arc<Deployment> {
+    let spec = serde_json::from_value(serde_json::json!({
+        "model_name": "primary",
+        "litellm_params": {"model": "anthropic/test-model", "api_key": "credential-value"},
+        "model_info": {"id": id},
+    }))
+    .expect("a deployment spec");
+    Arc::new(Deployment::from_spec(spec).expect("a deployment"))
 }
 
 /// The deployment that served a call, as the router registry and `routing::timeout` name it.
@@ -188,7 +224,7 @@ mod tests {
     /// What `Recorder` left in the attempt in scope once the core told it of a request `sends`, a
     /// response head `responds` and a result from `source`.
     async fn seen(sends: bool, responds: bool, source: ResultSource) -> Seen {
-        let (_, record) = super::super::attempt(async {
+        let (_, record) = super::super::attempt(&test_deployment("d1"), async {
             let recorder = &Recorder;
             if sends {
                 Interceptors::<()>::before_provider_request(recorder, wire(), context())
@@ -244,7 +280,7 @@ mod tests {
     /// What a failed attempt that sent its request left in its record, inside a call.
     async fn failed(error: Error) -> (Vec<(String, String)>, bool) {
         let (_, record) = super::super::scope(super::super::CallRecord::new(), async {
-            super::super::attempt(async {
+            super::super::attempt(&test_deployment("d1"), async {
                 Interceptors::<()>::before_provider_request(&Recorder, wire(), context())
                     .await
                     .map_err(|()| Error::Internal)?;
@@ -283,7 +319,7 @@ mod tests {
         AttemptRecord {
             url: Some("https://user:credential-value@provider.test/v1".to_owned()),
             provider_headers: vec![("x-token".to_owned(), "credential-value".to_owned())],
-            ..AttemptRecord::default()
+            ..AttemptRecord::on(test_deployment("d1"))
         }
     ))]
     #[case::a_served_deployment(format!(

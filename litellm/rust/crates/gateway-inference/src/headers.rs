@@ -801,7 +801,7 @@ mod tests {
                 api_base: Some("https://a.test/v1?key=s".to_owned()),
                 timeout: Some(Duration::from_secs(5)),
             }),
-            AttemptRecord::default(),
+            AttemptRecord::on(crate::record::test_deployment("d1")),
         );
         if stream {
             entries.stream_response = true;
@@ -898,7 +898,7 @@ mod tests {
                 started: Some(at(ms)),
                 head: Some(at(ms + 3000)),
                 wait: Some(Duration::from_millis(3000)),
-                ..AttemptRecord::default()
+                ..AttemptRecord::on(crate::record::test_deployment("d1"))
             }));
         let attempt = entries.attempt.as_mut().unwrap();
         attempt.started = served.map(at);

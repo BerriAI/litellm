@@ -72,8 +72,8 @@ pub enum HookError {
 pub struct ServedCall {
     /// The model group that served it, an alias resolved, as the proxy logs it.
     pub model_group: String,
-    /// The deployment that answered, `None` when the router no longer holds it.
-    pub deployment: Option<Arc<Deployment>>,
+    /// The deployment that answered.
+    pub deployment: Arc<Deployment>,
     /// The provider's id for the answer, as the response or a stream's first event names it.
     pub response_id: Option<String>,
     /// As Python's litellm `Usage` counts it, `None` for an answer that carries no usage.
@@ -180,7 +180,7 @@ where
 /// What served a call: the model group, an alias resolved, and the deployment that answered.
 pub(crate) struct ServedBy {
     pub(crate) model_group: String,
-    pub(crate) deployment: Option<Arc<Deployment>>,
+    pub(crate) deployment: Arc<Deployment>,
 }
 
 /// What a stream's events told of its answer before it ended: when the first one arrived and the
