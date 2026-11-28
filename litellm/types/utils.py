@@ -3353,6 +3353,8 @@ class StandardLoggingPromptManagementMetadata(TypedDict):
     prompt_id: str
     prompt_variables: dict | None
     prompt_integration: str
+    prompt_label: ReadOnly[NotRequired[str | None]]
+    prompt_version: ReadOnly[NotRequired[int | None]]
 
 
 class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):

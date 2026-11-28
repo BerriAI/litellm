@@ -8401,12 +8401,16 @@ class StandardLoggingPayloadSetup:
         if litellm_params is not None:
             prompt_id: Final = cast(str | None, litellm_params.get("prompt_id", None))
             prompt_variables: Final = cast(dict | None, litellm_params.get("prompt_variables", None))
+            prompt_label: Final = cast(str | None, litellm_params.get("prompt_label", None))
+            prompt_version: Final = cast(int | None, litellm_params.get("prompt_version", None))
 
             if prompt_id is not None and prompt_integration is not None:
                 prompt_management_metadata = StandardLoggingPromptManagementMetadata(
                     prompt_id=prompt_id,
                     prompt_variables=prompt_variables,
                     prompt_integration=prompt_integration,
+                    prompt_label=prompt_label,
+                    prompt_version=prompt_version,
                 )
 
         kubernetes_pod_routing: Final = proxy_stamped_kubernetes_pod_routing(metadata, litellm_params)
