@@ -39,8 +39,8 @@ class PromptLayerLogger:
                 new_kwargs[optional_param] = kwargs["optional_params"][optional_param]
 
             # Extract PromptLayer tags from metadata, if such exists
-            tags = []
-            metadata = {}
+            tags: list[object] = []  # mutable-ok: built here, sent as is
+            metadata: dict[str, object] = {}  # mutable-ok: built here, sent as is
             if "metadata" in kwargs["litellm_params"]:
                 if "pl_tags" in kwargs["litellm_params"]["metadata"]:
                     tags = kwargs["litellm_params"]["metadata"]["pl_tags"]

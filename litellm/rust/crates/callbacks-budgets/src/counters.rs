@@ -8,9 +8,9 @@
 
 use std::collections::HashSet;
 
+use aws_lc_rs::digest::{SHA256, digest};
 use litellm_redis_store::{auth_cache::AuthObject, spend_counters::SpendCounter};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
-use sha2::{Digest, Sha256};
 
 use crate::charge::{CounterStep, WindowSource};
 
@@ -187,7 +187,7 @@ pub(crate) fn charged(response_cost: Option<f64>) -> Option<f64> {
 
 fn hashed_token(token: &str) -> String {
     if token.starts_with("sk-") {
-        format!("{:x}", Sha256::digest(token.as_bytes()))
+        hex::encode(digest(&SHA256, token.as_bytes()))
     } else {
         token.to_owned()
     }
@@ -456,7 +456,7 @@ mod tests {
             token: Some("sk-raw-key".into()),
             ..CounterStep::default()
         });
-        let hashed = format!("{:x}", Sha256::digest(b"sk-raw-key"));
+        let hashed = "7e829077433c1b2fa414ae023e40914235063fcb5cf3cb0797e835c509a9b02a".to_owned();
         assert_eq!(
             scopes[0].tasks[0],
             Task::Counter {

@@ -179,9 +179,9 @@ function UsedUpAlert({
   budgetResetAt: string | null;
   href: string | undefined;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const scope = SCOPE_KEYS[budget.scope];
-  const reset = resetSentence(budget, formatBudgetResetTime(budgetResetAt));
+  const reset = resetSentence(budget, formatBudgetResetTime(budgetResetAt, t, i18n.language));
   const owner = ownerText(budget, true);
   return (
     <Alert variant="error">

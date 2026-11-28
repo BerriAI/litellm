@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use litellm_redis_store::auth_cache::{ExcludedIfNone, OrganizationMembershipEntry, UserEntry};
-use litellm_repositories::{OrganizationMembership, Side, SignIn, User, UserRepository};
+use litellm_repositories::{
+    Inserted, NewUserDefaults, OrganizationMembership, Resolution, Side, SignIn, SsoLink, User,
+    UserRepository,
+};
 
 use crate::{
     Error,
@@ -34,6 +37,88 @@ impl UserDatabase {
             .map(user_entry)
             .transpose()
     }
+
+    /// The user `sign_in` resolves to by id, then by SSO id, then by email, linking its SSO id as
+    /// `get_user_object` does, or `None` when no row matches. The entry is the row as the resolve
+    /// read it, which Python caches, so a user that just had its own id linked as its SSO id still
+    /// holds none.
+    pub async fn sign_in(&self, sign_in: &SignIn, side: Side) -> Result<Option<SignedIn>, Error> {
+        let Some(Resolution { user, sso_link }) = self.users.resolve_sign_in(sign_in, side).await?
+        else {
+            return Ok(None);
+        };
+        let owes_email = sign_in.user_email.is_some() && user.user_email.is_none();
+        Ok(Some(SignedIn {
+            user: user_entry(user)?,
+            sso_link,
+            owes_email,
+        }))
+    }
+
+    /// The user `sign_in` would resolve to, read without linking anything, or `None` when no row
+    /// matches. A host that must know the user before it lets a sign-in write reads this first,
+    /// and makes the sign-in with [`Self::sign_in`] once it will.
+    pub async fn found(&self, sign_in: &SignIn, side: Side) -> Result<Option<UserEntry>, Error> {
+        self.users
+            .find(sign_in, side)
+            .await?
+            .map(user_entry)
+            .transpose()
+    }
+
+    /// Creates the user `sign_in` names with `defaults`, as `get_user_object` does under
+    /// `user_id_upsert`, and returns the entry for the row as stored. A sign-in that loses to a
+    /// concurrent one gets the entry for the row that won, or `Conflict(None)` when that row is
+    /// gone again.
+    pub async fn insert(
+        &self,
+        sign_in: &SignIn,
+        defaults: &NewUserDefaults,
+    ) -> Result<Inserted<UserEntry>, Error> {
+        Ok(match self.users.insert(sign_in, defaults).await? {
+            Inserted::Created(user) => Inserted::Created(user_entry(user)?),
+            Inserted::Conflict(user) => Inserted::Conflict(user.map(user_entry).transpose()?),
+        })
+    }
+
+    /// Stores `user_email` on `user_id` while the row has none, as `_backfill_null_user_email`
+    /// does, and returns the entry for the row as stored, also when it already held an email.
+    /// `None` when another user holds the email and `links_any_user` is off, or the row is gone.
+    pub async fn backfill_email(
+        &self,
+        user_id: &str,
+        user_email: &str,
+        links_any_user: bool,
+    ) -> Result<Option<UserEntry>, Error> {
+        self.users
+            .backfill_email_returning(user_id, user_email, links_any_user)
+            .await?
+            .map(user_entry)
+            .transpose()
+    }
+
+    /// Sets the role of `user_id`, as the JWT role sync does, and returns the entry for the row as
+    /// stored, or `None` when no row has that id.
+    pub async fn set_role(
+        &self,
+        user_id: &str,
+        user_role: &str,
+    ) -> Result<Option<UserEntry>, Error> {
+        self.users
+            .set_role(user_id, user_role)
+            .await?
+            .map(user_entry)
+            .transpose()
+    }
+}
+
+/// The user a sign-in found, how its SSO id was linked, and whether the sign-in carries an email
+/// the row lacks, which `_backfill_null_user_email` would store.
+#[derive(Debug, PartialEq)]
+pub struct SignedIn {
+    pub user: UserEntry,
+    pub sso_link: SsoLink,
+    pub owes_email: bool,
 }
 
 fn organization_membership_entry(

@@ -86,6 +86,7 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
               data={topModels.map((m) => ({ key: m.model, spend: m.spend }))}
               index="key"
               categories={["spend"]}
+              categoryLabels={{ spend: t("activityMetrics.series.spend") }}
               colors={["cyan"]}
               valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
               layout="vertical"

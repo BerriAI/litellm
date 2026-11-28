@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import hashlib
 import json
 import threading
 import uuid
@@ -40,6 +41,7 @@ SECRET_KEY: Final = "sk-lf-integration"
 PROJECTS_PATH: Final = "/api/public/projects"
 TRACES_PATH: Final = "/api/public/otel/v1/traces"
 PROMPTS_PATH: Final = "/api/public/v2/prompts/"
+MEDIA_PATH: Final = "/api/public/media"
 STOCK_CONFIG: Final = Path("tests/integration/proxy_config.yaml")
 CONFIG_SECTIONS: Final = ("litellm_settings", "environment_variables")
 LANGFUSE_ENVIRONMENT: Final = ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
@@ -238,6 +240,110 @@ def test_langfuse_callback_delivers_the_generation_over_otlp_v4_with_the_caller_
             _attribute(attributes, "langfuse.observation.metadata.litellm_call_id")
             == response.headers["x-litellm-call-id"]
         )
+
+
+def test_langfuse_callback_uploads_a_base64_image_and_exports_only_its_media_reference(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "langfusemedia" + uuid.uuid4().hex
+    image: Final = (marker + "-image-bytes").encode() * 64
+    image_uri: Final = "data:image/png;base64," + base64.b64encode(image).decode()
+    image_sha256: Final = base64.b64encode(hashlib.sha256(image).digest()).decode()
+    media_id: Final = image_sha256.replace("+", "-").replace("/", "_")[:22]
+    reference: Final = f"@@@langfuseMedia:type=image/png|id={media_id}|source=base64_data_uri@@@"
+
+    def upstream(request: Request) -> Reply:
+        return _completion(marker + "-answer")
+
+    def store(request: Request) -> Reply:
+        return Reply(body=b"")
+
+    with wire_server(store) as storage:
+
+        def langfuse(request: Request) -> Reply:
+            if request.method == "GET" and request.target.startswith(PROJECTS_PATH):
+                return _projects()
+            if request.method == "POST" and request.target == MEDIA_PATH:
+                return Reply(
+                    status=201,
+                    body=json.dumps({"mediaId": media_id, "uploadUrl": storage.url + "/bucket/" + media_id}).encode(),
+                )
+            if request.method == "PATCH" and request.target.startswith(MEDIA_PATH + "/"):
+                return Reply()
+            return Reply(body=b"", content_type="application/x-protobuf")
+
+        with (
+            wire_server(upstream) as provider,
+            wire_server(langfuse) as destination,
+            owned_proxy(
+                gateway, tmp_path, _langfuse_environment(destination), config=_langfuse_config(tmp_path)
+            ) as candidate,
+            candidate.scenario() as scenario,
+        ):
+            model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-" + marker)
+            response: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": marker + "-question"},
+                                {"type": "image_url", "image_url": {"url": image_uri}},
+                            ],
+                        }
+                    ],
+                    "metadata": {"generation_name": marker},
+                    "cache": {"no-cache": True},
+                },
+            )
+            assert response.status_code == 200, response.text
+            received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
+            stored: Final[list[Request]] = []  # mutable-ok: same, for the media storage
+
+            def delivered() -> tuple[tuple[Span, ...], tuple[Request, ...], tuple[Request, ...]]:
+                received.extend(destination.drain())
+                stored.extend(storage.drain())
+                return (
+                    tuple(span for span in _spans(received) if span.name == marker),
+                    tuple(request for request in received if request.target.startswith(MEDIA_PATH + "/")),
+                    tuple(stored),
+                )
+
+            spans, confirmations, uploads = eventually(
+                delivered, lambda values: all(len(value) == 1 for value in values), seconds=20
+            )
+            span: Final = spans[0]
+            exported_input: Final = str(_attribute(span.attributes, "langfuse.observation.input"))
+            assert reference in exported_input
+            assert marker + "-question" in exported_input
+            for request in received:
+                assert base64.b64encode(image) not in request.body, request.target
+
+            registrations: Final = tuple(
+                request for request in received if request.method == "POST" and request.target == MEDIA_PATH
+            )
+            assert registrations
+            basic: Final = "Basic " + base64.b64encode(f"{PUBLIC_KEY}:{SECRET_KEY}".encode()).decode()
+            for registration in registrations:
+                assert registration.headers["authorization"] == basic
+                registered = json.loads(registration.body)
+                assert registered["traceId"] == span.trace_id.hex()
+                assert registered["observationId"] == span.span_id.hex()
+                assert registered["field"] == "input"
+                assert registered["contentType"] == "image/png"
+                assert registered["contentLength"] == len(image)
+                assert registered["sha256Hash"] == image_sha256
+
+            upload: Final = uploads[0]
+            assert (upload.method, upload.target, upload.body) == ("PUT", "/bucket/" + media_id, image)
+            assert upload.headers["content-type"] == "image/png"
+            assert upload.headers["x-amz-checksum-sha256"] == image_sha256
+            confirmation: Final = confirmations[0]
+            assert (confirmation.method, confirmation.target) == ("PATCH", MEDIA_PATH + "/" + media_id)
+            assert json.loads(confirmation.body)["uploadHttpStatus"] == 200
 
 
 def test_langfuse_callback_stored_in_the_db_through_config_update_delivers_the_generation_over_otlp_v4(

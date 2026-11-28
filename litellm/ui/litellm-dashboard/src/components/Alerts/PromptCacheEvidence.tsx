@@ -1,10 +1,11 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import { useTranslation } from "react-i18next";
 import type { PromptCacheDetails } from "./alertPresentation";
 
 const timeFormat = { dateStyle: "medium", timeStyle: "medium", timeZone: "UTC" } as const;
 
 export default function PromptCacheEvidence({ details }: { details: PromptCacheDetails }) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const facts: [string, string][] = [
     [t("alerts.unified.promptCache.deployment"), details.deploymentId],
     [t("alerts.unified.promptCache.model"), details.model],
@@ -20,8 +21,8 @@ export default function PromptCacheEvidence({ details }: { details: PromptCacheD
     [
       t("alerts.unified.promptCache.window"),
       t("alerts.unified.promptCache.windowValue", {
-        start: new Date(details.firstMiss).toLocaleString(undefined, timeFormat),
-        end: new Date(details.lastMiss).toLocaleString(undefined, timeFormat),
+        start: displayTimestamp(new Date(details.firstMiss), locale.language, timeFormat),
+        end: displayTimestamp(new Date(details.lastMiss), locale.language, timeFormat),
       }),
     ],
   ];

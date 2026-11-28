@@ -752,6 +752,7 @@ FIREWORKS_AI_80_B: Final = get_env_int("FIREWORKS_AI_80_B", 80)
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = get_env_int("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
 LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS: Final = 10_000
+LANGFUSE_MEDIA_QUEUE_MAX_BYTES: Final = max(1, get_env_int("LANGFUSE_MEDIA_QUEUE_MAX_BYTES", 100 * 1024 * 1024))
 # Backpressure + lifetime bounds for the /v1/messages streaming relay (see
 # BaseAnthropicMessagesStreamingIterator.async_sse_wrapper). The relay queue is
 # bounded so a slow client throttles the upstream pump instead of letting it
@@ -772,6 +773,10 @@ ANTHROPIC_MESSAGES_STREAM_CLIENT_STALL_TIMEOUT_SECONDS: Final = get_env_float(
 ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS: Final = get_env_float(
     "ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 600.0
 )
+RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS: Final = get_env_float(
+    "RESPONSES_API_DISCONNECT_DRAIN_TIMEOUT_SECONDS", 600.0
+)
+RESPONSES_API_UNCLAIMED_STREAM_CLOSE_GRACE_SECONDS: Final = 30.0
 LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 100)  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
@@ -1504,7 +1509,7 @@ WANDB_MODELS: Final[set[str]] = set(
     ]
 )
 
-modelscope_models: Final[set] = set(
+modelscope_models: Final[set[str]] = set(
     [
         # Qwen series models
         "Qwen/Qwen3-0.6B",
@@ -1807,6 +1812,7 @@ INVALID_API_KEY_ERROR_MESSAGE: Final = "Authentication Error, Invalid API key pr
 # provenance. Message text is caller-influenceable on other 401s, so it must not
 # be used to classify.
 INVALID_VIRTUAL_KEY_ERROR_MARKER: Final = "_litellm_invalid_virtual_key_error"
+AUTHENTICATION_FAILURE_MARKER: Final = "_litellm_authentication_failure"
 
 # Python garbage collection threshold configuration
 # Format: "gen0,gen1,gen2" e.g., "1000,50,50"

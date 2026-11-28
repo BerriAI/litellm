@@ -49,7 +49,8 @@ import {
 import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
-import ModelInfoEditForm, { type ModelEditSubmitValues, type TouchedPricingField } from "./ModelInfoEditForm";
+import ModelInfoEditForm from "./ModelInfoEditForm";
+import type { ModelEditSubmitValues, TouchedPricingField } from "./model-edit/schema";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -77,7 +78,7 @@ export default function ModelInfoView({
   onModelUpdate,
   modelAccessGroups,
 }: ModelInfoViewProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const activityDateRange = useActivityDateRange();
   const [localModelData, setLocalModelData] = useState<any>(null);
@@ -674,7 +675,7 @@ export default function ModelInfoView({
                 </svg>
                 {t("modelInfoView.audit.createdAt")}{" "}
                 {modelData.model_info.created_at
-                  ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {
+                  ? new Date(modelData.model_info.created_at).toLocaleDateString(i18n.language, {
                       month: "short",
                       day: "numeric",
                       year: "numeric",

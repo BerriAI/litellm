@@ -506,11 +506,8 @@ class DataDogLogger(
                     end_time=end_time,
                 )
 
-            # Build headers
-            headers: Final = {}
-            # Add API key if available (required for direct API, optional for agent)
-            if self.DD_API_KEY:
-                headers["DD-API-KEY"] = self.DD_API_KEY
+            # API key is required for the direct API and optional for the agent
+            headers: Final[Mapping[str, str]] = {"DD-API-KEY": self.DD_API_KEY} if self.DD_API_KEY else {}
 
             response: Final = self.sync_client.post(
                 url=self.intake_url,

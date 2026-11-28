@@ -12,6 +12,7 @@ export type AreaChartProps<TDatum extends Record<string, unknown>> = {
   data: readonly TDatum[];
   index: string;
   categories: readonly string[];
+  categoryLabels?: Readonly<Record<string, string>>;
   colors?: readonly ChartColor[];
   valueFormatter?: (value: number) => string;
   yAxisWidth?: number;
@@ -28,6 +29,7 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
   data,
   index,
   categories,
+  categoryLabels,
   colors,
   valueFormatter,
   yAxisWidth = 56,
@@ -54,7 +56,9 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
   }
 
   const fills = categoryFills(categories.length, colors);
-  const config: ChartConfig = Object.fromEntries(categories.map((category) => [category, { label: category }]));
+  const config: ChartConfig = Object.fromEntries(
+    categories.map((category) => [category, { label: categoryLabels?.[category] ?? category }]),
+  );
   const TooltipContent = customTooltip ?? ValueTooltip;
 
   return (
@@ -94,6 +98,7 @@ export function AreaChart<TDatum extends Record<string, unknown>>({
             key={category}
             type="linear"
             dataKey={category}
+            name={categoryLabels?.[category]}
             stroke={fills[i]}
             strokeWidth={2}
             fill={`url(#fill-${gradientId}-${i})`}
