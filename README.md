@@ -197,23 +197,28 @@ curl http://localhost:4000/v1/chat/completions \
 ### Python SDK - A2A Protocol
 
 ```python
+import asyncio
+from uuid import uuid4
 from litellm.a2a_protocol import A2AClient
 from a2a.types import SendMessageRequest, MessageSendParams
-from uuid import uuid4
 
-client = A2AClient(base_url="http://localhost:10001")
+async def main():
+    client = A2AClient(base_url="http://localhost:10001")
 
-request = SendMessageRequest(
-    id=str(uuid4()),
-    params=MessageSendParams(
-        message={
-            "role": "user",
-            "parts": [{"kind": "text", "text": "Hello!"}],
-            "messageId": uuid4().hex,
-        }
+    request = SendMessageRequest(
+        id=str(uuid4()),
+        params=MessageSendParams(
+            message={
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Hello!"}],
+                "messageId": uuid4().hex,
+            }
+        )
     )
-)
-response = await client.send_message(request)
+    response = await client.send_message(request)
+    print(response)
+
+asyncio.run(main())
 ```
 
 ### AI Gateway (Proxy Server)
