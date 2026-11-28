@@ -53,6 +53,45 @@ def _streamed_text(chunks: list[object]) -> str:
     return "".join(chunk.choices[0].delta.content or "" for chunk in chunks if isinstance(chunk, ModelResponseStream))
 
 
+def _text_delta_stream_without_block_start_text(text: str) -> bytes:
+    """A compatible gateway starts the text block without its ``text`` field."""
+    events: Final = (
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
+    )
+    return "".join(
+        f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n" for name, payload in events
+    ).encode()
+
+
+@pytest.mark.asyncio
+async def test_streaming_text_block_start_without_text_field_delivers_deltas():
+    """A text ``content_block_start`` that omits ``text`` must not raise KeyError:
+    the block's empty prefix is an empty string and the following deltas carry
+    the answer (gateway compatibility, #47871)."""
+    mock_client: Final = AsyncMock()
+    mock_client.post.return_value = httpx.Response(
+        200, stream=httpx.ByteStream(_text_delta_stream_without_block_start_text("Hi there"))
+    )
+
+    completion_stream, _ = await make_call(
+        client=mock_client,
+        api_base="https://api.anthropic.com/v1/messages",
+        headers={},
+        data="{}",
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Hi"}],
+        logging_obj=MagicMock(),
+        timeout=60.0,
+        json_mode=False,
+    )
+
+    assert _streamed_text([chunk async for chunk in completion_stream]) == "Hi there"
+
+
 @pytest.mark.asyncio
 async def test_make_call_passes_logging_obj_to_client_post():
     """make_call must pass logging_obj to client.post so track_llm_api_timing can set llm_api_duration_ms for litellm_overhead_time_ms."""
