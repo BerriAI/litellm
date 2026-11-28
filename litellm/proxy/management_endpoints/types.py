@@ -17,6 +17,7 @@ from litellm.proxy._types import LitellmUserRoles
 LITELLM_USER_ROLE_HIERARCHY: Final = (
     LitellmUserRoles.PROXY_ADMIN,
     LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    LitellmUserRoles.ORG_ADMIN,
     LitellmUserRoles.INTERNAL_USER,
     LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
 )
