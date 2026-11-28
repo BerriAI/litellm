@@ -855,6 +855,32 @@ def test_build_vertex_schema_array_branch_missing_items_in_anyof():
         assert branch.get("items") == {"type": "object"}, f"array branch must have items synthesized; got {branch}"
 
 
+def test_build_vertex_schema_required_only_anyof_branches_keep_properties():
+    """
+    Regression: an `anyOf` of required-only branches must not drop the
+    sibling `properties` — each branch has to define every property it
+    requires, or Vertex rejects the request with
+    `required[0]: property is not defined`.
+    """
+    from litellm.llms.vertex_ai.common_utils import build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "route": {"type": "string"},
+            "file": {"type": "string"},
+        },
+        "anyOf": [{"required": ["route"]}, {"required": ["file"]}],
+    }
+
+    result = build_vertex_schema(parameters)
+    branches = result["anyOf"]
+    assert branches, "expected the anyOf branches to remain after transform"
+    for branch in branches:
+        for name in branch.get("required", []):
+            assert name in branch.get("properties", {}), f"branch requires {name} but defines no properties: {branch}"
+
+
 def test_vertex_ai_complex_response_schema():
     from copy import deepcopy
 
@@ -3232,7 +3258,6 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
         )
 
     assert (None if result is None else result.total_tokens) == vertex_counted_tokens
-
 
 
 @pytest.mark.timeout(10)

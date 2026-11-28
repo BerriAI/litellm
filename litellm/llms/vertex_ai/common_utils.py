@@ -1326,6 +1326,12 @@ def _filter_anyof_fields(schema_dict: dict[str, object]) -> dict[str, object]:
 
     Case 2: If additional metadata is present, try to keep it
     E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test", "title": "test"} -> {"anyOf": [{"type": "string", "title": "test"}, {"type": "null", "title": "test"}]}
+
+    Case 3: If every branch only carries `required` (the "at least one of these
+    fields" pattern), the branches name properties that only exist on the
+    sibling `properties`, so copy those into each branch. Otherwise Vertex
+    rejects the branch with `required[0]: property is not defined`.
+    E.g. {"type": "object", "properties": {"route": {"type": "string"}}, "anyOf": [{"required": ["route"]}]} -> {"anyOf": [{"type": "object", "properties": {"route": {"type": "string"}}, "required": ["route"]}]}
     """
     title: Final = schema_dict.get("title", None)
     description: Final = schema_dict.get("description", None)
@@ -1338,6 +1344,22 @@ def _filter_anyof_fields(schema_dict: dict[str, object]) -> dict[str, object]:
                     item["title"] = title
                 if description:
                     item["description"] = description
+        properties: Final = schema_dict.get("properties", None)
+        if (
+            isinstance(properties, dict)
+            and properties
+            and isinstance(any_of, list)
+            and all(isinstance(item, dict) for item in any_of)
+            and all(set(item.keys()) <= {"required", "type", "title", "description"} for item in any_of)
+            and "required" not in schema_dict
+            and all(
+                isinstance(item.get("required"), list) and all(name in properties for name in item["required"])
+                for item in any_of
+                if "required" in item
+            )
+        ):
+            for item in any_of:
+                item["properties"] = deepcopy(properties)
         return {"anyOf": any_of}
     return schema_dict
 
