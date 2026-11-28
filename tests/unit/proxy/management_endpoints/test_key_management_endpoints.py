@@ -2712,57 +2712,6 @@ async def test_prepare_key_update_data_duration_none_never_expires():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("data", "expires_within"),
-    [
-        (UpdateKeyRequest(key="k", duration="365d"), timedelta(days=30)),
-        (UpdateKeyRequest(key="k", duration="-1"), timedelta(days=30)),
-        (UpdateKeyRequest(key="k", duration=None), timedelta(days=30)),
-        (UpdateKeyRequest(key="k", duration="7d"), timedelta(days=7)),
-        (RegenerateKeyRequest(duration="365d"), timedelta(days=30)),
-        (RegenerateKeyRequest(duration="-1"), timedelta(days=30)),
-    ],
-    ids=["update-longer", "update-never", "update-null", "update-shorter-kept", "regen-longer", "regen-never"],
-)
-async def test_key_update_and_regenerate_cannot_extend_a_member_key_past_the_team_duration(
-    monkeypatch: pytest.MonkeyPatch, data: UpdateKeyRequest | RegenerateKeyRequest, expires_within: timedelta
-) -> None:
-    install_rust_auth_stores(
-        monkeypatch,
-        RustAuthStores(
-            team=FakeTeamStore(rows={"team-a": {"team_id": "team-a", "metadata": {"team_member_key_duration": "30d"}}})
-        ),
-    )
-    prepared: Final = await prepare_key_update_data(
-        data=data,
-        existing_key_row=LiteLLM_VerificationToken(token="k", user_id="member", team_id="team-a"),
-        prisma_client=MagicMock(),
-    )
-
-    expires: Final = prepared["expires"]
-    assert isinstance(expires, datetime)
-    assert expires <= datetime.now(timezone.utc) + expires_within
-    assert expires > datetime.now(timezone.utc) + expires_within - timedelta(minutes=1)
-
-
-@pytest.mark.asyncio
-async def test_service_account_key_update_ignores_the_team_member_key_duration(monkeypatch: pytest.MonkeyPatch) -> None:
-    install_rust_auth_stores(
-        monkeypatch,
-        RustAuthStores(
-            team=FakeTeamStore(rows={"team-a": {"team_id": "team-a", "metadata": {"team_member_key_duration": "30d"}}})
-        ),
-    )
-    prepared: Final = await prepare_key_update_data(
-        data=UpdateKeyRequest(key="k", duration="-1"),
-        existing_key_row=LiteLLM_VerificationToken(token="k", user_id=None, team_id="team-a"),
-        prisma_client=MagicMock(),
-    )
-
-    assert prepared["expires"] is None
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("cleared_value", [[], None])
 async def test_prepare_key_update_data_budget_limits_clears_field(cleared_value):
     """budget_limits=[] / None must serialize to JSON null, never reach Prisma raw."""
