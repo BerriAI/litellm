@@ -1,10 +1,11 @@
 import asyncio
 import hashlib
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+import sys
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from itertools import chain
-from typing import Final, NoReturn
+from typing import TYPE_CHECKING, Final, NoReturn, Protocol
 
 import anyio
 from anyio.abc import TaskGroup, TaskStatus
@@ -48,6 +49,7 @@ from mcp.types import (
 )
 
 from litellm.constants import MCP_TOOL_LISTING_MAX_PAGES, MCP_TOOL_LISTING_TIMEOUT
+from litellm.litellm_core_utils.attribute_shapes import has_attributes
 from litellm.mcp_client.client import MCPClient
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -61,6 +63,30 @@ from litellm.proxy.mcp_server.catalog import (
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.types.mcp import MCP_LEGACY_VERSIONS
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+if not TYPE_CHECKING and sys.version_info < (3, 11):
+    from exceptiongroup import BaseExceptionGroup
+
+
+class _SupportsExceptionGroup(Protocol):
+    @property
+    def exceptions(self) -> tuple[BaseException, ...]: ...
+
+
+def _flatten_exceptions(error: BaseException) -> tuple[BaseException, ...]:
+    if has_attributes(error, _SupportsExceptionGroup, "exceptions"):
+        return tuple(chain.from_iterable(_flatten_exceptions(child) for child in error.exceptions))
+    return (error,)
+
+
+def _unwrap_startup_error(error: BaseExceptionGroup[BaseException]) -> BaseException:
+    leaves: Final = _flatten_exceptions(error)
+    if not leaves:
+        return error
+    if len(leaves) == 1:
+        return leaves[0]
+    preferred: Final = next((item for item in leaves if isinstance(item, (HTTPException, MCPError))), None)
+    return preferred if preferred is not None else error
 
 
 class SubscriptionAuthorization:
@@ -171,6 +197,68 @@ class SubscriptionTarget:
     server: MCPServer
     client: MCPClient
     credential: str
+
+
+def _raise_unwrapped_group_error(exc_group: BaseExceptionGroup[BaseException]) -> NoReturn:
+    unwrapped: Final = _unwrap_startup_error(exc_group)
+    if unwrapped is not exc_group:
+        raise unwrapped from exc_group
+    raise exc_group
+
+
+def _merge_honored_filters(honored: tuple[SubscriptionFilter, ...]) -> SubscriptionFilter:
+    return SubscriptionFilter(
+        tools_list_changed=any(item.tools_list_changed for item in honored) or None,
+        prompts_list_changed=any(item.prompts_list_changed for item in honored) or None,
+        resources_list_changed=any(item.resources_list_changed for item in honored) or None,
+        resource_subscriptions=list(
+            dict.fromkeys(chain.from_iterable(item.resource_subscriptions or () for item in honored))
+        )
+        or None,
+    )
+
+
+def _validate_listen_targets(
+    ctx: ServerRequestContext,
+    params: SubscriptionsListenRequestParams,
+    targets: tuple[SubscriptionTarget, ...],
+) -> None:
+    if any(target.server.protocol_version == "2026-07-28" and target.server.transport != "http" for target in targets):
+        raise MCPError(code=-32602, message="Modern upstream subscriptions require HTTP")
+    if not targets:
+        raise HTTPException(status_code=403, detail="No authorized MCP subscription targets")
+    if params.notifications.resource_subscriptions and len(targets) != 1:
+        raise MCPError(code=-32602, message="Resource subscriptions require exactly one allowed server")
+
+
+class _RelayStarter(Protocol):
+    def __call__(
+        self, target: SubscriptionTarget, *, task_status: TaskStatus[SubscriptionFilter]
+    ) -> Coroutine[object, object, None]: ...
+
+
+async def _start_relays(
+    group: TaskGroup,
+    relay: _RelayStarter,
+    targets: tuple[SubscriptionTarget, ...],
+) -> tuple[SubscriptionFilter, ...]:
+    loop: Final = asyncio.get_running_loop()
+    pending: Final[tuple[asyncio.Future[SubscriptionFilter], ...]] = tuple(loop.create_future() for _ in targets)
+    try:
+        async with anyio.create_task_group() as start_group:
+
+            async def start_relay(slot: asyncio.Future[SubscriptionFilter], target: SubscriptionTarget) -> None:
+                slot.set_result(
+                    SubscriptionFilter.model_validate(
+                        await group.start(relay, target)  # pyright: ignore[reportAny]  # anyio.TaskGroup.start returns Any
+                    )
+                )
+
+            for slot, target in zip(pending, targets, strict=True):
+                start_group.start_soon(start_relay, slot, target)
+    except BaseExceptionGroup as exc_group:
+        _raise_unwrapped_group_error(exc_group)
+    return tuple(slot.result() for slot in pending)
 
 
 class _AuthorizedSession(ServerSession):
@@ -434,24 +522,31 @@ class GatewaySubscriptions:
         key: Final = id(ctx.session.client_params)
         if ctx.session.client_params is None or key in self._legacy:
             return
-        async with anyio.create_task_group() as group:
-            state: Final = LegacySubscriptionSession(group, authorization, {}, asyncio.Lock())
-            self._legacy = {**self._legacy, key: state}
-            self._legacy_started.set()
-            try:
-                await group.start(
-                    self._legacy_listener,
-                    ctx,
-                    SubscriptionFilter(tools_list_changed=True, prompts_list_changed=True, resources_list_changed=True),
-                    authorization,
-                    _unmetered,
-                )
-                if (ready := self._initializing.get(key)) is not None:
-                    ready.set()
-                await anyio.sleep_forever()
-            finally:
-                self._legacy = {registered: state for registered, state in self._legacy.items() if registered != key}
-                group.cancel_scope.cancel()
+        try:
+            async with anyio.create_task_group() as group:
+                state: Final = LegacySubscriptionSession(group, authorization, {}, asyncio.Lock())
+                self._legacy = {**self._legacy, key: state}
+                self._legacy_started.set()
+                try:
+                    await group.start(
+                        self._legacy_listener,
+                        ctx,
+                        SubscriptionFilter(
+                            tools_list_changed=True, prompts_list_changed=True, resources_list_changed=True
+                        ),
+                        authorization,
+                        _unmetered,
+                    )
+                    if (ready := self._initializing.get(key)) is not None:
+                        ready.set()
+                    await anyio.sleep_forever()
+                finally:
+                    self._legacy = {
+                        registered: state for registered, state in self._legacy.items() if registered != key
+                    }
+                    group.cancel_scope.cancel()
+        except BaseExceptionGroup as exc_group:
+            _raise_unwrapped_group_error(exc_group)
 
     async def _legacy_listener(
         self,
@@ -514,14 +609,7 @@ class GatewaySubscriptions:
     ) -> SubscriptionsListenResult:
         context: Final = await authorize()
         targets: Final = await self._resolve_targets(context)
-        if any(
-            target.server.protocol_version == "2026-07-28" and target.server.transport != "http" for target in targets
-        ):
-            raise MCPError(code=-32602, message="Modern upstream subscriptions require HTTP")
-        if not targets:
-            raise HTTPException(status_code=403, detail="No authorized MCP subscription targets")
-        if params.notifications.resource_subscriptions and len(targets) != 1:
-            raise MCPError(code=-32602, message="Resource subscriptions require exactly one allowed server")
+        _validate_listen_targets(ctx, params, targets)
         bus: Final = _ListenerBus()
         handler: Final = ListenHandler(bus, max_subscriptions=1, max_buffered_events=128)
 
@@ -601,28 +689,21 @@ class GatewaySubscriptions:
             finally:
                 self._upstream_slots.release()
 
-        async with _listener_admission(targets), anyio.create_task_group() as group:
-            honored: Final = tuple(
-                [SubscriptionFilter.model_validate(await group.start(relay, target)) for target in targets]
-            )
-            notifications: Final = SubscriptionFilter(
-                tools_list_changed=any(item.tools_list_changed for item in honored) or None,
-                prompts_list_changed=any(item.prompts_list_changed for item in honored) or None,
-                resources_list_changed=any(item.resources_list_changed for item in honored) or None,
-                resource_subscriptions=list(
-                    dict.fromkeys(chain.from_iterable(item.resource_subscriptions or () for item in honored))
-                )
-                or None,
-            )
-            group.start_soon(_recheck_authorization, check)
-            try:
-                if ctx.protocol_version != "2026-07-28":
-                    await _deliver_legacy(ctx, bus, check, notifications, ready)
-                return await handler(
-                    replace(ctx, session=_AuthorizedSession(ctx.session, check)),
-                    params.model_copy(update={"notifications": notifications}),
-                )
-            finally:
-                group.cancel_scope.cancel()
+        try:
+            async with _listener_admission(targets), anyio.create_task_group() as group:
+                honored: Final = await _start_relays(group, relay, targets)
+                notifications: Final = _merge_honored_filters(honored)
+                group.start_soon(_recheck_authorization, check)
+                try:
+                    if ctx.protocol_version != "2026-07-28":
+                        await _deliver_legacy(ctx, bus, check, notifications, ready)
+                    return await handler(
+                        replace(ctx, session=_AuthorizedSession(ctx.session, check)),
+                        params.model_copy(update={"notifications": notifications}),
+                    )
+                finally:
+                    group.cancel_scope.cancel()
+        except BaseExceptionGroup as exc_group:
+            _raise_unwrapped_group_error(exc_group)
 
         raise MCPError(code=-32001, message="Subscription ended before completion")

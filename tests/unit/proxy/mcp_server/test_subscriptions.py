@@ -377,7 +377,9 @@ async def test_proxy_route_rejects_legacy_resource_subscription_before_setup(met
 
     from litellm.proxy.mcp_server import server
 
-    params = (SubscribeRequestParams if method == "subscribe_resource" else UnsubscribeRequestParams)(uri="test://value")
+    params = (SubscribeRequestParams if method == "subscribe_resource" else UnsubscribeRequestParams)(
+        uri="test://value"
+    )
     token = server._mcp_proxy_mode.set(True)
     try:
         with pytest.raises(MCPError, match="/mcp/proxy"):
@@ -506,17 +508,13 @@ async def test_all_failed_tools_listing_keeps_empty_catalog_digest(monkeypatch: 
 
     listener_context: Final = OperationContext(_caller=UserAPIKeyAuth(user_id="listener"))
     empty_gateway: Final = _ListingGateway(result=ListToolsResult(tools=[]))
-    monkeypatch.setattr(
-        "litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway
-    )
+    monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway)
     empty_digest: Final = await subscriptions._listing(ToolsListChanged(), listener_context)
 
     failed_gateway: Final = _ListingGateway(
         error=ToolListingFailedOutright(code=-32603, message="Every MCP server in scope failed")
     )
-    monkeypatch.setattr(
-        "litellm.proxy.mcp_server.operations.GatewayOperations", lambda: failed_gateway
-    )
+    monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: failed_gateway)
     failed_digest: Final = await subscriptions._listing(ToolsListChanged(), listener_context)
 
     assert failed_digest == empty_digest
@@ -534,3 +532,168 @@ async def test_tools_listing_propagates_other_mcp_errors(monkeypatch: pytest.Mon
         await subscriptions._listing(ToolsListChanged(), listener_context)
 
     assert exc_info.value is failure
+
+
+@pytest.mark.asyncio
+async def test_upstream_targets_started_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
+    from collections.abc import Awaitable, Callable
+
+    from mcp import ClientSession
+    from mcp.types import ServerCapabilities, ToolsCapability
+
+    from litellm.proxy.mcp_server import operations
+
+    caller: Final = UserAPIKeyAuth(api_key="concurrent-key", user_id="alice")
+    servers: Final = tuple(
+        MCPServer(
+            server_id=f"target-{i}",
+            name=f"target-{i}",
+            url=f"http://localhost/{i}",
+            transport="http",
+            protocol_version="2026-07-28",
+        )
+        for i in range(3)
+    )
+    empty_gateway: Final = _ListingGateway(result=ListToolsResult(tools=[]))
+    monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway)
+
+    started: Final = asyncio.Queue[int]()
+    release: Final = asyncio.Event()
+
+    def make_client(idx: int) -> Mock:
+        upstream: Final = Mock(spec=ClientSession)
+        upstream.server_capabilities = ServerCapabilities(tools=ToolsCapability(list_changed=True))
+        upstream.protocol_version = "2025-11-25"
+        upstream.send_ping = AsyncMock()
+
+        async def run_with_session(
+            connected: Callable[[ClientSession], Awaitable[None]],
+            on_notification: object = None,
+        ) -> None:
+            _ = on_notification
+            started.put_nowait(idx)
+            await release.wait()
+            await connected(upstream)
+
+        client: Final = Mock(spec=MCPClient)
+        client.run_with_session = AsyncMock(side_effect=run_with_session)
+        return client
+
+    targets: Final = tuple(
+        subscriptions.SubscriptionTarget(s, make_client(i), f"fingerprint-{i}") for i, s in enumerate(servers)
+    )
+
+    async def resolve(_: OperationContext) -> tuple[subscriptions.SubscriptionTarget, ...]:
+        return targets
+
+    initial: Final = operations.prepare_context(user_api_key_auth=caller, mcp_servers=[s.server_id for s in servers])
+    authorize: Final = AsyncMock(return_value=initial)
+    session: Final = Mock(spec=ServerSession)
+    session.client_params = Mock()
+    session.send_notification = AsyncMock()
+
+    service: Final = subscriptions.GatewaySubscriptions(resolve_targets=resolve)
+    key: Final = id(session.client_params)
+    ready: Final = asyncio.Event()
+    service._initializing = {key: ready}
+
+    listener: Final = asyncio.create_task(
+        service.legacy_session(
+            context(session, "2025-11-25"),
+            subscriptions.SubscriptionAuthorization(initial, authorize, lambda *_: "alice"),
+        )
+    )
+    try:
+        started_targets: Final = frozenset([await asyncio.wait_for(started.get(), timeout=5.0) for _ in servers])
+        assert started_targets == frozenset(range(len(servers)))
+        release.set()
+        await asyncio.wait_for(ready.wait(), timeout=5.0)
+        assert ready.is_set()
+    finally:
+        listener.cancel()
+        await asyncio.gather(listener, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_upstream_target_startup_failure_cancels_peers_and_releases_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from collections.abc import Awaitable, Callable
+
+    from mcp import ClientSession
+    from mcp.types import ServerCapabilities, ToolsCapability
+
+    from litellm.proxy.mcp_server import operations
+
+    caller: Final = UserAPIKeyAuth(api_key="failure-key", user_id="alice")
+    servers: Final = tuple(
+        MCPServer(
+            server_id=f"fail-target-{i}",
+            name=f"fail-target-{i}",
+            url=f"http://localhost/{i}",
+            transport="http",
+            protocol_version="2026-07-28",
+        )
+        for i in range(3)
+    )
+    empty_gateway: Final = _ListingGateway(result=ListToolsResult(tools=[]))
+    monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway)
+
+    cancelled_targets: Final = asyncio.Queue[int]()
+    target_0_started: Final = asyncio.Event()
+
+    def make_client(idx: int) -> Mock:
+        upstream: Final = Mock(spec=ClientSession)
+        upstream.server_capabilities = ServerCapabilities(tools=ToolsCapability(list_changed=True))
+        upstream.protocol_version = "2025-11-25"
+        upstream.send_ping = AsyncMock()
+
+        async def run_with_session(
+            connected: Callable[[ClientSession], Awaitable[None]],
+            on_notification: object = None,
+        ) -> None:
+            _ = on_notification
+            if idx == 1:
+                await target_0_started.wait()
+                raise MCPError(code=-32000, message="upstream handshake failed")
+            target_0_started.set()
+            try:
+                await asyncio.sleep(10.0)
+                await connected(upstream)
+            except asyncio.CancelledError:
+                cancelled_targets.put_nowait(idx)
+                raise
+
+        client: Final = Mock(spec=MCPClient)
+        client.run_with_session = AsyncMock(side_effect=run_with_session)
+        return client
+
+    targets: Final = tuple(
+        subscriptions.SubscriptionTarget(s, make_client(i), f"fingerprint-{i}") for i, s in enumerate(servers)
+    )
+
+    async def resolve(_: OperationContext) -> tuple[subscriptions.SubscriptionTarget, ...]:
+        return targets
+
+    initial: Final = operations.prepare_context(user_api_key_auth=caller, mcp_servers=[s.server_id for s in servers])
+    authorize: Final = AsyncMock(return_value=initial)
+    session: Final = Mock(spec=ServerSession)
+    session.client_params = Mock()
+    session.send_notification = AsyncMock()
+
+    service: Final = subscriptions.GatewaySubscriptions(resolve_targets=resolve)
+    initial_upstream_borrowed: Final = service._upstream_slots.borrowed_tokens
+    initial_listener_borrowed: Final = service._slots.borrowed_tokens
+
+    expected_error: Final = pytest.raises(MCPError)
+    with expected_error as exc_info:
+        await service.legacy_session(
+            context(session, "2025-11-25"),
+            subscriptions.SubscriptionAuthorization(initial, authorize, lambda *_: "alice"),
+        )
+
+    assert exc_info.value.error.code == -32000
+    assert "upstream handshake failed" in exc_info.value.error.message
+    assert not cancelled_targets.empty()
+    assert service._upstream_slots.borrowed_tokens == initial_upstream_borrowed
+    assert service._slots.borrowed_tokens == initial_listener_borrowed
