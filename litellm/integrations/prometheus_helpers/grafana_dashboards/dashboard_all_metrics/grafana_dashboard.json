@@ -3973,12 +3973,183 @@
       "type": "timeseries"
     },
     {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Remaining budget for a team member within a team",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 279
+      },
+      "id": 121,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "min by (team, team_alias, user) (litellm_remaining_team_member_budget_metric)",
+          "legendFormat": "{{team_alias}} / {{user}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "litellm_remaining_team_member_budget_metric",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Effective maximum budget for a team member within a team (per-member budget or the team's default member budget)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 279
+      },
+      "id": 122,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "max by (team, team_alias, user) (litellm_team_member_max_budget_metric)",
+          "legendFormat": "{{team_alias}} / {{user}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "litellm_team_member_max_budget_metric",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Hours until a team member's budget within a team resets",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "unit": "h"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 287
+      },
+      "id": 123,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "max by (team, team_alias, user) (litellm_team_member_budget_remaining_hours_metric)",
+          "legendFormat": "{{team_alias}} / {{user}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "litellm_team_member_budget_remaining_hours_metric",
+      "type": "timeseries"
+    },
+    {
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 279
+        "y": 295
       },
       "id": 72,
       "panels": [],
@@ -4011,7 +4182,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 280
+        "y": 296
       },
       "id": 73,
       "options": {
@@ -4068,7 +4239,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 280
+        "y": 296
       },
       "id": 74,
       "options": {
@@ -4125,7 +4296,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 288
+        "y": 304
       },
       "id": 75,
       "options": {
@@ -4184,7 +4355,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 296
+        "y": 312
       },
       "id": 76,
       "panels": [],
@@ -4217,7 +4388,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 297
+        "y": 313
       },
       "id": 77,
       "options": {
@@ -4274,7 +4445,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 297
+        "y": 313
       },
       "id": 78,
       "options": {
@@ -4311,7 +4482,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 305
+        "y": 321
       },
       "id": 79,
       "panels": [],
@@ -4344,7 +4515,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 306
+        "y": 322
       },
       "id": 80,
       "options": {
@@ -4401,7 +4572,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 306
+        "y": 322
       },
       "id": 81,
       "options": {
@@ -4458,7 +4629,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 314
+        "y": 330
       },
       "id": 82,
       "options": {
@@ -4515,7 +4686,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 314
+        "y": 330
       },
       "id": 83,
       "options": {
@@ -4572,7 +4743,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 322
+        "y": 338
       },
       "id": 84,
       "options": {
@@ -4651,7 +4822,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 322
+        "y": 338
       },
       "id": 85,
       "options": {
@@ -4708,7 +4879,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 330
+        "y": 346
       },
       "id": 86,
       "options": {
@@ -4765,7 +4936,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 330
+        "y": 346
       },
       "id": 87,
       "options": {
@@ -4822,7 +4993,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 338
+        "y": 354
       },
       "id": 88,
       "options": {
@@ -4859,7 +5030,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 346
+        "y": 362
       },
       "id": 89,
       "panels": [],
@@ -4892,7 +5063,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 347
+        "y": 363
       },
       "id": 90,
       "options": {
@@ -4949,7 +5120,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 347
+        "y": 363
       },
       "id": 91,
       "options": {
@@ -5006,7 +5177,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 355
+        "y": 371
       },
       "id": 92,
       "options": {
@@ -5063,7 +5234,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 355
+        "y": 371
       },
       "id": 93,
       "options": {
@@ -5120,7 +5291,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 363
+        "y": 379
       },
       "id": 94,
       "options": {
@@ -5157,7 +5328,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 371
+        "y": 387
       },
       "id": 95,
       "panels": [],
@@ -5190,7 +5361,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 372
+        "y": 388
       },
       "id": 96,
       "options": {
@@ -5247,7 +5418,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 372
+        "y": 388
       },
       "id": 97,
       "options": {
@@ -5304,7 +5475,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 380
+        "y": 396
       },
       "id": 98,
       "options": {
@@ -5341,7 +5512,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 388
+        "y": 404
       },
       "id": 99,
       "panels": [],
@@ -5374,7 +5545,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 389
+        "y": 405
       },
       "id": 100,
       "options": {
@@ -5431,7 +5602,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 389
+        "y": 405
       },
       "id": 101,
       "options": {
@@ -5488,7 +5659,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 397
+        "y": 413
       },
       "id": 102,
       "options": {
@@ -5545,7 +5716,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 397
+        "y": 413
       },
       "id": 103,
       "options": {
@@ -5624,7 +5795,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 405
+        "y": 421
       },
       "id": 104,
       "options": {
@@ -5681,7 +5852,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 405
+        "y": 421
       },
       "id": 117,
       "options": {
@@ -5718,7 +5889,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 413
+        "y": 429
       },
       "id": 105,
       "panels": [],
@@ -5751,7 +5922,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 414
+        "y": 430
       },
       "id": 106,
       "options": {
@@ -5951,7 +6122,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 414
+        "y": 430
       },
       "id": 107,
       "options": {
@@ -6162,7 +6333,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 422
+        "y": 438
       },
       "id": 108,
       "options": {
@@ -6373,7 +6544,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 422
+        "y": 438
       },
       "id": 109,
       "options": {
@@ -6496,7 +6667,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 430
+        "y": 446
       },
       "id": 110,
       "options": {
@@ -6533,7 +6704,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 438
+        "y": 454
       },
       "id": 112,
       "panels": [],
@@ -6566,7 +6737,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 439
+        "y": 455
       },
       "id": 113,
       "options": {
@@ -6623,7 +6794,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 439
+        "y": 455
       },
       "id": 114,
       "options": {
@@ -6660,7 +6831,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 447
+        "y": 463
       },
       "id": 115,
       "panels": [],
@@ -6693,7 +6864,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 448
+        "y": 464
       },
       "id": 116,
       "options": {
@@ -6741,7 +6912,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 456
+        "y": 472
       },
       "id": 117,
       "panels": [],
@@ -6774,7 +6945,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 457
+        "y": 473
       },
       "id": 118,
       "options": {
@@ -6831,7 +7002,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 457
+        "y": 473
       },
       "id": 119,
       "options": {
@@ -6888,7 +7059,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 465
+        "y": 481
       },
       "id": 120,
       "options": {

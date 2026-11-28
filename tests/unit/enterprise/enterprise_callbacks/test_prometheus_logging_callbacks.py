@@ -1699,10 +1699,14 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
         mock_orgtable.find_many = MagicMock(side_effect=Exception("Org database error"))
         mock_orgtable.count = MagicMock(side_effect=Exception("Org count error"))
 
+        mock_membershiptable = MagicMock()
+        mock_membershiptable.find_many = MagicMock(side_effect=Exception("Team membership database error"))
+
         mock_db = MagicMock()
         mock_db.litellm_usertable = mock_usertable
         mock_db.litellm_teamtable = mock_teamtable
         mock_db.litellm_organizationtable = mock_orgtable
+        mock_db.litellm_teammembership = mock_membershiptable
         mock_prisma.db = mock_db
 
         # Mock the Prometheus metrics
@@ -1718,13 +1722,14 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
             # Call the function
             await prometheus_logger._initialize_remaining_budget_metrics()
 
-            # Verify all five errors were logged (teams, keys, users, orgs, and user/team count)
-            assert mock_logger.call_count == 5
+            # Verify every family's error was logged (teams, team members, keys, users, orgs, user/team count)
+            assert mock_logger.call_count == 6
             logged = [
                 call.args[0] % call.args[1:] for call in mock_logger.call_args_list
             ]
             assert logged == [
                 "Error initializing teams budget metrics: Database error",
+                "Error initializing team_members budget metrics: Team membership database error",
                 "Error initializing keys budget metrics: Key listing error",
                 "Error initializing users budget metrics: User database error",
                 "Error initializing orgs budget metrics: Org database error",

@@ -7,9 +7,9 @@ import asyncio
 import math
 import os
 import sys
-from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import replace
-from datetime import datetime, timedelta
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Generic, Literal, Protocol, TypeAlias, TypeVar, cast
@@ -21,7 +21,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import print_verbose, verbose_logger
-from litellm.caching.redis_batch import active_request_redis_batches
+from litellm.caching.redis_batch import Batch, active_request_redis_batches
 from litellm.constants import (
     AUTH_OBJECTS_TARGET,
     IMAGE_CALL_TYPES,
@@ -66,15 +66,20 @@ from litellm.llms.azure.common_utils import caused_by_entra_rejection
 from litellm.llms.gemini.empty_image_response import is_answer_without_an_image
 from litellm.llms.github_copilot.per_user_auth import is_github_copilot_per_user_request
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTable
+from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.models.user import LiteLLM_UserTable
 from litellm.models.verification_token import LiteLLM_DeletedVerificationToken
-from litellm.repositories.base_repository import BaseRepository
+from litellm.proxy.spend_tracking.team_member_budget import TeamMemberBudget, hours_until, team_member_budget
+from litellm.redis.stores.spend_counters.types import team_member_counter
+from litellm.repositories.base_repository import BaseRepository, record_to_dict
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router_api import deployment_metadata
@@ -92,6 +97,7 @@ from litellm.types.proxy.carried_budget_state import (
     KeyBudgetSnapshot,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
+    TeamMemberBudgetSnapshot,
     UserBudgetSnapshot,
 )
 from litellm.types.utils import (
@@ -167,6 +173,37 @@ class _PaginatedPrismaTable(Protocol[_TableRowT]):
     ) -> list[_TableRowT]: ...
 
     async def count(self) -> int: ...
+
+
+@dataclass(frozen=True, slots=True)
+class TeamMemberSweepIO:
+    fetch_page: Callable[[int, int], Awaitable[tuple[Sequence[LiteLLM_TeamMembership], int | None]]]
+    fetch_teams: Callable[[Sequence[str]], Awaitable[Mapping[str, LiteLLM_TeamTable]]]
+    fetch_default: Callable[[str], Awaitable[LiteLLM_BudgetTable | None]]
+    fetch_emails: Callable[[Sequence[str]], Awaitable[Mapping[str, str | None]]]
+    read_counters: Callable[[Sequence[str]], Awaitable[Mapping[str, float | None] | None]]
+
+
+def _present(values: Iterable[str | None]) -> Iterator[str]:
+    return (value for value in values if value is not None)
+
+
+def _budgeted_members(
+    candidates: Iterable[tuple[LiteLLM_TeamMembership, LiteLLM_BudgetTable | None]], now: datetime
+) -> Iterator[tuple[LiteLLM_TeamMembership, TeamMemberBudget]]:
+    resolved: Final = (
+        (membership, team_member_budget(membership=membership, team_default_budget=team_default, now=now))
+        for membership, team_default in candidates
+    )
+    return ((membership, budget) for membership, budget in resolved if budget is not None)
+
+
+def _swept_member_spend(membership: LiteLLM_TeamMembership, counters: Mapping[str, float | None] | None) -> float:
+    stored_spend: Final = membership.spend or 0.0
+    counter_spend: Final = (
+        counters.get(team_member_counter(membership.user_id, membership.team_id)) if counters is not None else None
+    )
+    return max(counter_spend, stored_spend) if counter_spend is not None else stored_spend
 
 
 def _paginated_table(repository: BaseRepository[_TableRowT]) -> _PaginatedPrismaTable[_TableRowT]:
@@ -943,6 +980,25 @@ class PrometheusLogger(CustomLogger):
                 "litellm_customer_budget_remaining_hours_metric",
                 "Remaining hours for customer (end user) budget to be reset",
                 labelnames=self.get_labels_for_metric("litellm_customer_budget_remaining_hours_metric"),
+            )
+
+            self.litellm_remaining_team_member_budget_metric = self._gauge_factory(
+                "litellm_remaining_team_member_budget_metric",
+                "Remaining budget for a team member within a team",
+                labelnames=self.get_labels_for_metric("litellm_remaining_team_member_budget_metric"),
+            )
+
+            self.litellm_team_member_max_budget_metric = self._gauge_factory(
+                "litellm_team_member_max_budget_metric",
+                "Effective maximum budget for a team member within a team "
+                "(per-member budget or the team's default member budget)",
+                labelnames=self.get_labels_for_metric("litellm_team_member_max_budget_metric"),
+            )
+
+            self.litellm_team_member_budget_remaining_hours_metric = self._gauge_factory(
+                "litellm_team_member_budget_remaining_hours_metric",
+                "Hours until a team member's budget within a team resets",
+                labelnames=self.get_labels_for_metric("litellm_team_member_budget_remaining_hours_metric"),
             )
 
             ########################################
@@ -2406,6 +2462,7 @@ class PrometheusLogger(CustomLogger):
             and isinstance(self.litellm_remaining_user_budget_metric, NoOpMetric)
             and isinstance(self.litellm_remaining_org_budget_metric, NoOpMetric)
             and self._customer_budget_gauges_are_noop()
+            and self._team_member_budget_gauges_are_noop()
         ):
             return
 
@@ -2435,7 +2492,7 @@ class PrometheusLogger(CustomLogger):
         budget_metrics_timeout: Final = _get_budget_metrics_per_request_timeout()
         committed_read_timeout: Final = budget_metrics_timeout / 2
 
-        async def emit_budget_metrics() -> tuple[object, ...]:
+        async def emit_budget_metrics() -> tuple[tuple[str, object], ...]:
             committed: Final = await _committed_spend_without_own_charge(
                 counter_keys=_committed_at_auth.counter_keys
                 if _committed_at_auth is not None
@@ -2450,48 +2507,75 @@ class PrometheusLogger(CustomLogger):
                 response_cost=response_cost,
                 read_timeout=committed_read_timeout,
             )
-            return await asyncio.gather(
-                self._set_api_key_budget_metrics_after_api_request(
-                    user_api_key=user_api_key,
-                    user_api_key_alias=user_api_key_alias,
-                    response_cost=response_cost,
-                    key_max_budget=_api_key_max_budget,
-                    key_spend=_committed_floor(_stored_spend(_api_key_spend), committed.key),
-                    carried=KeyBudgetSnapshot.from_metadata(_carried_metadata),
+            budget_emitters: Final = (
+                (
+                    "key",
+                    self._set_api_key_budget_metrics_after_api_request(
+                        user_api_key=user_api_key,
+                        user_api_key_alias=user_api_key_alias,
+                        response_cost=response_cost,
+                        key_max_budget=_api_key_max_budget,
+                        key_spend=_committed_floor(_stored_spend(_api_key_spend), committed.key),
+                        carried=KeyBudgetSnapshot.from_metadata(_carried_metadata),
+                    ),
                 ),
-                self._set_team_budget_metrics_after_api_request(
-                    user_api_team=user_api_team,
-                    user_api_team_alias=user_api_team_alias,
-                    team_spend=_committed_floor(_stored_spend(_team_spend), committed.team),
-                    team_max_budget=_team_max_budget,
-                    response_cost=response_cost,
-                    carried=TeamBudgetSnapshot.from_metadata(_carried_metadata),
+                (
+                    "team",
+                    self._set_team_budget_metrics_after_api_request(
+                        user_api_team=user_api_team,
+                        user_api_team_alias=user_api_team_alias,
+                        team_spend=_committed_floor(_stored_spend(_team_spend), committed.team),
+                        team_max_budget=_team_max_budget,
+                        response_cost=response_cost,
+                        carried=TeamBudgetSnapshot.from_metadata(_carried_metadata),
+                    ),
                 ),
-                self._set_user_budget_metrics_after_api_request(
-                    user_id=user_id,
-                    user_spend=_committed_floor(_stored_spend(_user_spend), committed.user),
-                    user_max_budget=_user_max_budget,
-                    response_cost=response_cost,
-                    carried=UserBudgetSnapshot.from_metadata(_carried_metadata),
-                    user_email=_user_email if isinstance(_user_email, str) else None,
+                (
+                    "user",
+                    self._set_user_budget_metrics_after_api_request(
+                        user_id=user_id,
+                        user_spend=_committed_floor(_stored_spend(_user_spend), committed.user),
+                        user_max_budget=_user_max_budget,
+                        response_cost=response_cost,
+                        carried=UserBudgetSnapshot.from_metadata(_carried_metadata),
+                        user_email=_user_email if isinstance(_user_email, str) else None,
+                    ),
                 ),
-                self._set_org_budget_metrics_after_api_request(
-                    org_id=user_api_key_org_id,
-                    response_cost=response_cost,
-                    carried=OrgBudgetSnapshot.from_metadata(_carried_metadata),
-                    org_alias=_org_alias if isinstance(_org_alias, str) else None,
-                    committed_spend=committed.org,
+                (
+                    "org",
+                    self._set_org_budget_metrics_after_api_request(
+                        org_id=user_api_key_org_id,
+                        response_cost=response_cost,
+                        carried=OrgBudgetSnapshot.from_metadata(_carried_metadata),
+                        org_alias=_org_alias if isinstance(_org_alias, str) else None,
+                        committed_spend=committed.org,
+                    ),
                 ),
-                self._set_customer_budget_metrics_after_api_request(
-                    end_user_id=end_user_id,
-                    response_cost=response_cost,
-                    committed_spend=committed.end_user,
+                (
+                    "customer",
+                    self._set_customer_budget_metrics_after_api_request(
+                        end_user_id=end_user_id,
+                        response_cost=response_cost,
+                        committed_spend=committed.end_user,
+                    ),
                 ),
-                return_exceptions=True,
+                (
+                    "team_member",
+                    self._set_team_member_budget_metrics_after_api_request(
+                        team_id=user_api_team,
+                        team_alias=user_api_team_alias,
+                        user_id=user_id,
+                        user_email=_user_email if isinstance(_user_email, str) else None,
+                        carried=TeamMemberBudgetSnapshot.from_metadata(_carried_metadata),
+                        response_cost=response_cost,
+                    ),
+                ),
             )
+            results: Final = await asyncio.gather(*(emitter for _, emitter in budget_emitters), return_exceptions=True)
+            return tuple(zip((name for name, _ in budget_emitters), results, strict=True))
 
         try:
-            results: Final = await asyncio.wait_for(emit_budget_metrics(), timeout=budget_metrics_timeout)
+            named_results: Final = await asyncio.wait_for(emit_budget_metrics(), timeout=budget_metrics_timeout)
         except asyncio.TimeoutError:
             verbose_logger.debug(
                 "[Non-Blocking] Prometheus: per-request budget metric emission "
@@ -2500,13 +2584,9 @@ class PrometheusLogger(CustomLogger):
                 budget_metrics_timeout,
             )
             return
-        for i, r in enumerate(results):
-            if isinstance(r, Exception):
-                verbose_logger.debug(
-                    "[Non-Blocking] Prometheus: Budget metric lookup %s failed: %s",
-                    ("key", "team", "user", "org", "customer")[i],
-                    r,
-                )
+        for name, result in named_results:
+            if isinstance(result, Exception):
+                verbose_logger.debug("[Non-Blocking] Prometheus: Budget metric lookup %s failed: %s", name, result)
 
     def _increment_top_level_request_and_spend_metrics(
         self,
@@ -4451,7 +4531,7 @@ class PrometheusLogger(CustomLogger):
         self,
         data_fetch_function: Callable[..., Awaitable[tuple[Sequence[_BudgetRowT], int | None]]],
         set_metrics_function: Callable[[Sequence[_BudgetRowT]], Awaitable[None]],
-        data_type: Literal["teams", "keys", "users", "orgs", "customers"],
+        data_type: Literal["teams", "keys", "users", "orgs", "customers", "team_members"],
     ):
         """
         Generic method to initialize budget metrics for teams or API keys.
@@ -4653,6 +4733,127 @@ class PrometheusLogger(CustomLogger):
             data_type="customers",
         )
 
+    async def _initialize_team_member_budget_metrics(self) -> None:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None or self._team_member_budget_gauges_are_noop():
+            return
+        await self._sweep_team_member_budget_metrics(
+            self._team_member_sweep_io(prisma_client), now=datetime.now(timezone.utc)
+        )
+
+    def _team_member_sweep_io(self, prisma_client: PrismaClient) -> TeamMemberSweepIO:
+        from litellm.proxy.auth.auth_checks import get_team_member_default_budget
+        from litellm.proxy.proxy_server import spend_counter_store, user_api_key_cache
+
+        memberships_table: Final = TeamMembershipRepository(prisma_client).table
+        teams: Final = TeamRepository(prisma_client)
+        users: Final = UserRepository(prisma_client)
+
+        async def fetch_page(page_size: int, page: int) -> tuple[Sequence[LiteLLM_TeamMembership], int | None]:
+            rows: Final = await memberships_table.find_many(
+                skip=(page - 1) * page_size,
+                take=page_size,
+                order=[{"user_id": "asc"}, {"team_id": "asc"}],
+                include={"litellm_budget_table": True},
+            )
+            total_count: Final = await memberships_table.count() if page == 1 else None
+            return tuple(LiteLLM_TeamMembership.model_validate(record_to_dict(row)) for row in rows), total_count
+
+        async def fetch_teams(team_ids: Sequence[str]) -> Mapping[str, LiteLLM_TeamTable]:
+            found: Final = await teams.find_many_in("team_id", team_ids)
+            return MappingProxyType({team.team_id: team for team in found})
+
+        async def fetch_default(budget_id: str) -> LiteLLM_BudgetTable | None:
+            return await get_team_member_default_budget(
+                budget_id=budget_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                raise_on_lookup_error=True,
+            )
+
+        async def fetch_emails(user_ids: Sequence[str]) -> Mapping[str, str | None]:
+            found: Final = await users.find_many_in("user_id", user_ids)
+            return MappingProxyType({user.user_id: user.user_email for user in found})
+
+        async def read_counters(counter_keys: Sequence[str]) -> Mapping[str, float | None] | None:
+            try:
+                return await spend_counter_store.read_many(counter_keys, batch=Batch.NONE)
+            except Exception as e:  # noqa: BLE001  # a failed counter read falls back to the stored member spend
+                verbose_logger.debug("[Non-Blocking] Prometheus: team member counter read failed: %s", e)
+                return None
+
+        return TeamMemberSweepIO(
+            fetch_page=fetch_page,
+            fetch_teams=fetch_teams,
+            fetch_default=fetch_default,
+            fetch_emails=fetch_emails,
+            read_counters=read_counters,
+        )
+
+    async def _sweep_team_member_budget_metrics(self, io: TeamMemberSweepIO, now: datetime) -> None:
+        async def set_page(memberships: Sequence[LiteLLM_TeamMembership]) -> None:
+            await self._set_team_member_page_budget_metrics(io, memberships, now)
+
+        await self._initialize_budget_metrics(
+            data_fetch_function=io.fetch_page,
+            set_metrics_function=set_page,
+            data_type="team_members",
+        )
+
+    async def _set_team_member_page_budget_metrics(
+        self, io: TeamMemberSweepIO, memberships: Sequence[LiteLLM_TeamMembership], now: datetime
+    ) -> None:
+        from litellm.proxy.management_endpoints.team_admin_field_permissions import stored_team_member_budget_id
+
+        if not memberships:
+            return
+        teams: Final = await io.fetch_teams(tuple(dict.fromkeys(membership.team_id for membership in memberships)))
+        default_ids: Final = MappingProxyType(
+            {team_id: stored_team_member_budget_id(team) for team_id, team in teams.items()}
+        )
+        distinct_default_ids: Final = tuple(frozenset(_present(default_ids.values())))
+        default_lookups: Final = await asyncio.gather(
+            *(io.fetch_default(budget_id) for budget_id in distinct_default_ids), return_exceptions=True
+        )
+        defaults: Final = MappingProxyType(
+            {
+                budget_id: budget
+                for budget_id, budget in zip(distinct_default_ids, default_lookups, strict=True)
+                if isinstance(budget, LiteLLM_BudgetTable)
+            }
+        )
+
+        def default_for(team_id: str) -> LiteLLM_BudgetTable | None:
+            default_id: Final = default_ids.get(team_id)
+            return defaults.get(default_id) if default_id is not None else None
+
+        budgeted: Final = tuple(
+            _budgeted_members(((membership, default_for(membership.team_id)) for membership in memberships), now)
+        )
+        if not budgeted:
+            return
+        emails: Final = (
+            await io.fetch_emails(tuple(dict.fromkeys(membership.user_id for membership, _ in budgeted)))
+            if self._team_member_gauges_label_email()
+            else MappingProxyType({})
+        )
+        counters: Final = await io.read_counters(
+            tuple(team_member_counter(membership.user_id, membership.team_id) for membership, _ in budgeted)
+        )
+        aliases: Final = MappingProxyType({team_id: team.team_alias for team_id, team in teams.items()})
+        for membership, budget in budgeted:
+            self._set_team_member_budget_metrics(
+                team_id=membership.team_id,
+                team_alias=aliases.get(membership.team_id),
+                user_id=membership.user_id,
+                user_email=emails.get(membership.user_id),
+                max_budget=budget.max_budget,
+                spend=_swept_member_spend(membership, counters),
+                budget_reset_at=budget.budget_reset_at,
+                now=now,
+            )
+
     async def initialize_remaining_budget_metrics(self):
         """
         Handler for initializing remaining budget metrics for all teams to avoid metric discrepancies.
@@ -4685,6 +4886,7 @@ class PrometheusLogger(CustomLogger):
         """
         verbose_logger.debug("Emitting key, team, user, org, customer budget metrics....")
         await self._initialize_team_budget_metrics()
+        await self._initialize_team_member_budget_metrics()
         await self._initialize_api_key_budget_metrics()
         await self._initialize_user_budget_metrics()
         await self._initialize_org_budget_metrics()
@@ -5071,6 +5273,79 @@ class PrometheusLogger(CustomLogger):
             and isinstance(self.litellm_customer_max_budget_metric, NoOpMetric)
             and isinstance(self.litellm_customer_budget_remaining_hours_metric, NoOpMetric)
         )
+
+    def _team_member_budget_gauges_are_noop(self) -> bool:
+        return (
+            isinstance(self.litellm_remaining_team_member_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_team_member_max_budget_metric, NoOpMetric)
+            and isinstance(self.litellm_team_member_budget_remaining_hours_metric, NoOpMetric)
+        )
+
+    async def _set_team_member_budget_metrics_after_api_request(
+        self,
+        team_id: str | None,
+        team_alias: str | None,
+        user_id: str | None,
+        user_email: str | None,
+        carried: TeamMemberBudgetSnapshot | None,
+        response_cost: float,
+    ) -> None:
+        if self._team_member_budget_gauges_are_noop() or carried is None:
+            return
+        if not team_id or not user_id:
+            return
+        self._set_team_member_budget_metrics(
+            team_id=team_id,
+            team_alias=team_alias,
+            user_id=user_id,
+            user_email=user_email,
+            max_budget=carried.max_budget,
+            spend=carried.spend + response_cost,
+            budget_reset_at=carried.budget_reset_at,
+            now=datetime.now(timezone.utc),
+        )
+
+    def _team_member_gauges_label_email(self) -> bool:
+        return any(
+            UserAPIKeyLabelNames.USER_EMAIL.value in self.get_labels_for_metric(metric_name)
+            for metric_name in (
+                "litellm_remaining_team_member_budget_metric",
+                "litellm_team_member_max_budget_metric",
+                "litellm_team_member_budget_remaining_hours_metric",
+            )
+        )
+
+    def _team_member_labels(
+        self, metric_name: DEFINED_PROMETHEUS_METRICS, enum_values: UserAPIKeyLabelValues
+    ) -> Mapping[str, str | None]:
+        return prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(metric_name), enum_values=enum_values
+        )
+
+    def _set_team_member_budget_metrics(
+        self,
+        team_id: str,
+        team_alias: str | None,
+        user_id: str,
+        user_email: str | None,
+        max_budget: float,
+        spend: float,
+        budget_reset_at: datetime | None,
+        now: datetime,
+    ) -> None:
+        enum_values: Final = UserAPIKeyLabelValues(
+            team=team_id, team_alias=team_alias or "", user=user_id, user_email=user_email
+        )
+        self.litellm_remaining_team_member_budget_metric.labels(
+            **self._team_member_labels("litellm_remaining_team_member_budget_metric", enum_values)
+        ).set(max_budget - spend)
+        self.litellm_team_member_max_budget_metric.labels(
+            **self._team_member_labels("litellm_team_member_max_budget_metric", enum_values)
+        ).set(max_budget)
+        if budget_reset_at is not None:
+            self.litellm_team_member_budget_remaining_hours_metric.labels(
+                **self._team_member_labels("litellm_team_member_budget_remaining_hours_metric", enum_values)
+            ).set(hours_until(budget_reset_at, now))
 
     def _set_customer_budget_metrics(
         self,

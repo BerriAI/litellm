@@ -17,13 +17,16 @@ from litellm.proxy.spend_tracking.carried_budget_state import (
     carry_committed_budget_spend,
     carry_organization_budget_state,
     carry_team_and_user_budget_state,
+    carry_team_member_budget_state,
 )
+from litellm.proxy.spend_tracking.team_member_budget import TeamMemberBudget
 from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
     EntitySpendCounterKeys,
     KeyBudgetSnapshot,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
+    TeamMemberBudgetSnapshot,
     UserBudgetSnapshot,
 )
 
@@ -231,3 +234,20 @@ async def test_committed_spend_reads_the_team_org_when_the_key_has_none():
 
     assert reads == [EntitySpendCounterKeys(org="spend:org:team-org")]
     assert token.committed_budget_spend == CommittedBudgetSpend(org=41.0)
+
+
+def test_team_member_snapshot_round_trips_through_metadata():
+    token = UserAPIKeyAuth(token="hashed", team_id="t1", user_id="u1")
+    carry_team_member_budget_state(token, TeamMemberBudget(max_budget=5.0, budget_reset_at=RESET_AT), spend=1.25)
+
+    metadata = dict(carried_budget_metadata(token))
+
+    assert metadata == {
+        "user_api_key_team_member_max_budget": 5.0,
+        "user_api_key_team_member_spend": 1.25,
+        "user_api_key_team_member_budget_reset_at": RESET_AT.isoformat().replace("+00:00", "Z"),
+    }
+    assert TeamMemberBudgetSnapshot.from_metadata(metadata) == TeamMemberBudgetSnapshot(
+        max_budget=5.0, spend=1.25, budget_reset_at=RESET_AT
+    )
+    assert TeamMemberBudgetSnapshot.from_metadata({}) is None

@@ -7,14 +7,17 @@ when budget gauges are excluded from prometheus_metrics_config (and therefore
 created as NoOpMetric instances), the DB/cache lookup helpers must not be called.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import time_machine
 from prometheus_client import REGISTRY
 
 import litellm
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.types.integrations.prometheus import NoOpMetric
+from litellm.types.proxy.carried_budget_state import TeamMemberBudgetSnapshot
 
 _BUDGET_EXCLUDED_CONFIG = [
     {
@@ -357,3 +360,29 @@ class TestPerEntityGuards:
             )
 
         set_org_metrics.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("only_enabled", "expected"),
+    [
+        ("litellm_team_member_max_budget_metric", 7.0),
+        ("litellm_remaining_team_member_budget_metric", 5.999),
+        ("litellm_team_member_budget_remaining_hours_metric", 36.0),
+    ],
+)
+async def test_each_member_gauge_enabled_alone_still_emits_on_requests(monkeypatch, only_enabled, expected):
+    monkeypatch.setattr(
+        litellm, "prometheus_metrics_config", [{"group": "one-member-gauge", "metrics": [only_enabled]}]
+    )
+    logger = PrometheusLogger()
+    carried = TeamMemberBudgetSnapshot(
+        max_budget=7.0, spend=1.0, budget_reset_at=datetime(2026, 10, 3, tzinfo=timezone.utc)
+    )
+    metadata = {**carried.metadata_entries(), "user_api_key_user_email": "user-1@example.com"}
+
+    with time_machine.travel(datetime(2026, 10, 1, 12, tzinfo=timezone.utc), tick=False):
+        await logger._increment_remaining_budget_metrics(**{**COMMON_KWARGS, "litellm_params": {"metadata": metadata}})
+
+    member = {"team": "team-123", "team_alias": "my-team", "user": "user-1"}
+    assert REGISTRY.get_sample_value(only_enabled, member) == pytest.approx(expected)

@@ -9,11 +9,13 @@ from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.spend_tracking.team_member_budget import TeamMemberBudget
 from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
     EntitySpendCounterKeys,
     OrgBudgetSnapshot,
     TeamBudgetSnapshot,
+    TeamMemberBudgetSnapshot,
     UserBudgetSnapshot,
 )
 
@@ -35,6 +37,12 @@ def carry_team_and_user_budget_state(
             max_budget=user_object.max_budget,
             user_alias=user_object.user_alias,
         )
+
+
+def carry_team_member_budget_state(valid_token: UserAPIKeyAuth, budget: TeamMemberBudget, spend: float) -> None:
+    valid_token.team_member_budget_snapshot = TeamMemberBudgetSnapshot(  # rebind-ok: request-scoped credential
+        max_budget=budget.max_budget, spend=spend, budget_reset_at=budget.budget_reset_at
+    )
 
 
 def _budgeted_org_id(valid_token: UserAPIKeyAuth, team_object: LiteLLM_TeamTable | None) -> str | None:
@@ -86,6 +94,7 @@ def carried_budget_metadata(valid_token: UserAPIKeyAuth) -> Mapping[str, object]
         valid_token.team_budget_snapshot,
         valid_token.user_budget_snapshot,
         valid_token.org_budget_snapshot,
+        valid_token.team_member_budget_snapshot,
     )
     return MappingProxyType(
         {

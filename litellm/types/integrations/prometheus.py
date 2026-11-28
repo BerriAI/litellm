@@ -285,6 +285,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_customer_budget_metric",
     "litellm_customer_max_budget_metric",
     "litellm_customer_budget_remaining_hours_metric",
+    "litellm_remaining_team_member_budget_metric",
+    "litellm_team_member_max_budget_metric",
+    "litellm_team_member_budget_remaining_hours_metric",
     "litellm_deployment_state",
     "litellm_deployment_failure_responses",
     "litellm_deployment_total_requests",
@@ -804,6 +807,16 @@ class PrometheusMetricLabels:
 
     litellm_customer_budget_remaining_hours_metric = litellm_remaining_customer_budget_metric
 
+    litellm_remaining_team_member_budget_metric = (
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+    )
+
+    litellm_team_member_max_budget_metric = litellm_remaining_team_member_budget_metric
+
+    litellm_team_member_budget_remaining_hours_metric = litellm_remaining_team_member_budget_metric
+
     litellm_remaining_api_key_requests_for_model = [
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
@@ -1063,6 +1076,20 @@ class PrometheusMetricLabels:
             ]:
                 if label not in default_labels and label not in custom_labels:
                     custom_labels.append(label)
+
+        _team_member_budget_metrics: Final = frozenset(
+            (
+                "litellm_remaining_team_member_budget_metric",
+                "litellm_team_member_max_budget_metric",
+                "litellm_team_member_budget_remaining_hours_metric",
+            )
+        )
+        if (
+            label_name in _team_member_budget_metrics
+            and litellm.prometheus_user_budget_label_include_email_alias is True
+            and UserAPIKeyLabelNames.USER_EMAIL.value not in custom_labels
+        ):
+            custom_labels.append(UserAPIKeyLabelNames.USER_EMAIL.value)
 
         if label_name in PrometheusMetricLabels._org_label_metrics:
             for label in (
