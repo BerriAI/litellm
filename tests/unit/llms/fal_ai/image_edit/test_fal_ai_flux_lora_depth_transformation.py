@@ -105,6 +105,20 @@ def test_transform_request_rejects_two_images():
         )
 
 
+@pytest.mark.parametrize("image", [None, []])
+def test_transform_request_requires_an_image(image):
+    with pytest.raises(litellm.BadRequestError, match="input image") as exc_info:
+        FalAIFluxLoraDepthEditConfig().transform_image_edit_request(
+            model=MODEL,
+            prompt="follow the depth map",
+            image=image,
+            image_edit_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    assert exc_info.value.status_code == 400
+
+
 def test_image_edit_cost_uses_flat_output_cost_per_image():
     cost = CostCalculatorUtils.route_image_generation_cost_calculator(
         model=MODEL,
