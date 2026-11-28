@@ -279,6 +279,109 @@ class TestIsAzureSpeechRoute:
         assert "response_cost" not in normalized["kwargs"]
 
 
+MAI_MODEL = "MAI-Transcribe-2"
+MAI_PRICE_PER_SECOND = 0.25
+MULTIPART_BOUNDARY = "litellm-test-boundary"
+
+
+def _make_multipart_response(url: str, definition: str | None) -> httpx.Response:
+    parts: Final = (
+        f"--{MULTIPART_BOUNDARY}\r\n"
+        'Content-Disposition: form-data; name="audio"; filename="audio.wav"\r\n'
+        "Content-Type: audio/wav\r\n\r\n"
+    )
+    definition_part: Final = (
+        f'--{MULTIPART_BOUNDARY}\r\nContent-Disposition: form-data; name="definition"\r\n\r\n{definition}\r\n'
+        if definition is not None
+        else ""
+    )
+    body: Final = f"{parts}FAKE-AUDIO\r\n{definition_part}--{MULTIPART_BOUNDARY}--\r\n".encode()
+    request = httpx.Request(
+        "POST",
+        url,
+        headers={"Content-Type": f"multipart/form-data; boundary={MULTIPART_BOUNDARY}"},
+        content=body,
+    )
+    return httpx.Response(200, request=request, text=json.dumps(FAST_BODY))
+
+
+def _definition_with_model(model: str, enabled: bool = True) -> str:
+    return json.dumps({"enhancedMode": {"enabled": enabled, "model": model}})
+
+
+class TestAzureSpeechEnhancedModePricing:
+    @pytest.fixture(autouse=True)
+    def mai_price(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"azure/speech/{MAI_MODEL}",
+            {
+                "litellm_provider": "azure",
+                "mode": "audio_transcription",
+                "input_cost_per_second": MAI_PRICE_PER_SECOND,
+                "output_cost_per_second": 0.0,
+            },
+        )
+
+    def _run_handler(
+        self, httpx_response: httpx.Response, request_body: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        return AzureSpeechPassthroughLoggingHandler.azure_speech_passthrough_handler(
+            httpx_response=httpx_response,
+            response_body=FAST_BODY,
+            logging_obj=_make_logging_obj(),
+            url_route=FAST_URL,
+            result=json.dumps(FAST_BODY),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+            request_body=request_body or {},
+        )
+
+    def test_fast_transcription_with_enhanced_mode_model_in_multipart_definition_is_logged_and_priced_by_model(self):
+        handler_result = self._run_handler(_make_multipart_response(FAST_URL, _definition_with_model(MAI_MODEL)))
+
+        assert handler_result["kwargs"]["model"] == f"azure_speech/{MAI_MODEL}"
+        assert handler_result["kwargs"]["response_cost"] == pytest.approx(FAST_AUDIO_SECONDS * MAI_PRICE_PER_SECOND)
+        assert handler_result["kwargs"]["standard_logging_object"]["model"] == f"azure_speech/{MAI_MODEL}"
+
+    def test_fast_transcription_with_enhanced_mode_model_in_request_body_definition_is_priced_by_model(self):
+        handler_result = self._run_handler(
+            _make_response(FAST_URL), request_body={"definition": _definition_with_model(MAI_MODEL)}
+        )
+
+        assert handler_result["kwargs"]["model"] == f"azure_speech/{MAI_MODEL}"
+        assert handler_result["kwargs"]["response_cost"] == pytest.approx(FAST_AUDIO_SECONDS * MAI_PRICE_PER_SECOND)
+
+    def test_fast_transcription_with_enhanced_model_missing_from_cost_map_falls_back_to_standard_speech_price(self):
+        handler_result = self._run_handler(
+            _make_multipart_response(FAST_URL, _definition_with_model("MAI-Transcribe-1.5"))
+        )
+
+        assert handler_result["kwargs"]["model"] == "azure_speech/MAI-Transcribe-1.5"
+        assert handler_result["kwargs"]["response_cost"] == pytest.approx(FAST_AUDIO_SECONDS * PRICE_PER_SECOND)
+
+    def test_fast_transcription_with_enhanced_mode_disabled_keeps_standard_model_and_price(self):
+        handler_result = self._run_handler(
+            _make_multipart_response(FAST_URL, _definition_with_model(MAI_MODEL, enabled=False))
+        )
+
+        assert handler_result["kwargs"]["model"] == "azure_speech/fast-transcription"
+        assert handler_result["kwargs"]["response_cost"] == pytest.approx(FAST_AUDIO_SECONDS * PRICE_PER_SECOND)
+
+    def test_fast_transcription_without_enhanced_mode_keeps_standard_model_and_price(self):
+        handler_result = self._run_handler(_make_multipart_response(FAST_URL, json.dumps({"locales": ["en-US"]})))
+
+        assert handler_result["kwargs"]["model"] == "azure_speech/fast-transcription"
+        assert handler_result["kwargs"]["response_cost"] == pytest.approx(FAST_AUDIO_SECONDS * PRICE_PER_SECOND)
+
+    def test_fast_transcription_with_malformed_definition_keeps_standard_model_and_price(self):
+        handler_result = self._run_handler(_make_multipart_response(FAST_URL, "not-json{"))
+
+        assert handler_result["kwargs"]["model"] == "azure_speech/fast-transcription"
+        assert handler_result["kwargs"]["response_cost"] == pytest.approx(FAST_AUDIO_SECONDS * PRICE_PER_SECOND)
+
+
 class TestNormalizeDispatch:
     def test_normalize_routes_to_azure_speech_handler(self):
         normalized = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
