@@ -43,7 +43,7 @@ class _SuccessRecorder(CustomLogger):
             self.loop.call_soon_threadsafe(self.logged.set)
 
 
-def _request(method: str, path: str, body: bytes = b"") -> Request:
+def _request(method: str, path: str, body: bytes = b"", content_type: bytes = b"application/json") -> Request:
     scope: Final = {
         "type": "http",
         "http_version": "1.1",
@@ -53,7 +53,7 @@ def _request(method: str, path: str, body: bytes = b"") -> Request:
         "raw_path": path.encode(),
         "root_path": "",
         "query_string": b"",
-        "headers": [(b"content-type", b"application/json")],
+        "headers": [(b"content-type", content_type)],
         "client": ("127.0.0.1", 51234),
         "server": ("proxy.local", 4000),
         "state": {},
@@ -170,3 +170,31 @@ async def test_assemblyai_transcribe_with_non_admin_key_logs_key_identity(
     assert logged["metadata"]["user_api_key_user_id"] == "non-admin-user"
     assert logged["metadata"]["user_api_key_team_id"] == "non-admin-team"
     assert logged["custom_llm_provider"] == "assemblyai"
+
+
+@pytest.mark.asyncio
+async def test_assemblyai_upload_binary_audio(
+    respx_mock: respx.MockRouter, httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upload_url: Final = "https://api.assemblyai.com/v2/upload"
+    monkeypatch.setenv("ASSEMBLYAI_API_KEY", _KEY)
+    upload_route: Final = respx_mock.post(upload_url).mock(
+        return_value=httpx.Response(200, json={"upload_url": "https://cdn.assemblyai.com/upload/abc"})
+    )
+    admin: Final = UserAPIKeyAuth(api_key="sk-master", user_role=LitellmUserRoles.PROXY_ADMIN)
+    raw_audio: Final = b"\x00\x01\x02\x03RIFF\x24\x00\x00\x00WAVEfmt "
+
+    upload_response: Final = await assemblyai_proxy_route(
+        endpoint="v2/upload",
+        request=_request("POST", "/assemblyai/v2/upload", raw_audio, content_type=b"application/octet-stream"),
+        fastapi_response=Response(),
+        user_api_key_dict=admin,
+    )
+
+    assert isinstance(upload_response, Response)
+    assert upload_response.status_code == 200
+    assert json.loads(upload_response.body)["upload_url"] == "https://cdn.assemblyai.com/upload/abc"
+    assert upload_route.call_count == 1
+    assert upload_route.calls[0].request.content == raw_audio
+    assert upload_route.calls[0].request.headers["authorization"] == _KEY
+
