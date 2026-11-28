@@ -5310,6 +5310,12 @@ def get_optional_params_embeddings(
             provider=LlmProviders(custom_llm_provider),
         )
 
+    if custom_llm_provider in ("triton", "databricks") and non_default_params.get("encoding_format") == "float":
+        # OpenAI SDKs send encoding_format="float" by default; float lists
+        # are what Triton/Databricks return, so treat "float" as a no-op while
+        # keeping other values (e.g. "base64") on the unsupported-param path.
+        non_default_params.pop("encoding_format")
+
     if provider_config is not None:
         supported_params: list[str] | None = provider_config.get_supported_openai_params(model=model)
         _check_valid_arg(supported_params=supported_params)
