@@ -104,20 +104,15 @@ impl<H: Host> Gateway<H> {
         self.cost_map.load_full()
     }
 
-    /// Whether the messages route prices a call to `deployment` over the installed cost map. A call
-    /// it does not price is left `Deferred`, so nothing charges its caller for it. The region of a
-    /// Vertex AI or Mantle deployment is not read from its secrets here, so it is priced where the
-    /// route prices a call that names none.
+    /// Whether the messages route prices a call to `deployment` over the installed cost map,
+    /// whichever region the deployment's secrets send it to. A call it does not price is left
+    /// `Deferred`, so nothing charges its caller for it.
     pub fn prices(&self, deployment: &litellm_router_core::Deployment) -> bool {
-        let cost_map = self.cost_map();
-        pricing::identity(deployment, cost_map.catalog(), &|_| None).is_some_and(|identity| {
-            litellm_inference_messages::priced(
-                self.pricing.as_ref(),
-                &deployment.params.model,
-                deployment.params.custom_llm_provider.as_deref(),
-                identity,
-            )
-        })
+        pricing::priced_wherever_served(
+            self.pricing.as_ref(),
+            deployment,
+            self.cost_map().catalog(),
+        )
     }
 
     /// Has every request from now on read `cost_map`.

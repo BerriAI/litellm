@@ -204,7 +204,8 @@ impl Admit {
     /// route leaves unpriced would charge it nothing and never bring it nearer its budget. Such a
     /// call goes to Python, which prices it: a body asking for what the route leaves unpriced, or a
     /// model group the call can be served by, its fallbacks' too, with a deployment the route does
-    /// not price.
+    /// not price. One unpriced deployment anywhere in the group or its fallbacks sends the whole
+    /// call to Python on purpose, since that is the safe direction for budgets.
     fn unpriced(&self, caller: &Authenticated<NativeRows>, fields: &Fields) -> Option<Reason> {
         if budgets::counters(caller, budgets::Settings::default()).is_empty() {
             return None;
