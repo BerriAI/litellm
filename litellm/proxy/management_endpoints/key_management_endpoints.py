@@ -104,6 +104,7 @@ from litellm.proxy.common_utils.callback_config_validation import (
     string_keyed,
 )
 from litellm.proxy.common_utils.callback_utils import (
+    caller_env_reference_check_metadata,
     decrypt_callback_vars,
     decrypted_callback_metadata,
     decrypted_logging_entries,
@@ -1672,6 +1673,9 @@ async def _common_key_generation_helper(
     if semantic_cache_metadata_changed(requested_metadata, None):
         _enforce_key_semantic_cache_admin(user_api_key_dict, team_table)
         validate_semantic_cache_metadata(requested_metadata)
+    caller_env_reference_check_metadata(
+        data.metadata, None, caller_is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    )
     raise_on_invalid_key_metadata(data.metadata)
     raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
 
@@ -2974,15 +2978,19 @@ def prepare_metadata_fields(
     *,
     logging_references_approved: bool = False,
     metadata_owner: tuple[str, EnvReferenceSource] = ("This key", "key metadata"),
+    caller_is_proxy_admin: bool = False,
 ) -> dict:
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
     requested_metadata: Final = _OPTIONAL_METADATA_OBJECT.validate_python(non_default_values.get("metadata"))
+    stored_metadata: Final = _METADATA_OBJECT.validate_python(existing_metadata)
     raise_on_stored_metadata_env_reference(
         metadata_owner[0],
-        env_reference_check_metadata(requested_metadata),
-        env_reference_check_metadata(_METADATA_OBJECT.validate_python(existing_metadata)),
+        caller_env_reference_check_metadata(
+            requested_metadata, stored_metadata, caller_is_proxy_admin=caller_is_proxy_admin
+        ),
+        env_reference_check_metadata(stored_metadata),
         source=metadata_owner[1],
     )
     raise_on_invalid_key_metadata(requested_metadata)
@@ -3502,6 +3510,8 @@ async def prepare_key_update_data(
         logging_references_approved=(
             user_api_key_dict is not None and data.metadata is not None and "logging" in data.metadata
         ),
+        caller_is_proxy_admin=user_api_key_dict is not None
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
     )
 
     return non_default_values

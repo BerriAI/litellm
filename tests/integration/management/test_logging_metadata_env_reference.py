@@ -331,15 +331,59 @@ def test_team_update_refuses_an_env_reference_in_json_string_logging(gateway: Ga
         assert _team_metadata(team) == {"owner": "env-reference-audit"}
 
 
-def _encrypted_reference_logging(monkeypatch: pytest.MonkeyPatch) -> dict[str, JsonValue]:
+def _encrypted_logging(monkeypatch: pytest.MonkeyPatch, api_key: str) -> dict[str, JsonValue]:
     from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 
     monkeypatch.setenv("LITELLM_SALT_KEY", os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"))
     encrypted: Final = encrypt_callback_vars(
-        {"logging": [{"callback_name": "arize", "callback_type": "success", "callback_vars": {API_KEY: REFERENCE}}]}
+        {"logging": [{"callback_name": "arize", "callback_type": "success", "callback_vars": {API_KEY: api_key}}]}
     )
-    assert isinstance(encrypted, dict) and "os.environ" not in json.dumps(encrypted), encrypted
+    assert isinstance(encrypted, dict) and api_key not in json.dumps(encrypted), encrypted
     return encrypted
+
+
+def _encrypted_reference_logging(monkeypatch: pytest.MonkeyPatch) -> dict[str, JsonValue]:
+    return _encrypted_logging(monkeypatch, REFERENCE)
+
+
+NON_ADMIN_CIPHERTEXT_REFUSAL: Final = "Encrypted callback values can only be sent back unchanged"
+
+
+@pytest.mark.parametrize(
+    "plaintext", [pytest.param(REFERENCE, id="reference"), pytest.param("arize-literal-key", id="literal")]
+)
+def test_a_non_admin_copied_ciphertext_is_refused_whatever_it_holds(
+    gateway: Gateway, monkeypatch: pytest.MonkeyPatch, plaintext: str
+) -> None:
+    with gateway.scenario() as scenario:
+        member: Final = scenario.key(user_id=scenario.user(user_role="internal_user"))
+        alias: Final = f"env-reference-{uuid.uuid4().hex}"
+        refused: Final = gateway.request(
+            "POST",
+            "/key/generate",
+            {"key_alias": alias, "metadata": _encrypted_logging(monkeypatch, plaintext)},
+            key=member,
+        )
+        _drop_created_key(scenario, refused)
+        assert refused.status_code == 400, refused.text
+        assert NON_ADMIN_CIPHERTEXT_REFUSAL in refused.text, refused.text
+        assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = %s', (alias,)) == []
+
+
+def test_a_team_admin_can_send_back_its_team_keys_stored_ciphertext(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        team: Final = scenario.team()
+        team_admin: Final = scenario.key(user_id=scenario.member(team, role="admin"), team_id=team)
+        team_key: Final = scenario.key(
+            team_id=team, metadata={"logging": _logging_with(API_KEY, "arize-literal-key")["logging"]}
+        )
+        stored: Final = object_value(_key_metadata(team_key))
+        assert "arize-literal-key" not in json.dumps(stored), stored
+        resent: Final = gateway.request(
+            "POST", "/key/update", {"key": team_key, "metadata": {**stored, "owner": "team-admin"}}, key=team_admin
+        )
+        assert resent.status_code == 200, resent.text
+        assert object_value(_key_metadata(team_key))["logging"] == stored["logging"]
 
 
 _CREATE_SOURCES: Final = {"/team/new": "team metadata", "/user/new": "user metadata"}

@@ -3,9 +3,10 @@ import json
 import os
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from itertools import accumulate
+from itertools import accumulate, chain
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
 
+from fastapi import HTTPException
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -820,14 +821,59 @@ def decrypted_callback_metadata(metadata: object) -> object:
     return _transform_callback_vars(metadata, _decrypt_or_passthrough)
 
 
-def env_reference_check_metadata(metadata: object) -> object:
+NON_ADMIN_CIPHERTEXT_ERROR: Final = (
+    "Encrypted callback values can only be sent back unchanged from what this key, team or user already "
+    "stores. Send the plain value instead."
+)
+
+
+def env_reference_check_metadata(metadata: object, *, resendable: frozenset[str] | None = None) -> object:
+    """Callback metadata with its encrypted values decrypted for the env-reference check.
+
+    With ``resendable`` given, only ciphertexts in that set are decrypted, so a caller cannot learn what an
+    arbitrary copied ciphertext holds.
+    """
+    transform: Final = _decrypt_or_passthrough if resendable is None else _resendable_decrypter(resendable)
+    return _transform_callback_vars(_listed_logging_metadata(metadata), transform)
+
+
+def caller_env_reference_check_metadata(requested: object, stored: object, *, caller_is_proxy_admin: bool) -> object:
+    if caller_is_proxy_admin:
+        return env_reference_check_metadata(requested)
+    resendable: Final = frozenset(_callback_ciphertexts(stored))
+    if any(ciphertext not in resendable for ciphertext in _callback_ciphertexts(requested)):
+        raise HTTPException(status_code=400, detail={"error": NON_ADMIN_CIPHERTEXT_ERROR})
+    return env_reference_check_metadata(requested, resendable=resendable)
+
+
+def _listed_logging_metadata(metadata: object) -> object:
     fields: Final = string_keyed(metadata)
     logging_value: Final = fields.get("logging")
     if not isinstance(logging_value, str):
-        return decrypted_callback_metadata(metadata)
+        return metadata
     entries: Final = normalize_logging_entries(logging_value, skip_invalid=True)
     listed: Final = [] if isinstance(entries, InvalidLoggingMetadata) else [dict(entry) for entry in entries]
-    return decrypted_callback_metadata({**fields, "logging": listed})
+    return {**fields, "logging": listed}
+
+
+def _resendable_decrypter(resendable: frozenset[str]) -> Callable[[str, object], object]:
+    def decrypt_if_resendable(key: str, value: object) -> object:
+        return _decrypt_or_passthrough(key, value) if isinstance(value, str) and value in resendable else value
+
+    return decrypt_if_resendable
+
+
+def _callback_ciphertexts(metadata: object) -> tuple[str, ...]:
+    fields: Final = string_keyed(_listed_logging_metadata(metadata))
+    entries: Final = (*(object_sequence(fields.get("logging")) or ()), fields.get("callback_settings"))
+    values: Final = chain.from_iterable(_entry_callback_values(entry) for entry in entries)
+    return tuple(
+        value for value in values if isinstance(value, str) and value.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX)
+    )
+
+
+def _entry_callback_values(entry: object) -> Iterable[object]:
+    return string_keyed(string_keyed(entry).get("callback_vars")).values()
 
 
 def decrypted_logging_entries(metadata: object) -> object:

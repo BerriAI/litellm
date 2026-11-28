@@ -8,6 +8,7 @@ from typing import Final
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -16,9 +17,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
 from litellm.proxy.common_utils.callback_utils import (
+    NON_ADMIN_CIPHERTEXT_ERROR,
     _serialize_scan_metadata_header,
     add_guardrail_scan_id,
     add_policy_to_applied_policies_header,
+    caller_env_reference_check_metadata,
     decrypt_callback_vars,
     encrypt_callback_vars,
     get_logging_caching_headers,
@@ -974,3 +977,37 @@ def test_key_logging_entries_leaves_an_entry_with_a_non_string_credential_name_a
     entry: Final = {"callback_name": "arize", "litellm_credential_name": 5, "callback_vars": {}}
 
     assert key_logging_entries({"logging": [entry]}) == (entry,)
+
+
+def _arize_metadata(api_key: str) -> dict[str, object]:
+    return {"logging": [{"callback_name": "arize", "callback_vars": {"arize_api_key": api_key}}]}
+
+
+def _encrypted(api_key: str) -> dict[str, object]:
+    encrypted: Final = encrypt_callback_vars(_arize_metadata(api_key))
+    assert isinstance(encrypted, dict)
+    return encrypted
+
+
+@pytest.mark.parametrize("plaintext", ["os.environ/ARIZE_KEY_TENANT_1", "literal-arize-key"])
+def test_a_non_admin_copied_ciphertext_is_refused_the_same_way_whatever_it_holds(monkeypatch, plaintext: str) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    with pytest.raises(HTTPException) as raised:
+        caller_env_reference_check_metadata(_encrypted(plaintext), None, caller_is_proxy_admin=False)
+    assert raised.value.status_code == 400
+    assert raised.value.detail == {"error": NON_ADMIN_CIPHERTEXT_ERROR}
+
+
+def test_a_non_admin_resending_the_stored_ciphertext_gets_it_checked_decrypted(monkeypatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    stored: Final = _encrypted("os.environ/ARIZE_KEY_TENANT_1")
+    checked: Final = caller_env_reference_check_metadata(stored, stored, caller_is_proxy_admin=False)
+    assert checked == _arize_metadata("os.environ/ARIZE_KEY_TENANT_1")
+
+
+def test_a_proxy_admin_copied_ciphertext_is_decrypted_for_the_check(monkeypatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-unit-test-salt-key-for-callback-vars")
+    checked: Final = caller_env_reference_check_metadata(
+        _encrypted("os.environ/ARIZE_KEY_TENANT_1"), None, caller_is_proxy_admin=True
+    )
+    assert checked == _arize_metadata("os.environ/ARIZE_KEY_TENANT_1")
