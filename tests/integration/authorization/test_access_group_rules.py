@@ -8,6 +8,8 @@ import jwt
 import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
+from websockets.exceptions import InvalidStatus
+from websockets.sync.client import connect
 
 from litellm.proxy.mcp_server.idp_token_exchange import REJECTED_SUBJECT_TOKEN
 from tests.integration._support.client import Gateway, string_value
@@ -16,6 +18,14 @@ from tests.integration._support.process import owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
 
 pytestmark: Final = pytest.mark.shares_worker_state
+
+
+def _websocket_handshake_status(url: str, token: str) -> int:
+    try:
+        with connect(url, additional_headers={"Authorization": f"Bearer {token}"}, open_timeout=10):
+            return 101
+    except InvalidStatus as refusal:
+        return refusal.response.status_code
 
 
 @pytest.mark.parametrize(
@@ -219,3 +229,54 @@ def test_teamless_jwt_cannot_provision_credentials_without_native_team_access(
                 assert exchanged.json() == {"error": "invalid_request", "error_description": REJECTED_SUBJECT_TOKEN}, (
                     exchanged.text
                 )
+
+
+def test_jwt_with_only_unknown_team_claim_is_denied_without_a_model(gateway: Gateway, tmp_path: Path) -> None:
+    private_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_key: Final = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
+    key_id: Final = "unknown-team-model-less-signing-key"
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "GET", request
+        return Reply(body=json.dumps({"keys": [{**public_key, "kid": key_id}]}).encode())
+
+    with wire_server(respond) as jwks, gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["general_settings"] = {
+            **config["general_settings"],
+            "enable_jwt_auth": True,
+            "litellm_jwtauth": {
+                "user_id_jwt_field": "sub",
+                "team_ids_jwt_field": "groups",
+                "user_id_upsert": True,
+                "enforce_team_based_model_access": True,
+                "team_claim_fallback": False,
+                "public_key_url": jwks.url,
+            },
+        }
+        path: Final = tmp_path / "jwt_unknown_team_model_less.yaml"
+        path.write_text(yaml.safe_dump(config))
+        token: Final = jwt.encode(
+            {
+                "sub": f"integration-unknown-team-{uuid.uuid4().hex}",
+                "groups": ["team-that-does-not-exist"],
+                "exp": int(time.time()) + 300,
+            },
+            private_key,
+            algorithm="RS256",
+            headers={"kid": key_id},
+        )
+        with owned_proxy(gateway, tmp_path, {"JWT_PUBLIC_KEY_URL": jwks.url}, config=path) as candidate:
+            proxy_url: Final = str(candidate.client.base_url).rstrip("/")
+            websocket_url: Final = f"ws{proxy_url.removeprefix('http')}/vertex_ai/live"
+            assert _websocket_handshake_status(websocket_url, token) == 403
+
+            response: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": "unknown team control"}]},
+                key=token,
+            )
+            assert response.status_code == 403, response.text
+            assert "No team has access to the requested model" in response.text, response.text

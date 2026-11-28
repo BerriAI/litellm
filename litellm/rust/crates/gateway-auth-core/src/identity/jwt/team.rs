@@ -197,6 +197,12 @@ pub(crate) async fn select_team<H: AuthHost>(
             },
         }
         .into()),
+        None if !any_resolved
+            && settings.enforce_team_based_model_access
+            && !settings.team_claim_fallback =>
+        {
+            Err(TeamDenial::NoTeamsInToken.into())
+        }
         _ => Ok(None),
     }
 }
@@ -772,6 +778,33 @@ mod tests {
         };
         assert_eq!(
             select(&host, &["a"], Some("gpt"), false, settings).await,
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::enforced(None, true, false, Err(TeamDenial::NoTeamsInToken.into()))]
+    #[case::empty_model(Some(""), true, false, Err(TeamDenial::NoTeamsInToken.into()))]
+    #[case::claim_fallback(None, true, true, Ok(None))]
+    #[case::not_enforced(None, false, false, Ok(None))]
+    #[tokio::test]
+    async fn unresolved_team_without_a_model_respects_enforcement_and_fallback(
+        #[case] model: Option<&str>,
+        #[case] enforce_team_based_model_access: bool,
+        #[case] team_claim_fallback: bool,
+        #[case] expected: Result<Option<String>, Error>,
+    ) {
+        let host = ScriptedHost {
+            teams: HashMap::from([("a", Ok(TeamRead::Absent))]),
+            ..ScriptedHost::default()
+        };
+        let settings = TeamSettings {
+            enforce_team_based_model_access,
+            team_claim_fallback,
+            ..TeamSettings::default()
+        };
+        assert_eq!(
+            select(&host, &["a"], model, false, settings).await,
             expected
         );
     }
