@@ -62,6 +62,33 @@ class TestGetPermissionsForTeamMember:
         assert KeyManagementRoutes.KEY_GENERATE in result
         assert KeyManagementRoutes.KEY_HEALTH in result
 
+    def test_daily_activity_permissions_recognized(self):
+        """Verify the 4 team daily activity routes offered by /team/permissions_list parse correctly (#54135)."""
+        activity_routes = [
+            "/team/daily/activity/aggregated/keys",
+            "/team/daily/activity/aggregated/search",
+            "/team/daily/activity/aggregated/model_top_keys",
+            "/team/daily/activity/export",
+        ]
+        team = _make_team_table(activity_routes)
+
+        result = TeamMemberPermissionChecks.get_permissions_for_team_member(team_table=team)
+
+        for route in activity_routes:
+            assert KeyManagementRoutes(route) in result
+        assert KeyManagementRoutes.KEY_INFO in result
+        assert KeyManagementRoutes.KEY_HEALTH in result
+
+    def test_invalid_or_unknown_permission_ignored_without_raising(self):
+        """Unknown or deprecated permission strings in DB do not raise ValueError (#54135)."""
+        team = _make_team_table(["/key/generate", "/unknown/permission/route"])
+
+        result = TeamMemberPermissionChecks.get_permissions_for_team_member(team_table=team)
+
+        assert KeyManagementRoutes.KEY_GENERATE in result
+        assert KeyManagementRoutes.KEY_INFO in result
+        assert KeyManagementRoutes.KEY_HEALTH in result
+
 
 class TestGetDefaultTeamParam:
     def test_returns_none_when_no_config(self, monkeypatch):
