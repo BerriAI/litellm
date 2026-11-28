@@ -29,7 +29,7 @@ pub use self::{
     project::ProjectEntry,
     record::ExcludedIfNone,
     settings::Settings,
-    tag::TagEntry,
+    tag::{TagEntry, TagNames},
     team::{ModelAliases, ModelTableEntry, TeamEntry},
     team_membership::{TeamMembershipEntry, TeamMembershipReservation},
     user::UserEntry,

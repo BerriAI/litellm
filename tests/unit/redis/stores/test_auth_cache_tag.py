@@ -7,11 +7,13 @@ from unittest.mock import MagicMock
 import pytest
 from pydantic import ValidationError
 
+from litellm.constants import TAG_REGISTRY_MAX_SIZE
 from litellm.models.tag import LiteLLM_TagTable
 from litellm.proxy.auth.auth_checks import read_tag_objects_batch
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.redis.stores.auth_cache import AuthObject
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, TagRows, install_rust_auth_stores
 
 PLAIN_ENTRY: Final = (
     '{"tag_name": "plain", "description": null, "models": [], "model_info": null,'
@@ -70,3 +72,33 @@ async def test_tag_reader_accepts_the_bytes_the_python_model_and_rust_store_writ
 def test_the_tag_model_refuses_a_model_info_array() -> None:
     with pytest.raises(ValidationError):
         LiteLLM_TagTable.model_validate_json('{"tag_name":"malformed","model_info":[]}')
+
+
+@pytest.mark.parametrize(
+    ("tag_names", "entry", "read_by_name"),
+    [
+        (("limited", "plain"), '["limited", "plain"]', []),
+        (
+            tuple(f"tag-{n}" for n in range(TAG_REGISTRY_MAX_SIZE + 1)),
+            '"__tag_registry_overflow__"',
+            [("missing",)],
+        ),
+    ],
+    ids=["every_name", "more_names_than_python_holds"],
+)
+@pytest.mark.asyncio
+async def test_tag_registry_reader_accepts_the_bytes_python_and_the_rust_store_write(
+    monkeypatch: pytest.MonkeyPatch, tag_names: tuple[str, ...], entry: str, read_by_name: list[tuple[str, ...]]
+) -> None:
+    rows: Final = {tag_name: LiteLLM_TagTable(tag_name=tag_name) for tag_name in tag_names}
+    install_rust_auth_stores(monkeypatch, RustAuthStores(tag=TagRows(reader=rows)))
+    written: Final = UserApiKeyCache()
+    await read_tag_objects_batch(["missing"], MagicMock(), written)
+    assert json.dumps(written.get_local(AuthObject.tag_registry())) == entry
+
+    stores: Final = install_rust_auth_stores(monkeypatch, RustAuthStores(tag=TagRows(reader=rows)))
+    read: Final = UserApiKeyCache()
+    await read.async_set_cache(AuthObject.tag_registry(), json.loads(entry), ttl=60)
+
+    assert await read_tag_objects_batch(["missing"], MagicMock(), read) == {}
+    assert (stores.tag.name_listings, stores.tag.batches) == ([], read_by_name)

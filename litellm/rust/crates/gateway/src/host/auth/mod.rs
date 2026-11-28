@@ -44,7 +44,7 @@ pub(crate) use affiliation::{unserved, unserved_project, unserved_user};
 pub(crate) use end_user::{end_user, unserved as unserved_end_user};
 pub use key::Key;
 pub(crate) use models::{allowed_models, layers};
-pub use store::AuthStore;
+pub use store::{AuthStore, TagsRead};
 
 /// The rows the native host hands the core: a key's, and a core record for each thing a caller
 /// belongs to. A key's team, owner and project are read, and a caller that holds one still goes
