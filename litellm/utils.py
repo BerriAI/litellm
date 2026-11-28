@@ -1957,29 +1957,33 @@ async def _client_async_logging_helper(
         )
 
 
+def _retry_policy_num_retries(kwargs: Mapping[str, object], exception: Exception) -> int | None:
+    retry_policy: Final = kwargs.get("retry_policy", None)
+    if not retry_policy:
+        return None
+    get_num_retries_from_retry_policy: Final[Callable[..., int | None]] = (
+        litellm_utils.get_num_retries_from_retry_policy
+    )
+    return get_num_retries_from_retry_policy(
+        exception=exception,
+        retry_policy=retry_policy,
+    )
+
+
 def _get_wrapper_num_retries(kwargs: dict[str, object], exception: Exception) -> tuple[object, dict[str, object]]:
     """
     Get the number of retries from the kwargs and the retry policy.
     Used for the wrapper functions.
     """
-
-    num_retries = kwargs.get("num_retries", None)
-    if num_retries is None:
-        num_retries = litellm.num_retries
+    base_num_retries: Final = kwargs.get("num_retries", None)
+    resolved_num_retries: Final = litellm.num_retries if base_num_retries is None else base_num_retries
     if kwargs.get("retry_policy", None):
-        get_num_retries_from_retry_policy: Final[Callable[..., int | None]] = (
-            litellm_utils.get_num_retries_from_retry_policy
-        )
-        reset_retry_policy: Final = litellm_utils.reset_retry_policy
-        retry_policy_num_retries: Final[int | None] = get_num_retries_from_retry_policy(
-            exception=exception,
-            retry_policy=kwargs.get("retry_policy"),
-        )
-        kwargs["retry_policy"] = reset_retry_policy()
+        retry_policy_num_retries: Final = _retry_policy_num_retries(kwargs=kwargs, exception=exception)
+        kwargs["retry_policy"] = litellm_utils.reset_retry_policy()
         if retry_policy_num_retries is not None:
-            num_retries = retry_policy_num_retries
+            return retry_policy_num_retries, kwargs
 
-    return num_retries, kwargs
+    return resolved_num_retries, kwargs
 
 
 def _get_wrapper_timeout(kwargs: dict[str, object]) -> object:
@@ -2687,75 +2691,66 @@ def client(original_function):
             return checked_result
         except Exception as e:
             _close_unread_speech_sync(result, call_type, "stream" in kwargs and kwargs["stream"] is True)
-            if call_type == CallTypes.completion.value:
-                num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
-                if kwargs.get("retry_policy", None):
-                    get_num_retries_from_retry_policy: Callable[..., int | None] = (
-                        litellm_utils.get_num_retries_from_retry_policy
-                    )
-                    reset_retry_policy = litellm_utils.reset_retry_policy
-                    num_retries = get_num_retries_from_retry_policy(
-                        exception=e,
-                        retry_policy=kwargs.get("retry_policy"),
-                    )
-                    kwargs["retry_policy"] = reset_retry_policy()  # prevent infinite loops
-                if not is_resent_failure(e):
-                    litellm.num_retries = None  # set retries to None to prevent infinite loops
-                context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict", {})
-
-                is_completion_litellm_router_call: Final = _is_litellm_router_call(kwargs)
+            if call_type in (CallTypes.completion.value, CallTypes.responses.value):
+                sync_kwargs: Final[Mapping[str, object]] = as_str_mapping(kwargs) or {}
+                sync_args: Final = cast(  # cast-ok: @client decorator forwards untyped positional args
+                    tuple[object, ...], args
+                )
+                policy_num_retries: Final = _retry_policy_num_retries(kwargs=sync_kwargs, exception=e)
+                from_retry_policy: Final = policy_num_retries is not None
+                base_num_retries: Final = sync_kwargs.get("num_retries", None)
+                resolved_num_retries: Final = (
+                    policy_num_retries
+                    if policy_num_retries is not None
+                    else (litellm.num_retries if base_num_retries is None else base_num_retries)
+                )
+                is_litellm_router_call: Final = _is_litellm_router_call(sync_kwargs)
                 if (
-                    num_retries
-                    and not is_completion_litellm_router_call
+                    resolved_num_retries
+                    and not is_litellm_router_call
                     and not is_agentic_followup_failure(e)
                     and not is_resent_failure(e)
+                    and (from_retry_policy or is_retryable_exception(e))
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
                         or isinstance(e, openai.Timeout)
                         or isinstance(e, openai.APIConnectionError)
                     ):
-                        kwargs["num_retries"] = num_retries
-                        return litellm.completion_with_retries(*args, **kwargs)
-                elif (
-                    isinstance(e, litellm.exceptions.ContextWindowExceededError)
-                    and context_window_fallback_dict
-                    and model in context_window_fallback_dict
-                    and not is_completion_litellm_router_call
-                ):
-                    if len(args) > 0:
-                        args[0] = context_window_fallback_dict[model]
-                    else:
-                        kwargs["model"] = context_window_fallback_dict[model]
-                    return original_function(*args, **kwargs)
-            elif call_type == CallTypes.responses.value:
-                num_retries = kwargs.get("num_retries", None) or litellm.num_retries or None
-                if kwargs.get("retry_policy", None):
-                    get_num_retries_from_retry_policy = litellm_utils.get_num_retries_from_retry_policy
-                    reset_retry_policy = litellm_utils.reset_retry_policy
-                    num_retries = get_num_retries_from_retry_policy(
-                        exception=e,
-                        retry_policy=kwargs.get("retry_policy"),
+                        litellm.num_retries = None  # set retries to None to prevent infinite loops
+                        retry_policy_reset: Final[Mapping[str, object]] = (
+                            {"retry_policy": litellm_utils.reset_retry_policy()}
+                            if sync_kwargs.get("retry_policy", None)
+                            else {}
+                        )
+                        retry_overrides: Final[Mapping[str, object]] = (
+                            {"num_retries": resolved_num_retries, "_retry_non_retryable_status": True}
+                            if from_retry_policy
+                            else {"num_retries": resolved_num_retries}
+                        )
+                        if call_type == CallTypes.completion.value:
+                            return litellm.completion_with_retries(
+                                *sync_args, **{**sync_kwargs, **retry_policy_reset, **retry_overrides}
+                            )
+                        return litellm.responses_with_retries(
+                            *sync_args, **{**sync_kwargs, **retry_policy_reset, **retry_overrides}
+                        )
+                elif call_type == CallTypes.completion.value:
+                    context_window_fallback_dict: Final = as_str_mapping(
+                        sync_kwargs.get("context_window_fallback_dict", {})
                     )
-                    kwargs["retry_policy"] = reset_retry_policy()  # prevent infinite loops
-                if not is_resent_failure(e):
-                    litellm.num_retries = None  # set retries to None to prevent infinite loops
-
-                is_responses_litellm_router_call: Final = _is_litellm_router_call(kwargs)
-                if (
-                    num_retries
-                    and not is_responses_litellm_router_call
-                    and not is_agentic_followup_failure(e)
-                    and not is_resent_failure(e)
-                    and not isinstance(e, litellm.exceptions.UnresolvablePreviousResponseError)
-                ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
-                        isinstance(e, openai.APIError)
-                        or isinstance(e, openai.Timeout)
-                        or isinstance(e, openai.APIConnectionError)
+                        isinstance(e, litellm.exceptions.ContextWindowExceededError)
+                        and context_window_fallback_dict
+                        and isinstance(model, str)
+                        and model in context_window_fallback_dict
+                        and not is_litellm_router_call
                     ):
-                        kwargs["num_retries"] = num_retries
-                        return litellm.responses_with_retries(*args, **kwargs)
+                        if len(args) > 0:
+                            args[0] = context_window_fallback_dict[model]
+                        else:
+                            kwargs["model"] = context_window_fallback_dict[model]
+                        return original_function(*args, **kwargs)
             traceback_exception: Final = traceback.format_exc()
             end_time = datetime.datetime.now()
 
@@ -3059,28 +3054,47 @@ def client(original_function):
                     raise e
 
             retry_call_type: Final = _get_call_type_from_public_name(original_function.__name__)
-            num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
+            retry_args: Final = cast(  # cast-ok: @client decorator forwards untyped positional args
+                tuple[object, ...], args
+            )
+            retry_original_function: Final = cast(  # cast-ok: @client wraps untyped callables
+                object, wrapper_async
+            )
+            from_retry_policy: Final = _retry_policy_num_retries(kwargs=kwargs, exception=e) is not None
+            resolved_num_retries, retry_kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
             if retry_call_type == CallTypes.acompletion.value:
-                context_window_fallback_dict: Final = kwargs.get("context_window_fallback_dict")
+                context_window_fallback_dict: Final = retry_kwargs.get("context_window_fallback_dict")
 
-                is_acompletion_litellm_router_call: Final = _is_litellm_router_call(kwargs)
+                is_acompletion_litellm_router_call: Final = _is_litellm_router_call(retry_kwargs)
 
                 if (
-                    num_retries
+                    resolved_num_retries
                     and not is_acompletion_litellm_router_call
                     and not isinstance(e, ImportError)
                     and not is_agentic_followup_failure(e)
                     and not is_resent_failure(e)
+                    and (from_retry_policy or is_retryable_exception(e))
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
-                        kwargs["num_retries"] = num_retries
-                        kwargs["original_function"] = original_function
-                        if isinstance(e, openai.RateLimitError):  # rate limiting specific error
-                            kwargs["retry_strategy"] = "exponential_backoff_retry"
-                        elif isinstance(e, openai.APIError):  # generic api error
-                            kwargs["retry_strategy"] = "constant_retry"
-                        result = await litellm.acompletion_with_retries(*args, **kwargs)
+                        retry_strategy_override: Final[Mapping[str, object]] = (
+                            {"retry_strategy": "exponential_backoff_retry"}
+                            if isinstance(e, openai.RateLimitError)
+                            else ({"retry_strategy": "constant_retry"} if isinstance(e, openai.APIError) else {})
+                        )
+                        retry_status_override: Final[Mapping[str, object]] = (
+                            {"_retry_non_retryable_status": True} if from_retry_policy else {}
+                        )
+                        result = await litellm.acompletion_with_retries(
+                            *retry_args,
+                            **{
+                                **retry_kwargs,
+                                "num_retries": resolved_num_retries,
+                                "original_function": retry_original_function,
+                                **retry_strategy_override,
+                                **retry_status_override,
+                            },
+                        )
                     except Exception as retry_error:
                         if is_resent_failure(retry_error):
                             raise
@@ -3095,40 +3109,54 @@ def client(original_function):
                     if len(args) > 0:
                         args[0] = subscript(context_window_fallback_dict, model)
                     else:
-                        kwargs["model"] = subscript(context_window_fallback_dict, model)
-                    result = await original_function(*args, **kwargs)
+                        retry_kwargs["model"] = subscript(context_window_fallback_dict, model)
+                    result = await original_function(*args, **retry_kwargs)
                     return result
             elif retry_call_type == CallTypes.aresponses.value:
-                is_aresponses_litellm_router_call: Final = _is_litellm_router_call(kwargs)
+                is_aresponses_litellm_router_call: Final = _is_litellm_router_call(retry_kwargs)
 
                 if (
-                    num_retries
+                    resolved_num_retries
                     and not is_aresponses_litellm_router_call
                     and not isinstance(e, ImportError)
                     and not is_agentic_followup_failure(e)
                     and not is_resent_failure(e)
+                    and (from_retry_policy or is_retryable_exception(e))
                     and not isinstance(e, litellm.exceptions.UnresolvablePreviousResponseError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
-                        kwargs["num_retries"] = num_retries
-                        kwargs["original_function"] = original_function
-                        if isinstance(e, openai.RateLimitError):  # rate limiting specific error
-                            kwargs["retry_strategy"] = "exponential_backoff_retry"
-                        elif isinstance(e, openai.APIError):  # generic api error
-                            kwargs["retry_strategy"] = "constant_retry"
-                        result = await litellm.aresponses_with_retries(*args, **kwargs)
+                        aresponses_retry_strategy: Final[Mapping[str, object]] = (
+                            {"retry_strategy": "exponential_backoff_retry"}
+                            if isinstance(e, openai.RateLimitError)
+                            else ({"retry_strategy": "constant_retry"} if isinstance(e, openai.APIError) else {})
+                        )
+                        aresponses_retry_status: Final[Mapping[str, object]] = (
+                            {"_retry_non_retryable_status": True} if from_retry_policy else {}
+                        )
+                        result = await litellm.aresponses_with_retries(
+                            *retry_args,
+                            **{
+                                **retry_kwargs,
+                                "num_retries": resolved_num_retries,
+                                "original_function": retry_original_function,
+                                **aresponses_retry_strategy,
+                                **aresponses_retry_status,
+                            },
+                        )
                     except Exception as retry_error:
                         if is_resent_failure(retry_error):
                             raise
                     else:
                         return result
 
-            deployment_num_retries: Final = kwargs.get("num_retries")
+            deployment_num_retries: Final = (
+                retry_kwargs.get("num_retries") if retry_kwargs.get("num_retries") is not None else resolved_num_retries
+            )
             if deployment_num_retries is not None:
                 setattr(e, "num_retries", deployment_num_retries)
 
-            timeout: Final = _get_wrapper_timeout(kwargs=kwargs)
+            timeout: Final = _get_wrapper_timeout(kwargs=retry_kwargs)
             setattr(e, "timeout", timeout)
             raise e
 
@@ -9160,6 +9188,23 @@ def should_retry(status_code: int) -> bool:
 
 
 _should_retry = should_retry
+
+
+def is_retryable_exception(error: BaseException) -> bool:
+    if not isinstance(error, Exception) or is_resent_failure(error) or isinstance(error, ImportError):
+        return False
+    response: Final = attribute_or_none(error, "response")
+    headers: Final = as_str_mapping(attribute_or_none(response, "headers"))
+    if headers is not None:
+        should_retry_header: Final = headers.get("x-should-retry")
+        if should_retry_header == "true":
+            return True
+        if should_retry_header == "false":
+            return False
+    status_code: Final = attribute_or_none(error, "status_code")
+    if isinstance(status_code, int) and not isinstance(status_code, bool):
+        return should_retry(status_code)
+    return True
 
 
 def _get_retry_after_from_exception_header(
