@@ -49,8 +49,19 @@ fn charged(holder: &Holder<NativeRows>) -> Option<&'static str> {
     team.and_then(unserved_team_column)
         .or_else(|| user.and_then(Named::stored).and_then(unserved_user))
         .or_else(|| holder.membership().and_then(unserved_membership))
-        .or_else(|| team.map(|_| "team"))
-        .or_else(|| user.map(|_| "user"))
+        .or_else(|| match (team, user.and_then(Named::stored)) {
+            (Some(Team::Row(team)), Some(_))
+                if team.member_max_budget.is_some()
+                    || holder
+                        .membership()
+                        .is_some_and(|member| member.budget.max.is_some()) =>
+            {
+                None
+            }
+            (Some(_), _) => Some("team"),
+            (None, Some(user)) if user.budget.max.is_some() => None,
+            (None, _) => user.map(|_| "user"),
+        })
 }
 
 /// The column of the caller's team that keeps the caller with Python. A team no row stands behind
@@ -78,8 +89,9 @@ fn unserved_project_column(project: &Named<ProjectRecord>) -> Option<&'static st
 pub(super) fn budgets(admit: &Admit, authentication: &Authentication) -> Option<Reason> {
     let caller = authentication.as_ref().ok()?;
     let reserves = !admit.config.general_settings.disable_budget_reservation
-        && !budgets::counters(caller, budgets::Settings::default(), jiff::Timestamp::now())
-            .is_empty();
+        && budgets::counters(caller, budgets::Settings::default(), jiff::Timestamp::now())
+            .iter()
+            .any(|counter| !matches!(counter.entity_type.as_str(), "User" | "TeamMember"));
     reserves.then(|| {
         Reason::new(
             Refused::Settings,

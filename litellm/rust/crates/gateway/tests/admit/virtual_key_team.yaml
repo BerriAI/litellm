@@ -39,6 +39,9 @@ rows:
   - LiteLLM_ModelTable: {id: 7, aliases: {friendly: claude}, created_by: test, updated_by: test}
   - LiteLLM_TeamTable: {team_id: aliased, model_id: 7, created_at: "2026-11-01T00:00:00Z", updated_at: "2026-11-01T00:00:00Z"}
 
+users:
+  member: {}
+
 keys:
   sk-plain: {team_id: plain}
   sk-listed: {team_id: listed}
@@ -54,6 +57,7 @@ keys:
   sk-ui: {team_id: litellm-dashboard}
   sk-teamless: {}
   sk-member-default: {team_id: member_default}
+  sk-member-default-owner: {team_id: member_default, user_id: member}
   sk-member-default-gone: {team_id: member_default_gone}
   sk-member-default-per-model: {team_id: member_default_per_model}
   sk-reset-scheduled: {team_id: reset_scheduled}
@@ -185,7 +189,12 @@ requests:
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
-    over: member_max_budget
+    over: team
+
+  - name: a key owned by a member with the team default budget
+    headers: {authorization: Bearer sk-member-default-owner}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
 
   - name: a key in a team whose default member budget has no row
     headers: {authorization: Bearer sk-member-default-gone}

@@ -1163,10 +1163,6 @@ mod tests {
     #[case::rpm_limit(json!({"rpm_limit": 10}), "rpm_limit")]
     #[case::a_limit_of_zero(json!({"rpm_limit": 0}), "rpm_limit")]
     #[case::max_parallel_requests(json!({"max_parallel_requests": 1}), "max_parallel_requests")]
-    #[case::max_budget(json!({"max_budget": 5.0}), "max_budget")]
-    #[case::rollover_max_budget(json!({"rollover_max_budget": 5.0}), "rollover_max_budget")]
-    #[case::rollover_credit(json!({"rollover_credit": 1.5}), "rollover_credit")]
-    #[case::budget_duration(json!({"budget_duration": "30d"}), "budget_duration")]
     #[case::allowed_cache_controls(
         json!({"allowed_cache_controls": ["no-cache"]}),
         "allowed_cache_controls"
@@ -1185,6 +1181,21 @@ mod tests {
             panic!("the key holds no owner row");
         };
         assert_eq!(unserved_user(owner), Some(column));
+    }
+
+    #[rstest]
+    #[case::max_budget(json!({"max_budget": 5.0}))]
+    #[case::rollover_max_budget(json!({"rollover_max_budget": 5.0}))]
+    #[case::rollover_credit(json!({"rollover_credit": 1.5}))]
+    #[case::budget_duration(json!({"budget_duration": "30d"}))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_owners_lifetime_budget_settings_are_served(#[case] owner: Columns) {
+        let held = owned_by(owner).await;
+        let caller = presenting(held.database(), VIRTUAL_KEY).await.unwrap();
+        let Some(Named::Stored(owner)) = caller.affiliation.holder.user() else {
+            panic!("the key holds no owner row");
+        };
+        assert_eq!(unserved_user(owner), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]

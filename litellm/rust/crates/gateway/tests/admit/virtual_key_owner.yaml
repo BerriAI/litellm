@@ -1,6 +1,6 @@
 # A virtual key that names a user has that owner read natively. An owner whose row holds only
 # what describes it, or that has no row, still sends its key to Python, since the native spend log
-# charges no user yet. An owner that holds a limit or a budget goes to Python over that column,
+# does not serve all owners yet. An owner that holds an unserved limit goes to Python over that column,
 # and one whose metadata holds anything but SCIM's flag is not native. An owner's budget reset time
 # is read for nothing, as the proxy's checks never read it.
 config:
@@ -62,9 +62,7 @@ requests:
   - name: a key whose owner has a budget
     headers: {authorization: Bearer sk-capped}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: max_budget
+    expect: rust
 
   - name: a key whose owner has a rate limit
     headers: {authorization: Bearer sk-limited}

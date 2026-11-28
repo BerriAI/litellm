@@ -241,7 +241,7 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         model_rpm_limit,
         model_tpm_limit,
         priority,
-        member_max_budget,
+        member_max_budget: _,
         member_budget_extras,
     } = team;
     let litellm_model_table = &litellm_model_table.is_some();
@@ -274,7 +274,6 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         priority,
     ]
     .or_else(|| unserved_budget_extras(member_budget_extras))
-    .or_else(|| carried![member_max_budget])
 }
 
 /// The user's record, or the first field it holds that the native gateway cannot handle yet.
@@ -391,13 +390,10 @@ pub(crate) fn unserved_user(user: &UserRecord) -> Option<&'static str> {
             tpm: tpm_limit,
         },
         max_parallel_requests,
-        budget: Budget {
-            max: max_budget,
-            spend: _,
-        },
-        rollover_max_budget,
-        rollover_credit,
-        budget_duration,
+        budget: _,
+        rollover_max_budget: _,
+        rollover_credit: _,
+        budget_duration: _,
         budget_limits,
         model_max_budget,
         model_spend: _,
@@ -413,10 +409,6 @@ pub(crate) fn unserved_user(user: &UserRecord) -> Option<&'static str> {
         tpm_limit,
         rpm_limit,
         max_parallel_requests,
-        max_budget,
-        rollover_max_budget,
-        rollover_credit,
-        budget_duration,
         budget_limits,
         model_max_budget,
         allowed_cache_controls,
@@ -487,29 +479,34 @@ pub(crate) fn unserved_membership(membership: &MembershipRecord) -> Option<&'sta
             rpm: rpm_limit,
             tpm: tpm_limit,
         },
-        budget: Budget {
-            max: max_budget,
-            spend: _,
-        },
-        rollover_credit,
+        budget: _,
+        rollover_credit: _,
         soft_budget,
         tpd_limit,
         max_parallel_requests,
-        budget_duration,
-        budget_extras,
+        budget_duration: _,
+        budget_extras:
+            BudgetExtras {
+                model_max_budget,
+                model_rpm_limit,
+                model_tpm_limit,
+                allowed_models,
+                rollover_max_budget: _,
+                temp_budget_increase: _,
+                temp_budget_expiry: _,
+            },
     } = membership;
-    unserved_budget_extras(budget_extras).or_else(|| {
-        carried![
-            rollover_credit,
-            max_budget,
-            soft_budget,
-            rpm_limit,
-            tpm_limit,
-            tpd_limit,
-            max_parallel_requests,
-            budget_duration
-        ]
-    })
+    carried![
+        model_max_budget,
+        model_rpm_limit,
+        model_tpm_limit,
+        allowed_models,
+        soft_budget,
+        rpm_limit,
+        tpm_limit,
+        tpd_limit,
+        max_parallel_requests
+    ]
 }
 
 /// The organization's record, or the first field it or its budget row holds that no record field

@@ -47,12 +47,10 @@ requests:
     reason: credential
     over: team
 
-  - name: the key owner's membership has an unserved budget
+  - name: the key owner's membership has a lifetime budget
     headers: {authorization: Bearer sk-capped}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: max_budget
+    expect: rust
 
   - name: the key owner's membership budget has a per-model map
     headers: {authorization: Bearer sk-structured}
