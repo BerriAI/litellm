@@ -39,11 +39,13 @@ class ScimError(Exception):
         detail: str,
         headers: Mapping[str, str] | None = None,
         traced_as: Exception | None = None,
+        scim_type: ScimType | None = None,
     ) -> None:
         self.status_code: Final = status_code
         self.headers: Final = MappingProxyType(dict(headers or {}))
         self.traced_as: Final = traced_as
-        self.error: Final = SCIMError(status=str(status_code), detail=detail, scimType=_scim_type(status_code))
+        resolved_scim_type: Final = _scim_type(status_code) if scim_type is None else scim_type
+        self.error: Final = SCIMError(status=str(status_code), detail=detail, scimType=resolved_scim_type)
         super().__init__(detail)
 
 
@@ -132,6 +134,8 @@ def _unexpected_scim_error(exc: Exception) -> ScimError:
 
 def scim_detail_of(exc: Exception) -> str:
     match exc:
+        case ScimError():
+            return exc.error.detail
         case HTTPException() | ProxyException() | RequestValidationError():
             return scim_error_from(exc).error.detail
         case _:
@@ -140,6 +144,8 @@ def scim_detail_of(exc: Exception) -> str:
 
 def _scim_error_for(exc: Exception) -> ScimError:
     match exc:
+        case ScimError():
+            return exc
         case HTTPException() | ProxyException() | RequestValidationError():
             return scim_error_from(exc)
         case _:
