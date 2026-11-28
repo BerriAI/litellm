@@ -740,6 +740,61 @@ class TestAzureAnthropicCostCalculation:
         )
 
 
+@pytest.mark.parametrize("buffered", (False, True))
+@pytest.mark.parametrize(
+    "method, suffix, payload",
+    (
+        ("GET", "", b'{"data":[],"has_more":false,"first_id":null,"last_id":null}'),
+        ("GET", "/?limit=20", b'{"data":[],"has_more":false,"first_id":null,"last_id":null}'),
+        ("GET", "/msgbatch_control", b'{"id":"msgbatch_control","processing_status":"ended"}'),
+        (
+            "GET",
+            "/msgbatch_control/results",
+            b'{"custom_id":"first","result":{"type":"canceled"}}\n'
+            b'{"custom_id":"second","result":{"type":"canceled"}}\n',
+        ),
+        ("POST", "/msgbatch_control/cancel", b'{"id":"msgbatch_control","processing_status":"canceling"}'),
+    ),
+)
+def test_batch_control_plane_logging_preserves_the_response_without_creating_a_batch(
+    method: str, suffix: str, payload: bytes, buffered: bool
+) -> None:
+    url: Final = f"https://api.anthropic.com/v1/messages/batches{suffix}"
+    response: Final = httpx.Response(
+        200, request=httpx.Request(method, url), stream=httpx.ByteStream(payload)
+    )
+    if buffered:
+        response.read()
+    timestamp: Final = datetime(2025, 1, 1)
+    logger: Final = LiteLLMLoggingObj(
+        model="batch-control-plane",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=timestamp,
+        litellm_call_id="batch-control-plane",
+        function_id="batch-control-plane",
+    )
+    logged: Final = AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+        httpx_response=response,
+        response_body={},
+        logging_obj=logger,
+        url_route=url,
+        result="",
+        start_time=timestamp,
+        end_time=timestamp,
+        cache_hit=False,
+        request_body={},
+    )
+
+    assert logged["result"].choices == []
+    assert logged["result"].model == logger.model
+    assert logged["result"].usage == litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+    assert logged["kwargs"] == {}
+    assert response.is_stream_consumed is buffered
+    assert response.read() == payload
+
+
 class TestAnthropicBatchPassthroughCostTracking:
     """Test cases for Anthropic batch passthrough cost tracking functionality"""
 
@@ -792,6 +847,39 @@ class TestAnthropicBatchPassthroughCostTracking:
                 }
             ]
         }
+
+    @pytest.mark.parametrize("suffix", ("", "/", "?limit=20"))
+    def test_collection_post_still_logs_pending_batch_creation(
+        self, suffix: str, mock_httpx_response: MagicMock, mock_request_body: dict[str, object]
+    ) -> None:
+        url: Final = f"https://api.anthropic.com/v1/messages/batches{suffix}"
+        body: Final = mock_httpx_response.json()
+        timestamp: Final = datetime(2025, 1, 1)
+        logger: Final = LiteLLMLoggingObj(
+            model="batch-create",
+            messages=[],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=timestamp,
+            litellm_call_id="batch-create",
+            function_id="batch-create",
+        )
+        logged: Final = AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+            httpx_response=httpx.Response(200, request=httpx.Request("POST", url), json=body),
+            response_body=body,
+            logging_obj=logger,
+            url_route=url,
+            result="",
+            start_time=timestamp,
+            end_time=timestamp,
+            cache_hit=False,
+            request_body=mock_request_body,
+        )
+
+        assert logged["result"].object == "batch"
+        assert logged["kwargs"]["batch_id"] == body["id"]
+        assert logged["kwargs"]["batch_job_state"] == "in_progress"
+        assert logged["kwargs"]["response_cost"] == 0
 
     @patch(
         "litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler.AnthropicPassthroughLoggingHandler._store_batch_managed_object"
