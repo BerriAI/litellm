@@ -17,6 +17,10 @@ class SensitiveRoutePinStore:
     def __init__(self, handle: SensitiveRoutePinsHandle) -> None:
         self._handle: Final = handle
 
+    def flush_local(self) -> None:
+        """Drops everything this process holds in memory and leaves Redis alone, for test harnesses that reuse a process."""
+        self._handle.flush_local()
+
     @with_service_target(SENSITIVE_ROUTE_PINS_TARGET)
     async def get(self, tenant: str, session_id: str, default_ttl: float) -> str | None:
         return await self._handle.get(tenant, session_id, default_ttl)
