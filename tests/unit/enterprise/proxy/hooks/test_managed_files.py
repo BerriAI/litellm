@@ -1569,6 +1569,109 @@ def test_get_file_ids_from_responses_tools_empty():
     assert file_ids == []
 
 
+def test_get_file_ids_from_responses_tools_shell_environment():
+    """Verify shell environment.file_ids are extracted alongside code_interpreter."""
+    proxy_managed_files = PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+
+    tools = [
+        {
+            "type": "code_interpreter",
+            "container": {
+                "type": "auto",
+                "file_ids": ["file-ci-1"],
+            },
+        },
+        {
+            "type": "shell",
+            "environment": {
+                "type": "container_auto",
+                "file_ids": ["file-sh-1", "file-sh-2"],
+            },
+        },
+        {
+            "type": "shell",
+            "environment": "local",
+        },
+        {
+            "type": "shell",
+            "environment": {
+                "type": "container_auto",
+            },
+        },
+    ]
+
+    file_ids = proxy_managed_files.get_file_ids_from_responses_tools(tools)
+    assert file_ids == ["file-ci-1", "file-sh-1", "file-sh-2"]
+
+
+@pytest.mark.asyncio
+async def test_responses_shell_file_access_and_mapping():
+    """Verify shell environment.file_ids enforce ownership checks and build real mapping."""
+    from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
+        update_responses_tools_with_model_file_ids,
+    )
+
+    unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9qc29uO3VuaWZpZWRfaWQsNzc3Nzc3Nzc7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1YWVo7bGxtX291dHB1dF9maWxlX21vZGVsX2lkLG1vZGVsXzEyMw"
+    unreferenced_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
+
+    proxy_managed_files, _ = _managed_files_with_fake_prisma()
+    owner = UserAPIKeyAuth(user_id="owner-user", team_id="team-owner")
+    stranger = UserAPIKeyAuth(user_id="stranger-user", team_id="team-other")
+
+    await proxy_managed_files.store_unified_file_id(
+        file_id=unified_file_id,
+        file_object=None,
+        litellm_parent_otel_span=None,
+        model_mappings={"model_123": "file-provider-shell"},
+        user_api_key_dict=owner,
+    )
+    await proxy_managed_files.store_unified_file_id(
+        file_id=unreferenced_file_id,
+        file_object=None,
+        litellm_parent_otel_span=None,
+        model_mappings={"model_123": "file-provider-other"},
+        user_api_key_dict=owner,
+    )
+
+    tools_payload = [
+        {
+            "type": "shell",
+            "environment": {
+                "type": "container_auto",
+                "file_ids": [unified_file_id],
+            },
+        }
+    ]
+    result = await proxy_managed_files.async_pre_call_hook(
+        user_api_key_dict=owner,
+        cache=DualCache(),
+        data={"input": "hello", "tools": tools_payload, "model": "gpt-4o"},
+        call_type="aresponses",
+    )
+
+    assert result["model_file_id_mapping"] == {
+        unified_file_id: {"model_123": "file-provider-shell"}
+    }
+    translated_tools = update_responses_tools_with_model_file_ids(
+        tools=result["tools"],
+        model_id="model_123",
+        model_file_id_mapping=result["model_file_id_mapping"],
+    )
+    assert translated_tools is not None
+    assert translated_tools[0]["environment"]["file_ids"] == ["file-provider-shell"]
+
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_managed_files.async_pre_call_hook(
+            user_api_key_dict=stranger,
+            cache=DualCache(),
+            data={"input": "hello", "tools": tools_payload, "model": "gpt-4o"},
+            call_type="aresponses",
+        )
+    assert exc_info.value.status_code == 403
+
+
 @pytest.mark.asyncio
 async def test_check_file_ids_access_with_unified_file_ids():
     """

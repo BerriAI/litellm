@@ -3,7 +3,7 @@ Unit tests for file_search / vector_store support in the Responses API.
 
 Coverage:
   A1-A7  _decode_vector_store_ids_in_tools()
-  B1-B3  update_responses_tools_with_model_file_ids()
+  B1-B5  update_responses_tools_with_model_file_ids()
   C1,D1  supports_native_file_search()
   E1-E4  file_search guard in responses/main.py
   F1-F6  ManagedFiles hook access control
@@ -57,6 +57,13 @@ def _code_interpreter_tool(file_ids: Optional[List[str]] = None) -> Dict[str, An
     tool: Dict[str, Any] = {"type": "code_interpreter"}
     if file_ids:
         tool["container"] = {"type": "auto", "file_ids": file_ids}
+    return tool
+
+
+def _shell_tool(file_ids: list[str] | None = None) -> dict[str, Any]:
+    tool: dict[str, Any] = {"type": "shell"}
+    if file_ids is not None:
+        tool["environment"] = {"type": "container_auto", "file_ids": file_ids}
     return tool
 
 
@@ -163,6 +170,47 @@ class TestUpdateResponsesToolsWithModelFileIds:
         assert result is not None
         assert result[0]["vector_store_ids"] == ["vs_decoded"]
         assert result[1]["container"]["file_ids"] == ["provider_file_xyz"]
+
+    def test_B4_shell_environment_file_ids_mapping(self):
+        """shell tools translate unified IDs in environment.file_ids without mutating input."""
+        model_id = "deployment-test"
+        tools = [
+            _code_interpreter_tool(["unified-test"]),
+            _shell_tool(["unified-test", "file-raw-provider"]),
+        ]
+        mapping = {"unified-test": {model_id: "file-provider-test"}}
+
+        result = update_responses_tools_with_model_file_ids(
+            tools=tools,
+            model_id=model_id,
+            model_file_id_mapping=mapping,
+        )
+        assert result is not None
+        assert result[0]["container"]["file_ids"] == ["file-provider-test"]
+        assert result[1]["environment"]["file_ids"] == [
+            "file-provider-test",
+            "file-raw-provider",
+        ]
+        assert tools[1]["environment"]["file_ids"] == [
+            "unified-test",
+            "file-raw-provider",
+        ]
+
+    def test_B5_shell_without_file_ids_or_non_dict_environment_unchanged(self):
+        """shell tools missing file_ids or using non-dict environment stay intact."""
+        model_id = "deployment-test"
+        mapping = {"unified-test": {model_id: "file-provider-test"}}
+        tools: list[dict[str, Any]] = [
+            {"type": "shell", "environment": {"type": "container_auto"}},
+            {"type": "shell", "environment": "local"},
+        ]
+
+        result = update_responses_tools_with_model_file_ids(
+            tools=tools,
+            model_id=model_id,
+            model_file_id_mapping=mapping,
+        )
+        assert result == tools
 
 
 # ---------------------------------------------------------------------------

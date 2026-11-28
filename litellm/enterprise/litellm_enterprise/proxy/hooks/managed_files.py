@@ -58,6 +58,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import gemini_media_source
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import RESPONSE_TOOL_FILE_ID_KEYS
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints, FileListModelScope
 from litellm.llms.base_llm.managed_resources.isolation import (
@@ -2233,15 +2234,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
     def get_file_ids_from_responses_tools(self, tools: List[Dict[str, object]]) -> List[str]:
         """
-        Gets file ids from responses API tools parameter.
-
-        The tools can contain code_interpreter with container.file_ids:
-        [
-            {
-                "type": "code_interpreter",
-                "container": {"type": "auto", "file_ids": ["file-123", "file-456"]}
-            }
-        ]
+        Gets file ids from responses API tools parameter (`code_interpreter` container
+        and `shell` environment `file_ids`).
         """
         file_ids: List[str] = []
 
@@ -2252,13 +2246,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if not isinstance(tool, dict):
                 continue
 
-            # Check for code_interpreter with container file_ids
-            if tool.get("type") == "code_interpreter":
-                container = tool.get("container")
-                if isinstance(container, dict):
-                    container_file_ids = container.get("file_ids")
-                    if isinstance(container_file_ids, list):
-                        for file_id in container_file_ids:
+            tool_type: Final = tool.get("type")
+            nested_key: Final = (
+                RESPONSE_TOOL_FILE_ID_KEYS.get(tool_type) if isinstance(tool_type, str) else None
+            )
+            if nested_key is not None:
+                nested: Final = tool.get(nested_key)
+                if isinstance(nested, dict):
+                    nested_file_ids: Final = nested.get("file_ids")
+                    if isinstance(nested_file_ids, list):
+                        for file_id in nested_file_ids:
                             if isinstance(file_id, str):
                                 file_ids.append(file_id)
 
