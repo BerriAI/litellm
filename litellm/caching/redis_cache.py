@@ -35,6 +35,7 @@ from litellm.constants import (
     DEFAULT_REDIS_MAJOR_VERSION,
     REDIS_TIMEOUT_LOG_INTERVAL,
 )
+from litellm.integrations.otel.runtime import background_job_span
 from litellm.litellm_core_utils.core_helpers import as_object_list, get_parent_otel_span_from_kwargs, has_attributes
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.redis.store_settings import RedisStoreSettings, breaker_settings
@@ -1614,10 +1615,11 @@ class RedisCache(BaseCache):
             self.redis_batch_writing_buffer.clear()
         print_verbose(f"flushing to redis....reached size of buffer {len(entries)}")
         try:
-            if any(ttl is not None for _, _, ttl in entries):
-                await self.async_set_cache_pipeline_with_ttls(entries)
-            else:
-                await self.async_set_cache_pipeline(tuple((key, value) for key, value, _ in entries))
+            with background_job_span("redis_cache_flush"):
+                if any(ttl is not None for _, _, ttl in entries):
+                    await self.async_set_cache_pipeline_with_ttls(entries)
+                else:
+                    await self.async_set_cache_pipeline(tuple((key, value) for key, value, _ in entries))
         except BaseException:
             with self._batch_buffer_lock:
                 self.redis_batch_writing_buffer.extendleft(reversed(entries))
