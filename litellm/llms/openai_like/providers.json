@@ -397,5 +397,11 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "infer": {
+    "base_url": "https://infer.flow7.org/v1",
+    "api_key_env": "INFER_API_KEY",
+    "api_base_env": "INFER_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
   }
 }
