@@ -16,6 +16,7 @@ use litellm_python_compat::scalar::python_value;
 use litellm_router_types::LitellmParams;
 use litellm_secret_value::SecretValue;
 use serde_json::{Map, Value, json};
+use strum::VariantArray as _;
 
 use super::{
     handler::{shape_anthropic_messages_request_keeping_tool_use_ids, with_sanitized_tool_use_ids},
@@ -25,7 +26,7 @@ use crate::anthropic::{
     beta_gated_fields::strip_beta_gated_request, beta_headers::accepted_or_unlisted,
 };
 use crate::base_llm::messages::{
-    context::{MessagesShapeOptions, MessagesTransformContext},
+    context::{MessagesModelCapabilities, MessagesShapeOptions, MessagesTransformContext},
     tools::ToolCustomField,
 };
 use crate::{
@@ -402,40 +403,34 @@ pub(crate) fn transform_messages_request(
     if request.params.max_tokens.is_none() {
         return Err(Error::MissingField("max_tokens"));
     }
-    let request = without_unstructured_output_format(request, context);
     let request = drop_unsupported_params(request, context)?;
     let request = translate_thinking(request, &context.thinking)?;
-    let context_management = request.params.context_management.clone().and_then(|sent| {
-        map_openai_context_management_to_anthropic(&sent).or((!context.drop_params).then_some(sent))
-    });
     let request = if context.drop_params {
-        MessagesRequest {
-            params: MessagesOptionalParams {
-                system: request.params.system.and_then(drop_non_string_system_texts),
-                ..request.params
-            },
-            ..request
-        }
+        without_content_the_provider_rejects(request)?
     } else {
         request
     };
-    let messages = if context.drop_params {
-        map_messages_rejecting_emptied(
-            request.messages,
-            drop_non_string_user_texts,
-            drop_raw_non_string_user_texts,
-        )?
-    } else {
-        request.messages
-    };
+    let context_management = request
+        .params
+        .context_management
+        .clone()
+        .map(|sent| map_openai_context_management_to_anthropic(&sent).unwrap_or(sent));
     let messages = if has_advisor_tool(request.params.tools.as_deref())
         || continues_message_thread(&request.params)
     {
-        messages
+        request.messages
     } else if context.drop_params {
-        map_messages(messages, drop_advisor_blocks, drop_raw_advisor_blocks)
+        map_messages(
+            request.messages,
+            drop_advisor_blocks,
+            drop_raw_advisor_blocks,
+        )
     } else {
-        map_messages(messages, strip_advisor_blocks, strip_raw_advisor_blocks)
+        map_messages(
+            request.messages,
+            strip_advisor_blocks,
+            strip_raw_advisor_blocks,
+        )
     };
     let messages = map_messages(
         messages,
@@ -463,26 +458,30 @@ pub(crate) fn transform_messages_request(
     })
 }
 
-fn without_unstructured_output_format(
+/// What `drop_params` removes from a request's content, which is otherwise sent as it came: an
+/// `output_format` that is no object, a `context_management` that names no Anthropic edits, and
+/// the system and user texts that are no string. A request left with no message is refused.
+fn without_content_the_provider_rejects(
     request: MessagesRequest,
-    context: &MessagesTransformContext,
-) -> MessagesRequest {
-    if !context.drop_params
-        || request
-            .params
-            .output_format
-            .as_ref()
-            .is_none_or(Value::is_object)
-    {
-        return request;
-    }
-    MessagesRequest {
-        params: MessagesOptionalParams {
-            output_format: None,
-            ..request.params
-        },
+) -> Result<MessagesRequest, Error> {
+    let params = request.params;
+    let params = MessagesOptionalParams {
+        output_format: params.output_format.filter(Value::is_object),
+        context_management: params
+            .context_management
+            .filter(|sent| map_openai_context_management_to_anthropic(sent).is_some()),
+        system: params.system.and_then(drop_non_string_system_texts),
+        ..params
+    };
+    Ok(MessagesRequest {
+        messages: map_messages_rejecting_emptied(
+            request.messages,
+            drop_non_string_user_texts,
+            drop_raw_non_string_user_texts,
+        )?,
+        params,
         ..request
-    }
+    })
 }
 
 pub(crate) fn update_headers_with_anthropic_beta(
@@ -698,7 +697,97 @@ fn unsupported_param(model: &str, param: &str, value: &str, hint: &str) -> Error
     })
 }
 
-/// The speed and sampling gates of Python's `get_requested_anthropic_messages_optional_param`.
+/// A top-level param a model or an API version takes no value of. Each rule is stated once here:
+/// what the param is, when the model takes it, and the request without it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
+enum GatedParam {
+    Speed,
+    Temperature,
+    TopP,
+    TopK,
+}
+
+/// The params `anthropic-version` 2026-10-21 removed.
+const SAMPLING_PARAMS: [GatedParam; 3] =
+    [GatedParam::Temperature, GatedParam::TopP, GatedParam::TopK];
+
+impl GatedParam {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Speed => "speed",
+            Self::Temperature => "temperature",
+            Self::TopP => "top_p",
+            Self::TopK => "top_k",
+        }
+    }
+
+    /// The value the request sends, as an error prints it.
+    fn sent(self, params: &MessagesOptionalParams) -> Option<String> {
+        match self {
+            Self::Speed => params.speed.as_ref().map(speed_repr),
+            Self::Temperature => params.temperature.as_ref().map(python_str),
+            Self::TopP => params.top_p.as_ref().map(python_str),
+            Self::TopK => params.top_k.as_ref().map(python_str),
+        }
+    }
+
+    /// Whether the model takes the value the request sends.
+    fn taken(
+        self,
+        params: &MessagesOptionalParams,
+        capabilities: &MessagesModelCapabilities,
+    ) -> bool {
+        match self {
+            Self::Speed => capabilities.supports_speed,
+            Self::Temperature => {
+                capabilities.supports_sampling_params
+                    || params.temperature.as_ref().is_some_and(is_one)
+            }
+            Self::TopP | Self::TopK => capabilities.supports_sampling_params,
+        }
+    }
+
+    /// What an error adds about the values the model does take.
+    const fn hint(self) -> &'static str {
+        match self {
+            Self::Temperature => "Only temperature=1 is supported. ",
+            Self::Speed | Self::TopP | Self::TopK => "",
+        }
+    }
+
+    /// What the warning of a drop adds, for the params whose drop Python warns of.
+    const fn drop_note(self) -> Option<&'static str> {
+        match self {
+            Self::Speed => Some("Fast mode is only supported on select Opus models."),
+            Self::Temperature | Self::TopP | Self::TopK => None,
+        }
+    }
+
+    fn without(self, params: MessagesOptionalParams) -> MessagesOptionalParams {
+        match self {
+            Self::Speed => MessagesOptionalParams {
+                speed: None,
+                ..params
+            },
+            Self::Temperature => MessagesOptionalParams {
+                temperature: None,
+                ..params
+            },
+            Self::TopP => MessagesOptionalParams {
+                top_p: None,
+                ..params
+            },
+            Self::TopK => MessagesOptionalParams {
+                top_k: None,
+                ..params
+            },
+        }
+    }
+}
+
+/// The speed and sampling gates of Python's `get_requested_anthropic_messages_optional_param`:
+/// each [`GatedParam`] the model does not take is dropped under `drop_params`, and is the call's
+/// error without it.
 pub fn drop_unsupported_params(
     request: MessagesRequest,
     context: &MessagesTransformContext,
@@ -709,57 +798,35 @@ pub fn drop_unsupported_params(
     } else {
         request
     };
-    let model = request.model.clone();
-    let reject = |param: &str, value: String, hint: &str| -> Result<(), Error> {
-        if context.drop_params {
-            return Ok(());
-        }
-        Err(unsupported_param(&model, param, &value, hint))
-    };
-    let params = request.params;
-    let speed = match &params.speed {
-        Some(speed) if !capabilities.supports_speed => {
-            reject("speed", speed_repr(speed), "")?;
-            tracing::warn!(
-                "Dropping unsupported `speed` for model={model} (drop_params=True). Fast mode is only supported on select Opus models."
-            );
-            None
-        }
-        _ => params.speed.clone(),
-    };
-    if capabilities.supports_sampling_params {
-        return Ok(MessagesRequest {
-            params: MessagesOptionalParams { speed, ..params },
-            ..request
-        });
-    }
-    let temperature = match params.temperature {
-        Some(temperature) if !is_one(&temperature) => {
-            reject(
-                "temperature",
-                python_str(&temperature),
-                "Only temperature=1 is supported. ",
-            )?;
-            None
-        }
-        temperature => temperature,
-    };
-    if let Some(top_p) = &params.top_p {
-        reject("top_p", python_str(top_p), "")?;
-    }
-    if let Some(top_k) = &params.top_k {
-        reject("top_k", python_str(top_k), "")?;
-    }
-    Ok(MessagesRequest {
-        params: MessagesOptionalParams {
-            speed,
-            temperature,
-            top_p: None,
-            top_k: None,
-            ..params
-        },
-        ..request
-    })
+    GatedParam::VARIANTS
+        .iter()
+        .try_fold(request, |request, param| {
+            let Some(value) = param.sent(&request.params) else {
+                return Ok(request);
+            };
+            if param.taken(&request.params, capabilities) {
+                return Ok(request);
+            }
+            if !context.drop_params {
+                return Err(unsupported_param(
+                    &request.model,
+                    param.name(),
+                    &value,
+                    param.hint(),
+                ));
+            }
+            if let Some(note) = param.drop_note() {
+                tracing::warn!(
+                    "Dropping unsupported `{}` for model={} (drop_params=True). {note}",
+                    param.name(),
+                    request.model
+                );
+            }
+            Ok(MessagesRequest {
+                params: param.without(request.params),
+                ..request
+            })
+        })
 }
 
 fn requested_api_version(headers: &Headers) -> &str {
@@ -782,29 +849,21 @@ pub(crate) fn drop_sampling_params_removed_by_version(
     if !removes_sampling_params(api_version) {
         return Ok(request);
     }
-    let params = &request.params;
-    let first_sent = [
-        ("temperature", params.temperature.as_ref().map(python_str)),
-        ("top_p", params.top_p.as_ref().map(python_str)),
-        ("top_k", params.top_k.as_ref().map(python_str)),
-    ]
-    .into_iter()
-    .find_map(|(param, value)| Some((param, value?)));
+    let first_sent = SAMPLING_PARAMS
+        .iter()
+        .find_map(|param| Some((param, param.sent(&request.params)?)));
     if let (Some((param, value)), false) = (first_sent, drop_params) {
         return Err(unsupported_param(
             &request.model,
-            param,
+            param.name(),
             &value,
             &format!("anthropic-version {api_version} removed temperature, top_p and top_k. "),
         ));
     }
     Ok(MessagesRequest {
-        params: MessagesOptionalParams {
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            ..request.params
-        },
+        params: SAMPLING_PARAMS
+            .iter()
+            .fold(request.params, |params, param| param.without(params)),
         ..request
     })
 }
@@ -1610,6 +1669,24 @@ mod tests {
                 true
             ),
             Ok(body(json!({})))
+        );
+    }
+
+    #[rstest]
+    #[case::sent_as_is_without_drop_params(false, json!({"system": [{"type": "text", "text": 5}]}))]
+    #[case::dropped_under_drop_params(true, json!({}))]
+    fn a_non_string_system_text_is_dropped_only_under_drop_params(
+        #[case] drop_params: bool,
+        #[case] expected: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        assert_eq!(
+            transform(
+                json!({"system": [{"type": "text", "text": 5}]}),
+                unmapped,
+                drop_params
+            ),
+            Ok(body(expected))
         );
     }
 
