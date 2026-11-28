@@ -29,12 +29,14 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import ModelResponse
 
+from ....exceptions import UnsupportedParamsError
 from ....utils import remove_additional_properties, remove_strict_from_schema
 from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
 
+LEGACY_FUNCTION_PARAMS: Final = ("functions", "function_call")
 _THINKING_KEYS: Final = frozenset({"thinking_blocks"})
 _THINKING_AND_REASONING_KEYS: Final = frozenset({"thinking_blocks", "reasoning_content"})
 
@@ -179,6 +181,19 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        legacy_params: Final = [param for param in LEGACY_FUNCTION_PARAMS if param in non_default_params]
+        if legacy_params:
+            # vLLM's schema lacks these fields and drops unknown extras, so forwarding them returns plain text
+            raise UnsupportedParamsError(
+                status_code=400,
+                llm_provider="hosted_vllm",
+                model=model,
+                message=(
+                    f"hosted_vllm does not support the legacy parameter(s) {', '.join(legacy_params)}. "
+                    "Use `tools` and `tool_choice` instead."
+                ),
+            )
+
         params: Final = dict[str, object](non_default_params)
         mapped_params: Final = {
             key: value
