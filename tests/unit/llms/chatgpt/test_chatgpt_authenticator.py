@@ -1,13 +1,14 @@
 import base64
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock, mock_open, patch
 
-import pytest
 import httpx
+import pytest
 import respx
 
 import litellm
@@ -218,6 +219,50 @@ class TestChatGPTMultiAccountAuthenticator:
         assert not custom_file.parent.exists()
         authenticator._write_auth_file({"access_token": "token-a"})
         assert json.loads(custom_file.read_text())["access_token"] == "token-a"
+
+    @pytest.mark.parametrize("preexisting", [False, True])
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+    def test_write_auth_file_enforces_private_permissions(self, tmp_path: Path, preexisting: bool) -> None:
+        token_dir: Final = tmp_path / "tokens"
+        auth_file: Final = token_dir / "auth.json"
+        if preexisting:
+            token_dir.mkdir(parents=True)
+            token_dir.chmod(0o755)
+            auth_file.write_text("{}")
+            auth_file.chmod(0o644)
+
+        previous_umask = os.umask(0o022)
+        try:
+            authenticator: Final = Authenticator(auth_file=str(auth_file))
+            authenticator._write_auth_file(
+                {
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "id_token": "id-token",
+                }
+            )
+        finally:
+            os.umask(previous_umask)
+
+        stored = json.loads(auth_file.read_text())
+        assert stored["access_token"] == "access-token"
+        assert stored["refresh_token"] == "refresh-token"
+        assert token_dir.stat().st_mode & 0o777 == 0o700
+        assert auth_file.stat().st_mode & 0o777 == 0o600
+
+    def test_write_auth_file_stops_when_token_dir_chmod_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        auth_file: Final = tmp_path / "tokens" / "auth.json"
+
+        def fail_chmod(path: str, mode: int) -> None:
+            raise OSError("chmod denied")
+
+        monkeypatch.setattr(os, "chmod", fail_chmod)
+        authenticator: Final = Authenticator(auth_file=str(auth_file))
+        authenticator._write_auth_file({"access_token": "access-token"})
+
+        assert not auth_file.exists()
 
     def test_default_auth_file_from_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "env-dir"))
