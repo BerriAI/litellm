@@ -9,13 +9,22 @@ Routes covered:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from prisma.errors import ForeignKeyViolationError
 
 from .conftest import VOLATILE_KEYS, normalize
+
+_INVITATION_FOREIGN_KEYS: Final = (
+    ("user_id", "LiteLLM_InvitationLink_user_id_fkey"),
+    ("created_by", "LiteLLM_InvitationLink_created_by_fkey"),
+    ("updated_by", "LiteLLM_InvitationLink_updated_by_fkey"),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -51,9 +60,134 @@ def _make_invitation(
     )
 
 
+def _foreign_key_violation(constraint: str) -> ForeignKeyViolationError:
+    field_name: Final = f"{constraint} (index)"
+    return ForeignKeyViolationError(
+        {
+            "user_facing_error": {
+                "error_code": "P2003",
+                "message": f"Foreign key constraint failed on the field: `{field_name}`",
+                "meta": {"field_name": field_name},
+            }
+        }
+    )
+
+
+def _store_users_with_invitation_foreign_keys(mock_prisma: MagicMock, users: dict[str, dict[str, object]]) -> None:
+    """Back the user upsert and invitation insert with ``users``, refusing an invitation whose ids it lacks."""
+
+    async def upsert(where: Mapping[str, str], data: Mapping[str, Mapping[str, object]]) -> SimpleNamespace:
+        user_id: Final = where["user_id"]
+        users[user_id] = {**users[user_id], **data["update"]} if user_id in users else dict(data["create"])
+        return SimpleNamespace(**users[user_id])
+
+    async def create(data: Mapping[str, object]) -> SimpleNamespace:
+        missing: Final = next(
+            (constraint for field, constraint in _INVITATION_FOREIGN_KEYS if data[field] not in users), None
+        )
+        if missing is not None:
+            raise _foreign_key_violation(missing)
+        return SimpleNamespace(id="inv-new", is_accepted=False, accepted_at=None, **data)
+
+    mock_prisma.db.litellm_usertable.upsert = AsyncMock(side_effect=upsert)
+    mock_prisma.db.litellm_invitationlink.create = AsyncMock(side_effect=create)
+
+
 # ---------------------------------------------------------------------------
 # POST /invitation/new
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("master_key_user_id", ["default_user_id", None])
+@pytest.mark.parametrize(
+    ("admin_row_before", "admin_row_after"),
+    [
+        (None, {"user_id": "default_user_id"}),
+        (
+            {"user_id": "default_user_id", "user_role": "proxy_admin"},
+            {"user_id": "default_user_id", "user_role": "proxy_admin"},
+        ),
+    ],
+    ids=["never-logged-in", "logged-in-before"],
+)
+def test_invitation_new_with_master_key_invites_an_existing_user(
+    client,
+    auth_as,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+    master_key_user_id: str | None,
+    admin_row_before: dict[str, object] | None,
+    admin_row_after: dict[str, object],
+) -> None:
+    """The master key invites a user made by /user/new whether or not the Admin UI was ever logged into."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    users: Final[dict[str, dict[str, object]]] = {"user-target": {"user_id": "user-target"}}
+    if admin_row_before is not None:
+        users["default_user_id"] = dict(admin_row_before)
+    _store_users_with_invitation_foreign_keys(mock_prisma, users)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN, user_id=master_key_user_id):
+        response: Final = client.post("/invitation/new", json={"user_id": "user-target"})
+
+    assert (response.status_code, normalize(response.json())) == (
+        200,
+        {
+            "id": "<VOLATILE>",
+            "user_id": "user-target",
+            "is_accepted": False,
+            "accepted_at": None,
+            "expires_at": "<VOLATILE>",
+            "created_at": "<VOLATILE>",
+            "created_by": "default_user_id",
+            "updated_at": "<VOLATILE>",
+            "updated_by": "default_user_id",
+        },
+    )
+    assert users == {"user-target": {"user_id": "user-target"}, "default_user_id": admin_row_after}
+
+
+@pytest.mark.parametrize(
+    ("inviter_user_id", "users", "error"),
+    [
+        (
+            "default_user_id",
+            {},
+            "User id does not exist in 'LiteLLM_UserTable'. Fix this by creating user via `/user/new`.",
+        ),
+        (
+            "admin-without-row",
+            {"user-target": {"user_id": "user-target"}},
+            "Inviting user id=admin-without-row does not exist in 'LiteLLM_UserTable'. "
+            "Fix this by creating user via `/user/new`.",
+        ),
+    ],
+    ids=["invited-user-missing", "inviter-missing"],
+)
+def test_invitation_new_names_the_user_that_does_not_exist(
+    client,
+    auth_as,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_prisma: MagicMock,
+    inviter_user_id: str,
+    users: dict[str, dict[str, object]],
+    error: str,
+) -> None:
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _store_users_with_invitation_foreign_keys(mock_prisma, dict(users))
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN, user_id=inviter_user_id):
+        response: Final = client.post("/invitation/new", json={"user_id": "user-target"})
+
+    assert (response.status_code, response.json()) == (
+        400,
+        {"error": {"message": str({"error": error}), "type": "invalid_request_error", "param": None, "code": "400"}},
+    )
 
 
 def test_invitation_new_admin_happy(client, auth_as, monkeypatch, mock_prisma):
