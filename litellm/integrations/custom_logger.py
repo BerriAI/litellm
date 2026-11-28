@@ -77,6 +77,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     """Proxy accounting hooks that must see every request, ``no-log`` ones included. A class named ``_PROXY_*``
     counts as one without setting this."""
 
+    _proxy_callback_registration_name: str | None = None
+
     enforces_request_content: bool = False
     """
     Whether this hook's ``async_pre_call_hook`` judges the request payload itself.

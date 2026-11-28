@@ -86,6 +86,7 @@ class CallbackLogsReplayer:
             start_time=start_time,
             litellm_call_id=call_id,
             function_id="",
+            is_callback_log_replay=True,
         )
 
         metadata: Final[dict[str, object]] = payload.get("metadata") or {}

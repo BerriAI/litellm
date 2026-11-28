@@ -192,6 +192,7 @@ from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.litellm_core_utils.callback_timing import measure_callback_execution
 from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     coerce_token_limit,
@@ -2287,6 +2288,7 @@ class _PreCallRun:
     endpoint_type: EndpointType
     raw_request_snapshot: dict[str, object] | None  # mutable-ok: same request-payload shape as latest
     latest: dict[str, object] | None  # mutable-ok: the request as the callbacks have left it so far
+    measure_callback_latency: bool
     pipeline_managed: frozenset[str] = frozenset()
     deferred: SensitiveDataRouteException | None = None
     parallel: list[tuple[CustomGuardrail, list[object]]] = field(  # mutable-ok: parallel results in list order
@@ -3858,6 +3860,9 @@ class ProxyLogging:
                 endpoint_type=endpoint_type,
                 raw_request_snapshot=raw_request_snapshot,
                 latest=data,
+                measure_callback_latency=call_type in (CallTypes.completion.value, CallTypes.acompletion.value)
+                and not guardrails_only
+                and not data.get("stream"),
             )
         )
 
@@ -3958,12 +3963,16 @@ class ProxyLogging:
             ):
                 if run.call_type in MCP_GUARDRAIL_CALL_TYPES and run.user_api_key_dict is None:
                     return None
-                response: Final[Exception | str | Mapping[str, object] | None] = await callback.async_pre_call_hook(
-                    user_api_key_dict=run.user_api_key_dict,
-                    cache=self.hook_cache,
-                    data=data,
-                    call_type=run.call_type,
+                callback_name: Final = (
+                    callback._proxy_callback_registration_name if run.measure_callback_latency else None
                 )
+                with measure_callback_execution(callback_name, "async_pre_call_hook", "request_path"):
+                    response: Final[Exception | str | Mapping[str, object] | None] = await callback.async_pre_call_hook(
+                        user_api_key_dict=run.user_api_key_dict,
+                        cache=self.hook_cache,
+                        data=data,
+                        call_type=run.call_type,
+                    )
                 if response is not None:
                     updated = await self.process_pre_call_hook_response(  # rebind-ok: see above
                         response=response, data=data, call_type=run.call_type

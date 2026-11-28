@@ -28,6 +28,10 @@ _CALLBACK_DEADLINE: Final[contextvars.ContextVar[float | None]] = contextvars.Co
 )
 
 
+def in_logging_worker() -> bool:
+    return _CALLBACK_DEADLINE.get() is not None
+
+
 def optional_callback_budget(maximum: float, *, fraction: float = 0.25) -> float:
     deadline: Final = _CALLBACK_DEADLINE.get()
     return (

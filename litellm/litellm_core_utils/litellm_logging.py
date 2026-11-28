@@ -121,6 +121,7 @@ from litellm.litellm_core_utils.batch_utils import (
     POLLED_BATCH_ID_KWARG,
     batch_cost_is_final,
 )
+from litellm.litellm_core_utils.callback_timing import measure_callback_execution
 from litellm.litellm_core_utils.classifier_logging import (
     classifier_audit_fields,
     classifier_input_snapshot,
@@ -186,6 +187,7 @@ from litellm.litellm_core_utils.logging_utils import (
     truncate_base64_in_messages,
     truncate_base64_in_messages_async,
 )
+from litellm.litellm_core_utils.logging_worker import in_logging_worker
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
@@ -1176,6 +1178,8 @@ class Logging(LiteLLMLoggingBaseClass):
         log_raw_request_response: bool = False,
         supports_correlation_logging: bool = True,
         raw_request_only: bool = False,
+        *,
+        is_callback_log_replay: bool = False,
     ):
         _input: Final[str | None] = messages  # save original value of messages
         if messages is not None:
@@ -1250,6 +1254,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.sync_streaming_chunks: list[object] = []
         self.log_raw_request_response = log_raw_request_response
         self.raw_request_only = raw_request_only
+        self._is_callback_log_replay: Final = is_callback_log_replay
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable[..., object] | CustomLogger] | None = dynamic_input_callbacks
@@ -5617,12 +5622,26 @@ class Logging(LiteLLMLoggingBaseClass):
                             end_time=end_time,
                         )
                 else:
-                    await callback.async_log_success_event(
-                        kwargs=model_call_details,
-                        response_obj=redacted_response_obj_for_custom_logger(result, callback),
-                        start_time=start_time,
-                        end_time=end_time,
+                    response_obj: Final = redacted_response_obj_for_custom_logger(result, callback)
+                    hook: Final = callback.async_log_success_event
+                    callback_name: Final = (
+                        callback._proxy_callback_registration_name
+                        if not self._is_callback_log_replay
+                        and self.call_type in _CHAT_CALL_TYPES
+                        and getattr(hook, "__func__", hook) is not CustomLogger.async_log_success_event
+                        else None
                     )
+                    with measure_callback_execution(
+                        callback_name,
+                        "async_log_success_event",
+                        "background" if in_logging_worker() else "unclassified",
+                    ):
+                        await hook(
+                            kwargs=model_call_details,
+                            response_obj=response_obj,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
             if callable(callback):  # custom logger functions
                 global customLogger
                 if customLogger is None:
