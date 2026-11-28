@@ -1,11 +1,13 @@
 import { z } from "zod";
 
-export const bulkKeyEditSchema = z.object({
+const bulkKeyEditFields = {
   teamId: z.string().nullable(),
   userId: z.string().nullable(),
   budgetInput: z.string(),
   duration: z.string().nullable(),
-});
+};
+
+export const bulkKeyEditSchema = z.object(bulkKeyEditFields);
 
 export const bulkKeyBudgetSchema = z.string().transform((input, ctx) => {
   const amount = Number(input);

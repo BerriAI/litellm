@@ -36,7 +36,7 @@ import AgentSelector from "../agent_management/AgentSelector";
 import SkillSelector from "../skills/SkillSelector";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
-import SchemaFormFields from "../common_components/check_openapi_schema";
+import SchemaFormFields, { type OpenAPIFieldValidation } from "../common_components/check_openapi_schema";
 import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import { StorePromptsMetadataToggle } from "../common_components/StorePromptsToggle";
@@ -281,10 +281,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const ownerLimitedToTeamMembers = keyOwner === "another_user" && ownerScope === "team_members";
   const ownerRequiresTeam = keyOwner === "service_account" || ownerLimitedToTeamMembers;
   const registry = useMountRegistry();
-  const schema = useMemo(
-    () => createKeySchema(registry, { keyOwner, ownerRequiresTeam, ownerLimitedToTeamMembers, team }, t),
-    [registry, keyOwner, ownerRequiresTeam, ownerLimitedToTeamMembers, team, t],
-  );
+  const [advancedFields, setAdvancedFields] = useState<readonly OpenAPIFieldValidation[]>([]);
+  const schema = useMemo(() => {
+    const validationContext = { keyOwner, ownerRequiresTeam, ownerLimitedToTeamMembers, team, advancedFields };
+    return createKeySchema(registry, validationContext, t);
+  }, [registry, keyOwner, ownerRequiresTeam, ownerLimitedToTeamMembers, team, advancedFields, t]);
   const form = useZodForm(schema, {
     mode: "onChange",
     shouldUnregister: false,
@@ -1956,6 +1957,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           <SchemaFormFields
                             schemaComponent="GenerateKeyRequest"
                             setValue={form.setValue}
+                            onValidationFields={setAdvancedFields}
                             excludedFields={
                               disableCustomApiKeys
                                 ? GENERATE_KEY_EXCLUDED_FIELDS_WITH_KEY

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const createUserFields = z.object({
+const createUserFields = {
   supply_user_id: z.boolean(),
   user_id: z.string().optional(),
   user_email: z.string().optional(),
@@ -10,8 +10,10 @@ const createUserFields = z.object({
   metadata: z.string().optional(),
   send_invite_email: z.boolean(),
   models: z.array(z.string()).optional(),
-});
+};
 
-export type CreateUserFormValues = z.input<typeof createUserFields>;
+const createUserObject = z.object(createUserFields);
 
-export const createUserSchema = z.custom<CreateUserFormValues>((values) => createUserFields.safeParse(values).success);
+export type CreateUserFormValues = z.input<typeof createUserObject>;
+
+export const createUserSchema = z.custom<CreateUserFormValues>((values) => createUserObject.safeParse(values).success);
