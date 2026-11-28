@@ -286,6 +286,7 @@ pub(super) async fn provider_call(
         secret_fields: Vec::new(),
         api_key: api_key.map(SecretValue::new),
         host_transport,
+        dropped_params: dropped::noted(),
     };
     let authenticated = resolve_auth(
         auth_services,

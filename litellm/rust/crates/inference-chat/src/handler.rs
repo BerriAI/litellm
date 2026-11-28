@@ -60,6 +60,7 @@ pub(super) async fn execute(
         secret_fields: Vec::new(),
         api_key: call.api_key.map(litellm_secret_value::SecretValue::new),
         host_transport: false,
+        dropped_params: Vec::new(),
     };
     let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
     let identity = litellm_host::interceptors::ProviderIdentity {

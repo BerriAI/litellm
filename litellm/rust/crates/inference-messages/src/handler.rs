@@ -14,6 +14,7 @@ use litellm_http::Phases;
 use litellm_llms::base_llm::{
     auth::Authenticated,
     messages::{
+        dropped,
         streaming::{ByteStream, StreamDecoder},
         transformation::BaseMessagesConfig,
     },
@@ -157,7 +158,7 @@ pub(super) async fn execute(
     let caller_keyed = caller_keyed(route).is_some();
     let pricing_identity = call.shaping.settings.pricing.clone();
     let inject_stream_cost = call.shaping.settings.inject_stream_cost;
-    let request = provider_call(
+    let request = dropped::scoped(provider_call(
         CallerCredentials {
             auth: &route.auth,
             workload_identity: route.workload_identity.as_deref(),
@@ -170,7 +171,7 @@ pub(super) async fn execute(
         secrets.as_ref(),
         route.transport.is_some(),
         context,
-    )
+    ))
     .boxed()
     .await?;
     let cache = CallCache::<Messages>::from_wire(

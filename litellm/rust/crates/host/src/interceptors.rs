@@ -39,6 +39,9 @@ pub struct RequestContext {
     pub api_key: Option<litellm_secret_value::SecretValue>,
     /// Whether the host's own HTTP client sends the request, timing the exchange itself.
     pub host_transport: bool,
+    /// The fields the route took out of the caller's request because the provider would refuse
+    /// them, each named as the caller wrote it.
+    pub dropped_params: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -272,6 +275,7 @@ mod tests {
             secret_fields: Vec::new(),
             api_key: None,
             host_transport: false,
+            dropped_params: Vec::new(),
         }
     }
 

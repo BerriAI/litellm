@@ -32,6 +32,8 @@ use crate::{
     record::{self, AttemptRecord, CallState, ErrorResponse},
 };
 
+const DROPPED_PARAMS: &str = "x-litellm-dropped-params";
+
 /// `LITELLM_UI_ALLOW_HEADERS` in `litellm/constants.py`.
 #[derive(Clone, Copy, Debug, strum::VariantArray, strum::IntoStaticStr)]
 pub enum ExposedHeader {
@@ -132,6 +134,7 @@ fn head(entries: &mut CallState, headers: &mut HeaderMap, now: Instant) {
     let error = entries.error_response().cloned();
     let served = error.is_none();
     let mut layers = cache_key(entries, served);
+    layers.extend(dropped_params(entries, served));
     layers.extend(routing_headers(entries.routing()));
     layers.extend(match &error {
         None => served_details(entries, now),
@@ -189,6 +192,19 @@ fn cache_key(entries: &CallState, served: bool) -> Vec<(String, String)> {
                 key.to_owned(),
             )
         })
+        .into_iter()
+        .collect()
+}
+
+/// `x-litellm-dropped-params`, the fields the served attempt took out of the caller's request
+/// because its provider would have refused them. A response with nothing dropped carries none.
+fn dropped_params(entries: &CallState, served: bool) -> Vec<(String, String)> {
+    entries
+        .attempt
+        .as_ref()
+        .map(|attempt| attempt.dropped_params.join(","))
+        .filter(|dropped| served && !dropped.is_empty())
+        .map(|dropped| (DROPPED_PARAMS.to_owned(), dropped))
         .into_iter()
         .collect()
 }
@@ -499,6 +515,45 @@ mod tests {
             entries.respond_with_error(Some(Routing::failed_on("d1")), ErrorResponse::default());
         }
         entries
+    }
+
+    /// A call `d1` served, or one that ended on an error on `d1`, after its attempt dropped
+    /// `dropped` from the request.
+    fn entries_dropping(dropped: &[&str], ended: bool) -> CallState {
+        let mut entries = CallState::new("trace-1".to_owned());
+        entries.routed(
+            Routing::served_by("d1", "public/model", 0),
+            None,
+            AttemptRecord {
+                dropped_params: dropped.iter().map(|field| (*field).to_owned()).collect(),
+                ..AttemptRecord::default()
+            },
+        );
+        if ended {
+            entries.respond_with_error(Some(Routing::failed_on("d1")), ErrorResponse::default());
+        }
+        entries
+    }
+
+    #[rstest]
+    #[case::each_field_in_the_order_dropped(
+        &["temperature", "output_config.effort"],
+        false,
+        Some("temperature,output_config.effort")
+    )]
+    #[case::nothing_dropped(&[], false, None)]
+    #[case::a_call_that_ended_on_an_error(&["temperature"], true, None)]
+    fn a_served_response_names_the_params_its_attempt_dropped(
+        #[case] dropped: &[&str],
+        #[case] ended: bool,
+        #[case] expected: Option<&str>,
+    ) {
+        let sent = written(&mut entries_dropping(dropped, ended));
+        let header = sent
+            .iter()
+            .find(|(name, _)| name == "x-litellm-dropped-params")
+            .map(|(_, value)| value.as_str());
+        assert_eq!(header, expected);
     }
 
     /// The head `entries` give a response whose route wrote only its content type, written as the
