@@ -1,7 +1,9 @@
 # With scope based access enforced, the core checks a JWT's scopes against the model the request
-# names, which the gateway authenticates before it reads. So the core declines a JWT, which goes
-# to Python. A key a JWT maps to takes the key path, where the gateway sends it to Python over the
-# setting, and the master key, which no scope mapping limits, is still served.
+# names, which the gateway reads before it authenticates a JWT. A scope that reaches the model is
+# served, and one that does not is the core's to refuse. A model the body does not name plainly,
+# as a list of names in one string or a body that is no JSON, is not handed to the core, which
+# then declines the JWT. A key a JWT maps to takes the key path, where the gateway sends it to
+# Python over the setting, and the master key, which no scope mapping limits, is still served.
 enterprise: true
 
 config:
@@ -19,6 +21,8 @@ config:
       scope_mappings:
         - scope: litellm.models.other
           models: [other-model]
+        - scope: litellm.models.claude
+          models: [claude]
       virtual_key_claim_field: client_id
 
 keys:
@@ -29,19 +33,64 @@ mappings:
     svc-claude: sk-claude
 
 requests:
-  - name: a proxy admin JWT
+  - name: a proxy admin JWT whose scope reaches the model
+    jwt: {claims: {scope: litellm_proxy_admin litellm.models.claude}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a user JWT with no team whose scope reaches the model
+    jwt: {claims: {sub: user-123, scope: litellm.models.claude}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a proxy admin JWT whose scope reaches another model
     jwt: {claims: {scope: litellm_proxy_admin litellm.models.other}}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
-    over: not_native
+    over: forbidden
 
-  - name: a user JWT with no team
+  - name: a user JWT with no team whose scope reaches another model
     jwt: {claims: {sub: user-123, scope: litellm.models.other}}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
+    over: forbidden
+
+  - name: a JWT naming several models in one string
+    jwt: {claims: {scope: litellm_proxy_admin litellm.models.claude}}
+    body: {model: "claude,other-model", max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
     over: not_native
+
+  - name: a JWT naming a model with a space around it
+    jwt: {claims: {scope: litellm_proxy_admin litellm.models.claude}}
+    body: {model: " claude", max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a JWT naming no model
+    jwt: {claims: {scope: litellm_proxy_admin litellm.models.claude}}
+    body: {max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a JWT whose body is not JSON
+    jwt: {claims: {scope: litellm_proxy_admin litellm.models.claude}}
+    raw: '{"model": "claude"'
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: an expired JWT whose body is not JSON
+    jwt: {claims: {scope: litellm_proxy_admin litellm.models.claude}, expires_in: -60}
+    raw: '{"model": "claude"'
+    expect: python
+    reason: credential
+    over: expired
 
   - name: a JWT mapped to a key
     jwt: {claims: {client_id: svc-claude, scope: litellm.models.other}}

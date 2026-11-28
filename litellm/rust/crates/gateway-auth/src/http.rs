@@ -9,7 +9,7 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use litellm_gateway_auth_core::{self as auth_core, Caller, Rows};
+use litellm_gateway_auth_core::{self as auth_core, Caller, Model, Rows};
 use litellm_secret_value::SecretValue;
 
 use crate::{Auth, Credential, Error};
@@ -104,6 +104,8 @@ impl<R: Rows> Clone for Preauthenticated<R> {
     }
 }
 
+/// Authenticates a request no server layer in front already did, before its body is read, so
+/// the core is told no model and a decision that needs one is declined.
 pub async fn authenticate<R: Rows>(
     State(auth): State<Auth<R>>,
     request: Request,
@@ -112,7 +114,7 @@ pub async fn authenticate<R: Rows>(
     let (mut parts, body) = request.into_parts();
     let caller = match parts.extensions.remove::<Preauthenticated<R>>() {
         Some(Preauthenticated(caller)) => caller,
-        None => auth.authenticate_parts(&parts).await?,
+        None => auth.authenticate_parts(&parts, Model::Unread).await?,
     };
     parts.extensions.insert(caller);
     Ok(next.run(Request::from_parts(parts, body)).await)
@@ -167,7 +169,7 @@ impl<R: Rows> FromRequestParts<Auth<R>> for RequireMasterKey {
 
     async fn from_request_parts(parts: &mut Parts, state: &Auth<R>) -> Result<Self, Error> {
         let caller = state
-            .authenticate_credential(&presented(parts), parts)
+            .authenticate_credential(&presented(parts), parts, Model::Unread)
             .await?;
         match caller.credential {
             auth_core::Credential::MasterKey => {

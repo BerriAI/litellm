@@ -52,6 +52,14 @@ impl SizeLimits {
     }
 }
 
+/// The most bytes of a request body the proxy takes under `general` and its license, or `None`
+/// with no limit in force.
+pub(crate) fn max_bytes(general: &GeneralSettings, entitlements: &Entitlements) -> Option<u64> {
+    SizeLimits::new(&Settings::from_general(general))
+        .megabytes(entitlements)
+        .map(bytes)
+}
+
 #[derive(Default)]
 struct Reading {
     overflowed: AtomicBool,

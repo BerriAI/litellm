@@ -128,10 +128,10 @@ async fn check_team<H: AuthHost>(
     }
     let has_model = match model {
         None => true,
-        Some(model) => matches!(
-            host.team_model_access(&team.row, model).await,
-            Ok(ModelAccess::Allowed)
-        ),
+        Some(model) => match host.team_model_access(&team.row, model).await {
+            Err(Error::HostDeclined) => return Err(Error::HostDeclined),
+            answer => answer == Ok(ModelAccess::Allowed),
+        },
     };
     Ok(match eligibility.verdict(&team.passthrough, has_model) {
         Eligibility::Selected => Verdict::Selected(team),
@@ -143,7 +143,9 @@ async fn check_team<H: AuthHost>(
 }
 
 /// `find_team_with_model_access`. A team the host fails to read ends the selection as that host
-/// failure, so an unreachable database is never reported as a team without access.
+/// failure, so an unreachable database is never reported as a team without access. A model answer
+/// the host fails counts as no access, as Python reads one, and one it declines ends the
+/// selection, so no team is picked on an answer the host did not give.
 pub(crate) async fn select_team<H: AuthHost>(
     host: &H,
     team_ids: &BTreeSet<String>,
@@ -744,6 +746,26 @@ mod tests {
         assert_eq!(
             host.calls(),
             ["team a", "team b", "model b gpt", "team c", "model c gpt"]
+        );
+    }
+
+    #[rstest]
+    #[case::declined(Error::HostDeclined, Err(Error::HostDeclined))]
+    #[case::failed(Error::HostFailed, Ok(Some("a".to_owned())))]
+    #[tokio::test]
+    async fn only_a_declined_model_answer_ends_the_selection(
+        enforced: TeamSettings,
+        #[case] answer: Error,
+        #[case] expected: Result<Option<String>, Error>,
+    ) {
+        let host = ScriptedHost {
+            teams: HashMap::from([("a", granted("a"))]),
+            failing: HashMap::from([("team_model_access", answer)]),
+            ..ScriptedHost::default()
+        };
+        assert_eq!(
+            select(&host, &["a"], Some("gpt"), true, enforced).await,
+            expected
         );
     }
 

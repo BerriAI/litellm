@@ -3,8 +3,9 @@
 //!
 //! [`Admit`] holds what the native app was built from, and each request is put to the three stages
 //! of checks in `checks`. This is the only part that does IO: it authenticates the caller before
-//! the `CALLER` stage, reads the body with `body` before the `BODY` stage, and reads the end user
-//! the body names once every check has passed.
+//! the `CALLER` stage, reads the body with `body` before the `BODY` stage, or before it
+//! authenticates when the caller presents a JWT, and reads the end user the body names once every
+//! check has passed.
 
 mod body;
 mod checks;
@@ -15,16 +16,16 @@ use axum::{body::Body, extract::Request, http::request::Parts};
 use litellm_config::{Config, Environment};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_gateway_auth::{Auth, Authenticated, Preauthenticated};
-use litellm_gateway_auth_core::{Allowlists, Caller, authz::ModelList};
-use litellm_gateway_inference::{JsonObject, routing};
+use litellm_gateway_auth_core::{Allowlists, Caller, Model, authz::ModelList};
+use litellm_gateway_inference::{JsonObject, MAX_BODY_BYTES, routing};
 use litellm_router_core::{Router, registry::DeploymentFilter};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::{
     AppState, Gateway, StoredConfig,
     callbacks::parallel_request_limiter,
     host::{self, NativeHost, NativeRows, auth::AuthStore},
-    middleware::request_allowlist,
+    middleware::{body_limit, request_allowlist},
 };
 use checks::Fields;
 pub use checks::Reason;
@@ -86,6 +87,9 @@ pub struct Admit {
     allowlists: Allowlists,
     auth: Auth<NativeRows>,
     end_users: EndUsers,
+    /// How much of a body is read before its caller is authenticated: the proxy's
+    /// `max_request_size_mb` when it applies, and never more than the native route reads.
+    unauthenticated_body_limit: usize,
     /// The native app's inference, which tells whether a caller may call the model it asks for.
     /// `None` leaves every caller with a model list to Python.
     inference: Option<Arc<Gateway>>,
@@ -119,6 +123,19 @@ fn token_estimate(
         .then(|| Reason::new(Refused::Body, "media_under_a_token_limit"))
 }
 
+/// The model `fields` names, as the auth core is told it. Python hands its auth the answer of
+/// `get_model_from_request`, which splits `model` on commas, strips each name and reads
+/// `target_model_names` when `model` names nothing. So only a `model` that is one plain name is
+/// named here, and any other body is left unread, which declines a decision that needs it.
+fn named(fields: &Fields) -> Model<'_> {
+    match fields.get("model").and_then(Value::as_str) {
+        Some(model) if !model.is_empty() && model.trim() == model && !model.contains(',') => {
+            Model::Named(Some(model))
+        }
+        _ => Model::Unread,
+    }
+}
+
 impl Admit {
     /// By the `config` the native app `state` is built from, with its environment under it as
     /// `load_config` leaves it, and whether `config` holds the config the proxy stores in its
@@ -150,6 +167,13 @@ impl Admit {
                 (None, false) => EndUsers::NoDatabase,
                 (None, true) => EndUsers::Unread,
             },
+            unauthenticated_body_limit: body_limit::max_bytes(
+                &config.general_settings,
+                &state.entitlements,
+            )
+            .map_or(MAX_BODY_BYTES, |limit| {
+                usize::try_from(limit).map_or(MAX_BODY_BYTES, |limit| limit.min(MAX_BODY_BYTES))
+            }),
             host: state.inference.host().clone(),
             inference: Some(state.inference.clone()),
             ..Self::built(config, state.inference.router.clone(), deployed)
@@ -167,6 +191,7 @@ impl Admit {
             allowlists: Allowlists::new(&config.general_settings),
             auth: host::auth::auth(config, None, false),
             end_users: EndUsers::NoDatabase,
+            unauthenticated_body_limit: MAX_BODY_BYTES,
             config: config.clone(),
             environment: Environment::default(),
             stored: StoredConfig::Unused,
@@ -231,7 +256,12 @@ impl Admit {
 
     /// The body is read only for a request that passes every other check, and parsed once: an
     /// admitted request carries it parsed, as the [`JsonObject`] the route takes. A refused request
-    /// keeps the bytes the client sent and carries nothing more. A request the proxy's allowlists
+    /// keeps the bytes the client sent and carries nothing more. A JWT is the one caller whose
+    /// body is read before it is authenticated, since the core picks its team and judges its role
+    /// and scopes by the model the body names. That read stops at the proxy's request size limit,
+    /// so a caller nobody has verified cannot make the gateway hold more than Python would take,
+    /// and a larger body is sent on unread for the native limit or Python to refuse. The checks still run in the same order, so a JWT
+    /// the core refuses goes to Python over that refusal whatever its body holds. A request the proxy's allowlists
     /// leave out is admitted as sent, before its caller or body is read, as Python refuses it before
     /// it reads either, and `middleware::request_allowlist` refuses it in the native app.
     pub async fn admit(
@@ -252,17 +282,24 @@ impl Admit {
         {
             return Ok(Request::from_parts(parts, body));
         }
-        let authenticated = self.auth.authenticate_parts(&parts).await;
+        let body_first = self.auth.reads_model(&parts);
+        let (body, read_first) = match body_first {
+            true => body::parsed(&parts, body, self.unauthenticated_body_limit).await,
+            false => (body, None),
+        };
+        let model = read_first.as_ref().map_or(Model::Unread, named);
+        let authenticated = self.auth.authenticate_parts(&parts, model).await;
         if let Some(reason) = checks::CALLER
             .iter()
             .find_map(|check| check(&self, &parts, &authenticated))
         {
             return Err(refused(parts, body, reason));
         }
-        let (body, whole) = body::read(&parts, body).await;
-        let Some(mut fields) =
-            whole.and_then(|sent| serde_json::from_slice::<Map<String, Value>>(&sent).ok())
-        else {
+        let (body, fields) = match read_first {
+            Some(fields) => (body, Some(fields)),
+            None => body::parsed(&parts, body, MAX_BODY_BYTES).await,
+        };
+        let Some(mut fields) = fields else {
             return Err(refused(
                 parts,
                 body,
@@ -294,8 +331,9 @@ impl Admit {
 #[cfg(test)]
 mod tests {
     use axum::http::Method;
+    use futures_util::StreamExt;
     use rstest::rstest;
-    use serde_json::json;
+    use serde_json::{Map, json};
 
     use super::*;
     use crate::host::auth::{AuthStore, keys};
@@ -456,6 +494,78 @@ mod tests {
                 end_user.and_then(|end_user| end_user.end_user_id.as_deref())
             }),
             Some(end_user_id)
+        );
+    }
+
+    #[rstest]
+    #[case::a_jwt("Bearer header.claims.signature", true)]
+    #[case::a_virtual_key("Bearer sk-someone-else", false)]
+    #[tokio::test]
+    async fn only_a_jwt_has_its_body_read_before_its_caller_is_refused(
+        #[case] authorization: &str,
+        #[case] read: bool,
+    ) {
+        let config = Config::from_yaml(&format!("{CONFIG}  enable_jwt_auth: true\n")).unwrap();
+        let admit = Arc::new(Admit {
+            auth: host::auth::auth_over(&config, None, false, None, true, &|_: &str| None),
+            ..Admit::over(&config, Vec::new())
+        });
+        let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let body = {
+            let polled = polled.clone();
+            Body::from_stream(futures_util::stream::once(async move {
+                polled.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok::<_, std::io::Error>(r#"{"model":"claude"}"#)
+            }))
+        };
+        let request = Request::post("/v1/messages")
+            .header("authorization", authorization)
+            .body(body)
+            .unwrap();
+
+        let (_, refused) = admit.admit(request).await.unwrap_err();
+
+        assert_eq!(
+            (
+                refused.why,
+                polled.load(std::sync::atomic::Ordering::SeqCst)
+            ),
+            (Refused::Credential, read)
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_jwt_that_is_not_verified_yet_has_its_body_read_only_to_the_request_size_limit() {
+        const CHUNK: usize = 1024;
+        let config = Config::from_yaml(&format!("{CONFIG}  enable_jwt_auth: true\n")).unwrap();
+        let admit = Arc::new(Admit {
+            auth: host::auth::auth_over(&config, None, false, None, true, &|_: &str| None),
+            unauthenticated_body_limit: 2 * CHUNK,
+            ..Admit::over(&config, Vec::new())
+        });
+        let pulled = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let chunks = {
+            let pulled = pulled.clone();
+            futures_util::stream::iter(0..10).map(move |_| {
+                pulled.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok::<_, std::io::Error>(vec![b' '; CHUNK])
+            })
+        };
+        let request = Request::post("/v1/messages")
+            .header("authorization", "Bearer header.claims.signature")
+            .body(Body::from_stream(chunks))
+            .unwrap();
+
+        let (returned, refused) = admit.admit(request).await.unwrap_err();
+
+        let read = pulled.load(std::sync::atomic::Ordering::SeqCst);
+        let sent_on = axum::body::to_bytes(returned.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            (refused.why, read, sent_on.len()),
+            (Refused::Credential, 3, 10 * CHUNK)
         );
     }
 
