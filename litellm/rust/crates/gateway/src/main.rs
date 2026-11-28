@@ -112,6 +112,8 @@ async fn standalone(
     let admit = Arc::new(Admit::new(&config, &state, stored));
     refresh_cost_map(environment, &state, &config)?;
     let in_flight = InFlight::new();
+    let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
+    let accounting = state.start_standalone_accounting();
     let live = Arc::new(Live::new(served(
         state,
         Some(admit),
@@ -121,7 +123,6 @@ async fn standalone(
     )));
     let poller = polled(source, &config, &live, environment, &in_flight);
     let app = alone(live.clone());
-    let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
 
     tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %log_level, "gateway listening");
 
@@ -131,7 +132,7 @@ async fn standalone(
     )
     .with_graceful_shutdown(shutdown_signal())
     .await;
-    closed(poller, &live).await;
+    closed(poller, &live, accounting).await;
     Ok(served?)
 }
 
@@ -288,7 +289,7 @@ async fn in_front_of_python(
         },
     )
     .await;
-    closed(poller, &live).await;
+    closed(poller, &live, None).await;
     Ok(ran?)
 }
 
@@ -326,11 +327,15 @@ fn polled(
 }
 
 /// Stops the poller before the database pools close, so no read is left on a closed pool.
-async fn closed(poller: Option<Poller>, live: &Live) {
+async fn closed(
+    poller: Option<Poller>,
+    live: &Live,
+    accounting: Option<litellm_gateway::PeriodicJob>,
+) {
     if let Some(poller) = poller {
         poller.stop().await;
     }
-    live.current().state.close().await;
+    live.current().state.close_with_accounting(accounting).await;
 }
 
 /// What both modes serve from `config`: the native app built from `state`, with `admit` deciding

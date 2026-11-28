@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM \"LiteLLM_SpendLogDelivery\"\nWHERE delivery_id IN (\n    SELECT delivery_id\n    FROM \"LiteLLM_SpendLogDelivery\"\n    WHERE state = 'applied' AND NOT is_batch\n      AND applied_at < (NOW() AT TIME ZONE 'UTC') - make_interval(days => $1::integer)\n    ORDER BY applied_at, delivery_id\n    LIMIT $2::integer\n    FOR UPDATE SKIP LOCKED\n)\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "06c831d92ce65b62f52a352eaf15a58045f52280f833b585c9547119ffb13a36"
+}

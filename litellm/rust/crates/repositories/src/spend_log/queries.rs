@@ -260,6 +260,21 @@ pub(super) async fn current_window_spend(
     .await?)
 }
 
+pub(super) async fn cleanup_accounting_deliveries(
+    executor: impl PgExecutor<'_>,
+    days: i32,
+    limit: i32,
+) -> Result<u64, Error> {
+    Ok(sqlx::query_file!(
+        "src/spend_log/queries/cleanup_accounting_deliveries.sql",
+        days,
+        limit
+    )
+    .execute(executor)
+    .await?
+    .rows_affected())
+}
+
 macro_rules! window_spend_sql {
     ($column:literal) => {
         concat!(

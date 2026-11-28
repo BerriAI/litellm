@@ -9,15 +9,17 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+import psutil
 import psycopg
 import pytest
-from pydantic import BaseModel, TypeAdapter
+from psycopg.types.json import Jsonb
+from pydantic import BaseModel, JsonValue, TypeAdapter
 from redis import Redis
 
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.database import read_rows
 from tests.integration._support.ports import allocate_port
-from tests.integration._support.process import owned_proxy, private_state
+from tests.integration._support.process import owned_proxy_process, private_state
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, recording_service
 
 MODEL: Final = "claude-opus-4-8"
@@ -164,6 +166,7 @@ def _rust(binary: Path, config: Path, environment: dict[str, str]) -> Iterator[h
 @dataclass(frozen=True)
 class Proxies:
     python: httpx.Client
+    python_pid: int
     rust: httpx.Client
     database: str
     redis: Redis
@@ -202,14 +205,16 @@ general_settings:
             "PYTHONPATH": os.pathsep.join(filter(None, (str(ROOT / "tests"), os.environ.get("PYTHONPATH")))),
             "STORE_MODEL_IN_DB": "False",
             "PROXY_BATCH_WRITE_AT": "1",
+            "LITELLM_ACCOUNTING_DELIVERY_BATCH_SIZE": "1",
+            "SPEND_ROLLUP_LOCK_TIMEOUT_MS": "20000",
         }
         gateway: Final = Gateway(unused, MASTER_KEY, upstream.base_url)
         with (
-            owned_proxy(gateway, directory, environment, config=config) as python,
+            owned_proxy_process(gateway, directory, environment, config=config) as python,
             _rust(binary, config, environment) as native,
             Redis(host=environment["REDIS_HOST"], port=int(environment["REDIS_PORT"])) as redis,
         ):
-            yield Proxies(python.client, native, state.database_url, redis, upstream)
+            yield Proxies(python.gateway.client, python.process.pid, native, state.database_url, redis, upstream)
 
 
 def _outcome(client: httpx.Client, proxies: Proxies, case: Case, actual_cost: float) -> tuple[int, float, float]:
@@ -268,3 +273,72 @@ def test_affiliation_budget_admission_and_settlement_match_python(
     python: Final = _outcome(proxies.python, proxies, case, actual_cost)
     native: Final = _outcome(proxies.rust, proxies, case, actual_cost)
     assert native == pytest.approx(python)
+
+
+@pytest.mark.parametrize("case", [pytest.param(Case(owner=True), id="owner"), pytest.param(Case(), id="member")])
+def test_standalone_applies_affiliation_spend_while_python_is_paused(
+    proxies: Proxies, case: Case, actual_cost: float
+) -> None:
+    python: Final = _outcome(proxies.python, proxies, case, actual_cost)
+    process: Final = psutil.Process(proxies.python_pid)
+    process.suspend()
+    try:
+        eventually(process.status, lambda status: status == psutil.STATUS_STOPPED)
+        native: Final = _outcome(proxies.rust, proxies, case, actual_cost)
+        assert native == pytest.approx(python)
+    finally:
+        process.resume()
+
+
+def test_python_and_rust_claim_concurrently_without_applying_a_delivery_twice(proxies: Proxies) -> None:
+    identity: Final = _identity(proxies.database, Case(owner=True))
+    first: Final = uuid.uuid4().hex
+    second: Final = uuid.uuid4().hex
+    with psycopg.connect(proxies.database) as locked, psycopg.connect(proxies.database) as enqueue:
+        locked.execute('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s FOR UPDATE', (identity.user,))
+        enqueue.execute(
+            """
+            INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, is_batch, accounting_payload)
+            VALUES (%s, %s, false, %s), (%s, %s, false, %s)
+            """,
+            (
+                first,
+                first,
+                Jsonb({"spend": 0.125, "metadata": {"accounting_entities": {"user": identity.user}}}),
+                second,
+                second,
+                Jsonb({"spend": 0.25, "metadata": {"accounting_entities": {"user": identity.user}}}),
+            ),
+        )
+        enqueue.commit()
+
+        def blocked_workers() -> set[str]:
+            rows: Final = read_rows(
+                """
+                SELECT query FROM pg_stat_activity
+                WHERE datname = current_database() AND state = 'active' AND wait_event_type = 'Lock'
+                  AND strpos(query, 'UPDATE') > 0 AND strpos(query, 'LiteLLM_UserTable') > 0
+                """,
+                (),
+                database_url=proxies.database,
+            )
+            return {"rust" if "jsonb_to_recordset" in str(row["query"]) else "python" for row in rows}
+
+        assert eventually(blocked_workers, lambda workers: workers == {"python", "rust"}, seconds=15) == {
+            "python",
+            "rust",
+        }
+
+    def delivered() -> list[dict[str, JsonValue]]:
+        return read_rows(
+            """
+            SELECT state::text, attempts FROM "LiteLLM_SpendLogDelivery"
+            WHERE delivery_id IN (%s, %s) ORDER BY delivery_id
+            """,
+            (first, second),
+            database_url=proxies.database,
+        )
+
+    expected: Final = [{"state": "applied", "attempts": 0}, {"state": "applied", "attempts": 0}]
+    assert eventually(delivered, lambda rows: rows == expected) == expected
+    assert identity.persisted(proxies.database) == pytest.approx(0.375)

@@ -84,6 +84,7 @@ pub struct SpendLogs<S: LedgerStore = PgLedgerStore> {
 /// same callback again, so no row queued under the old config is lost.
 pub struct SpendLog {
     logs: Arc<SpendLogs>,
+    pub(crate) repository: SpendLogRepository,
     callback: Arc<dyn ErasedCallback>,
     host: Arc<RustSpendLogHost>,
     /// The spend counters the callback charges.
@@ -97,10 +98,8 @@ impl SpendLog {
     /// when there is one, and the writer it queues to, whose flush loop runs from here on.
     pub fn start(database: &Database, redis: &RedisClients, environment: &Environment) -> Self {
         let settings = settings(environment);
-        let store = PgLedgerStore::new(
-            SpendLogRepository::new(database.clone()),
-            settings.transaction_timeout,
-        );
+        let repository = SpendLogRepository::new(database.clone());
+        let store = PgLedgerStore::new(repository.clone(), settings.transaction_timeout);
         let interval = environment
             .proxy_batch_write_at
             .map_or(BATCH_WRITE_AT, Duration::from_secs);
@@ -118,6 +117,7 @@ impl SpendLog {
         });
         Self {
             logs,
+            repository,
             callback: Arc::new(callback),
             host: Arc::new(RustSpendLogHost::new(Some(rows.clone()))),
             budgets,

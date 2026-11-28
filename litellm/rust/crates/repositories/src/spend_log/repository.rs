@@ -55,6 +55,12 @@ const RETRY_ACCOUNTING: Call = Call {
     operation: None,
 };
 
+const CLEANUP_ACCOUNTING: Call = Call {
+    call_type: "cleanup_accounting_deliveries",
+    table: Some("LiteLLM_SpendLogDelivery"),
+    operation: None,
+};
+
 const ACCOUNTING_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Progress of one fresh or retry accounting batch.
@@ -144,6 +150,7 @@ async fn apply_affiliation(
 /// Reads `LiteLLM_SpendLogs`.
 ///
 /// Also writes request logs and their ledger deliveries on the writer.
+#[derive(Clone)]
 pub struct SpendLogRepository {
     database: Database,
 }
@@ -151,6 +158,21 @@ pub struct SpendLogRepository {
 impl SpendLogRepository {
     pub fn new(database: Database) -> Self {
         Self { database }
+    }
+
+    /// Removes one batch of expired applied deliveries, keeping settle-once batch identities.
+    pub async fn cleanup_accounting_deliveries(&self, days: i32, limit: i32) -> Result<u64, Error> {
+        self.database
+            .run(CLEANUP_ACCOUNTING, || async {
+                let mut session = self.database.session(Side::Writer).await?;
+                queries::cleanup_accounting_deliveries(
+                    session.executor(),
+                    days.max(1),
+                    limit.max(1),
+                )
+                .await
+            })
+            .await
     }
 
     /// Claims one batch, applies its projections and marks it applied in the same writer transaction.

@@ -180,8 +180,26 @@ impl AppState {
     /// Drains the spend logs still queued, writes the gateway request counts still in memory,
     /// then closes the database pools.
     pub async fn close(&self) {
+        self.close_with_accounting(None).await;
+    }
+
+    /// Standalone owns the applier. Python owns it when the gateway is running in front.
+    pub fn start_standalone_accounting(&self) -> Option<PeriodicJob> {
+        let logs = self.spend_logs.as_ref()?;
+        Some(crate::accounting::start(
+            logs.repository.clone(),
+            &self.variables,
+            &*self.environment,
+        ))
+    }
+
+    /// Runs the applier's last pass after all locally queued deliveries are durable.
+    pub async fn close_with_accounting(&self, accounting: Option<PeriodicJob>) {
         if let Some(spend_logs) = &self.spend_logs {
             spend_logs.drain().await;
+        }
+        if let Some(accounting) = accounting {
+            accounting.close().await;
         }
         if let Some(flush) = &self.gateway_requests_flush {
             flush.close().await;
