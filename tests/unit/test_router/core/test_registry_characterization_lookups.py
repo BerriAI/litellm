@@ -191,10 +191,10 @@ def test_ids_can_leave_out_team_deployments(make_core: MakeCore) -> None:
     assert registry.names(kind="ids", exclude_team_models=True) == ["a", "b", "e", "w"]
 
 
-def test_ids_of_a_group_read_only_the_group_index(make_core: MakeCore) -> None:
+def test_ids_of_a_group_follow_its_alias_and_read_only_the_group_index(make_core: MakeCore) -> None:
     registry = _core(make_core).registry()
 
-    assert registry.names("fast", kind="ids") == []
+    assert registry.names("fast", kind="ids") == ["a", "b"]
     assert registry.names("pub", kind="ids") == []
     assert registry.names("int-a", kind="ids") == ["t1"]
     assert registry.names("int-a", kind="ids", exclude_team_models=True) == []
