@@ -48,10 +48,9 @@ litellm-redis-types.workspace = true
 tracing.workspace = true
 litellm-cache-response.workspace = true
 serde.workspace = true
-litellm-auth.workspace = true
+litellm-auth = { workspace = true, features = ["aws", "gcp"] }
 litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
-litellm-auth-gcp.workspace = true
 azure_core = { version = "1.0.0", default-features = false, features = ["reqwest", "reqwest_deflate", "reqwest_gzip", "tokio"] }
 litellm-callbacks-legacy-python.workspace = true
 litellm-callbacks-budgets.workspace = true

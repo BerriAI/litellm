@@ -5,6 +5,7 @@ mod counters;
 mod engine;
 mod plan;
 pub mod post_call;
+mod reader;
 mod window;
 
 pub use admission::{Admission, Budgets};
@@ -18,4 +19,5 @@ pub use engine::{
 pub use litellm_callbacks::{BudgetPlan, BudgetReservation};
 pub use litellm_python_compat::number::PyNumber;
 pub use plan::{Plan, PlannedCounter};
+pub use reader::{RowSpend, SpendReader};
 pub use window::{ErrorKind, Moment, ReservationError};

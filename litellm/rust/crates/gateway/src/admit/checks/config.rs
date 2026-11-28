@@ -118,8 +118,9 @@ fn spelled(config: &Config, key: Box<str>) -> Box<str> {
     config.origins.variable(&key).map_or(key, Box::from)
 }
 
-/// The variables the proxy reads that no config key sets. A variable config.yaml can also set is
-/// judged once, as the key it fills.
+/// Names the environment variables the gateway cannot serve, among those the proxy reads that no config
+/// key sets. A field bound as `field: _` is honored by the gateway, every other set field is unhandled. A
+/// variable config.yaml can also set is judged once, as the key it fills.
 fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<> {
     let Environment {
         litellm_cors_origins: _,
@@ -136,6 +137,8 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         spend_log_queue_max_bytes: _,
         spend_log_write_batch_max_bytes: _,
         spend_log_write_batch_max_rows: _,
+        anthropic_messages_detached_stream_drain_timeout_seconds: _,
+        anthropic_messages_max_detached_stream_drains: _,
         legacy_multi_instance_rate_limiting,
         use_aws_kms,
         litellm_ssl_ciphers,
@@ -227,6 +230,7 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         allowed_routes: _,
         use_x_forwarded_for: _,
         allowed_ips: _,
+        disable_budget_reservation: _,
         completion_model,
         max_in_flight_requests_per_worker,
         max_queued_requests_per_worker,
@@ -542,6 +546,18 @@ mod tests {
     #[case::a_pre_call_check_the_host_runs(
         "router_settings:\n  optional_pre_call_checks: [enforce_model_rate_limits, prompt_caching]\n",
         "router_settings.optional_pre_call_checks"
+    )]
+    #[case::a_default_end_user_budget(
+        "litellm_settings:\n  max_end_user_budget_id: b-1\n",
+        "litellm_settings.max_end_user_budget_id"
+    )]
+    #[case::end_users_checked_against_the_database(
+        "litellm_settings:\n  validate_end_user_id_in_db: true\n",
+        "litellm_settings.validate_end_user_id_in_db"
+    )]
+    #[case::end_user_cost_tracking_turned_off(
+        "litellm_settings:\n  disable_end_user_cost_tracking: true\n",
+        "litellm_settings.disable_end_user_cost_tracking"
     )]
     #[case::a_section_the_config_types_do_not_name("future_section: {}\n", "future_section")]
     #[case::a_callback_beside_the_dynamic_rate_limiter(

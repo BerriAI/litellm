@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use crate::host::NativeBootHost;
-use litellm_config::{Config, LiteLlmSettings, Spelled};
+use litellm_config::{Config, Environment, LiteLlmSettings, Spelled};
 use litellm_inference_messages::MessagesSettings;
 use litellm_python_compat::number::float;
 use litellm_router_core::{BuildPath, Router, RouterConfig, build::Install};
@@ -55,12 +55,36 @@ pub(crate) fn request_timeout(settings: &LiteLlmSettings) -> Option<f64> {
         .then_some(seconds)
 }
 
-/// What `litellm_settings` sets for a messages call to any deployment.
-pub(crate) fn configured(settings: &LiteLlmSettings) -> MessagesSettings {
+/// Python's `ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS` and
+/// `ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS` defaults.
+const DETACHED_DRAIN_TIMEOUT_SECONDS: f64 = 600.0;
+const MAX_DETACHED_DRAINS: u64 = 100;
+
+/// What `litellm_settings` and the environment set for a messages call to any deployment. A
+/// stream whose client left is still read to its end, for as long and in as many calls at once
+/// as Python's async relay reads a Bedrock invoke stream. The route drains only a stream it
+/// decodes itself.
+pub(crate) fn configured(
+    settings: &LiteLlmSettings,
+    environment: &Environment,
+) -> MessagesSettings {
     MessagesSettings {
         global_drop_params: settings.drop_params == Some(true),
         reasoning_auto_summary: settings.reasoning_auto_summary,
         request_timeout: request_timeout(settings),
+        detached_drain_timeout: Some(
+            environment
+                .anthropic_messages_detached_stream_drain_timeout_seconds
+                .unwrap_or(DETACHED_DRAIN_TIMEOUT_SECONDS),
+        ),
+        detached_drain_limit: Some(
+            usize::try_from(
+                environment
+                    .anthropic_messages_max_detached_stream_drains
+                    .unwrap_or(MAX_DETACHED_DRAINS),
+            )
+            .unwrap_or(usize::MAX),
+        ),
         ..MessagesSettings::default()
     }
 }
@@ -99,7 +123,7 @@ pub(crate) fn unhosted(config: &Config) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use litellm_config::Config;
+    use litellm_config::{Config, Environment};
     use rstest::rstest;
 
     #[rstest]
@@ -131,7 +155,7 @@ mod tests {
     ) {
         let config = Config::from_yaml(yaml).unwrap();
 
-        let settings = super::configured(&config.litellm_settings);
+        let settings = super::configured(&config.litellm_settings, &Environment::default());
 
         assert_eq!(
             (
@@ -140,6 +164,32 @@ mod tests {
                 settings.request_timeout,
             ),
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::python_defaults(None, None, 600.0, 100)]
+    #[case::set_in_the_environment(Some(30.0), Some(4), 30.0, 4)]
+    fn a_stream_whose_client_left_is_drained_as_python_drains_it(
+        #[case] timeout: Option<f64>,
+        #[case] limit: Option<u64>,
+        #[case] expected_timeout: f64,
+        #[case] expected_limit: usize,
+    ) {
+        let environment = Environment {
+            anthropic_messages_detached_stream_drain_timeout_seconds: timeout,
+            anthropic_messages_max_detached_stream_drains: limit,
+            ..Environment::default()
+        };
+
+        let settings = super::configured(&Config::default().litellm_settings, &environment);
+
+        assert_eq!(
+            (
+                settings.detached_drain_timeout,
+                settings.detached_drain_limit
+            ),
+            (Some(expected_timeout), Some(expected_limit))
         );
     }
 }

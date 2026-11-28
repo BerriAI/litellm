@@ -12,11 +12,12 @@ import contextlib
 import contextvars
 import os
 import re
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, NoReturn
 from unittest.mock import patch
 
 import pytest
@@ -2391,6 +2392,194 @@ def test_background_service_call_with_timing_emits_root_span(monkeypatch):
     # No parent → it's a root span of its own trace.
     assert spans[0].parent is None
     assert spans[0].kind is SpanKind.CLIENT
+
+
+@pytest.fixture
+def set_background_job_tracing(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[bool], None]]:
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    def set_enabled(enabled: bool) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_V2", str(enabled))
+        is_otel_v2_enabled.cache_clear()
+
+    yield set_enabled
+    is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("v2_enabled", "config_value", "db_override", "tracing"),
+    [
+        (True, True, None, "grouped"),
+        (True, False, True, "grouped"),
+        (True, False, None, "off"),
+        (True, True, False, "off"),
+        (False, True, None, "unchanged"),
+    ],
+)
+async def test_each_background_job_run_groups_service_spans_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    set_background_job_tracing: Callable[[bool], None],
+    v2_enabled: bool,
+    config_value: bool,
+    db_override: bool | None,
+    tracing: Literal["grouped", "off", "unchanged"],
+) -> None:
+    from litellm.integrations.otel.runtime import background_job_span, traced_background_job
+    from litellm.proxy import proxy_server
+
+    set_background_job_tracing(v2_enabled)
+    logger, exporter = _logger(
+        config=OpenTelemetryV2Config(exporter="in_memory", emit_background_service_spans=config_value)
+    )
+    logger.background_service_spans_db_override = db_override
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+
+    async def flush(*, operation: str) -> str:
+        with background_job_span("nested_flush"):
+            for service in ("postgres", "redis"):
+                await logger.async_service_success_hook(
+                    payload=_ServicePayload(service, operation), start_time=1.0, end_time=2.0
+                )
+        return operation
+
+    run = traced_background_job("spend_flush", flush)
+    assert await run(operation="first") == "first"
+    assert await run(operation="second") == "second"
+    spans = exporter.get_finished_spans()
+    roots = [span for span in spans if span.parent is None]
+    if tracing == "grouped":
+        assert [(span.name, span.kind, span.links) for span in roots] == [
+            ("litellm.background.spend_flush", SpanKind.INTERNAL, ()),
+            ("litellm.background.spend_flush", SpanKind.INTERNAL, ()),
+        ]
+        assert roots[0].context.trace_id != roots[1].context.trace_id
+        assert len(spans) == 6
+        for root, operation in zip(roots, ("first", "second"), strict=True):
+            assert {span.name for span in spans if span.parent == root.context} == {
+                f"postgres {operation}",
+                f"redis {operation}",
+            }
+    elif tracing == "off":
+        assert spans == ()
+    else:
+        assert len(spans) == len(roots) == 4
+        assert {span.name for span in roots} == {"postgres first", "redis first", "postgres second", "redis second"}
+
+
+@pytest.mark.asyncio
+async def test_idle_spend_monitor_recovery_groups_the_baseline_transaction(
+    monkeypatch: pytest.MonkeyPatch, set_background_job_tracing: Callable[[bool], None]
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.baseline_accounting import flush_baseline_accounting
+    from litellm.proxy.db.log_db_metrics import record_db_io
+
+    set_background_job_tracing(True)
+    logger, exporter = _logger()
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    monkeypatch.setattr(litellm, "service_callback", [logger])
+
+    async def claim(_statement: str) -> tuple[()]:
+        record_db_io()
+        return ()
+
+    @contextlib.asynccontextmanager
+    async def transaction(*, timeout: timedelta) -> AsyncIterator[SimpleNamespace]:
+        yield SimpleNamespace(execute_raw=AsyncMock(), query_raw=claim)
+
+    client = SimpleNamespace(
+        db=SimpleNamespace(tx=transaction),
+        baseline_accounting_lock=asyncio.Lock(),
+        baseline_accounting_transactions=[],
+        baseline_accounting_recovery_due_at=float("-inf"),
+    )
+    await flush_baseline_accounting(client)
+    await asyncio.sleep(0)
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert set(spans) == {
+        "litellm.background.flush_baseline_accounting",
+        "postgres.transaction LiteLLM_AutoRouterBaselineComparison",
+    }
+    root = spans["litellm.background.flush_baseline_accounting"]
+    assert root.parent is None
+    assert spans["postgres.transaction LiteLLM_AutoRouterBaselineComparison"].parent == root.context
+
+
+@pytest.mark.asyncio
+async def test_background_response_sweep_groups_the_prune_and_lookup(
+    monkeypatch: pytest.MonkeyPatch, set_background_job_tracing: Callable[[bool], None]
+) -> None:
+    from types import SimpleNamespace
+
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.db_span import db_span
+    from litellm.proxy.db.log_db_metrics import record_db_io
+    from litellm.proxy.pass_through_endpoints.background_response_polling import (
+        BackgroundResponsePoller,
+        sweep_background_response_polls,
+    )
+
+    set_background_job_tracing(True)
+    logger, exporter = _logger()
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    monkeypatch.setattr(litellm, "service_callback", [logger])
+
+    async def prune(_created_before: datetime) -> None:
+        async with db_span("delete_many", "LiteLLM_BackgroundResponseCreator"):
+            record_db_io()
+
+    async def unleased(_created_after: datetime, _now: datetime) -> tuple[()]:
+        async with db_span("find_many", "LiteLLM_BackgroundResponseCreator"):
+            record_db_io()
+            return ()
+
+    async def unused(*_args: object) -> NoReturn:
+        pytest.fail("An empty sweep must not start polling")
+
+    assert await sweep_background_response_polls(
+        SimpleNamespace(prune=prune, unleased=unleased),
+        BackgroundResponsePoller(now=lambda: datetime(2025, 1, 1, tzinfo=timezone.utc)),
+        unused,
+        "https://api.example.com",
+        unused,
+    ) == ()
+    await asyncio.sleep(0)
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    root = spans.pop("litellm.background.sweep_background_response_polls")
+    assert root.parent is None
+    assert {name: span.parent for name, span in spans.items()} == {
+        "postgres.delete LiteLLM_BackgroundResponseCreator": root.context,
+        "postgres.select LiteLLM_BackgroundResponseCreator": root.context,
+    }
+
+
+@pytest.mark.asyncio
+async def test_background_job_scope_does_not_change_request_service_parenting(
+    monkeypatch: pytest.MonkeyPatch, set_background_job_tracing: Callable[[bool], None]
+) -> None:
+    from litellm.integrations.otel.runtime import background_job_span
+    from litellm.proxy import proxy_server
+
+    set_background_job_tracing(True)
+    logger, exporter = _logger()
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    with logger.tracer_provider.get_tracer("test").start_as_current_span("request") as request:
+        with background_job_span("redis_cache_flush"):
+            await logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "write"), start_time=1.0, end_time=2.0
+            )
+
+    redis, request_span = exporter.get_finished_spans()
+    assert redis.name == "redis write"
+    assert redis.parent == request_span.context == request.get_span_context()
 
 
 @pytest.mark.parametrize("config_source", ["env", "yaml"])

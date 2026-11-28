@@ -75,6 +75,7 @@ class SpanRole(str, Enum):
     GUARDRAIL = "guardrail"
     DB_CALL = "db_call"
     SERVICE = "service"
+    BACKGROUND_JOB = "background_job"
 
 
 class LiteLLMSpanKind(str, Enum):
@@ -106,6 +107,7 @@ SPAN_REGISTRY: Final[dict[SpanRole, SpanSpec]] = {
     SpanRole.GUARDRAIL: SpanSpec(SpanRole.GUARDRAIL, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
     SpanRole.DB_CALL: SpanSpec(SpanRole.DB_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
     SpanRole.SERVICE: SpanSpec(SpanRole.SERVICE, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
+    SpanRole.BACKGROUND_JOB: SpanSpec(SpanRole.BACKGROUND_JOB, LiteLLMSpanKind.INTERNAL, parent=None),
 }
 
 

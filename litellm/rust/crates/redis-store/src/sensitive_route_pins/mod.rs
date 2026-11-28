@@ -104,6 +104,11 @@ impl SensitiveRoutePins {
         self.pins.memory().set(key, model.clone(), Some(ttl))?;
         Ok(Some(model))
     }
+
+    /// Drops everything this process holds in memory and leaves Redis alone.
+    pub fn flush_local(&self) -> Result<(), Error> {
+        Ok(self.pins.memory().flush()?)
+    }
 }
 
 fn decode(raw: &[u8]) -> Result<String, DecodeError> {

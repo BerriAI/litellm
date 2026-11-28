@@ -1317,6 +1317,7 @@ mod tests {
         let (pools, database) = crate::db::connect(&config, &resources.secrets)
             .await
             .unwrap()
+            .pools()
             .unwrap();
         let (live, reading) = booted(&Rows::default()).await;
         let before = live.current();
