@@ -570,7 +570,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        AgentIdentityFailure, BudgetExceeded, ErrorType, KeyHash, PublicDenial, RbacDenial,
+        AgentIdentityFailure, BudgetExceeded, ErrorType, KeyHash, Model, PublicDenial, RbacDenial,
         TeamDenial, VerifyDenial,
         authn::{
             jwt::{MappedKey, NO_MAPPING_SENTINEL, PROXY_ADMIN_SENTINEL},
@@ -620,6 +620,7 @@ mod tests {
         JwtRequest {
             route,
             method: Some(&POST),
+            model: Model::Named(None),
             ..JwtRequest::default()
         }
     }
@@ -1950,7 +1951,7 @@ mod tests {
             ..config()
         });
         let request = JwtRequest {
-            model: Some(model),
+            model: Model::Named(Some(model)),
             ..request(CHAT)
         };
         let identity = authorize_with(&host, request, &settings, None).await;

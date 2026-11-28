@@ -188,9 +188,14 @@ impl RoutePolicy<'_> {
         if caller.kind == CallerKind::ManagedAgent(AgentMode::Autonomous) {
             return Ok(());
         }
-        check_rbac_role(caller.rbac_role, target.model, target.route, self.jwt)?;
-        if let Some(mappings) = self.jwt.enforced_scope_mappings() {
-            check_scope_based_access(mappings, &caller.scopes, target.model)?;
+        let mappings = self.jwt.enforced_scope_mappings();
+        let model = match self.jwt.config.enforce_rbac || mappings.is_some() {
+            true => target.model.read()?,
+            false => None,
+        };
+        check_rbac_role(caller.rbac_role, model, target.route, self.jwt)?;
+        if let Some(mappings) = mappings {
+            check_scope_based_access(mappings, &caller.scopes, model)?;
         }
         if caller.kind == CallerKind::ProxyAdmin {
             check_admin_route(target.route, self.jwt)?;
@@ -230,7 +235,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        authn::key::KeySettings, routes::passthrough::ForwardedRoutes, test_support::route_groups,
+        Model, authn::key::KeySettings, routes::passthrough::ForwardedRoutes,
+        test_support::route_groups, testing::Labels,
     };
 
     fn defaults() -> JwtSettings {
@@ -389,6 +395,53 @@ mod tests {
     }
 
     #[rstest]
+    #[case::enforced_rbac(
+        JwtAuthSettings { enforce_rbac: true, ..JwtAuthSettings::default() },
+        Err(Error::HostDeclined)
+    )]
+    #[case::enforced_scope_mappings(
+        JwtAuthSettings {
+            enforce_scope_based_access: true,
+            scope_mappings: Some(scope_mappings()),
+            ..JwtAuthSettings::default()
+        },
+        Err(Error::HostDeclined)
+    )]
+    #[case::neither(JwtAuthSettings::default(), Ok(()))]
+    fn a_model_the_host_has_not_read_declines_only_under_a_check_that_reads_it(
+        #[case] config: JwtAuthSettings,
+        #[case] expected: Result<(), Error>,
+    ) {
+        let (key, jwt) = (
+            KeySettings::default(),
+            JwtSettings {
+                config,
+                ..settings()
+            },
+        );
+        let caller = Caller::<Labels> {
+            kind: CallerKind::Jwt,
+            rbac_role: Some(RbacRole::InternalUser),
+            scopes: vec!["read".to_owned()],
+            agent: None,
+            agent_id: None,
+            issuer: serde_json::Value::Null,
+        };
+        let target = Target {
+            route: "/chat/completions",
+            method: None,
+            model: Model::Unread,
+            forwarded_routes: ForwardedRoutes::default(),
+            auth_enforced_pass_through: false,
+        };
+
+        assert_eq!(
+            RoutePolicy::new(&key, &jwt).credential(&caller, &target),
+            expected
+        );
+    }
+
+    #[rstest]
     #[case::management("/key/generate", true)]
     #[case::spend("/spend/logs", true)]
     #[case::not_openai("/chat/completions", false)]
@@ -418,7 +471,7 @@ mod tests {
         let target = Target {
             route,
             method: None,
-            model: None,
+            model: Model::Named(None),
             forwarded_routes: ForwardedRoutes::default(),
             auth_enforced_pass_through,
         };

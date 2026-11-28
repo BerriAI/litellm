@@ -4,7 +4,7 @@ use http::Method;
 
 use super::TeamEligibility;
 use crate::{
-    KeyDenial,
+    KeyDenial, Model,
     authn::{
         jwt::{JwtRequest, JwtSettings},
         key::KeySettings,
@@ -17,7 +17,7 @@ use crate::{
 pub(crate) struct Target<'a> {
     pub(crate) route: &'a str,
     pub(crate) method: Option<&'a Method>,
-    pub(crate) model: Option<&'a str>,
+    pub(crate) model: Model<'a>,
     pub(crate) forwarded_routes: ForwardedRoutes<'a>,
     /// `RouteChecks.is_auth_enforced_pass_through_route(route, method)`
     pub(crate) auth_enforced_pass_through: bool,

@@ -4,7 +4,7 @@ use litellm_config::ClaimPath;
 
 use super::claims;
 use crate::{
-    AffiliationRead, AuthHost, Error, Rows, TeamDenial,
+    AffiliationRead, AuthHost, Error, Model, Rows, TeamDenial,
     authn::jwt::{Claims, JwtRequest, JwtSettings},
     authz::{TeamEligibility, Verdict as Eligibility},
     host::{MembershipRow, TeamRow},
@@ -147,11 +147,10 @@ async fn check_team<H: AuthHost>(
 pub(crate) async fn select_team<H: AuthHost>(
     host: &H,
     team_ids: &BTreeSet<String>,
-    model: Option<&str>,
+    model: Model<'_>,
     eligibility: &TeamEligibility<'_>,
     settings: TeamSettings,
 ) -> Result<Option<HostTeam<H>>, Error> {
-    let model = model.filter(|text| !text.is_empty());
     let route = eligibility.route();
     if team_ids.is_empty() {
         if settings.enforce_team_based_model_access && !settings.fallback_to_db_teams {
@@ -159,6 +158,7 @@ pub(crate) async fn select_team<H: AuthHost>(
         }
         return Ok(None);
     }
+    let model = model.read()?.filter(|text| !text.is_empty());
     let mut any_resolved = false;
     let mut fallback = None;
     let mut route_denied = None;
@@ -372,12 +372,15 @@ pub(crate) async fn db_team_fallback<H: AuthHost>(
     host: &H,
     user_team_ids: &[String],
     user_id: Option<&str>,
-    model: Option<&str>,
+    model: Model<'_>,
     eligibility: &TeamEligibility<'_>,
     upsert: bool,
     settings: TeamSettings,
 ) -> Result<Option<Joined<H::Rows>>, Error> {
-    let model = model.filter(|text| !text.is_empty());
+    let model = match user_team_ids.is_empty() {
+        true => None,
+        false => model.read()?.filter(|text| !text.is_empty()),
+    };
     let mut any_resolved = false;
     let mut fallback = None;
     for team_id in user_team_ids {
@@ -645,7 +648,7 @@ mod tests {
         select_team(
             host,
             &ids(team_ids),
-            model,
+            Model::Named(model),
             &eligibility(&forwarded, pass_through),
             settings,
         )
@@ -673,6 +676,56 @@ mod tests {
             select(&host, &[], Some("gpt"), true, settings).await,
             expected
         );
+        assert!(host.calls().is_empty());
+    }
+
+    #[rstest]
+    #[case::claimed(&["a"], Err(Error::HostDeclined))]
+    #[case::none_claimed(&[], Ok(None))]
+    #[tokio::test]
+    async fn a_model_the_host_has_not_read_declines_only_a_token_that_claims_teams(
+        #[case] team_ids: &[&str],
+        #[case] expected: Result<Option<String>, Error>,
+    ) {
+        let host = ScriptedHost {
+            teams: HashMap::from([("a", granted("a"))]),
+            ..ScriptedHost::default()
+        };
+        let forwarded = forwarded();
+        let picked = select_team(
+            &host,
+            &ids(team_ids),
+            Model::Unread,
+            &eligibility(&forwarded, true),
+            TeamSettings::default(),
+        )
+        .await
+        .map(id);
+        assert_eq!(picked, expected);
+        assert!(host.calls().is_empty());
+    }
+
+    #[rstest]
+    #[case::listed(&["b"], Err(Error::HostDeclined))]
+    #[case::none_listed(&[], Ok(None))]
+    #[tokio::test]
+    async fn db_fallback_declines_a_model_the_host_has_not_read_only_with_teams_to_pick_from(
+        #[case] user_team_ids: &[&str],
+        #[case] expected: Result<Option<String>, Error>,
+    ) {
+        let (host, forwarded) = (db_host(), forwarded());
+        let picked = db_team_fallback(
+            &host,
+            &owned(user_team_ids),
+            None,
+            Model::Unread,
+            &eligibility(&forwarded, true),
+            false,
+            TeamSettings::default(),
+        )
+        .await
+        .map(joined_id);
+        assert_eq!(picked, expected);
         assert!(host.calls().is_empty());
     }
 
@@ -1168,7 +1221,7 @@ mod tests {
                 &host,
                 &owned(user_team_ids),
                 Some("u"),
-                model,
+                Model::Named(model),
                 &eligibility(&forwarded, team_route_allowed),
                 false,
                 enforced
@@ -1189,7 +1242,7 @@ mod tests {
                 &host,
                 &owned(&["b"]),
                 None,
-                Some("gpt"),
+                Model::Named(Some("gpt")),
                 &eligibility(&forwarded, false),
                 true,
                 TeamSettings::default()

@@ -13,14 +13,11 @@ use crate::{
 
 /// Each caller the core hands back is matched by name, with no catch-all, so a caller the native
 /// host learns to serve does not compile here until it is named native or not. A credential the
-/// core did not authenticate is over the error's name. A key that holds a team, owner,
-/// organization or project stays with Python over the first unserved column or association.
-/// A key a JWT maps to is held the same way. A JWT is checked against its scope mappings only
-/// for the model the request names, which the core is not handed before the body is read. With a customer
-/// claim mapped, Python resolves the customer a verified JWT names after auth, and applies that
-/// customer's budgets and models, which the native app does not. Only the JWT path reads the team
-/// header, and Python code after auth reads it beside a key, so a key that sends one stays with
-/// Python, a key a JWT maps to included.
+/// core did not authenticate is over the error's name, including when a JWT decision needs the
+/// model before the body is read. A key that holds a team, owner, organization or project stays
+/// with Python over the first unserved column or association. This also applies to mapped keys.
+/// Python resolves a JWT customer claim after auth and applies its budgets and models. A key
+/// that sends the team header also stays with Python, which reads that header after auth.
 pub(super) fn caller(
     admit: &Admit,
     request: &Parts,
@@ -65,7 +62,7 @@ pub(super) fn caller(
                     .or_else(key_team)
                     .or_else(scope_mappings)
                     .or_else(|| customer_claims(admit)),
-                Credential::Jwt { .. } => scope_mappings().or_else(|| customer_claims(admit)),
+                Credential::Jwt { .. } => customer_claims(admit),
             }
         }
         Err(error) => Some(Reason::new(

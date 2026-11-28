@@ -37,7 +37,7 @@ pub use host::{
 };
 pub use outcome::{Identity, KeyOutcome, Outcome, Refused};
 pub use public::{ErrorType, PublicDenial};
-pub use request::Request;
+pub use request::{Model, Request};
 pub use routes::{
     ExposedRoutes, ManagedRoute, MissingRouteGroup, RouteAllowlist, RouteGroup, RouteGroups,
     RouteNotExposed, matches_wildcard,
