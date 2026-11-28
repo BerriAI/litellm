@@ -37350,6 +37350,11 @@ export interface components {
          * @description Response model for internal user settings
          */
         InternalUserSettingsResponse: {
+            /**
+             * Can Save
+             * @description Whether database-backed configuration updates are available.
+             */
+            can_save: boolean;
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
