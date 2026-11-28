@@ -1,6 +1,7 @@
 import json
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
@@ -12,6 +13,7 @@ import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     decoded_json_object,
     json_contains,
     json_loaded,
@@ -66,6 +68,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 _TOOL_CALL_ARGUMENTS: Final = TypeAdapter(dict[str, object])
+_TOOL_CALL_ITEMS: Final = TypeAdapter(list[object])
 
 
 class _KeywordFields(TypedDict, total=False, extra_items=object):
@@ -113,6 +116,38 @@ def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistant
             llm_provider="ollama_chat",
         ) from None
     return OllamaToolCallFunction(name=name, arguments=arguments)
+
+
+def _tool_names_by_call_id(messages: Sequence[object]) -> Mapping[str, str]:
+    pairs: Final = tuple(map(_call_id_and_name, chain.from_iterable(map(_assistant_tool_calls, messages))))
+    return MappingProxyType(dict(pair for pair in pairs if pair is not None))
+
+
+def _call_id_and_name(tool_call: Mapping[str, object]) -> tuple[str, str] | None:
+    call_id: Final = tool_call.get("id")
+    function: Final = as_str_mapping(tool_call.get("function"))
+    name: Final = None if function is None else function.get("name")
+    return (call_id, name) if isinstance(call_id, str) and isinstance(name, str) and name else None
+
+
+def _assistant_tool_calls(message: object) -> tuple[Mapping[str, object], ...]:
+    fields: Final = as_str_mapping(message.model_dump(exclude_none=True) if isinstance(message, BaseModel) else message)
+    tool_calls: Final = None if fields is None else fields.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return ()
+    parsed: Final = tuple(map(as_str_mapping, _TOOL_CALL_ITEMS.validate_python(tool_calls)))
+    return tuple(tool_call for tool_call in parsed if tool_call is not None)
+
+
+def _tool_result_name(message: object, tool_names_by_call_id: Mapping[str, str]) -> str | None:
+    fields: Final = as_str_mapping(message)
+    if fields is None or fields.get("role") != "tool":
+        return None
+    explicit_name: Final = fields.get("name")
+    if isinstance(explicit_name, str) and explicit_name:
+        return explicit_name
+    tool_call_id: Final = fields.get("tool_call_id")
+    return tool_names_by_call_id.get(tool_call_id) if isinstance(tool_call_id, str) else None
 
 
 class OllamaChatConfig(BaseConfig):
@@ -327,6 +362,7 @@ class OllamaChatConfig(BaseConfig):
             )
             return ollama_tool_call
 
+        tool_names_by_call_id: Final = _tool_names_by_call_id(messages)
         new_messages: Final[list[OllamaChatCompletionMessage]] = []
         for m in messages:
             if isinstance(
@@ -359,6 +395,9 @@ class OllamaChatConfig(BaseConfig):
             tool_call_id = m.get("tool_call_id")
             if tool_call_id is not None:
                 ollama_message["tool_call_id"] = cast(str, tool_call_id)
+            tool_name = _tool_result_name(m, tool_names_by_call_id)
+            if tool_name is not None:
+                ollama_message["tool_name"] = tool_name
 
             new_messages.append(ollama_message)
 
