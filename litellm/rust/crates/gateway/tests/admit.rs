@@ -2,7 +2,8 @@
 //! each with who answers it, `rust` or `python`. A request for Python names the `reason` the client
 //! sees in `x-litellm-gateway`, and may name the setting or trait it goes to Python `over`.
 //! A request that names `jwt` claims carries them signed by a provider whose JWKS
-//! `JWT_PUBLIC_KEY_URL` names, and `jwks` says what that URL answers.
+//! `JWT_PUBLIC_KEY_URL` names, and `jwks` says what that URL answers. `mappings` lists the keys the
+//! database maps a JWT's claim to.
 
 mod jwt;
 mod keys;
@@ -41,6 +42,10 @@ struct Scenario {
     /// The projects the database holds, each id with the columns set on its row.
     #[serde(default)]
     projects: BTreeMap<String, Columns>,
+    /// The key each JWT claim maps to for every issuer: the claim's name, then each value it
+    /// takes with the token of its key.
+    #[serde(default)]
+    mappings: BTreeMap<String, BTreeMap<String, String>>,
     /// Whether the config reads the database that holds the keys, as its
     /// `general_settings.database_url`.
     #[serde(default)]
@@ -146,7 +151,7 @@ type Columns = serde_json::Map<String, serde_json::Value>;
 
 /// The database holding each team, user, project and key of the scenario, in that order so a key
 /// can point at a project and a project at a team, a key as a plain row with its columns set on
-/// it, and each of its other rows.
+/// it, each claim mapped to its key, and each of its other rows.
 async fn listed(scenario: &Scenario) -> keys::Held {
     let held = keys::Held::start().await;
     if scenario.allow_missing_organization == Some(true) {
@@ -187,6 +192,11 @@ async fn listed(scenario: &Scenario) -> keys::Held {
     for (token, columns) in &scenario.keys {
         held.key(token, serde_json::Value::Object(columns.clone()))
             .await;
+    }
+    for (claim, mapped) in &scenario.mappings {
+        for (value, token) in mapped {
+            held.mapping("", claim, value, token).await;
+        }
     }
     held
 }
@@ -360,6 +370,8 @@ impl Sent {
 #[case::jwt_scope_based_access("jwt_scope_based_access")]
 #[case::jwt_provider_unusable("jwt_provider_unusable")]
 #[case::jwt_provider_down("jwt_provider_down")]
+#[case::jwt_key_mapping("jwt_key_mapping")]
+#[case::jwt_key_mapping_without_database("jwt_key_mapping_without_database")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();

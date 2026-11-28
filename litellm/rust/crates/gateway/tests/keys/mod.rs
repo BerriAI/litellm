@@ -71,6 +71,22 @@ impl Held {
         self.insert("LiteLLM_VerificationToken", &row).await;
     }
 
+    /// Maps the `claim` a JWT carries as `value` to the key of `token`, for the tokens of `issuer`
+    /// or, with an empty one, of every issuer.
+    pub async fn mapping(&self, issuer: &str, claim: &str, value: &str, token: &str) {
+        let row = json!({
+            "id": format!("{issuer}/{claim}/{value}"),
+            "jwt_issuer": issuer,
+            "jwt_claim_name": claim,
+            "jwt_claim_value": value,
+            "token": Token::new(token).hash().as_str(),
+            "is_active": true,
+            "created_at": "2026-01-01T00:00:00",
+            "updated_at": "2026-01-01T00:00:00",
+        });
+        self.insert("LiteLLM_JWTKeyMapping", &row).await;
+    }
+
     /// Stores `row` in `table`, each field in the column of its name.
     pub async fn insert(&self, table: &str, row: &Value) {
         #[expect(

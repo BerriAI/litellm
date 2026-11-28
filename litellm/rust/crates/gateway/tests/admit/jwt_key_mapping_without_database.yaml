@@ -1,0 +1,29 @@
+# The gateway keeps a JWT's key mapping in the auth cache that stands in front of its database, so
+# without a database a JWT that carries the mapped claim goes to Python. One that carries no such
+# claim maps to no key and is served as itself.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      virtual_key_claim_field: client_id
+
+requests:
+  - name: a JWT carrying the mapped claim
+    jwt: {claims: {client_id: svc-claude}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a JWT carrying no mapped claim
+    jwt: {claims: {scope: read}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

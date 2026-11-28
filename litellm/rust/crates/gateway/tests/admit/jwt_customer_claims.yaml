@@ -1,6 +1,7 @@
 # With a customer claim mapped, Python resolves the customer a verified JWT names after auth, and
 # applies that customer's budgets and models. The native app resolves no customer, so every JWT
-# goes to Python, and the master key, which carries no claims, is still served.
+# goes to Python, a key it maps to included, and the master key, which carries no claims, is still
+# served.
 enterprise: true
 
 config:
@@ -14,6 +15,14 @@ config:
     enable_jwt_auth: true
     litellm_jwtauth:
       customer_member_id_jwt_field: customer.member
+      virtual_key_claim_field: client_id
+
+keys:
+  sk-claude: {models: [claude]}
+
+mappings:
+  client_id:
+    svc-claude: sk-claude
 
 requests:
   - name: a JWT naming a customer
@@ -25,6 +34,13 @@ requests:
 
   - name: a JWT naming no customer
     jwt: {claims: {sub: user-123}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: customer_jwt_fields
+
+  - name: a JWT mapped to a key
+    jwt: {claims: {client_id: svc-claude, customer: {member: member-1}}}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: settings
