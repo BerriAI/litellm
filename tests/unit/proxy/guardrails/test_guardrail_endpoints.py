@@ -2590,6 +2590,21 @@ class _InputDirectionGuardrail(_NativeFindingGuardrail):
         return {"texts": [input_type]}
 
 
+class _BusyGuardrail(_NativeFindingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Logging | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        raise HTTPException(
+            status_code=429,
+            detail="busy, retry later",
+            headers={"Retry-After": "3", "Content-Length": "1", "Access-Control-Allow-Origin": "*"},
+        )
+
+
 async def _apply_finding_guardrail_over_http(
     mocker: MockerFixture,
     findings: tuple[object, ...],
@@ -2629,6 +2644,18 @@ async def test_apply_guardrail_native_response_preserves_structured_findings(
     )
     assert result.status_code == 200
     assert result.json() == findings
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_answers_with_the_retry_after_a_busy_guardrail_raised(mocker: MockerFixture) -> None:
+    result: Final = await _apply_finding_guardrail_over_http(
+        mocker, (), {"guardrail_name": "grounding", "text": "hi"}, guardrail=_BusyGuardrail(())
+    )
+
+    assert result.status_code == 429, result.text
+    assert result.headers.get("retry-after") == "3", result.headers
+    assert result.headers.get("content-length") == str(len(result.content)), result.headers
+    assert "access-control-allow-origin" not in result.headers, result.headers
 
 
 @pytest.mark.asyncio
