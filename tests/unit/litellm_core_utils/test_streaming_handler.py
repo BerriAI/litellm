@@ -8036,6 +8036,44 @@ def _chunk_creator_calls(
     return outputs, tuple(calls)
 
 
+def test_anthropic_signed_delta_is_copied_for_output_without_an_intermediate_rebuild(logging_obj: Logging) -> None:
+    parser: Final = AnthropicModelResponseIterator(
+        iter(
+            (
+                'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}',
+                'data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"consider"}}',
+                'data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"signed"}}',
+            )
+        ),
+        sync_stream=True,
+    )
+    wrapper: Final = CustomStreamWrapper(parser, "anthropic/test", logging_obj, custom_llm_provider="anthropic")
+    wrapper.chunk_creator(next(parser))
+    opening_chunk: Final = next(parser)
+    assert isinstance(opening_chunk, ModelResponseStream)
+    opening_source: Final = opening_chunk.choices[0].delta
+    original_role: Final = opening_source.role
+    opening: Final = wrapper.chunk_creator(opening_chunk)
+    assert opening_source.role == original_role
+    signature: Final = next(parser)
+    assert isinstance(signature, ModelResponseStream)
+    assert opening is not None and opening.choices[0].delta.role == "assistant"
+    outputs, calls = _chunk_creator_calls(wrapper, (signature,), frozenset({Delta.__init__.__code__}))
+    result: Final = outputs[0]
+    assert result is not None
+    delta: Final = result.choices[0].delta
+    assert delta.role is None
+    source_blocks: Final = signature.choices[0].delta.thinking_blocks
+    assert delta.thinking_blocks == [{"type": "thinking", "index": 0, "thinking": "", "signature": "signed"}]
+    assert delta.provider_specific_fields == {"thinking_blocks": delta.thinking_blocks}
+    assert (
+        source_blocks is not None and delta.thinking_blocks is not None and delta.provider_specific_fields is not None
+    )
+    assert delta.thinking_blocks[0] is not source_blocks[0]
+    assert delta.thinking_blocks[0] is not delta.provider_specific_fields["thinking_blocks"][0]
+    assert len(calls) <= 2
+
+
 def test_openai_chunk_creator_skips_full_chunk_dump_and_delta_rebuild(
     logging_obj: Logging,
 ) -> None:

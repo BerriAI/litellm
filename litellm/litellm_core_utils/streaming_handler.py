@@ -1343,6 +1343,13 @@ class CustomStreamWrapper:
             or self._has_any_special_delta_attributes(upstream_delta)
         ):
             return None
+        if (
+            self.custom_llm_provider == "anthropic"
+            and type(upstream_delta) is Delta
+            and getattr(upstream_delta, "thinking_blocks", None)
+        ):
+            # Structured choices are rebuilt from a full dump before their role or contents are changed.
+            return upstream_delta
         return _delta_from_upstream(upstream_delta)
 
     def _claim_role_for_choice(self, choice_index: int | None) -> bool:
