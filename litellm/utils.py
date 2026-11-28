@@ -12209,6 +12209,7 @@ class ProviderConfigManager:
         from litellm.llms.azure.search.transformation import BingGroundingSearchConfig
         from litellm.llms.bedrock.search.transformation import AgentCoreSearchConfig
         from litellm.llms.brave.search.transformation import BraveSearchConfig
+        from litellm.llms.clawifi.search.transformation import ClawifiSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.deepseek.search.transformation import DeepSeekSearchConfig
         from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
@@ -12253,6 +12254,7 @@ class ProviderConfigManager:
             SearchProviders.NIMBLE: NimbleSearchConfig,
             SearchProviders.BING_GROUNDING: BingGroundingSearchConfig,
             SearchProviders.WEBIQ: WebIQSearchConfig,
+            SearchProviders.CLAWIFI: ClawifiSearchConfig,
             SearchProviders.DEEPSEEK: DeepSeekSearchConfig,
             SearchProviders.XAI: XAISearchConfig,
         }

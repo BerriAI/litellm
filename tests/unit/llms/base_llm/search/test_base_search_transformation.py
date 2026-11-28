@@ -22,6 +22,7 @@ from litellm.llms.base_llm.search.transformation import (
     _is_trusted_search_api_base,
 )
 from litellm.llms.brave.search.transformation import BraveSearchConfig
+from litellm.llms.clawifi.search.transformation import ClawifiSearchConfig
 from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
 from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
 from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
@@ -60,6 +61,7 @@ _BASE_ENV_VARS = (
     "TINYFISH_API_BASE",
     "CRW_API_BASE",
     "NIMBLE_API_BASE",
+    "CLAWIFI_API_BASE",
     "BING_GROUNDING_PROJECT_ENDPOINT",
 )
 
@@ -101,6 +103,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
     (TinyfishSearchConfig, {"TINYFISH_API_KEY": "srv"}, "caller-key", {}),
     (FastCRWSearchConfig, {"CRW_API_KEY": "srv"}, "caller-key", {}),
     (NimbleSearchConfig, {"NIMBLE_API_KEY": "srv"}, "caller-key", {}),
+    (ClawifiSearchConfig, {"CLAWIFI_API_KEY": "srv"}, "caller-key", {}),
     (BingGroundingSearchConfig, {"BING_GROUNDING_TOKEN": "srv"}, "caller-key", {}),
 )
 
