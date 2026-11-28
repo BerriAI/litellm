@@ -4,14 +4,11 @@ Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orches
 
 import types
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
-from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel
 
-import litellm
-from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -28,7 +25,8 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-from ..credentials import AICoreDeploymentList, get_token_creator
+from ..credentials import get_token_creator
+from ..deployment import fetch_deployment_url, resolve_deployment_url
 from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
@@ -46,8 +44,6 @@ from .models import (
     SAPUserMessage,
 )
 from .reasoning import normalize_reasoning_blocks
-
-_DECODED_JSON: Final = TypeAdapter(object)
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
@@ -188,39 +184,24 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self.run_env_setup()
         return self._resource_group
 
+    @property
+    def deployment_url(self) -> str:
+        return resolve_deployment_url(
+            self.base_url,
+            self.resource_group,
+            self._fetch_deployment_url,
+        )
+
+    def _fetch_deployment_url(self) -> str:
+        return fetch_deployment_url(
+            self.base_url,
+            lambda: self.headers,
+            self._invalidate_rejected_token,
+        )
+
     def _invalidate_rejected_token(self, authorization: str | None) -> None:
         if self.token_creator is not None and authorization is not None:
             self.token_creator.invalidate(authorization)
-
-    def _get_with_current_token(self, path: str) -> httpx.Response:
-        request_headers: Final = self.headers
-        response: Final = litellm.module_level_client.get(join_api_base(self.base_url, path), headers=request_headers)
-        if response.status_code == 401:
-            self._invalidate_rejected_token(request_headers["Authorization"])
-        return response
-
-    def _get_from_ai_core(self, path: str) -> httpx.Response:
-        first_try: Final = self._get_with_current_token(path)
-        response: Final = self._get_with_current_token(path) if first_try.status_code == 401 else first_try
-        if response.status_code == 401:
-            raise GenAIHubOrchestrationError(status_code=401, message=response.text)
-        return response
-
-    def _is_orchestration_configuration(self, configuration_id: str) -> bool:
-        configuration: Final = _DECODED_JSON.validate_python(
-            self._get_from_ai_core(f"lm/configurations/{configuration_id}").json()
-        )
-        return require_get(configuration).get("executableId") == "orchestration"
-
-    @cached_property
-    def deployment_url(self) -> str:
-        deployments: Final[AICoreDeploymentList] = self._get_from_ai_core("lm/deployments").json()
-        orchestration_deployments: Final = tuple(
-            (dep["deploymentUrl"], dep["createdAt"])
-            for dep in deployments.get("resources", [])
-            if dep.get("scenarioId") == "orchestration" and self._is_orchestration_configuration(dep["configurationId"])
-        )
-        return sorted(orchestration_deployments, key=lambda x: x[1], reverse=True)[0][0]
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
@@ -309,8 +290,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ):
-        api_base_: Final = join_api_base(self.deployment_url, "v2/completion")
-        return api_base_
+        return join_api_base(self.deployment_url, "v2/completion")
 
     def _build_prompt_module(
         self,
@@ -376,7 +356,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         headers: Mapping[str, object],
     ) -> dict[str, object]:
         optional_params = dict(optional_params)
-        optional_params.pop("deployment_url", None)
 
         template: Final = _messages_to_sap_template(messages)
 

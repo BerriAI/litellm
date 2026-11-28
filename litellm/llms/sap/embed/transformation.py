@@ -1,15 +1,13 @@
 """
-Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
+Translates from OpenAI's `/v1/embeddings` to SAP GenAI Hub's Orchestration Service `/v2/embeddings`.
 """
 
 from collections.abc import Mapping
-from functools import cached_property
 from typing import Final, Literal
 
 import httpx
-from pydantic import Field, TypeAdapter
+from pydantic import Field
 
-from litellm.litellm_core_utils.core_helpers import iter_items, require_get, subscript
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.embedding.transformation import (
     BaseEmbeddingConfig,
@@ -22,8 +20,7 @@ from litellm.types.utils import EmbeddingResponse
 
 from ..chat.handler import GenAIHubOrchestrationError
 from ..credentials import get_token_creator
-
-_DECODED_JSON: Final = TypeAdapter(object)
+from ..deployment import fetch_deployment_url, resolve_deployment_url
 
 
 class Usage(LiteLLMBaseModel):
@@ -94,7 +91,6 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
     @property
     def headers(self) -> dict[str, str]:
         access_token: Final = self.token_creator()
-        # headers for completions and embeddings requests
         headers: Final = {
             "Authorization": access_token,
             "AI-Resource-Group": self.resource_group,
@@ -103,39 +99,20 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         }
         return headers
 
-    def _get_with_current_token(self, client: httpx.Client, path: str) -> httpx.Response:
-        request_headers: Final = self.headers
-        response: Final = client.get(join_api_base(self.base_url, path), headers=request_headers)
-        if response.status_code == 401:
-            self.token_creator.invalidate(request_headers["Authorization"])
-        return response
-
-    def _get_from_ai_core(self, client: httpx.Client, path: str) -> httpx.Response:
-        first_try: Final = self._get_with_current_token(client, path)
-        response: Final = self._get_with_current_token(client, path) if first_try.status_code == 401 else first_try
-        if response.status_code == 401:
-            raise GenAIHubOrchestrationError(status_code=401, message=response.text)
-        return response
-
-    @cached_property
+    @property
     def deployment_url(self) -> str:
-        with httpx.Client(timeout=30) as client:
-            valid_deployments: Final = []
-            deployments: Final = require_get(
-                _DECODED_JSON.validate_python(self._get_from_ai_core(client, "lm/deployments").json())
-            )
-            for deployment in iter_items(deployments.get("resources", [])):
-                if subscript(deployment, "scenarioId") == "orchestration":
-                    config_details = _DECODED_JSON.validate_python(
-                        self._get_from_ai_core(
-                            client, f"lm/configurations/{subscript(deployment, 'configurationId')}"
-                        ).json()
-                    )
-                    if subscript(config_details, "executableId") == "orchestration":
-                        valid_deployments.append(
-                            (subscript(deployment, "deploymentUrl"), subscript(deployment, "createdAt"))
-                        )
-            return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0][0]
+        return resolve_deployment_url(
+            self.base_url,
+            self.resource_group,
+            self._fetch_deployment_url,
+        )
+
+    def _fetch_deployment_url(self) -> str:
+        return fetch_deployment_url(
+            self.base_url,
+            lambda: self.headers,
+            self.token_creator.invalidate,
+        )
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers):
         if status_code == 401 and self._request_authorization is not None:
