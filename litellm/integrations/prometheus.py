@@ -46,6 +46,10 @@ from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker i
     BoundedPrometheusSeriesTracker,
     PrometheusSeriesLimits,
 )
+from litellm.integrations.prometheus_helpers.deployment_state_series import (
+    DeploymentStateSeries,
+    DeploymentStateSeriesTracker,
+)
 from litellm.integrations.prometheus_helpers.shared_prometheus_series_admissions import (
     SharedPrometheusSeriesAdmissions,
 )
@@ -707,6 +711,7 @@ class PrometheusLogger(CustomLogger):
             _custom_buckets: Final = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
             self._bounded_prometheus_series_tracker = BoundedPrometheusSeriesTracker()
+            self._deployment_state_tracker = DeploymentStateSeriesTracker(write=self.set_litellm_deployment_state)
             _multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
             self._series_cap_tracker = (
                 BoundedPrometheusSeriesTracker()
@@ -3840,7 +3845,7 @@ class PrometheusLogger(CustomLogger):
             litellm_model_name: Final = request_kwargs.get("model", None)
             llm_provider: Final = _litellm_params.get("custom_llm_provider", None)
             _model_info: Final = _metadata.get("model_info") or {}
-            model_id: Final = _model_info.get("id", None)
+            model_id: Final = standard_logging_payload["model_id"] or _model_info.get("id", None)
 
             if _model_info or _litellm_params:
                 self._set_deployment_tpm_rpm_limit_metrics(
@@ -4298,7 +4303,9 @@ class PrometheusLogger(CustomLogger):
         api_base: object,
         api_provider: object,
     ):
-        self.set_litellm_deployment_state(0, litellm_model_name, model_id, api_base, api_provider)
+        self._deployment_state_tracker.healthy(
+            DeploymentStateSeries(litellm_model_name, model_id, api_base, api_provider)
+        )
 
     def _set_deployment_state_after_failure(
         self,
@@ -4321,7 +4328,9 @@ class PrometheusLogger(CustomLogger):
         api_base: object,
         api_provider: object,
     ):
-        self.set_litellm_deployment_state(1, litellm_model_name, model_id, api_base, api_provider)
+        self._deployment_state_tracker.partial_outage(
+            DeploymentStateSeries(litellm_model_name, model_id, api_base, api_provider)
+        )
 
     def set_deployment_complete_outage(
         self,
@@ -4330,7 +4339,12 @@ class PrometheusLogger(CustomLogger):
         api_base: object,
         api_provider: object,
     ):
-        self.set_litellm_deployment_state(2, litellm_model_name, model_id, api_base, api_provider)
+        self._deployment_state_tracker.complete_outage(
+            DeploymentStateSeries(litellm_model_name, model_id, api_base, api_provider)
+        )
+
+    def set_deployment_cooldown_time(self, model_id: str | None, cooldown_time: float) -> None:
+        self._deployment_state_tracker.cooldown_lasts(model_id, cooldown_time)
 
     def increment_deployment_cooled_down(
         self,
