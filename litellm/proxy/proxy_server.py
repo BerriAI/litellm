@@ -2155,7 +2155,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
 
     model_info_refresh_disabled: Final = ProxyStartupEvent.model_info_refresh_disabled()
     model_info_scheduler: Final = (
-        None if model_info_refresh_disabled else scheduler if scheduler is not None else AsyncIOScheduler()
+        None if model_info_refresh_disabled else scheduler if scheduler is not None else AsyncIOScheduler(timezone="UTC")
     )
     if model_info_scheduler is not None:
         model_info_scheduler.add_job(
@@ -11602,8 +11602,8 @@ class ProxyStartupEvent:
             executors={
                 "default": scheduler_executor,
             },
-            # Disable timezone awareness to reduce computation
-            timezone=None,
+            # Explicitly use UTC timezone to prevent infinite loops and unbounded memory growth during DST transitions (#48285)
+            timezone="UTC",
         )
 
         # Use fixed intervals with small random offset instead of jitter
