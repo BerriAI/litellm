@@ -1202,6 +1202,50 @@ async def test_proxy_startup_event_warns_for_fail_closed_rate_limits_without_red
     assert "rejects nothing" in caplog.text
 
 
+def test_startup_warns_for_fail_closed_budgets_without_redis(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent.warn_fail_closed_budgets_without_redis(
+            fail_closed_budget_enforcement=True, redis_usage_cache=None
+        )
+
+    assert "fail_closed_budget_enforcement" in caplog.text
+    assert "budgets can be overspent" in caplog.text
+
+
+@pytest.mark.parametrize("fail_closed, redis_usage_cache", [(True, MagicMock()), (False, None)])
+def test_startup_does_not_warn_for_fail_closed_budgets_when_nothing_is_lost(caplog, fail_closed, redis_usage_cache):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        ProxyStartupEvent.warn_fail_closed_budgets_without_redis(
+            fail_closed_budget_enforcement=fail_closed, redis_usage_cache=redis_usage_cache
+        )
+
+    assert "fail_closed_budget_enforcement" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_closed", [True, False])
+async def test_proxy_startup_event_warns_for_fail_closed_budgets_without_redis_only_when_enabled(caplog, fail_closed):
+    scheduler = AsyncIOScheduler()
+    clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")} | {
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"
+    }
+    with (
+        patch.dict(os.environ, clean_env, clear=True),
+        patch.object(ps, "scheduler", scheduler),
+        patch.object(ps, "redis_usage_cache", None),
+        patch.dict(ps.general_settings, {"fail_closed_budget_enforcement": fail_closed}),
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+    ):
+        try:
+            async with proxy_startup_event(app=None):
+                pass
+        finally:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+
+    assert ("budgets can be overspent" in caplog.text) is fail_closed
+
+
 def test_proxy_startup_event_warns_for_global_budget_without_database():
     """Pin the lifespan call that prevents silent DB-less budgets.
 

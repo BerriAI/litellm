@@ -2083,6 +2083,10 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         fail_closed_rate_limit_enforcement=fail_closed_rate_limit_enforcement_enabled(general_settings),
         redis_usage_cache=redis_usage_cache,
     )
+    ProxyStartupEvent.warn_fail_closed_budgets_without_redis(
+        fail_closed_budget_enforcement=fail_closed_budget_enforcement_enabled(),
+        redis_usage_cache=redis_usage_cache,
+    )
     register_prompt_cache_alerts(general_settings_view(), prisma_client, resources)
 
     from litellm.proxy.common_utils.ldap_sync import ldap_sync_settings
@@ -11165,6 +11169,22 @@ class ProxyStartupEvent:
         )
 
     _warn_fail_closed_rate_limits_without_redis = warn_fail_closed_rate_limits_without_redis
+
+    @staticmethod
+    def warn_fail_closed_budgets_without_redis(
+        fail_closed_budget_enforcement: bool, redis_usage_cache: RedisCache | None
+    ) -> None:
+        if redis_usage_cache is not None or not fail_closed_budget_enforcement:
+            return
+
+        verbose_proxy_logger.warning(
+            "general_settings.fail_closed_budget_enforcement is enabled but no Redis is configured, so each proxy "
+            "worker counts budget spend in its own memory. With more than one worker or replica, a worker only sees "
+            "the others' spend after it is written to the database, so budgets can be overspent and the setting "
+            "does not prevent it. Configure general_settings.coordination_redis (or "
+            "REDIS_HOST/REDIS_PORT/REDIS_PASSWORD) to share the spend counters and make the budget a hard limit. "
+            "A single worker is not affected."
+        )
 
     @classmethod
     def initialize_startup_logging(
