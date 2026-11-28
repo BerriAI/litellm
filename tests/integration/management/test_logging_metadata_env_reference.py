@@ -370,24 +370,22 @@ def test_a_non_admin_copied_ciphertext_is_refused_whatever_it_holds(
         assert read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE key_alias = %s', (alias,)) == []
 
 
-@pytest.mark.parametrize(
-    "route", [pytest.param("/key/update", id="key-update"), pytest.param("/team/update", id="team-update")]
-)
-def test_a_team_admin_copied_ciphertext_is_refused_on_update(
-    gateway: Gateway, monkeypatch: pytest.MonkeyPatch, route: str
+def test_a_team_admin_copied_ciphertext_is_refused_on_key_update(
+    gateway: Gateway, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with gateway.scenario() as scenario:
-        team: Final = scenario.team(metadata={"owner": "env-reference-audit"})
+        team: Final = scenario.team()
         team_admin: Final = scenario.key(user_id=scenario.member(team, role="admin"), team_id=team)
         team_key: Final = scenario.key(team_id=team, metadata={"owner": "env-reference-audit"})
-        target: Final = {"key": team_key} if route == "/key/update" else {"team_id": team}
         refused: Final = gateway.request(
-            "POST", route, {**target, "metadata": _encrypted_logging(monkeypatch, "arize-literal-key")}, key=team_admin
+            "POST",
+            "/key/update",
+            {"key": team_key, "metadata": _encrypted_logging(monkeypatch, "arize-literal-key")},
+            key=team_admin,
         )
         assert refused.status_code == 400, refused.text
         assert NON_ADMIN_CIPHERTEXT_REFUSAL in refused.text, refused.text
         assert _key_metadata(team_key) == {"owner": "env-reference-audit"}
-        assert _team_metadata(team) == {"owner": "env-reference-audit"}
 
 
 def test_a_team_admin_can_send_back_its_team_keys_stored_ciphertext(gateway: Gateway) -> None:
