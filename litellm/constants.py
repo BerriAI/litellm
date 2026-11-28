@@ -1162,6 +1162,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.cognition.ai/v1",
     "https://inference.coralbricks.ai/v1",
     "https://api.cortecs.ai/v1",
+    "https://api.martllm.com/v1",
     "https://api.scx.ai/v1",
     "https://api.lab.vispark.in/v1",
     "https://api.prisminference.com/v1",
@@ -1245,6 +1246,7 @@ openai_compatible_providers: Final[list[str]] = [
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "openinfer",
+    "martllm",
     "darkbloom",
     "vispark",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
