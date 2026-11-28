@@ -2473,15 +2473,16 @@ _ACCESS_GROUP_CACHED_RESULTS = {
 
 @contextmanager
 def _proxy_health_globals(
-    llm_model_list: Sequence[Mapping[str, object]],
+    llm_model_list: Sequence[Mapping[str, object]] | None,
     llm_router: object,
     use_background_health_checks: bool = False,
     health_check_results: Mapping[str, object] | None = None,
     prisma_client: object = None,
+    user_model: str | None = None,
 ) -> Iterator[None]:
     with (
         patch(  # test-quality-ok: proxy module global, no injection seam
-            "litellm.proxy.proxy_server.llm_model_list", list(llm_model_list)
+            "litellm.proxy.proxy_server.llm_model_list", None if llm_model_list is None else list(llm_model_list)
         ),
         patch(  # test-quality-ok: proxy module global, no injection seam
             "litellm.proxy.proxy_server.llm_router", llm_router
@@ -2493,7 +2494,7 @@ def _proxy_health_globals(
             "litellm.proxy.proxy_server.use_background_health_checks", use_background_health_checks
         ),
         patch(  # test-quality-ok: proxy module global, no injection seam
-            "litellm.proxy.proxy_server.user_model", None
+            "litellm.proxy.proxy_server.user_model", user_model
         ),
         patch(  # test-quality-ok: proxy module global, no injection seam
             "litellm.proxy.proxy_server.health_check_results", dict(health_check_results or {})
@@ -2639,6 +2640,263 @@ async def test_health_endpoint_omits_model_id_warning_when_no_deployment_matches
     assert result["healthy_count"] == 0
     assert result["unhealthy_count"] == 0
     assert "warnings" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_background_health_checks", [True, False])
+async def test_targeted_health_answers_without_probing_billed_media(use_background_health_checks):
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_check import BILLED_MEDIA_NOT_CHECKED_WARNING
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    model_list = [
+        {
+            "model_name": "image",
+            "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+            "model_info": {"id": "image-1", "mode": "image_generation"},
+        },
+        {
+            "model_name": "image-opted-out",
+            "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+            "model_info": {"id": "image-off", "mode": "image_generation", "disable_background_health_check": True},
+        },
+        {
+            "model_name": "image-opted-in",
+            "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+            "model_info": {"id": "image-on", "mode": "image_generation", "disable_background_health_check": False},
+        },
+        {"model_name": "chat", "litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "chat-1"}},
+    ]
+    cached = {
+        "healthy_endpoints": [
+            {"model": "openai/gpt-4o-mini", "model_id": "chat-1"},
+            {"model": "gemini/gemini-3-pro-image", "model_id": "image-on"},
+        ],
+        "unhealthy_endpoints": [],
+        "healthy_count": 2,
+        "unhealthy_count": 0,
+    }
+    live_model_ids: list[str | None] = []
+
+    async def fake_perform(**kwargs):
+        live_model_ids.append(kwargs["model_id"])
+        return {
+            "healthy_endpoints": [{"model": "probed", "model_id": kwargs["model_id"]}],
+            "unhealthy_endpoints": [],
+            "healthy_count": 1,
+            "unhealthy_count": 0,
+        }
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token")
+    responses = {model_id: Response() for model_id in ("image-1", "image-off", "image-on", "chat-1")}
+    with (
+        _proxy_health_globals(
+            model_list,
+            litellm.Router(model_list=copy.deepcopy(model_list)),
+            use_background_health_checks=use_background_health_checks,
+            health_check_results=cached,
+        ),
+        patch(  # test-quality-ok: whether the live probe ran is the assertion; no injection seam
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        results = {
+            model_id: await health_endpoint(response=response, user_api_key_dict=admin, model=None, model_id=model_id)
+            for model_id, response in responses.items()
+        }
+
+    assert live_model_ids == ([] if use_background_health_checks else ["image-on", "chat-1"])
+    for skipped in ("image-1", "image-off"):
+        assert responses[skipped].status_code == 200
+        assert results[skipped]["healthy_endpoints"] == results[skipped]["unhealthy_endpoints"] == []
+        assert results[skipped]["healthy_count"] == results[skipped]["unhealthy_count"] == 0
+        assert results[skipped]["warnings"] == [BILLED_MEDIA_NOT_CHECKED_WARNING]
+    for checked in ("image-on", "chat-1"):
+        assert responses[checked].status_code == 200
+        assert results[checked]["healthy_count"] == 1
+        assert "warnings" not in results[checked]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_background_health_checks", [True, False])
+async def test_health_names_the_media_models_it_left_out_and_never_lists_them(use_background_health_checks):
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_check import BILLED_MEDIA_NOT_CHECKED_WARNING
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    def image(model_name: str, model_id: str) -> dict:
+        return {
+            "model_name": model_name,
+            "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+            "model_info": {"id": model_id, "mode": "image_generation"},
+        }
+
+    chat = {"model_name": "mixed", "litellm_params": {"model": "openai/gpt-4o-mini"}, "model_info": {"id": "chat-1"}}
+    model_list = [image("mixed", "image-in-mixed"), image("image", "image-2"), chat]
+    checked = {
+        "healthy_endpoints": [{"model": "openai/gpt-4o-mini", "model_id": "chat-1"}],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+    cached_before_the_skip = {
+        "healthy_endpoints": [
+            *checked["healthy_endpoints"],
+            {"model": "gemini/gemini-3-pro-image", "model_id": "image-in-mixed"},
+        ],
+        "unhealthy_endpoints": [{"model": "gemini/gemini-3-pro-image", "model_id": "image-2"}],
+        "healthy_count": 2,
+        "unhealthy_count": 1,
+    }
+
+    async def fake_perform(**kwargs):
+        return dict(checked)
+
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token")
+    with (
+        _proxy_health_globals(
+            model_list,
+            litellm.Router(model_list=copy.deepcopy(model_list)),
+            use_background_health_checks=use_background_health_checks,
+            health_check_results=cached_before_the_skip,
+        ),
+        patch(  # test-quality-ok: the live probe is the outside call; the answer built around it is under test
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        everything = await health_endpoint(response=Response(), user_api_key_dict=admin, model=None, model_id=None)
+        mixed_response = Response()
+        mixed = await health_endpoint(response=mixed_response, user_api_key_dict=admin, model="mixed", model_id=None)
+        one_chat = await health_endpoint(response=Response(), user_api_key_dict=admin, model=None, model_id="chat-1")
+
+    for answer in (everything, mixed):
+        assert answer["healthy_endpoints"] == checked["healthy_endpoints"]
+        assert answer["unhealthy_endpoints"] == []
+        assert (answer["healthy_count"], answer["unhealthy_count"]) == (1, 0)
+    assert everything["warnings"] == [f"{BILLED_MEDIA_NOT_CHECKED_WARNING} Model ids: image-2, image-in-mixed"]
+    assert mixed_response.status_code == 200
+    assert mixed["warnings"] == [f"{BILLED_MEDIA_NOT_CHECKED_WARNING} Model ids: image-in-mixed"]
+    assert "warnings" not in one_chat
+    assert "warnings" not in checked
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("cli_model", "probed"), [("gemini/gemini-3-pro-image", False), ("openai/gpt-4o-mini", True)])
+async def test_cli_model_health_names_a_billed_media_model_without_probing_it(cli_model, probed):
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_check import BILLED_MEDIA_NOT_CHECKED_WARNING
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    probed_models: list[str] = []
+
+    async def fake_perform(**kwargs):
+        probed_models.append(kwargs["cli_model"])
+        return {
+            "healthy_endpoints": [{"model": kwargs["cli_model"]}],
+            "unhealthy_endpoints": [],
+            "healthy_count": 1,
+            "unhealthy_count": 0,
+        }
+
+    with (
+        _proxy_health_globals(None, None, user_model=cli_model),
+        patch(  # test-quality-ok: the live probe and its saved row are the outside effects under test
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token"),
+            model=None,
+            model_id=None,
+        )
+
+    assert probed_models == ([cli_model] if probed else [])
+    assert result.get("warnings") == (None if probed else [BILLED_MEDIA_NOT_CHECKED_WARNING])
+    assert result["healthy_count"] == (1 if probed else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cli", [False, True])
+async def test_non_admin_media_health_answer_keeps_the_admin_only_field_notice(cli):
+    from fastapi import Response
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_check import BILLED_MEDIA_NOT_CHECKED_WARNING
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    model_list = [
+        {
+            "model_name": "image",
+            "litellm_params": {"model": "gemini/gemini-3-pro-image"},
+            "model_info": {"id": "image-1", "mode": "image_generation"},
+        }
+    ]
+    response = Response()
+    with _proxy_health_globals(
+        None if cli else model_list,
+        None if cli else litellm.Router(model_list=copy.deepcopy(model_list)),
+        user_model="gemini/gemini-3-pro-image" if cli else None,
+    ):
+        result = await health_endpoint(
+            response=response,
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["image"]),
+            model=None,
+            model_id=None if cli else "image-1",
+        )
+
+    assert response.status_code == 200
+    assert result["warnings"] == [BILLED_MEDIA_NOT_CHECKED_WARNING]
+    assert response.headers["Litellm-Health-Field-Notice"].endswith(" are admin-only on this endpoint")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_info", "expected_status"),
+    [
+        ({"id": "image-1", "mode": "image_generation", "disable_background_health_check": True}, 503),
+        ({"id": "image-1", "mode": "image_generation"}, 200),
+    ],
+)
+async def test_skip_disabled_setting_keeps_the_503_for_an_opted_out_media_model(model_info, expected_status):
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    model_list = [
+        {"model_name": "image", "litellm_params": {"model": "gemini/gemini-3-pro-image"}, "model_info": model_info}
+    ]
+    response = Response()
+    with (
+        _proxy_health_globals(
+            model_list,
+            litellm.Router(model_list=copy.deepcopy(model_list)),
+            use_background_health_checks=True,
+            health_check_results={"healthy_endpoints": [], "unhealthy_endpoints": []},
+        ),
+        patch(  # test-quality-ok: proxy module global, no injection seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"health_check_skip_disabled_background_models": True},
+        ),
+    ):
+        await health_endpoint(
+            response=response,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-token"),
+            model=None,
+            model_id="image-1",
+        )
+
+    assert response.status_code == expected_status
 
 
 @pytest.mark.asyncio
