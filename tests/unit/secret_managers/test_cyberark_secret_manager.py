@@ -480,3 +480,97 @@ async def test_cyberark_rotate_secret_with_new_alias(cyberark_env):
 
             old_read = cyberark_manager.sync_read_secret(secret_name=old_alias)
             assert old_read == old_value
+
+
+def test_cyberark_trailing_slash_stripped(cyberark_env, monkeypatch: pytest.MonkeyPatch):
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        monkeypatch.setenv("CYBERARK_API_BASE", "http://0.0.0.0:8080/")
+        manager = CyberArkSecretManager()
+        assert manager.conjur_addr == "http://0.0.0.0:8080"
+        assert manager.get_url("my-secret") == "http://0.0.0.0:8080/secrets/default/variable/my-secret"
+
+        # Explicit trailing slash modification also handled
+        manager.conjur_addr = "http://0.0.0.0:8080///"
+        assert manager.get_url("my-secret") == "http://0.0.0.0:8080/secrets/default/variable/my-secret"
+
+
+def test_cyberark_auth_and_url_encoding(cyberark_env, monkeypatch: pytest.MonkeyPatch):
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        monkeypatch.setenv("CYBERARK_API_BASE", "http://conjur.test:8080/")
+        monkeypatch.setenv("CYBERARK_ACCOUNT", "my/account")
+        monkeypatch.setenv("CYBERARK_USERNAME", "host/frontend/app")
+        monkeypatch.setenv("CYBERARK_API_KEY", "secret-api-key")
+
+        mock_sync_client = MagicMock()
+        mock_sync_client.client.post.return_value = create_mock_response(status_code=200, text="mock-token-json")
+
+        with patch(
+            "litellm.secret_managers.cyberark_secret_manager.get_httpx_client",
+            return_value=mock_sync_client,
+        ):
+            manager = CyberArkSecretManager()
+            token = manager._authenticate()
+            assert token is not None
+
+            # Verify auth_url encodes account and username with slashes, and strips base trailing slash
+            call_args = mock_sync_client.client.post.call_args
+            auth_url = call_args[0][0]
+            assert auth_url == "http://conjur.test:8080/authn/my%2Faccount/host%2Ffrontend%2Fapp/authenticate"
+
+            # Verify get_url encodes account and secret name
+            secret_url = manager.get_url("team/my-secret")
+            assert secret_url == "http://conjur.test:8080/secrets/my%2Faccount/variable/team%2Fmy-secret"
+
+
+@pytest.mark.parametrize(
+    "unsafe_name",
+    [
+        "..",
+        "../bad_secret",
+        "bad/../secret",
+        "secret/..",
+    ],
+)
+def test_cyberark_get_url_rejects_unsafe_secret_name(cyberark_env, unsafe_name):
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        manager = CyberArkSecretManager()
+        with pytest.raises(ValueError, match="Invalid secret_name"):
+            manager.get_url(unsafe_name)
+
+        # sync_read_secret catches internal exceptions and returns None
+        assert manager.sync_read_secret(unsafe_name) is None
+
+
+@pytest.mark.parametrize(
+    ("secret_name", "expected_url"),
+    [
+        ("release-1.0..2", "http://0.0.0.0:8080/secrets/default/variable/release-1.0..2"),
+        ("team/foo..bar", "http://0.0.0.0:8080/secrets/default/variable/team%2Ffoo..bar"),
+        ("..foo", "http://0.0.0.0:8080/secrets/default/variable/..foo"),
+        ("foo..", "http://0.0.0.0:8080/secrets/default/variable/foo.."),
+    ],
+)
+def test_cyberark_get_url_allows_embedded_double_dots(cyberark_env, secret_name, expected_url):
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        manager = CyberArkSecretManager()
+        assert manager.get_url(secret_name) == expected_url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unsafe_name",
+    [
+        "..",
+        "../bad_secret",
+        "bad/../secret",
+        "secret/..",
+    ],
+)
+async def test_cyberark_async_operations_reject_unsafe_secret_name(cyberark_env, unsafe_name):
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        manager = CyberArkSecretManager()
+        assert await manager.async_read_secret(unsafe_name) is None
+
+        write_res = await manager.async_write_secret(unsafe_name, "value")
+        assert write_res["status"] == "error"
+        assert "Invalid secret_name" in write_res["message"]
