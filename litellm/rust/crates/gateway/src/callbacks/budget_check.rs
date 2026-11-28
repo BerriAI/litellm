@@ -186,7 +186,8 @@ fn entities(identity: &Authenticated<NativeRows>, counter: &SpendCounter) -> Vec
 }
 
 fn budgeted(identity: &Authenticated<NativeRows>) -> Budgeted {
-    let held = budgets::counters(identity, budgets::Settings::default())
+    let now = jiff::Timestamp::now();
+    let held = budgets::counters(identity, budgets::Settings::default(), now)
         .into_iter()
         .filter_map(|planned| {
             let counter = SpendCounter::parse(&planned.counter_key).ok()?;

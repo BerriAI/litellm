@@ -6,13 +6,14 @@
 //!
 //! Accepted difference, while the gateway declines every caller that holds a budget other than its
 //! key's own: no `budget_limits` window is planned, no counter is planned for a team the key only
-//! copies, and a user's or a member's budget leaves out any rollover credit or temporary increase.
+//! copies, and the owner's rollover is not applied.
 
+use jiff::Timestamp;
 use litellm_callbacks_budgets::PlannedCounter;
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{
     Affiliation, Caller, Credential, Named, Team,
-    record::{Budget, Record},
+    record::{Budget, MembershipRecord, Record},
 };
 use litellm_redis_store::spend_counters::SpendCounter;
 
@@ -43,11 +44,61 @@ fn planned(
     })
 }
 
+fn member_budget(
+    membership: Option<&MembershipRecord>,
+    default_max: Option<f64>,
+    now: Timestamp,
+) -> Budget {
+    let active_increase = membership
+        .map(|member| &member.budget_extras)
+        .filter(|extras| {
+            extras
+                .temp_budget_expiry
+                .is_some_and(|expires| expires > now)
+        })
+        .and_then(|extras| extras.temp_budget_increase)
+        .unwrap_or(0.0);
+    let max = membership
+        .and_then(|member| {
+            let base = member.budget.max?;
+            let credit = member
+                .budget_extras
+                .rollover_max_budget
+                .filter(|ceiling| {
+                    ceiling.is_finite()
+                        && base > 0.0
+                        && base < *ceiling
+                        && member
+                            .budget_duration
+                            .as_ref()
+                            .is_some_and(|d| !d.is_empty())
+                })
+                .map_or(0.0, |ceiling| {
+                    member
+                        .rollover_credit
+                        .unwrap_or(0.0)
+                        .max(0.0)
+                        .min(ceiling - base)
+                });
+            Some(base + active_increase + credit)
+        })
+        .or_else(|| {
+            default_max
+                .filter(|max| *max > 0.0)
+                .map(|max| max + active_increase)
+        });
+    Budget {
+        max,
+        spend: membership.map_or(0.0, |member| member.budget.spend),
+    }
+}
+
 /// The counters `identity` reserves against. The master key belongs to nothing, so it holds only
 /// the budget of the end user its request names, as Python's does.
 pub(crate) fn counters(
     identity: &Authenticated<NativeRows>,
     settings: Settings,
+    now: Timestamp,
 ) -> Vec<PlannedCounter> {
     let Caller {
         credential,
@@ -77,13 +128,6 @@ pub(crate) fn counters(
     let member = team
         .zip(holder.user().and_then(Named::stored))
         .and_then(|(team, user)| {
-            let membership = holder.membership();
-            let budget = Budget {
-                max: membership
-                    .and_then(|membership| membership.budget.max)
-                    .or(team.member_max_budget),
-                spend: membership.map_or(0.0, |membership| membership.budget.spend),
-            };
             planned(
                 SpendCounter::TeamMember {
                     user_id: user.user_id.clone(),
@@ -91,7 +135,7 @@ pub(crate) fn counters(
                 },
                 "TeamMember",
                 format!("{}:{}", user.user_id, team.team_id),
-                budget,
+                member_budget(holder.membership(), team.member_max_budget, now),
             )
         });
     [
@@ -258,7 +302,7 @@ mod tests {
         identity: &Authenticated<NativeRows>,
         settings: Settings,
     ) -> Vec<(String, String, String, f64, f64)> {
-        counters(identity, settings)
+        counters(identity, settings, Timestamp::UNIX_EPOCH)
             .into_iter()
             .map(|counter| {
                 (
@@ -360,6 +404,9 @@ mod tests {
     #[rstest]
     #[case::its_own_budget(Some(70.0), Some(80.0), Some((70.0, 3.0)))]
     #[case::the_teams_default(None, Some(80.0), Some((80.0, 3.0)))]
+    #[case::explicit_zero_wins(Some(0.0), Some(80.0), Some((0.0, 3.0)))]
+    #[case::zero_default_does_not_hold(None, Some(0.0), None)]
+    #[case::negative_default_does_not_hold(None, Some(-1.0), None)]
     #[case::neither(None, None, None)]
     fn a_member_is_held_to_its_own_budget_or_its_teams_default(
         #[case] own: Option<f64>,
@@ -375,12 +422,48 @@ mod tests {
         let held = counters(
             &caller(member, EndUserRecord::default()),
             Settings::default(),
+            Timestamp::UNIX_EPOCH,
         )
         .into_iter()
         .find(|counter| counter.entity_type == "TeamMember")
         .map(|counter| (counter.max_budget, counter.fallback_spend));
 
         assert_eq!(held, expected);
+    }
+
+    #[rstest]
+    #[case::active_own(Some(70.0), Some("1d"), Timestamp::MAX, 120.0)]
+    #[case::expired_at_the_boundary(Some(70.0), Some("1d"), Timestamp::UNIX_EPOCH, 100.0)]
+    #[case::no_duration_no_rollover(Some(70.0), None, Timestamp::MAX, 90.0)]
+    #[case::inherited_only_gets_temp_increase(None, Some("1d"), Timestamp::MAX, 100.0)]
+    fn the_member_counter_applies_only_active_increases_and_capped_rollover(
+        #[case] own: Option<f64>,
+        #[case] duration: Option<&str>,
+        #[case] expiry: Timestamp,
+        #[case] expected: f64,
+    ) {
+        let mut membership = membership(own);
+        membership.budget_duration = duration.map(str::to_owned);
+        membership.rollover_credit = Some(60.0);
+        membership.budget_extras.rollover_max_budget = Some(100.0);
+        membership.budget_extras.temp_budget_increase = Some(20.0);
+        membership.budget_extras.temp_budget_expiry = Some(expiry);
+        let member = Holder::Member {
+            user: Named::Stored(user(None)),
+            team: Team::Row(team(Some(80.0))),
+            membership: Some(membership),
+        };
+        let held = counters(
+            &caller(member, EndUserRecord::default()),
+            Settings::default(),
+            Timestamp::UNIX_EPOCH,
+        )
+        .into_iter()
+        .find(|counter| counter.entity_type == "TeamMember");
+        assert_eq!(
+            held.map(|counter| (counter.max_budget, counter.fallback_spend)),
+            Some((expected, 3.0))
+        );
     }
 
     #[rstest]
@@ -401,6 +484,7 @@ mod tests {
         let held = counters(
             &caller(holder, EndUserRecord::default()),
             Settings::default(),
+            Timestamp::UNIX_EPOCH,
         )
         .into_iter()
         .find(|counter| counter.entity_type == "TeamMember")

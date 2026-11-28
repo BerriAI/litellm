@@ -78,7 +78,8 @@ fn unserved_project_column(project: &Named<ProjectRecord>) -> Option<&'static st
 pub(super) fn budgets(admit: &Admit, authentication: &Authentication) -> Option<Reason> {
     let caller = authentication.as_ref().ok()?;
     let reserves = !admit.config.general_settings.disable_budget_reservation
-        && !budgets::counters(caller, budgets::Settings::default()).is_empty();
+        && !budgets::counters(caller, budgets::Settings::default(), jiff::Timestamp::now())
+            .is_empty();
     reserves.then(|| {
         Reason::new(
             Refused::Settings,
