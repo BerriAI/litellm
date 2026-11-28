@@ -24,6 +24,10 @@ struct Scenario {
     /// The virtual keys the database holds, each token with the columns set on its row.
     #[serde(default)]
     keys: BTreeMap<String, Columns>,
+    /// Whether the config reads the database that holds the keys, as its
+    /// `general_settings.database_url`.
+    #[serde(default)]
+    database: bool,
     /// What boot read of the config the proxy stores in its database.
     #[serde(default)]
     stored: Stored,
@@ -104,6 +108,12 @@ async fn listed(keys: &BTreeMap<String, Columns>) -> keys::Held {
             .await;
     }
     held
+}
+
+/// `config` reading the database at `url`.
+fn with_database(mut config: serde_yaml_ng::Value, url: &str) -> serde_yaml_ng::Value {
+    config["general_settings"]["database_url"] = url.into();
+    config
 }
 
 #[derive(Deserialize)]
@@ -201,6 +211,15 @@ impl Sent {
 #[case::pre_call_checks("pre_call_checks")]
 #[case::claude_only_providers("claude_only_providers")]
 #[case::cloud_providers("cloud_providers")]
+#[case::budget_features("budget_features")]
+#[case::proxy_budget("proxy_budget")]
+#[case::budget_alerting("budget_alerting")]
+#[case::budget_throttle("budget_throttle")]
+#[case::budget_status_code("budget_status_code")]
+#[case::virtual_key_budgets("virtual_key_budgets")]
+#[case::virtual_key_budgets_reserved("virtual_key_budgets_reserved")]
+#[case::virtual_key_budgets_alerting("virtual_key_budgets_alerting")]
+#[case::virtual_key_budgets_without_database("virtual_key_budgets_without_database")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
@@ -208,16 +227,20 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let text = std::fs::read_to_string(&path).unwrap();
     let scenario: Scenario =
         serde_yaml_ng::from_value(litellm_yaml::from_str(&text).unwrap()).unwrap();
-    let config = Config::from_value(scenario.config).unwrap();
+    let held = match scenario.keys.is_empty() {
+        true => None,
+        false => Some(listed(&scenario.keys).await),
+    };
+    let config = match (&held, scenario.database) {
+        (Some(held), true) => with_database(scenario.config.clone(), held.url()),
+        _ => scenario.config.clone(),
+    };
+    let config = Config::from_value(config).unwrap();
     let resources =
         litellm_gateway::Resources::over(&config, Arc::new(|_: &str| None::<String>)).unwrap();
     let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
         .await
         .unwrap();
-    let held = match scenario.keys.is_empty() {
-        true => None,
-        false => Some(listed(&scenario.keys).await),
-    };
     let state = match &held {
         None => state,
         Some(held) => litellm_gateway::AppState {

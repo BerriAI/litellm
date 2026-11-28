@@ -93,14 +93,16 @@ impl AppState {
         )
         .await?;
         let (database, connected) = connected
-            .map(|(pools, repositories)| {
+            .zip(spend_logs.as_ref())
+            .map(|((pools, repositories), spend_logs)| {
                 let requests = Arc::new(GatewayRequests::new());
                 let flush = gateway_requests_flush(
                     requests.clone(),
                     GatewayRequestRepository::new(repositories.clone()),
                     environment,
                 );
-                let auth_store = Arc::new(auth_store(config, &redis, repositories));
+                let spend_counters = spend_logs.spend_counters().clone();
+                let auth_store = Arc::new(auth_store(config, &redis, repositories, spend_counters));
                 (pools, (auth_store, (requests, Arc::new(flush))))
             })
             .unzip();
@@ -163,9 +165,10 @@ impl AppState {
     }
 
     /// Who the inference routes and `admit` authenticate, which the core decides over the native
-    /// host: the master key of `config`, and with a database a virtual key it holds.
+    /// host: the master key of `config`, and with a database a virtual key it holds. A key's own
+    /// budget is checked only with the spend logs, whose counters the budget checks read.
     pub(crate) fn auth(&self, config: &Config) -> Auth<NativeRows> {
-        host::auth::auth(config, self.auth_store.clone())
+        host::auth::auth(config, self.auth_store.clone(), self.spend_logs.is_some())
     }
 
     /// Drains the spend logs still queued, writes the gateway request counts still in memory,
@@ -200,19 +203,30 @@ fn gateway_requests_flush(
 /// Where the gateway reads a virtual key: through the auth cache Python's `UserApiKeyCache` is,
 /// this process's memory in front of the database, with the coordination Redis between them when
 /// `enable_redis_auth_cache` attaches it. Every pod's evictions reach the memory whenever a
-/// coordination Redis carries them, as Python subscribes with the flag on or off.
-pub(crate) fn auth_store(config: &Config, redis: &RedisClients, database: Database) -> AuthStore {
+/// coordination Redis carries them, as Python subscribes with the flag on or off, and so do its
+/// spend resets, to `spend_counters`, the counters the spend log charges.
+pub(crate) fn auth_store(
+    config: &Config,
+    redis: &RedisClients,
+    database: Database,
+    spend_counters: Arc<SpendCounters>,
+) -> AuthStore {
     let cache = Arc::new(auth_cache(config, redis, system_clock()));
     if let Some(client) = &redis.coordination {
-        hear_evictions(&cache, client);
+        hear_evictions(&cache, spend_counters, client);
     }
     AuthStore::new(cache, database)
 }
 
 /// Drops from this process's memory every key a pod evicts, Python or native, for as long as
 /// `cache` lives. The store keeps a copy of each key it reads there, and without this a blocked
-/// key would keep answering from it until the copy expired.
-fn hear_evictions(cache: &Arc<AuthCache>, client: &RedisClient) {
+/// key would keep answering from it until the copy expired. A spend reset's counter and floor
+/// reach `spend_counters`, so a spend read never answers the spend from before the reset.
+fn hear_evictions(
+    cache: &Arc<AuthCache>,
+    spend_counters: Arc<SpendCounters>,
+    client: &RedisClient,
+) {
     let channel = CacheInvalidation::new(
         client.clone(),
         client.namespace().as_str(),
@@ -220,7 +234,6 @@ fn hear_evictions(cache: &Arc<AuthCache>, client: &RedisClient) {
     );
     let mut evictions = channel.subscribe();
     let cache = Arc::downgrade(cache);
-    let spend_counters = SpendCounters::new(None);
     litellm_call_scope::spawn_detached(async move {
         while let Some(invalidation) = evictions.next().await {
             let Some(cache) = cache.upgrade() else {
@@ -279,6 +292,10 @@ impl FromRef<AppState> for Option<Pools> {
 #[cfg(test)]
 mod tests {
     use litellm_gateway_auth_core::Token;
+    use litellm_redis_store::{
+        Number, cache_invalidation::Invalidation, spend_counters::SpendCounter,
+    };
+    use litellm_redis_testing::{RedisServer, eventually};
     use rstest::rstest;
     use serde_json::json;
 
@@ -347,5 +364,48 @@ mod tests {
             (first_kept, true)
         );
         next.close().await;
+    }
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_spend_reset_another_pod_announces_reaches_the_counters_the_spend_log_charges() {
+        let held = Held::start().await;
+        let redis = RedisServer::start().await.unwrap();
+        let config = Config::from_yaml(&format!(
+            "general_settings:\n  database_url: {}\n  coordination_redis:\n    host: 127.0.0.1\n    port: {}\n",
+            held.url(),
+            redis.port()
+        ))
+        .unwrap();
+        let state = AppState::build(&config, &Environment::default())
+            .await
+            .unwrap();
+        let counters = state.spend_logs.as_ref().unwrap().spend_counters().clone();
+        let channel = CacheInvalidation::new(
+            state.redis.coordination.clone().unwrap(),
+            None,
+            Handle::current(),
+        );
+        let team = SpendCounter::Team {
+            team_id: "t".to_owned(),
+            window: None,
+        };
+        let reset = |cache_key: String| Invalidation::Set {
+            cache_key,
+            value: Number::Float(0.0),
+            ttl: Some(Number::Int(60)),
+        };
+        counters.set_local(&team, Number::Float(7.0), None).unwrap();
+
+        eventually(async || {
+            channel.publish(&reset(team.key()));
+            channel.publish(&reset(team.floor_key()));
+            let held = (
+                counters.get_local(&team).unwrap(),
+                counters.floor(&team).unwrap(),
+            );
+            (held == (Some(Number::Float(0.0)), Some(Number::Float(0.0)))).then_some(())
+        })
+        .await;
+        state.close().await;
     }
 }
