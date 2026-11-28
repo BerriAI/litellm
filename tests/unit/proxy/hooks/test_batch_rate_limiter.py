@@ -1174,6 +1174,34 @@ async def test_a_batch_refused_by_an_output_limit_names_it_an_otpm_limit(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("limited", ["metadata", "team_metadata", "project_metadata"], ids=["key", "team", "project"])
+async def test_a_batch_refused_by_an_input_limit_names_it_an_itpm_limit(
+    alias_routed_batch: respx.MockRouter, limited: str
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key=hash_token("sk-batch"),
+                models=[_BATCH_ALIAS],
+                team_id="team-1",
+                project_id="project-1",
+                **{limited: {"model_itpm_limit": {_BATCH_ALIAS: 1}}},
+            ),
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert refused.value.status_code == 429
+    assert "out of 1 ITPM limit" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("malformed", ["abc", {_BATCH_ALIAS: None}], ids=["text", "unset limit"])
 async def test_malformed_team_output_limit_metadata_leaves_the_key_token_limit_enforced(
     alias_routed_batch: respx.MockRouter, malformed: object

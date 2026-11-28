@@ -125,6 +125,8 @@ impl BatchFacts {
                 "TPD"
             } else if descriptor.is_otpm() {
                 "OTPM"
+            } else if descriptor.is_itpm() {
+                "ITPM"
             } else {
                 "TPM"
             };
@@ -263,7 +265,7 @@ mod tests {
         json!([{"key": "model_per_project_itpm", "value": "p:other", "rate_limit": {"tokens_per_unit": 100}},
                {"key": "model_per_project_itpm", "value": "p:gpt", "rate_limit": {"tokens_per_unit": 100}}]),
         status("model_per_project_itpm", Some("p:gpt"), LimitKind::Tokens), None,
-        "Batch rate limit exceeded for model_per_project_itpm: p:gpt. Batch contains 75 tokens but only 0 tokens remaining out of 100 TPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
+        "Batch rate limit exceeded for model_per_project_itpm: p:gpt. Batch contains 75 tokens but only 0 tokens remaining out of 100 ITPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
         60
     )]
     #[case::project_output_tokens_for_every_group_naming_the_model(
@@ -287,7 +289,7 @@ mod tests {
     #[case::team_input_tokens_for_the_rows_model(
         json!([{"key": "model_per_team_itpm", "value": "t:gpt", "rate_limit": {"tokens_per_unit": 100}}]),
         status("model_per_team_itpm", Some("t:gpt"), LimitKind::Tokens), None,
-        "Batch rate limit exceeded for model_per_team_itpm: t:gpt. Batch contains 75 tokens but only 0 tokens remaining out of 100 TPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
+        "Batch rate limit exceeded for model_per_team_itpm: t:gpt. Batch contains 75 tokens but only 0 tokens remaining out of 100 ITPM limit. Limit resets at: 2023-11-14 22:14:20 UTC",
         60
     )]
     fn the_refusal_reads_like_the_python_batch_limiter(

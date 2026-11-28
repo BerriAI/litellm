@@ -852,6 +852,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 if descriptor.get("key", "").endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
                 else "OTPM"
                 if descriptor.get("key") in OTPM_DESCRIPTOR_KEYS
+                else "ITPM"
+                if descriptor.get("key") in ITPM_DESCRIPTOR_KEYS
                 else "TPM"
             )
             detail = (
