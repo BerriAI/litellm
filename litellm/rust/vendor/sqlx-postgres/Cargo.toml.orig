@@ -1,0 +1,88 @@
+[package]
+name = "sqlx-postgres"
+documentation = "https://docs.rs/sqlx"
+description = "PostgreSQL driver implementation for SQLx. Not for direct use; see the `sqlx` crate for details."
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+any = ["sqlx-core/any"]
+json = ["dep:serde", "dep:serde_json", "sqlx-core/json"]
+migrate = ["sqlx-core/migrate", "dep:crc"]
+offline = ["json", "sqlx-core/offline", "smallvec/serde"]
+
+# Type Integration features
+bigdecimal = ["dep:bigdecimal", "dep:num-bigint", "sqlx-core/bigdecimal"]
+bit-vec = ["dep:bit-vec", "sqlx-core/bit-vec"]
+chrono = ["dep:chrono", "sqlx-core/chrono"]
+ipnet = ["dep:ipnet", "sqlx-core/ipnet"]
+ipnetwork = ["dep:ipnetwork", "sqlx-core/ipnetwork"]
+mac_address = ["dep:mac_address", "sqlx-core/mac_address"]
+rust_decimal = ["dep:rust_decimal", "rust_decimal/maths", "sqlx-core/rust_decimal"]
+time = ["dep:time", "sqlx-core/time"]
+uuid = ["dep:uuid", "sqlx-core/uuid"]
+
+[dependencies]
+# Futures crates
+futures-channel = { version = "0.3.32", default-features = false, features = ["sink", "alloc", "std"] }
+futures-core = { version = "0.3.32", default-features = false }
+futures-util = { version = "0.3.32", default-features = false, features = ["alloc", "sink", "io"] }
+
+# Cryptographic Primitives
+crc = { workspace = true, optional = true }
+hkdf = { workspace = true }
+hmac = { workspace = true }
+md-5 = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
+
+# Type Integrations (versions inherited from `[workspace.dependencies]`)
+bigdecimal = { workspace = true, optional = true }
+bit-vec = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+ipnet = { workspace = true, optional = true }
+ipnetwork = { workspace = true, optional = true }
+mac_address = { workspace = true, optional = true }
+rust_decimal = { workspace = true, optional = true }
+time = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+
+# Misc
+atoi = "2.0"
+base64.workspace = true
+bitflags = { version = "2.4", default-features = false }
+byteorder = { version = "1.4.3", default-features = false, features = ["std"] }
+hex = "0.4.3"
+itoa = "1.0.5"
+log = "0.4.18"
+memchr = { version = "2.5.0", default-features = false }
+num-bigint = { version = "0.4.3", optional = true }
+smallvec = { version = "1.13.1" }
+stringprep = "0.1.2"
+tracing = { version = "0.1.37", features = ["log"] }
+whoami = { version = "2.0.2", default-features = false }
+
+dotenvy.workspace = true
+thiserror.workspace = true
+
+serde = { version = "1.0.219", optional = true, features = ["derive"] }
+serde_json = { version = "1.0.142", optional = true, features = ["raw_value"] }
+
+[dependencies.sqlx-core]
+workspace = true
+
+[dev-dependencies.sqlx]
+# FIXME: https://github.com/rust-lang/cargo/issues/15622
+# workspace = true
+path = ".."
+features = ["postgres", "derive"]
+
+[target.'cfg(target_os = "windows")'.dependencies]
+etcetera = "0.11.0"
+
+[lints]
+workspace = true

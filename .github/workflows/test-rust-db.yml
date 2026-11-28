@@ -7,6 +7,7 @@ on:
     paths:
       - "litellm/rust/crates/db/**"
       - "litellm/rust/crates/repositories/**"
+      - "litellm/rust/vendor/**"
       - "litellm/rust/Cargo.toml"
       - "litellm/rust/Cargo.lock"
       - "litellm/rust/clippy.toml"
@@ -28,6 +29,7 @@ on:
     paths:
       - "litellm/rust/crates/db/**"
       - "litellm/rust/crates/repositories/**"
+      - "litellm/rust/vendor/**"
       - "litellm/rust/Cargo.toml"
       - "litellm/rust/Cargo.lock"
       - "litellm/rust/clippy.toml"

@@ -12,12 +12,14 @@ FROM chef AS planner
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY vendor ./vendor
 
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 
 COPY --from=planner /app/recipe.json ./recipe.json
+COPY vendor ./vendor
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cargo chef cook --release --locked --package litellm-gateway --bin litellm-gateway --recipe-path recipe.json

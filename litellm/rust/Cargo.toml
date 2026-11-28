@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/*"]
+exclude = ["vendor"]
 resolver = "2"
 
 [workspace.package]
@@ -146,6 +147,7 @@ syn = { version = "2", default-features = false }
 sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-aws-lc-rs"] }
 # sqlx-core directly so its rustls-native-certs feature puts the OS trust store under sqlx's aws-lc TLS; the feature is an undocumented optional dep, hence the exact pin
 sqlx-core = { version = "=0.9.0", default-features = false, features = ["rustls-native-certs"] }
+sqlx-postgres = { version = "=0.9.0", default-features = false }
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 proc-macro2 = "1"
 quote = "1"
@@ -177,6 +179,9 @@ regex = "1.13.1"
 veil = "0.3.0"
 prost = "0.14.4"
 opentelemetry-proto = "0.33"
+
+[patch.crates-io]
+sqlx-postgres = { path = "vendor/sqlx-postgres" }
 
 [profile.release]
 opt-level = 3

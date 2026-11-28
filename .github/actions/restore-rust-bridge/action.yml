@@ -37,7 +37,7 @@ runs:
       id: key
       shell: bash
       env:
-        RUST_INPUTS: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm/rust/Cargo.lock', 'litellm/rust/Cargo.toml', 'litellm/rust/crates/**', 'pyproject.toml', 'litellm/packaging/litellm-proxy/pyproject.toml') }}
+        RUST_INPUTS: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm/rust/Cargo.lock', 'litellm/rust/Cargo.toml', 'litellm/rust/crates/**', 'litellm/rust/vendor/**', 'pyproject.toml', 'litellm/packaging/litellm-proxy/pyproject.toml') }}
         COST_MAP: ${{ hashFiles('model_prices_and_context_window.json') }}
         STALE_COST_MAP: ${{ inputs.stale-cost-map }}
       run: |
