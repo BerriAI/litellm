@@ -478,7 +478,6 @@ MIGNMEkGCSqGSIb3DQEFDTA8MBsGCSqGSIb3DQEFDDAOBAgDuXPNju0QywICCAAw
 HQYJYIZIAWUDBAEqBBA8MVTinGPVUQDLB4P3mZuRBEB/tXUkOHEL20ANYfQoI+P0
 CCHipAQfdXEEZS/iF+yOZZivchKhFk93s8NXqb1XEq6w/PboxfF3V+QKwSHajMYL
 -----END ENCRYPTED PRIVATE KEY-----";
-    // `openssl pkcs8 -topk8 -v1 PBE-SHA1-3DES` and `-v1 PBE-SHA1-RC4-128` (OpenSSL 3.0.13) of `OPENSSL_KEY`
     const OPENSSL_PBE_SHA1_3DES_KEY: &str = "-----BEGIN ENCRYPTED PRIVATE KEY-----
 MFgwHAYKKoZIhvcNAQwBAzAOBAiCCdCCvCTnsAICCAAEOMVv1UPE3cHvyeVvhGCd
 zXA1SpqeOrKcBoTKZLC4qYz3gAVroajHXDfTrpKq/N+ojqtnYPwGCWpD
@@ -523,7 +522,6 @@ MFAwHAYKKoZIhvcNAQwBATAOBAjTvdpgk5rFsQICCAAEMKXaF0krhnKC9g4DqR0A
         .unwrap()
     }
 
-    /// The decrypted key, or the reason AWS-LC gave in the FIPS build and the error message otherwise
     fn decrypted(key: &[u8], password: &str) -> Result<Vec<u8>, String> {
         decrypt(key, password)
             .map(|document| document.as_bytes().to_vec())
