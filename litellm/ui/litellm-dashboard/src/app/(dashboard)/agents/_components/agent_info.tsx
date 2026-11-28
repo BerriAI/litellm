@@ -1,10 +1,10 @@
 import { displayTimestamp } from "@/i18n/displayDate";
 import { AgentIdentityFields } from "./AgentIdentityFields";
 import { AgentIdentityDetails } from "./AgentIdentityDetails";
-import { withAgentIdentity } from "./agent_identity";
 import React, { useState, useEffect, useMemo } from "react";
 import { cx } from "@/lib/cva.config";
-import { FormProvider, useForm, useWatch } from "react-hook-form";
+import { useWatch } from "react-hook-form";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -28,30 +28,29 @@ import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelec
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import AgentVirtualKeys from "./agent_virtual_keys";
 import AgentKillSwitchDangerZone from "./AgentKillSwitchDangerZone";
-import AgentFormFields, { unmountedA2AFieldNames } from "./agent_form_fields";
-import DynamicAgentFormFields, { buildDynamicAgentData, unmountedDynamicFieldNames } from "./dynamic_agent_form_fields";
+import AgentFormFields from "./agent_form_fields";
+import DynamicAgentFormFields from "./dynamic_agent_form_fields";
 import {
   AGENT_FORM_CONFIG,
-  buildAgentDataFromForm,
-  buildMcpObjectPermission,
   parseAccessGroupIdsForForm,
   parseAgentForForm,
   parseMcpPermissionsForForm,
 } from "./agent_config";
 import {
   AgentFormField,
+  AgentFormProvider,
   AgentFormValues,
   AgentNumberInput,
-  AgentRequestPayload,
   McpServerSelection,
   labelWithHint,
-  omitFieldValues,
   useCollapsiblePanels,
 } from "./AgentFormKit";
 import AgentCostView from "./agent_cost_view";
 import { detectAgentType, parseDynamicAgentForForm } from "./agent_type_utils";
 import AgentCardDiscovery, { DiscoveredAgentCardSelection } from "./agent_card_discovery";
-import { buildDiscoveryRequest, overlayDiscoveredCardParams } from "./agent_discovery_utils";
+import { buildDiscoveryRequest } from "./agent_discovery_utils";
+import { mapAgentEdit } from "./mapper";
+import { useAgentFormSchema } from "./schema";
 import { useResetDetailState } from "@/hooks/useUrlTab";
 
 interface AgentInfoViewProps {
@@ -96,7 +95,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
   const [isEditing, setIsEditing] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
   const [isSaving, setIsSaving] = useState(false);
-  const form = useForm<AgentFormValues>({ defaultValues: {} });
+  const { schema, registerRules } = useAgentFormSchema();
+  const form = useZodForm(schema, { defaultValues: {} });
   const panels = useCollapsiblePanels([AGENT_FORM_CONFIG.basic.key]);
   const [agentTypeMetadata, setAgentTypeMetadata] = useState<AgentCreateInfo[]>([]);
   const [detectedAgentType, setDetectedAgentType] = useState<string>("a2a");
@@ -233,31 +233,14 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
 
     setIsSaving(true);
     try {
-      const values = omitFieldValues(
-        submitted,
-        usesDynamicFields
-          ? unmountedDynamicFieldNames(panels.mountedPanels)
-          : unmountedA2AFieldNames(panels.mountedPanels),
-      );
-
-      const built: AgentRequestPayload = usesDynamicFields
-        ? { ...buildDynamicAgentData(values, selectedAgentTypeInfo, agent), agent_name: values.agent_name }
-        : buildAgentDataFromForm(values, agent);
-
-      const updateData = appliedDiscoveredSelection
-        ? overlayDiscoveredCardParams(built, appliedDiscoveredSelection.selected_card)
-        : built;
-      const cardEdited =
-        Boolean(appliedDiscoveredSelection) ||
-        [AGENT_FORM_CONFIG.basic, AGENT_FORM_CONFIG.skills, AGENT_FORM_CONFIG.capabilities, AGENT_FORM_CONFIG.optional]
-          .flatMap((section) => section.fields)
-          .some((field) => form.getFieldState(field.name).isDirty);
-
-      await patchAgentCall(accessToken, agentId, {
-        ...withAgentIdentity(updateData, values, agent, cardEdited),
-        object_permission: buildMcpObjectPermission(values),
-        access_group_ids: values.access_group_ids ?? [],
-      });
+      const editOptions = {
+        dynamicInfo: usesDynamicFields ? selectedAgentTypeInfo : undefined,
+        mountedPanels: panels.mountedPanels,
+        appliedDiscoveredSelection,
+        isDirty: (name: string) => form.getFieldState(name).isDirty,
+      };
+      const payload = mapAgentEdit(submitted, agent, editOptions);
+      await patchAgentCall(accessToken, agentId, payload);
       toast.success(t("agents.info.toasts.updated"));
       setIsEditing(false);
       fetchAgentInfo();
@@ -550,7 +533,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
 
                 {isEditing ? (
                   <TooltipProvider>
-                    <FormProvider {...form}>
+                    <AgentFormProvider form={form} registerRules={registerRules}>
                       <form onSubmit={form.handleSubmit(handleUpdate)}>
                         <FieldGroup className="mb-4">
                           <Field>
@@ -662,7 +645,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                           </Button>
                         </div>
                       </form>
-                    </FormProvider>
+                    </AgentFormProvider>
                   </TooltipProvider>
                 ) : (
                   <p>{t("agents.info.settings.editHint")}</p>

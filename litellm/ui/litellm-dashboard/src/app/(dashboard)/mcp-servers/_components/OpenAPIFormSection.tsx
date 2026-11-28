@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { AUTH_TYPE, OAUTH_FLOW } from "@/components/mcp_tools/types";
-import { MountedFormField } from "@/components/common_components/MountedFormField";
+import { McpFormField as MountedFormField } from "./McpFormField";
 import { requiredRule } from "@/components/common_components/formRules";
 import OpenAPIQuickPicker, { OpenAPIRegistryEntry, OpenAPIKeyTool } from "./OpenAPIQuickPicker";
 import { McpForm, resetFields, setFieldsValue } from "./mcpFormStore";
