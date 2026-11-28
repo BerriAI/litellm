@@ -1628,6 +1628,8 @@ async def test_aggregated_activity_flags_only_keys_that_key_info_can_still_resol
         "session-key": False,
     }
     assert key_breakdown["deleted-key"].metadata.key_alias == "deleted"
+    assert key_breakdown["deleted-key"].metadata.key_info_available is True
+    assert key_breakdown["session-key"].metadata.key_info_available is not True
 
 
 def _daily_user_spend_record(*, user_id, api_key, spend, model="gpt-4", model_group="gpt-4", guardrail_spend=0.0):

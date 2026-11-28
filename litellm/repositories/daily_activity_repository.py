@@ -439,7 +439,7 @@ class DailyActivityRepository:
         )
         deleted: Final = MappingProxyType(
             {
-                key: self._metadata_row(deleted_by_token[key], key_exists=False)
+                key: replace(self._metadata_row(deleted_by_token[key], key_exists=False), key_info_available=True)
                 for key in missing
                 if key in deleted_by_token
             }

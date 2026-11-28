@@ -550,7 +550,32 @@ describe("TopKeyView", () => {
     expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", key);
   });
 
-  it("should only look up keys that still exist in the database, from both the table and the chart", async () => {
+  it.each(["Table View", "Chart View"])("opens deleted key details from %s", async (view) => {
+    mockKeyInfoV1Call.mockResolvedValue({ key: "deleted-key", info: { status: "deleted" } });
+    mockTransformKeyInfo.mockReturnValue({ transformed: "data" } as unknown as KeyResponse);
+    const { container } = render(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[
+          { api_key: "deleted-key", key_alias: "Deleted", key_exists: false, key_info_available: true, spend: 50 },
+        ]}
+      />,
+    );
+
+    if (view === "Chart View") {
+      fireEvent.click(screen.getByRole("radio", { name: view }));
+      const bars = chartBars(container);
+      expect(bars).toHaveLength(1);
+      fireEvent.click(bars[0]);
+    } else {
+      fireEvent.click(screen.getByRole("button", { name: "deleted-key" }));
+    }
+
+    expect(await screen.findByText("Key Info View for deleted-key")).toBeInTheDocument();
+    expect(mockKeyInfoV1Call).toHaveBeenCalledExactlyOnceWith("test-token", "deleted-key");
+  });
+
+  it("should only look up resolvable keys, from both the table and the chart", async () => {
     mockKeyInfoV1Call.mockResolvedValue({ key: "info" });
     mockTransformKeyInfo.mockReturnValue({ transformed: "data" } as unknown as KeyResponse);
 

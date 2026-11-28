@@ -55,6 +55,7 @@ export interface KeyMetadata {
   user_id?: string | null;
   user_email?: string | null;
   key_exists?: boolean | null;
+  key_info_available?: boolean | null;
   tags?: { tag: string; usage: number }[];
 }
 

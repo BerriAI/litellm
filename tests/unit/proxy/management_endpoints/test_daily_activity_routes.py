@@ -847,6 +847,7 @@ def test_search_folds_each_entity_key_across_days(
                     "user_id": "user-a",
                     "user_email": "user@example.test",
                     "key_exists": True,
+                    "key_info_available": None,
                 },
             }
         ]
@@ -926,6 +927,7 @@ def test_key_page_routes_map_ranked_rows_and_totals(
                     "user_id": "user-a",
                     "user_email": "user@example.test",
                     "key_exists": True,
+                    "key_info_available": None,
                 },
             },
             {
@@ -947,6 +949,7 @@ def test_key_page_routes_map_ranked_rows_and_totals(
                     "user_id": "user-a",
                     "user_email": "user@example.test",
                     "key_exists": True,
+                    "key_info_available": None,
                 },
             },
         ],

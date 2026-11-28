@@ -63,6 +63,7 @@ class KeyMetadata(LiteLLMBaseModel):
     user_id: str | None = None
     user_email: str | None = None
     key_exists: bool | None = None
+    key_info_available: bool | None = None
 
 
 class KeyMetricWithMetadata(MetricBase):
