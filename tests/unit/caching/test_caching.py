@@ -1752,6 +1752,199 @@ async def test_async_messages_chat_bridge_counts_the_caller_messages_when_only_c
         await _settle_post_response_work()
 
 
+def test_semantic_cache_bypasses_tool_and_function_calls() -> None:
+    semantic_cache: Final = Cache.__new__(Cache)
+    semantic_cache.type = LiteLLMCacheType.REDIS_SEMANTIC
+    semantic_cache.mode = CacheMode.default_on
+    semantic_cache.max_messages = 4
+    semantic_cache.semantic_cache_allow_tools = False
+
+    tool_def: Final = [{"type": "function", "function": {"name": "refund_charge"}}]
+    func_def: Final = [{"name": "refund_charge"}]
+
+    assert semantic_cache.should_use_cache(messages=[{"role": "user", "content": "hi"}]) is True
+    assert (
+        semantic_cache.should_use_cache(
+            messages=[{"role": "user", "content": "refund charge"}],
+            tools=tool_def,
+        )
+        is False
+    )
+    assert (
+        semantic_cache.should_use_cache(
+            messages=[{"role": "user", "content": "refund charge"}],
+            functions=func_def,
+        )
+        is False
+    )
+    assert (
+        semantic_cache.should_use_cache(
+            messages=[{"role": "user", "content": "refund charge"}],
+            extra_body={"tools": tool_def},
+        )
+        is False
+    )
+    assert (
+        semantic_cache.should_use_cache(
+            messages=[{"role": "user", "content": "refund charge"}],
+            extra_body={"functions": func_def},
+        )
+        is False
+    )
+    assert (
+        semantic_cache.should_use_cache(
+            input="refund charge",
+            optional_params={"extra_body": {"tools": tool_def}},
+        )
+        is False
+    )
+
+
+def test_semantic_cache_allows_tools_when_explicitly_opted_in() -> None:
+    semantic_cache: Final = Cache.__new__(Cache)
+    semantic_cache.type = LiteLLMCacheType.REDIS_SEMANTIC
+    semantic_cache.mode = CacheMode.default_on
+    semantic_cache.max_messages = 4
+    semantic_cache.semantic_cache_allow_tools = True
+
+    tool_def: Final = [{"type": "function", "function": {"name": "refund_charge"}}]
+    assert (
+        semantic_cache.should_use_cache(
+            messages=[{"role": "user", "content": "refund charge"}],
+            tools=tool_def,
+        )
+        is True
+    )
+    assert (
+        semantic_cache.should_use_cache(
+            messages=[{"role": "user", "content": "refund charge"}],
+            extra_body={"tools": tool_def},
+        )
+        is True
+    )
+
+
+def test_semantic_cache_get_cache_logic_rejects_cached_tool_calls() -> None:
+    import time
+
+    semantic_cache: Final = Cache.__new__(Cache)
+    semantic_cache.type = LiteLLMCacheType.REDIS_SEMANTIC
+    semantic_cache.semantic_cache_allow_tools = False
+
+    cached_with_tool: Final = {
+        "timestamp": time.time(),
+        "response": {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "refund", "arguments": '{"id": "ch_123"}'},
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+    }
+
+    assert semantic_cache.get_cache_logic(cached_result=cached_with_tool, max_age=3600) is None
+
+    semantic_cache.semantic_cache_allow_tools = True
+    assert semantic_cache.get_cache_logic(cached_result=cached_with_tool, max_age=3600) == cached_with_tool["response"]
+
+    semantic_cache.semantic_cache_allow_tools = False
+    cached_responses_api_tool: Final = {
+        "timestamp": time.time(),
+        "response": {
+            "id": "resp_test123",
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "refund",
+                    "arguments": '{"id": "ch_456"}',
+                    "call_id": "call_456",
+                }
+            ],
+        },
+    }
+    assert semantic_cache.get_cache_logic(cached_result=cached_responses_api_tool, max_age=3600) is None
+
+    semantic_cache.semantic_cache_allow_tools = True
+    assert (
+        semantic_cache.get_cache_logic(cached_result=cached_responses_api_tool, max_age=3600)
+        == cached_responses_api_tool["response"]
+    )
+
+
+def test_exact_cache_preserves_tool_caching() -> None:
+    import time
+
+    local_cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    tool_def: Final = [{"type": "function", "function": {"name": "refund_charge"}}]
+
+    assert (
+        local_cache.should_use_cache(
+            messages=[{"role": "user", "content": "refund charge"}],
+            tools=tool_def,
+        )
+        is True
+    )
+    assert (
+        local_cache.should_use_cache(
+            messages=[{"role": "user", "content": "refund charge"}],
+            extra_body={"tools": tool_def},
+        )
+        is True
+    )
+
+    cached_with_tool: Final = {
+        "timestamp": time.time(),
+        "response": {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "refund", "arguments": '{"id": "ch_123"}'},
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+    }
+
+    assert local_cache.get_cache_logic(cached_result=cached_with_tool, max_age=3600) == cached_with_tool["response"]
+
+    cached_responses_api_tool: Final = {
+        "timestamp": time.time(),
+        "response": {
+            "id": "resp_test123",
+            "output": [
+                {
+                    "type": "function_call",
+                    "name": "refund",
+                    "arguments": '{"id": "ch_456"}',
+                    "call_id": "call_456",
+                }
+            ],
+        },
+    }
+    assert (
+        local_cache.get_cache_logic(cached_result=cached_responses_api_tool, max_age=3600)
+        == cached_responses_api_tool["response"]
+    )
+
+
 @respx.mock
 def test_enable_cache_serves_a_repeated_bedrock_titan_embedding_from_the_local_cache(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], fake_provider_credentials: None
