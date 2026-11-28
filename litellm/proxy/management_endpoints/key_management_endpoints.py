@@ -258,6 +258,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     CustomKeyPolicyRequest,
     FailedKeyUpdate,
     KeySearchWhere,
+    KeyTagWhere,
     SuccessfulKeyUpdate,
 )
 from litellm.types.router import Deployment
@@ -7688,6 +7689,7 @@ async def list_keys(
     project_id: str | None = Query(None, description="Filter keys by project ID"),
     access_group_id: str | None = Query(None, description="Filter keys by access group ID"),
     agent_id: str | None = Query(None, description="Filter keys by agent ID"),
+    tag: str | None = Query(None, description="Filter keys by tag name. Exact match on an entry of metadata.tags"),
     substring_matching: bool = Query(
         False,
         description="If true, match key_alias (any caller) and user_id (proxy admins only) as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id filter must never return another user's keys.",
@@ -7818,6 +7820,7 @@ async def list_keys(
             project_id=project_id,
             access_group_id=access_group_id,
             agent_id=agent_id,
+            tag=tag,
             use_substring_matching=use_substring_matching,
             use_key_alias_substring_matching=use_key_alias_substring_matching,
             expires_filter=expires if isinstance(expires, str) else None,
@@ -8050,6 +8053,11 @@ def _build_key_search_where(search: str) -> KeySearchWhere:
     return search_where
 
 
+def _build_key_tag_where(tag: str) -> KeyTagWhere:
+    tag_where: Final[KeyTagWhere] = {"metadata": {"path": ("tags",), "array_contains": json.dumps((tag,))}}
+    return tag_where
+
+
 def _build_key_filter_conditions(
     user_id: str | None,
     team_id: str | None,
@@ -8063,6 +8071,7 @@ def _build_key_filter_conditions(
     project_id: str | None = None,
     access_group_id: str | None = None,
     agent_id: str | None = None,
+    tag: str | None = None,
     use_substring_matching: bool = False,
     use_key_alias_substring_matching: bool = False,
     expires_filter: str | None = None,
@@ -8155,7 +8164,7 @@ def _build_key_filter_conditions(
     elif len(or_conditions) == 1:
         where.update(or_conditions[0])
 
-    # Apply team_id, project_id and access_group_id as global AND filters so they
+    # Apply team_id, project_id, access_group_id and tag as global AND filters so they
     # narrow results across all visibility conditions (own keys, team keys, etc.)
     now: Final = datetime.now(timezone.utc)
     status_where: Final = _build_status_where_clause(status_filter, now)
@@ -8175,6 +8184,7 @@ def _build_key_filter_conditions(
         *(({"project_id": project_id},) if project_id else ()),
         *(({"access_group_ids": {"hasSome": [access_group_id]}},) if access_group_id else ()),
         *(({"agent_id": agent_id},) if agent_id and isinstance(agent_id, str) else ()),
+        *((_build_key_tag_where(tag),) if tag and isinstance(tag, str) else ()),  # pyright: ignore[reportUnnecessaryIsInstance]  # direct list_keys() callers leave tag as the Query default
         *(
             (_build_expires_where_clause(expires_filter, now),)
             if expires_filter is not None and expires_filter in VALID_EXPIRES_FILTER_VALUES
@@ -8209,6 +8219,7 @@ async def list_key_helper(
     project_id: str | None = None,
     access_group_id: str | None = None,
     agent_id: str | None = None,
+    tag: str | None = None,
     use_substring_matching: bool = False,
     use_key_alias_substring_matching: bool = False,
     expires_filter: str | None = None,
@@ -8249,6 +8260,7 @@ async def list_key_helper(
         project_id=project_id,
         access_group_id=access_group_id,
         agent_id=agent_id,
+        tag=tag,
         use_substring_matching=use_substring_matching,
         use_key_alias_substring_matching=use_key_alias_substring_matching,
         expires_filter=expires_filter,
