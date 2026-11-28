@@ -61,9 +61,13 @@ class TestIsInternalIp:
         assert IPAddressUtils.is_internal_ip("1.1.1.1") is False
         assert IPAddressUtils.is_internal_ip("172.32.0.1") is False
 
-    def test_xff_chain_uses_leftmost_ip(self):
+    def test_unresolved_xff_chain_is_external(self):
         assert IPAddressUtils.is_internal_ip("8.8.8.8, 10.0.0.1") is False
-        assert IPAddressUtils.is_internal_ip("10.0.0.1, 8.8.8.8") is True
+        assert IPAddressUtils.is_internal_ip("10.0.0.1, 8.8.8.8") is False
+
+    def test_ipv6_ranges(self):
+        assert IPAddressUtils.is_internal_ip("fd00::1") is True
+        assert IPAddressUtils.is_internal_ip("2001:4860:4860::8888") is False
 
     def test_fails_closed_on_bad_input(self):
         assert IPAddressUtils.is_internal_ip("") is False
@@ -146,10 +150,7 @@ class TestMCPClientIPExtraction:
         assert IPAddressUtils.is_internal_ip(result) is False
 
     def test_honours_xff_from_trusted_proxy(self):
-        request = MagicMock(spec=Request)
-        request.client = MagicMock()
-        request.client.host = "10.0.0.5"
-        request.headers = {"x-forwarded-for": "192.168.1.10"}
+        request = _make_request("10.0.0.5", "192.168.1.10")
 
         result = IPAddressUtils.get_mcp_client_ip(
             request,
@@ -191,12 +192,24 @@ class TestMCPClientIPExtraction:
         assert result == "10.0.0.5"
 
 
-def _make_request(client_host, xff):
-    request = MagicMock(spec=Request)
-    request.client = MagicMock()
-    request.client.host = client_host
-    request.headers = {"x-forwarded-for": xff}
-    return request
+def _make_request(client_host: str, *xff_lines: str) -> Request:
+    """A real ASGI request: each xff_lines entry becomes its own header line."""
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/mcp",
+            "query_string": b"",
+            "headers": [(b"x-forwarded-for", line.encode()) for line in xff_lines],
+            "client": (client_host, 54321),
+        }
+    )
+
+
+_TRUSTED_XFF_SETTINGS: Final[dict[str, object]] = {
+    "use_x_forwarded_for": True,
+    "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+}
 
 
 class TestExtractClientIpFromXffHops:
@@ -377,18 +390,15 @@ class TestXffTrustedHopsAccessControl:
 
         assert result == ""
 
-    def test_unset_hops_keeps_legacy_leftmost_behavior(self):
-        request = _make_request("10.0.0.5", "10.0.0.99, 203.0.113.9")
+    def test_hops_count_across_multiple_header_lines(self):
+        request = _make_request("10.0.0.5", "10.0.0.99", "203.0.113.9")
 
         result = IPAddressUtils.get_mcp_client_ip(
             request,
-            general_settings={
-                "use_x_forwarded_for": True,
-                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
-            },
+            general_settings={**_TRUSTED_XFF_SETTINGS, "mcp_xff_num_trusted_hops": 1},
         )
 
-        assert result == "10.0.0.99, 203.0.113.9"
+        assert result == "203.0.113.9"
 
     @pytest.mark.parametrize("bad_value", [0, -1, "abc", 1.5])
     def test_invalid_hops_config_fails_closed_not_legacy(self, bad_value):
@@ -407,6 +417,108 @@ class TestXffTrustedHopsAccessControl:
         assert IPAddressUtils.is_internal_ip(result) is False
 
 
+class TestXffTrustedChainWalk:
+    """mcp_xff_num_trusted_hops unset: walk right to left past trusted proxies."""
+
+    def test_forged_leftmost_internal_entry_is_not_internal(self):
+        request = _make_request("10.0.0.5", "10.0.0.1, 198.51.100.4")
+
+        result = IPAddressUtils.get_mcp_client_ip(request, general_settings=_TRUSTED_XFF_SETTINGS)
+
+        assert result == "198.51.100.4"
+        assert IPAddressUtils.is_internal_ip(result) is False
+
+    def test_forged_header_line_before_proxy_line_is_ignored(self):
+        request = _make_request("10.0.0.5", "10.0.0.1", "198.51.100.4")
+
+        result = IPAddressUtils.get_mcp_client_ip(request, general_settings=_TRUSTED_XFF_SETTINGS)
+
+        assert result == "198.51.100.4"
+
+    def test_multi_hop_chain_skips_trusted_proxies(self):
+        request = _make_request("10.0.0.5", "192.168.9.9, 203.0.113.7, 10.1.2.3, 10.4.5.6")
+
+        result = IPAddressUtils.get_mcp_client_ip(request, general_settings=_TRUSTED_XFF_SETTINGS)
+
+        assert result == "203.0.113.7"
+
+    def test_internal_client_behind_trusted_proxy_stays_internal(self):
+        request = _make_request("10.0.0.5", "192.168.1.10")
+
+        result = IPAddressUtils.get_mcp_client_ip(request, general_settings=_TRUSTED_XFF_SETTINGS)
+
+        assert result == "192.168.1.10"
+        assert IPAddressUtils.is_internal_ip(result) is True
+
+    def test_all_entries_trusted_resolves_to_leftmost(self):
+        request = _make_request("10.0.0.5", "10.9.9.9, 10.1.1.1")
+
+        result = IPAddressUtils.get_mcp_client_ip(request, general_settings=_TRUSTED_XFF_SETTINGS)
+
+        assert result == "10.9.9.9"
+
+    def test_untrusted_direct_peer_ignores_xff(self):
+        request = _make_request("198.51.100.20", "10.0.0.1")
+
+        result = IPAddressUtils.get_mcp_client_ip(request, general_settings=_TRUSTED_XFF_SETTINGS)
+
+        assert result == "198.51.100.20"
+        assert IPAddressUtils.is_internal_ip(result) is False
+
+    def test_xff_disabled_uses_direct_peer(self):
+        request = _make_request("10.0.0.5", "198.51.100.4")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={"use_x_forwarded_for": False, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+        )
+
+        assert result == "10.0.0.5"
+
+    def test_ipv6_chain(self):
+        request = _make_request("fd00::5", "fd00::99, 2001:db8::1, fd00::7")
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["fd00::/8"]},
+        )
+
+        assert result == "2001:db8::1"
+        assert IPAddressUtils.is_internal_ip(result) is False
+
+    @pytest.mark.parametrize(
+        "xff",
+        ["10.0.0.1, not-an-ip", "10.0.0.1, 198.51.100.4:443", "unknown", " , ,", ""],
+    )
+    def test_garbage_entry_fails_closed(self, xff):
+        request = _make_request("10.0.0.5", xff)
+
+        result = IPAddressUtils.get_mcp_client_ip(request, general_settings=_TRUSTED_XFF_SETTINGS)
+
+        assert result == ""
+        assert IPAddressUtils.is_internal_ip(result) is False
+
+    def test_garbage_left_of_client_is_ignored(self):
+        request = _make_request("10.0.0.5", "garbage, 198.51.100.4, 10.0.0.9")
+
+        result = IPAddressUtils.get_mcp_client_ip(request, general_settings=_TRUSTED_XFF_SETTINGS)
+
+        assert result == "198.51.100.4"
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_forged_leftmost_is_denied_non_public_server(self):
+        private = _make_server("private-srv")
+        public = _make_server("public-srv", available_on_public_internet=True)
+        manager = _make_manager([private, public])
+        request = _make_request("10.0.0.5", "10.0.0.1, 198.51.100.4")
+
+        client_ip = IPAddressUtils.get_mcp_client_ip(request, general_settings=_TRUSTED_XFF_SETTINGS)
+
+        assert manager.is_server_accessible_from_ip(private, client_ip) is False
+        assert manager.is_server_accessible_from_ip(public, client_ip) is True
+
+
 class TestXffPresentButDisabledWarning:
     """When an XFF header arrives but use_x_forwarded_for is off, the proxy must
     loudly warn (the internal-only check is silently trusting the load balancer's
@@ -418,11 +530,7 @@ class TestXffPresentButDisabledWarning:
         ip_address_utils._warned_xff_present_but_disabled = False
 
     def _request_with_xff(self):
-        request = MagicMock(spec=Request)
-        request.client = MagicMock()
-        request.client.host = "10.0.0.7"
-        request.headers = {"x-forwarded-for": "8.8.8.8"}
-        return request
+        return _make_request("10.0.0.7", "8.8.8.8")
 
     def test_warns_and_does_not_fail_when_xff_present_but_disabled(self):
         self._reset_warning_flag()
