@@ -311,6 +311,7 @@ from ..integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
 from ..integrations.greenscale import GreenscaleLogger
 from ..integrations.helicone import HeliconeLogger
 from ..integrations.humanloop import HumanloopLogger
+from ..integrations.kafka import KafkaLogger
 from ..integrations.lago import LagoLogger
 from ..integrations.langfuse.langfuse import LangFuseLogger
 from ..integrations.langfuse.langfuse_handler import LangFuseHandler
@@ -7200,6 +7201,14 @@ def build_custom_logger_compatible_class(
         _pointfive_logger: Final = PointFiveLogger()
         _in_memory_loggers.append(_pointfive_logger)
         return _pointfive_logger
+    elif logging_integration == "kafka":
+        for callback in _in_memory_loggers:
+            if isinstance(callback, KafkaLogger):
+                return callback
+
+        _kafka_logger: Final = KafkaLogger()
+        _in_memory_loggers.append(_kafka_logger)
+        return _kafka_logger
     elif logging_integration == "zerobus":
         for callback in _in_memory_loggers:
             if isinstance(callback, ZerobusLogger):
@@ -7774,6 +7783,10 @@ def init_custom_logger_compatible_class_at_startup(
     internal_usage_cache: DualCache | None,
     llm_router: object,
 ) -> CustomLogger | None:
+    if callback == "kafka":
+        return build_custom_logger_compatible_class(
+            callback, internal_usage_cache=internal_usage_cache, llm_router=llm_router
+        )
     return _init_custom_logger_compatible_class(
         callback, internal_usage_cache=internal_usage_cache, llm_router=llm_router, raise_import_errors=True
     )
@@ -8028,6 +8041,10 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "pointfive":
             for callback in _in_memory_loggers:
                 if isinstance(callback, PointFiveLogger):
+                    return callback
+        elif logging_integration == "kafka":
+            for callback in _in_memory_loggers:
+                if isinstance(callback, KafkaLogger):
                     return callback
         elif logging_integration == "zerobus":
             for callback in _in_memory_loggers:

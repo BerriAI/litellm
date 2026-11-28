@@ -30,6 +30,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.gcs_pubsub.pub_sub import GcsPubSubLogger
 from litellm.integrations.gitlab import GitLabPromptManager
 from litellm.integrations.humanloop import HumanloopLogger
+from litellm.integrations.kafka import KafkaLogger
 from litellm.integrations.lago import LagoLogger
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
@@ -108,6 +109,7 @@ class CustomLoggerRegistry:
         "s3_v2": S3Logger,
         "pointfive": PointFiveLogger,
         "zerobus": ZerobusLogger,
+        "kafka": KafkaLogger,
         "aws_sqs": SQSLogger,
         "dynamic_rate_limiter": PROXY_DynamicRateLimitHandler,
         "dynamic_rate_limiter_v3": PROXY_DynamicRateLimitHandlerV3,
