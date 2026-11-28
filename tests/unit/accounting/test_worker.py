@@ -44,7 +44,7 @@ class _Ledger:
 
     async def query(self, query: str, *args: object) -> tuple[Mapping[str, object], ...]:
         if query.startswith("SELECT delivery_id, attempts"):
-            if not self.pending or self.attempts or args[1] is True:
+            if not self.pending or self.attempts or "attempts > 0" in query:
                 return ()
             return ({"delivery_id": "delivery", "attempts": self.attempts, "accounting_payload": _PAYLOAD},)
         if "SET attempts = attempts + 1" in query:
@@ -120,7 +120,7 @@ class _CustomerLedger:
 
     async def query(self, query: str, *args: object) -> tuple[Mapping[str, object], ...]:
         if query.startswith("SELECT delivery_id, attempts"):
-            if not self.pending or (self.attempts > 0) is not args[1]:
+            if not self.pending or (self.attempts > 0) is not ("attempts > 0" in query):
                 return ()
             return (
                 {

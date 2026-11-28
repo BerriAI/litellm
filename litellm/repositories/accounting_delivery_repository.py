@@ -91,10 +91,13 @@ _DELIVERIES: Final = TypeAdapter(tuple[_Delivery, ...])
 _CLAIMED: Final = TypeAdapter(tuple[_ClaimedDelivery, ...])
 _PAYLOAD: Final = TypeAdapter(dict[str, object])
 _TIMEOUT: Final = timedelta(seconds=60)
-_CLAIM: Final = """SELECT delivery_id, attempts, accounting_payload::text AS accounting_payload
+_CLAIM_RETRY: Final = """SELECT delivery_id, attempts, accounting_payload::text AS accounting_payload
 FROM "LiteLLM_SpendLogDelivery"
-WHERE state = 'pending' AND next_attempt_at <= (NOW() AT TIME ZONE 'UTC')
-  AND (attempts > 0) = $2::boolean
+WHERE state = 'pending' AND attempts > 0 AND next_attempt_at <= (NOW() AT TIME ZONE 'UTC')
+ORDER BY next_attempt_at, delivery_id LIMIT $1::integer FOR UPDATE SKIP LOCKED"""
+_CLAIM_FRESH: Final = """SELECT delivery_id, attempts, accounting_payload::text AS accounting_payload
+FROM "LiteLLM_SpendLogDelivery"
+WHERE state = 'pending' AND attempts <= 0 AND next_attempt_at <= (NOW() AT TIME ZONE 'UTC')
 ORDER BY next_attempt_at, delivery_id LIMIT $1::integer FOR UPDATE SKIP LOCKED"""
 _APPLIED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
 SET state = 'applied', applied_at = (NOW() AT TIME ZONE 'UTC'), last_error = NULL
@@ -184,12 +187,12 @@ class AccountingDeliveryRepository:
         try:
             async with self._database.tx(timeout=_TIMEOUT) as transaction:
                 retries: Final = (
-                    _CLAIMED.validate_python(await transaction.query_raw(_CLAIM, 1, True))
+                    _CLAIMED.validate_python(await transaction.query_raw(_CLAIM_RETRY, 1))
                     if retry_only is not False
                     else ()
                 )
                 rows: Final = retries or (
-                    _CLAIMED.validate_python(await transaction.query_raw(_CLAIM, batch_size, False))
+                    _CLAIMED.validate_python(await transaction.query_raw(_CLAIM_FRESH, batch_size))
                     if retry_only is not True
                     else ()
                 )

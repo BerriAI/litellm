@@ -84,6 +84,11 @@ REQUEST_LOG_INDEXES: Final = (
         '("tool_name", "start_time")',
     ),
     RequestLogIndex("LiteLLM_SpendLogToolIndex", "LiteLLM_SpendLogToolIndex_start_time_idx", '("start_time")'),
+    RequestLogIndex(
+        "LiteLLM_SpendLogDelivery",
+        "LiteLLM_SpendLogDelivery_retry_due_idx",
+        '("next_attempt_at", "delivery_id") WHERE ((state = \'pending\'::"AccountingDeliveryState") AND (attempts > 0))',
+    ),
 )
 
 _IDENTIFIER_MAX_BYTES: Final = 63
@@ -200,6 +205,7 @@ def ensure_request_log_indexes(
     since it is an optional dependency and no rerun on this node can change that. Never raises."""
     try:
         import psycopg
+        from psycopg import sql
     except ImportError as exc:
         logger.warning(
             "psycopg could not be imported (%s), skipping the request-log index build. %s",
@@ -211,6 +217,7 @@ def ensure_request_log_indexes(
     try:
         with connect(database_url) as connection:
             connection.execute("SET statement_timeout = 0")
+            connection.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
             results: Final = tuple(_ensure_index(connection, schema, index) for index in indexes)
     except psycopg.Error as exc:
         logger.warning("Could not build the request-log indexes, leaving them for the next index build: %s", exc)

@@ -170,6 +170,9 @@ class TestFilterRequestLogIndexDiff:
     def test_an_empty_script_stays_empty(self):
         assert filter_request_log_index_diff("") == ""
 
+    def test_a_drop_of_the_due_retry_delivery_index_is_removed(self):
+        assert filter_request_log_index_diff('DROP INDEX "LiteLLM_SpendLogDelivery_retry_due_idx";') == ""
+
 
 class TestEnsureRequestLogIndexesWithoutAUsableDriver:
     DATABASE_URL: Final = "postgresql://user:secret@writer:5432/litellm"
