@@ -1601,7 +1601,7 @@ OPENAI_SHAPED = {
 
 DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
     "ai21": {402: (litellm.APIError, 402)},
-    "azure": {402: (litellm.APIError, 402), 403: (litellm.APIError, 403), 500: (litellm.APIError, 500)},
+    "azure": {402: (litellm.APIError, 402)},
     "azure_ai": {402: (litellm.APIError, 402)},
     "bedrock": {
         500: (litellm.ServiceUnavailableError, 503),
@@ -4511,3 +4511,76 @@ def test_bedrock_mantle_without_usable_aws_credentials_answers_401() -> None:
 
     assert excinfo.value.status_code == 401
     assert "github.com/BerriAI/litellm/issues/new" not in excinfo.value.message
+
+
+def test_azure_upstream_500_maps_to_internal_server_error() -> None:
+    """An upstream Azure HTTP 500 response whose body lacks the phrase 'Internal server error'
+    must still map to litellm.InternalServerError so InternalServerErrorRetries apply."""
+    req = httpx.Request("POST", "https://example-azure.openai.azure.com/v1/chat/completions")
+    resp = httpx.Response(
+        status_code=500,
+        request=req,
+        text='{"error":{"code":"InternalServerError","message":"The server had an error while processing your request."}}',
+        headers={"content-type": "application/json"},
+    )
+    azure_error = _UpstreamHTTPError(
+        status_code=500,
+        message="The server had an error while processing your request.",
+    )
+    azure_error.response = resp
+
+    with pytest.raises(litellm.InternalServerError) as excinfo:
+        exception_type(
+            model="azure/gpt-4o",
+            original_exception=azure_error,
+            custom_llm_provider="azure",
+        )
+
+    assert excinfo.value.status_code == 500
+    assert isinstance(excinfo.value, litellm.InternalServerError)
+
+
+def test_azure_synthetic_local_500_remains_api_error() -> None:
+    """A locally raised synthetic AzureOpenAIError with status 500 and no upstream reply
+    must remain litellm.APIError and not trigger upstream retry policies."""
+    synthetic_err = Exception("Sync call passed AsyncAzureOpenAI client")
+    synthetic_err.status_code = 500
+    synthetic_err.response = None
+
+    with pytest.raises(litellm.APIError) as excinfo:
+        exception_type(
+            model="azure/gpt-4o",
+            original_exception=synthetic_err,
+            custom_llm_provider="azure",
+        )
+
+    assert excinfo.value.status_code == 500
+    assert type(excinfo.value) is litellm.APIError
+
+
+def test_azure_upstream_403_maps_to_permission_denied() -> None:
+    """An upstream Azure HTTP 403 response must map to litellm.PermissionDeniedError."""
+    req = httpx.Request("POST", "https://example-azure.openai.azure.com/v1/chat/completions")
+    resp = httpx.Response(
+        status_code=403,
+        request=req,
+        text='{"error":{"code":"Forbidden","message":"Access denied due to Virtual Network/Firewall rules."}}',
+        headers={"content-type": "application/json"},
+    )
+    azure_error = _UpstreamHTTPError(
+        status_code=403,
+        message="Access denied due to Virtual Network/Firewall rules.",
+    )
+    azure_error.response = resp
+
+    with pytest.raises(litellm.PermissionDeniedError) as excinfo:
+        exception_type(
+            model="azure/gpt-4o",
+            original_exception=azure_error,
+            custom_llm_provider="azure",
+        )
+
+    assert excinfo.value.status_code == 403
+    assert isinstance(excinfo.value, litellm.PermissionDeniedError)
+
+

@@ -2428,6 +2428,14 @@ def _map_azure_exception(
                 litellm_debug_info=extra_information,
                 response=response,
             )
+        elif original_exception.status_code == 403:
+            raise PermissionDeniedError(
+                message=f"AzureException PermissionDeniedError - {message}",
+                llm_provider="azure",
+                model=model,
+                litellm_debug_info=extra_information,
+                response=response,
+            )
         elif original_exception.status_code == 404:
             raise NotFoundError(
                 message=f"AzureException NotFoundError - {message}",
@@ -2460,6 +2468,14 @@ def _map_azure_exception(
                 litellm_debug_info=extra_information,
                 response=response,
                 body=getattr(original_exception, "body", None),
+            )
+        elif original_exception.status_code == 500 and _upstream_reply(response, 500) is not None:
+            raise InternalServerError(
+                message=f"AzureException InternalServerError - {message}",
+                model=model,
+                llm_provider="azure",
+                litellm_debug_info=extra_information,
+                response=_upstream_reply(response, 500),
             )
         elif original_exception.status_code == 502:
             raise BadGatewayError(
