@@ -28,6 +28,12 @@ impl EndUserDatabase {
             .map(end_user_entry)
             .transpose()
     }
+
+    /// The ids of the end users whose row restricts something, at most `limit` of them, which
+    /// `_load_end_user_restricted_registry` caches whole.
+    pub async fn restricted_ids(&self, limit: i64) -> Result<Vec<String>, Error> {
+        Ok(self.end_users.find_restricted_ids(limit).await?)
+    }
 }
 
 /// What `LiteLLM_EndUserTable.model_dump(mode="json")` holds for `end_user`, or the column the

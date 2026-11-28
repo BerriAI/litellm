@@ -19,7 +19,7 @@ pub use self::{
     bag::{Bag, Dict, Ints, Lists},
     budget::{BudgetEntry, BudgetFullEntry},
     budget_limit::BudgetLimitEntry,
-    end_user::{EndUserEntry, ModelRegion},
+    end_user::{EndUserEntry, ModelRegion, RestrictedEndUsers},
     key::KeyEntry,
     member::{MemberEntry, MemberRole},
     object_permission::ObjectPermissionEntry,
@@ -29,6 +29,6 @@ pub use self::{
     record::ExcludedIfNone,
     settings::Settings,
     team::{ModelAliases, ModelTableEntry, TeamEntry},
-    team_membership::TeamMembershipEntry,
+    team_membership::{TeamMembershipEntry, TeamMembershipReservation},
     user::UserEntry,
 };

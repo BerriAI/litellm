@@ -32,7 +32,8 @@ const CACHE_OFF: &str = "Cache OFF";
 ///   read, so admit cannot see it, but it only reaches background Responses jobs, which this
 ///   route never serves.
 /// - `end_user_max_budget` and `window_resets`: none. `host/auth` declines any key with a team,
-///   owner, end user, budget or access group, so only the master key or a bare key is served.
+///   owner, budget or access group and any end user whose row holds a budget, so only the master
+///   key or a bare key is served, for nobody or for an end user that holds no budget.
 /// - `batch_accounting`: false. `/v1/messages` is the only route served, and it runs no batch.
 /// - `response` and `kwargs_response_cost`: none. The gateway builds no logging payload yet, and
 ///   the cost comes from `Field::Cost`, which the served attempt's settled cost fills.

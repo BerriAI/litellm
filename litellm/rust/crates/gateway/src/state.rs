@@ -34,6 +34,9 @@ pub struct AppState {
     pub inference: Arc<Gateway>,
     pub redis: RedisClients,
     pub database: Option<Pools>,
+    /// True when the config names a database the gateway cannot sign in to (token auth), so the
+    /// proxy holds rows the gateway cannot read.
+    pub database_unread: bool,
     /// Where a virtual key is read from: the auth cache in front of the proxy's database. `None`
     /// without a database.
     pub auth_store: Option<Arc<AuthStore>>,
@@ -76,6 +79,8 @@ impl AppState {
         let routing = crate::redis::routing(&redis, environment);
         let counters = parallel_request_limiter::counters(redis.coordination.clone());
         let connected = db::connect(config, &resources.secrets).await?;
+        let database_unread = matches!(connected, db::Connected::Unread);
+        let connected = connected.pools();
         let spend_logs = connected
             .as_ref()
             .map(|(_, repositories)| Arc::new(SpendLog::start(repositories, &redis, &variables)));
@@ -113,6 +118,7 @@ impl AppState {
             inference,
             redis,
             database,
+            database_unread,
             auth_store,
             entitlements,
             key_limiter,
