@@ -1,6 +1,6 @@
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias, TypeVar
 
 from pydantic import (
     AliasChoices,
@@ -23,6 +23,7 @@ from litellm.types.mcp import MCPAuth, MCPTokenEndpointAuthMethod
 
 RESERVED_PROFILE_ID: Final = "default"
 _FIELDS: Final = TypeAdapter(Mapping[str, object])
+_Validated = TypeVar("_Validated")
 
 
 def profile_id_key(value: str) -> str:
@@ -50,7 +51,7 @@ def _redact_profile_errors() -> Generator[None, None, None]:
         raise ValidationError.from_exception_data("MCPAuthProfile", errors) from None
 
 
-def _validate_profile(value: object, handler: Callable[[object], "_AuthProfile"]) -> "_AuthProfile":
+def _validate_redacting_errors(value: object, handler: Callable[[object], _Validated]) -> _Validated:
     with _redact_profile_errors():
         return handler(value)
 
@@ -67,7 +68,7 @@ class _AuthProfile(LiteLLMBaseModel):
     @model_validator(mode="wrap")
     @classmethod
     def _redact_errors(cls, value: object, handler: ModelWrapValidatorHandler["_AuthProfile"]) -> "_AuthProfile":
-        return _validate_profile(value, handler)
+        return _validate_redacting_errors(value, handler)
 
     @field_validator("id")
     @classmethod
@@ -105,9 +106,11 @@ class ClientCredentialsAuthProfile(_AuthProfile):
 MCPAuthProfile: TypeAlias = Annotated[
     StaticAuthProfile | ClientCredentialsAuthProfile,
     Field(discriminator="auth_type"),
-    WrapValidator(_validate_profile),
+    WrapValidator(_validate_redacting_errors),
 ]
 
+
+MCPAuthProfiles: TypeAlias = Annotated[tuple[MCPAuthProfile, ...], WrapValidator(_validate_redacting_errors)]
 
 _PROFILE: Final[TypeAdapter[MCPAuthProfile]] = TypeAdapter(MCPAuthProfile)
 

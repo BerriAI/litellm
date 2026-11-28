@@ -3,19 +3,18 @@ from dataclasses import dataclass
 from typing import Final
 
 from nacl.exceptions import CryptoError
-from pydantic import JsonValue, SecretStr, TypeAdapter
-from typing_extensions import assert_never
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import single_log_line
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
-from litellm.proxy.mcp_server.auth_profiles import InvalidAuthProfiles, parse_auth_profiles, profile_credentials_error
-from litellm.types.mcp_server.auth_profile import (
-    ClientCredentialsAuthProfile,
-    MCPAuthProfile,
-    StaticAuthProfile,
-    profile_id_key,
+from litellm.proxy.mcp_server.auth_profiles import (
+    InvalidAuthProfiles,
+    parse_auth_profiles,
+    profile_credentials_error,
+    profile_secrets,
 )
+from litellm.types.mcp_server.auth_profile import ClientCredentialsAuthProfile, MCPAuthProfile, profile_id_key
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, JsonValue])
 
@@ -34,16 +33,6 @@ def _seal(value: str, signing_key: str) -> str:
     return encrypt_value_helper(value, new_encryption_key=signing_key)
 
 
-def _secrets(profile: MCPAuthProfile) -> Mapping[str, SecretStr | None]:
-    match profile:
-        case ClientCredentialsAuthProfile():
-            return {"client_id": profile.client_id, "client_secret": profile.client_secret}
-        case StaticAuthProfile():
-            return {"authentication_token": profile.authentication_token}
-        case _:  # pragma: no cover - exhaustiveness guard, unreachable while the union holds
-            assert_never(profile)  # pragma: no cover
-
-
 def _can_inherit(profile: MCPAuthProfile, previous: MCPAuthProfile) -> bool:
     if isinstance(profile, ClientCredentialsAuthProfile) and isinstance(previous, ClientCredentialsAuthProfile):
         return "token_url" not in profile.model_fields_set or profile.token_url == previous.token_url
@@ -59,21 +48,23 @@ def _is_text(value: str) -> bool:
 
 
 def _has_unencodable_secret(profile: MCPAuthProfile) -> bool:
-    return any(not _is_text(secret.get_secret_value()) for secret in _secrets(profile).values() if secret)
+    return any(not _is_text(secret.get_secret_value()) for secret in profile_secrets(profile).values() if secret)
 
 
 def _encrypted_secrets(
     profile: MCPAuthProfile, signing_key: str, encrypt: Callable[[str, str], str]
 ) -> Mapping[str, str]:
     return {
-        field: encrypt(secret.get_secret_value(), signing_key) for field, secret in _secrets(profile).items() if secret
+        field: encrypt(secret.get_secret_value(), signing_key)
+        for field, secret in profile_secrets(profile).items()
+        if secret
     }
 
 
 def _readable_ciphertext(previous: MCPAuthProfile, signing_key: str) -> Mapping[str, str]:
     return {
         field: secret.get_secret_value()
-        for field, secret in _secrets(previous).items()
+        for field, secret in profile_secrets(previous).items()
         if secret and decrypt_if_encrypted_with(secret.get_secret_value(), signing_key) is not None
     }
 
@@ -133,7 +124,7 @@ def encrypt_auth_profiles(
 def _decrypted_secrets(profile: MCPAuthProfile, signing_key: str) -> Mapping[str, str | None]:
     return {
         field: decrypt_if_encrypted_with(secret.get_secret_value(), signing_key) if secret and signing_key else None
-        for field, secret in _secrets(profile).items()
+        for field, secret in profile_secrets(profile).items()
     }
 
 

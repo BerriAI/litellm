@@ -1,12 +1,15 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import pytest
+from pydantic import SecretStr
 
 from litellm.proxy.mcp_server.auth_profiles import (
     InvalidAuthProfiles,
     parse_auth_profiles,
     profile_credentials_error,
+    profile_secrets,
+    profile_secrets_digest,
 )
 
 
@@ -192,3 +195,65 @@ def test_every_missing_credential_is_named() -> None:
     assert profile_credentials_error("tickets", profiles) == InvalidAuthProfiles(
         "Profile 'build' of MCP server 'tickets' requires client_secret, token_url"
     )
+
+
+def _profile_digest(*profiles: Mapping[str, str]) -> str:
+    parsed: Final = parse_auth_profiles("tickets", profiles)
+    assert isinstance(parsed, tuple)
+    return profile_secrets_digest(parsed)
+
+
+_OAUTH: Final = {
+    "id": "ops",
+    "auth_type": "oauth2",
+    "oauth2_flow": "client_credentials",
+    "client_id": "id-1",
+    "client_secret": "secret-1",
+    "token_url": "https://issuer.example/token",
+}
+_BUILD: Final = {"id": "build", "auth_type": "basic", "auth_value": "token-1"}
+_OTHER: Final = {"id": "other", "auth_type": "basic", "auth_value": "token-2"}
+
+
+@pytest.mark.parametrize(
+    "changed",
+    (
+        [{**_BUILD, "auth_value": "token-3"}, _OAUTH],
+        [_BUILD, {**_OAUTH, "client_id": "id-2"}],
+        [_BUILD, {**_OAUTH, "client_secret": "secret-2"}],
+        [{"id": "build", "auth_type": "basic"}, _OAUTH],
+        [{**_BUILD, "id": "renamed"}, _OAUTH],
+        [_BUILD],
+    ),
+    ids=(
+        "static token",
+        "oauth client id",
+        "oauth client secret",
+        "secret removed",
+        "profile renamed",
+        "profile removed",
+    ),
+)
+def test_changing_a_profile_secret_or_whose_it_is_changes_the_digest(changed: Sequence[Mapping[str, str]]) -> None:
+    assert _profile_digest(*changed) != _profile_digest(_BUILD, _OAUTH)
+
+
+def test_swapping_the_secrets_of_two_profiles_changes_the_digest() -> None:
+    swapped: Final = [{**_BUILD, "auth_value": "token-2"}, {**_OTHER, "auth_value": "token-1"}]
+    assert _profile_digest(_BUILD, _OTHER) != _profile_digest(*swapped)
+
+
+def test_the_same_profiles_always_have_the_same_digest() -> None:
+    assert _profile_digest(_BUILD, _OAUTH) == _profile_digest(_BUILD, _OAUTH)
+
+
+@pytest.mark.parametrize("profile", (_BUILD, _OAUTH), ids=("static", "oauth"))
+def test_every_secret_a_profile_class_declares_is_listed_as_a_secret(profile: Mapping[str, str]) -> None:
+    parsed: Final = parse_auth_profiles("tickets", [profile])
+    assert isinstance(parsed, tuple)
+    declared: Final = {
+        name
+        for name, field in type(parsed[0]).model_fields.items()
+        if field.annotation in (SecretStr, SecretStr | None)
+    }
+    assert set(profile_secrets(parsed[0])) == declared

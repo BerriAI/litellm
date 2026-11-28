@@ -1,5 +1,6 @@
 import asyncio
-from collections.abc import Mapping, Sequence
+import json
+from collections.abc import Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
@@ -26,6 +27,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.mcp_server import catalog
 from litellm.proxy.mcp_server import operations as mcp_operations
+from litellm.proxy.mcp_server.auth_profiles import parse_auth_profiles
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy.mcp_server.faults.list_outcomes import (
@@ -1070,4 +1072,86 @@ async def test_the_challenge_names_the_url_the_client_addressed(request_path: st
     start: Final = send.await_args_list[0].args[0]
     assert dict(start["headers"])[b"www-authenticate"].decode() == (
         f'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/{resource}"'
+    )
+
+
+def _server_with_profiles(profiles: Sequence[Mapping[str, object]]) -> MCPServer:
+    parsed: Final = parse_auth_profiles("tickets", profiles)
+    assert isinstance(parsed, tuple)
+    return MCPServer(server_id="tickets", name="tickets", transport=MCPTransport.http, additional_auth=parsed)
+
+
+def _profiled_server(*, token: str, second_token: str = "ops-token-1") -> MCPServer:
+    return _server_with_profiles(
+        [
+            {"id": "build", "auth_type": "basic", "auth_value": token},
+            {"id": "ops", "auth_type": "basic", "auth_value": second_token},
+        ]
+    )
+
+
+def _bare_server(**fields: object) -> MCPServer:
+    return MCPServer.model_validate(
+        {"server_id": "tickets", "name": "tickets", "transport": MCPTransport.http, **fields}
+    )
+
+
+_OAUTH_PROFILE: Final = {
+    "id": "ops",
+    "auth_type": "oauth2",
+    "oauth2_flow": "client_credentials",
+    "client_id": "id-1",
+    "client_secret": "secret-1",
+    "token_url": "https://issuer.example/token",
+}
+_STATIC_PROFILE: Final = {"id": "build", "auth_type": "basic", "auth_value": "token-1"}
+_CHANGED_SERVERS: Final[dict[str, Callable[[], MCPServer]]] = {
+    "rotated secret": lambda: _profiled_server(token="token-2"),
+    "rotated secret of the second profile": lambda: _profiled_server(token="token-1", second_token="ops-token-2"),
+    "stored profiles became unreadable": lambda: _bare_server(auth_profiles_unreadable=True),
+    "profiles removed": _bare_server,
+    "rotated oauth client id": lambda: _server_with_profiles(
+        [_STATIC_PROFILE, {**_OAUTH_PROFILE, "client_id": "id-2"}]
+    ),
+    "rotated oauth client secret": lambda: _server_with_profiles(
+        [_STATIC_PROFILE, {**_OAUTH_PROFILE, "client_secret": "secret-2"}]
+    ),
+    "changed token url": lambda: _server_with_profiles(
+        [_STATIC_PROFILE, {**_OAUTH_PROFILE, "token_url": "https://other.example/token"}]
+    ),
+    "changed scopes": lambda: _server_with_profiles([_STATIC_PROFILE, {**_OAUTH_PROFILE, "scopes": ["read"]}]),
+    "a third profile": lambda: _server_with_profiles(
+        [_STATIC_PROFILE, _OAUTH_PROFILE, {**_STATIC_PROFILE, "id": "extra"}]
+    ),
+}
+
+
+@pytest.mark.parametrize("build_changed", _CHANGED_SERVERS.values(), ids=_CHANGED_SERVERS.keys())
+def test_configuration_identity_changes_with_the_profiles_a_server_carries(
+    build_changed: Callable[[], MCPServer],
+) -> None:
+    baseline: Final = _server_with_profiles([_STATIC_PROFILE, _OAUTH_PROFILE])
+    assert catalog._configuration_identity(build_changed()) != catalog._configuration_identity(baseline)
+
+
+def test_configuration_identity_of_unreadable_profiles_differs_from_a_server_without_profiles() -> None:
+    unreadable: Final = catalog._configuration_identity(_bare_server(auth_profiles_unreadable=True))
+    assert unreadable != catalog._configuration_identity(_bare_server())
+
+
+def test_configuration_identity_never_holds_a_profile_secret() -> None:
+    identity: Final = catalog._configuration_identity(_server_with_profiles([_STATIC_PROFILE, _OAUTH_PROFILE]))
+    assert all(secret not in identity for secret in ("token-1", "id-1", "secret-1"))
+
+
+@pytest.mark.parametrize("profiles", (None, ()), ids=("none", "empty"))
+def test_configuration_identity_of_a_server_without_profiles_is_that_of_a_bare_server(
+    profiles: tuple[object, ...] | None,
+) -> None:
+    identity: Final = catalog._configuration_identity(_bare_server(additional_auth=profiles))
+    assert identity == catalog._configuration_identity(_bare_server())
+    assert (
+        json.loads(identity)
+        .keys()
+        .isdisjoint({"additional_auth", "additional_auth_secrets_digest", "auth_profiles_unreadable"})
     )
