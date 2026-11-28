@@ -242,6 +242,33 @@ func resourceLiteLLMModel() *schema.Resource {
 				Optional:    true,
 				Description: "Name of the LiteLLM credential to use",
 			},
+			"max_input_tokens": {
+				Type:         schema.TypeInt,
+				Optional:     true,
+				ValidateFunc: validation.IntAtLeast(1),
+				Description:  "Context window in tokens, stored as model_info.max_input_tokens and returned by /v1/model/info and /v1/models",
+			},
+			"max_output_tokens": {
+				Type:         schema.TypeInt,
+				Optional:     true,
+				ValidateFunc: validation.IntAtLeast(1),
+				Description:  "Maximum output tokens, stored as model_info.max_output_tokens and returned by /v1/model/info and /v1/models",
+			},
+			"supports_vision": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Description: "Whether the model accepts image input, stored as model_info.supports_vision",
+			},
+			"supports_function_calling": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Description: "Whether the model supports tool calls, stored as model_info.supports_function_calling",
+			},
+			"supports_reasoning": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Description: "Whether the model is a reasoning model, stored as model_info.supports_reasoning",
+			},
 			"additional_litellm_params": {
 				Type:     schema.TypeMap,
 				Optional: true,

@@ -35,6 +35,17 @@ type ModelInfoPatch struct {
 type ModelInfoPatchFields struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
+	ModelCapabilities
+}
+
+// ModelCapabilities are the model_info fields clients read to learn what a model supports.
+// Pointers keep an unset field out of the request while still sending false and 0.
+type ModelCapabilities struct {
+	MaxInputTokens          *int  `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens         *int  `json:"max_output_tokens,omitempty"`
+	SupportsVision          *bool `json:"supports_vision,omitempty"`
+	SupportsFunctionCalling *bool `json:"supports_function_calling,omitempty"`
+	SupportsReasoning       *bool `json:"supports_reasoning,omitempty"`
 }
 
 // ModelRequest represents a request to create or update a model.
@@ -134,6 +145,7 @@ type ModelInfo struct {
 	Mode        string `json:"mode"`
 	TeamID      string `json:"team_id,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
+	ModelCapabilities
 }
 
 // Key represents a LiteLLM API key.

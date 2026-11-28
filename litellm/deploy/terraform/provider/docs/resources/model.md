@@ -222,6 +222,18 @@ The following arguments are supported:
   }
   ```
 
+### Model capabilities
+
+These fields are stored in `model_info` and returned by `/v1/model/info`. `/v1/models` also returns the two token limits. Clients such as chat frontends and coding agents read them to size the context window and to decide whether to send images or tools. Set them for models the LiteLLM cost map doesn't know, such as self-hosted or `hosted_vllm` deployments. Leave them unset to keep the cost map values.
+
+* `max_input_tokens` - (Optional) integer, at least 1. Context window in tokens.
+* `max_output_tokens` - (Optional) integer, at least 1. Maximum output tokens.
+* `supports_vision` - (Optional) boolean. Whether the model accepts image input.
+* `supports_function_calling` - (Optional) boolean. Whether the model supports tool calls.
+* `supports_reasoning` - (Optional) boolean. Whether the model is a reasoning model.
+
+Terraform refreshes only the fields set in the configuration, so a value changed outside Terraform shows up in the next plan. Changes are sent through `PATCH /model/{id}/update`, which works on proxies that drop `model_info` on `/model/update`. Removing a field from the configuration stops Terraform from managing it but leaves the stored value on the proxy, because the proxy cannot clear these fields through its update endpoints. An imported model picks up these fields on the first apply after you add them to the configuration.
+
 ### AWS-specific Configuration
 
 * `aws_access_key_id` - (Optional) string (Sensitive). AWS access key ID for AWS-based models.

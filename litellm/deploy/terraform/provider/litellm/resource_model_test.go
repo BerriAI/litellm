@@ -912,3 +912,198 @@ func TestResourceLiteLLMModelSchemaRejectsSecretInStateAndWriteOnly(t *testing.T
 		})
 	}
 }
+
+func modelInfoWithCapabilities(capabilities map[string]interface{}) string {
+	modelInfo := map[string]interface{}{"id": "model-123", "db_model": true, "mode": "chat"}
+	maps.Copy(modelInfo, capabilities)
+	body, _ := json.Marshal(map[string]interface{}{
+		"model_name":     "glm",
+		"litellm_params": map[string]interface{}{"model": "hosted_vllm/glm-5.3", "custom_llm_provider": "hosted_vllm"},
+		"model_info":     modelInfo,
+	})
+	return `{"data": [` + string(body) + `]}`
+}
+
+func capabilityModelConfig(capabilities map[string]interface{}) map[string]interface{} {
+	config := map[string]interface{}{"model_name": "glm", "custom_llm_provider": "hosted_vllm", "base_model": "glm-5.3"}
+	maps.Copy(config, capabilities)
+	return config
+}
+
+func TestResourceLiteLLMModelCreateSendsConfiguredCapabilities(t *testing.T) {
+	var createPayload map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/model/new" {
+			if err := json.NewDecoder(r.Body).Decode(&createPayload); err != nil {
+				t.Errorf("decode create payload: %v", err)
+			}
+		}
+		_, _ = w.Write([]byte(modelInfoWithCapabilities(nil)))
+	}))
+	defer srv.Close()
+
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMModel().Schema, capabilityModelConfig(map[string]interface{}{
+		"max_input_tokens":   256000,
+		"supports_vision":    false,
+		"supports_reasoning": true,
+	}))
+	if err := resourceLiteLLMModelCreate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	got := createPayload["model_info"].(map[string]interface{})
+	want := map[string]interface{}{"max_input_tokens": float64(256000), "supports_vision": false, "supports_reasoning": true}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("model_info.%s: want %v, got %v", key, value, got[key])
+		}
+	}
+	for _, key := range []string{"max_output_tokens", "supports_function_calling"} {
+		if _, present := got[key]; present {
+			t.Errorf("model_info.%s should be omitted when unset, got %v", key, got[key])
+		}
+	}
+}
+
+func TestResourceLiteLLMModelReadCapabilities(t *testing.T) {
+	cases := map[string]struct {
+		config     map[string]interface{}
+		server     map[string]interface{}
+		wantChange []string
+	}{
+		"matching values plan no changes": {
+			config: map[string]interface{}{"max_input_tokens": 256000, "supports_vision": false},
+			server: map[string]interface{}{"max_input_tokens": 256000, "supports_vision": false},
+		},
+		"values changed outside Terraform show as drift": {
+			config:     map[string]interface{}{"max_input_tokens": 256000, "supports_vision": false},
+			server:     map[string]interface{}{"max_input_tokens": 128000, "supports_vision": true},
+			wantChange: []string{"max_input_tokens", "supports_vision"},
+		},
+		"values missing on the proxy show as drift": {
+			config:     map[string]interface{}{"max_output_tokens": 8192, "supports_function_calling": true},
+			server:     map[string]interface{}{},
+			wantChange: []string{"max_output_tokens", "supports_function_calling"},
+		},
+		"values Terraform does not manage are ignored": {
+			config: map[string]interface{}{},
+			server: map[string]interface{}{"max_input_tokens": 200000, "max_output_tokens": 8192, "supports_reasoning": true},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(modelInfoWithCapabilities(tc.server)))
+			}))
+			defer srv.Close()
+
+			res := resourceLiteLLMModel()
+			config := capabilityModelConfig(tc.config)
+			d := schema.TestResourceDataRaw(t, res.Schema, config)
+			d.SetId("model-123")
+			if err := resourceLiteLLMModelRead(d, NewClient(srv.URL, "test-key", true)); err != nil {
+				t.Fatalf("read failed: %v", err)
+			}
+			diff, err := res.Diff(context.Background(), d.State(), terraform.NewResourceConfigRaw(config), nil)
+			if err != nil {
+				t.Fatalf("plan failed: %v", err)
+			}
+			changed := []string{}
+			for _, key := range modelCapabilityAttributes {
+				if diff != nil && diff.Attributes[key] != nil {
+					changed = append(changed, key)
+				}
+			}
+			want := tc.wantChange
+			if want == nil {
+				want = []string{}
+			}
+			if !slices.Equal(changed, want) {
+				t.Errorf("planned capability changes: want %v, got %v", want, changed)
+			}
+		})
+	}
+}
+
+func capabilityUpdateData(t *testing.T, oldState map[string]string, newConfig map[string]interface{}) *schema.ResourceData {
+	t.Helper()
+	res := resourceLiteLLMModel()
+	attrs := map[string]string{"model_name": "glm", "custom_llm_provider": "hosted_vllm", "base_model": "glm-5.3"}
+	maps.Copy(attrs, oldState)
+	state := &terraform.InstanceState{ID: "model-123", Attributes: attrs}
+	diff, err := res.Diff(context.Background(), state, terraform.NewResourceConfigRaw(capabilityModelConfig(newConfig)), nil)
+	if err != nil {
+		t.Fatalf("diff failed: %v", err)
+	}
+	d, err := schema.InternalMap(res.Schema).Data(state, diff)
+	if err != nil {
+		t.Fatalf("data failed: %v", err)
+	}
+	return d
+}
+
+func TestResourceLiteLLMModelUpdatePatchesChangedCapabilities(t *testing.T) {
+	var patchPayload map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			if r.URL.Path != "/model/model-123/update" {
+				t.Errorf("unexpected PATCH %s", r.URL.Path)
+			}
+			if err := json.NewDecoder(r.Body).Decode(&patchPayload); err != nil {
+				t.Errorf("decode patch payload: %v", err)
+			}
+		}
+		_, _ = w.Write([]byte(modelInfoWithCapabilities(map[string]interface{}{
+			"max_input_tokens": 256000, "supports_vision": false,
+		})))
+	}))
+	defer srv.Close()
+
+	d := capabilityUpdateData(t,
+		map[string]string{"max_input_tokens": "128000", "supports_vision": "true"},
+		map[string]interface{}{"max_input_tokens": 256000, "supports_vision": false},
+	)
+	if err := resourceLiteLLMModelUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+	if patchPayload == nil {
+		t.Fatal("expected a PATCH /model/model-123/update, got none")
+	}
+	got := patchPayload["model_info"].(map[string]interface{})
+	if got["max_input_tokens"] != float64(256000) || got["supports_vision"] != false {
+		t.Errorf("patched model_info: want max_input_tokens 256000 and supports_vision false, got %v", got)
+	}
+	if v := d.Get("max_input_tokens").(int); v != 256000 {
+		t.Errorf("state max_input_tokens: want 256000, got %d", v)
+	}
+}
+
+func TestResourceLiteLLMModelUpdateSkipsPatchWhenCapabilitiesUnchanged(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			t.Errorf("unexpected PATCH %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(modelInfoWithCapabilities(map[string]interface{}{"supports_vision": false})))
+	}))
+	defer srv.Close()
+
+	d := capabilityUpdateData(t,
+		map[string]string{"supports_vision": "false", "tpm": "10"},
+		map[string]interface{}{"supports_vision": false, "tpm": 20},
+	)
+	if err := resourceLiteLLMModelUpdate(d, NewClient(srv.URL, "test-key", true)); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+}
+
+func TestResourceLiteLLMModelRejectsNonPositiveTokenLimits(t *testing.T) {
+	for _, key := range []string{"max_input_tokens", "max_output_tokens"} {
+		validate := resourceLiteLLMModel().Schema[key].ValidateFunc
+		if _, errs := validate(0, key); len(errs) == 0 {
+			t.Errorf("%s = 0 should be rejected", key)
+		}
+		if _, errs := validate(1, key); len(errs) != 0 {
+			t.Errorf("%s = 1 should be accepted, got %v", key, errs)
+		}
+	}
+}
