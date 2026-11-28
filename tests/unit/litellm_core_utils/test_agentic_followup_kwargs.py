@@ -64,3 +64,21 @@ def test_followup_kwargs_carry_the_loop_bookkeeping_without_touching_the_inputs(
     assert fingerprints == ["earlier"]
     assert request_kwargs == {"_agentic_loop_depth": 0, "max_agentic_loops": 9}
     assert patch_kwargs == {"_agentic_loop_fingerprints": ["stale"]}
+
+
+def test_followup_kwargs_isolate_metadata_and_drop_otel_internal():
+    request_metadata: Final[dict[str, object]] = {"k": "v", "_otel_internal": {"emitted": True}}
+    patch_litellm_metadata: Final[dict[str, object]] = {"trace_id": "t1", "_otel_internal": {"emitted": True}}
+
+    followup: Final = _build(
+        request_kwargs={"metadata": request_metadata},
+        patch_kwargs={"litellm_metadata": patch_litellm_metadata},
+        request_params=set(),
+    )
+
+    assert followup["metadata"] == {"k": "v"}
+    assert followup["metadata"] is not request_metadata
+    assert "_otel_internal" in request_metadata
+    assert followup["litellm_metadata"] == {"trace_id": "t1"}
+    assert followup["litellm_metadata"] is not patch_litellm_metadata
+    assert "_otel_internal" in patch_litellm_metadata

@@ -79,7 +79,10 @@ from litellm.images.streaming import (
 from litellm.integrations.custom_logger_v2.enums import Hook
 from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
-from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
+from litellm.litellm_core_utils.agentic_followup_kwargs import (
+    build_agentic_followup_kwargs,
+    isolate_agentic_metadata,
+)
 from litellm.litellm_core_utils.agentic_loop_refusal import (
     called_tool_names,
     every_claimed_tool_call,
@@ -99,7 +102,9 @@ from litellm.litellm_core_utils.audio_utils.subtitle_utils import (
 from litellm.litellm_core_utils.audio_utils.transcription_streaming import litellm_exception_mapper
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
+    billed_with_the_round_it_follows,
     holds_a_call_the_choice_excludes,
+    leave_pricing_to_the_request,
     run_chat_completion_agentic_hooks,
     runs_its_own_chat_completion_loop,
     with_caller_tool_choice,
@@ -6413,6 +6418,7 @@ class BaseLLMHTTPHandler:
         fingerprints: Sequence[str],
         fingerprint: str,
         callback: Optional["CustomLogger"] = None,
+        initial_response: object = None,
     ) -> object:
         patch: Final = plan.request_patch or AgenticLoopRequestPatch()
         if patch.messages is None:
@@ -6423,7 +6429,7 @@ class BaseLLMHTTPHandler:
         if patch.tools is not None:
             optional_params["tools"] = patch.tools
         optional_params = {
-            k: v
+            k: isolate_agentic_metadata(v) if k == "metadata" else v
             for k, v in optional_params.items()
             if k != "stream" and k != "_code_interpreter_interception_converted_stream"
         }
@@ -6456,22 +6462,23 @@ class BaseLLMHTTPHandler:
                     **kwargs_for_followup,
                 )
 
-            if callback is not None:
-                try:
-                    return await callback.async_post_agentic_loop_response_hook(
-                        response=response, plan=plan, kwargs=kwargs
-                    )
-                except Exception as e:
-                    _call_id: Final = getattr(logging_obj, "litellm_call_id", "unknown")
-                    verbose_logger.exception(
-                        "LiteLLM.AgenticHookError: Exception in "
-                        "async_post_agentic_loop_response_hook [call_id=%s model=%s]: %s",
-                        _call_id,
-                        model,
-                        str(e),
-                    )
-
-            return response
+            if callback is None:
+                return self._finalize_responses_agentic_response(initial_response, response, logging_obj)
+            try:
+                hook_response: Final = await callback.async_post_agentic_loop_response_hook(
+                    response=response, plan=plan, kwargs=kwargs
+                )
+            except Exception as e:
+                _call_id: Final = getattr(logging_obj, "litellm_call_id", "unknown")
+                verbose_logger.exception(
+                    "LiteLLM.AgenticHookError: Exception in "
+                    "async_post_agentic_loop_response_hook [call_id=%s model=%s]: %s",
+                    _call_id,
+                    model,
+                    str(e),
+                )
+                return self._finalize_responses_agentic_response(initial_response, response, logging_obj)
+            return self._finalize_responses_agentic_response(initial_response, hook_response, logging_obj)
         finally:
             if callback is not None:
                 await self._run_agentic_loop_cleanup(
@@ -6481,6 +6488,17 @@ class BaseLLMHTTPHandler:
                     logging_obj=logging_obj,
                     model=model,
                 )
+
+    @staticmethod
+    def _finalize_responses_agentic_response(
+        initial_response: object,
+        final_response: object,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> object:
+        if initial_response is None:
+            return final_response
+        leave_pricing_to_the_request(final_response)
+        return billed_with_the_round_it_follows(initial_response, final_response, logging_obj)
 
     @staticmethod
     async def _run_agentic_loop_cleanup(
@@ -6739,6 +6757,7 @@ class BaseLLMHTTPHandler:
                         fingerprints=fingerprints,
                         fingerprint=fingerprint,
                         callback=callback,
+                        initial_response=response,
                     ),
                     logging_obj=logging_obj,
                     response=response,
