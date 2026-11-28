@@ -14,7 +14,10 @@ use pyo3::{prelude::*, types::PyDict};
 
 use crate::{
     redaction::NativeTokenRedactor,
-    redis::store::{request::NativeRequestRedis, spend_counters::NativeSpendCounters},
+    redis::{
+        events::RedisCall,
+        store::{request::NativeRequestRedis, spend_counters::NativeSpendCounters},
+    },
     spend_log_writer::RustSpendLogWriter,
 };
 
@@ -60,11 +63,14 @@ impl RustSpendLog {
         request: Option<PyRef<'py, NativeRequestRedis>>,
     ) -> PyResult<Execution> {
         let input = hook_input(Callback::manifest(&*self.0), hook, fields, call)?;
+        let redis_call = RedisCall::caller(fields.py(), None)?;
         let callback = Arc::clone(&self.0);
         let redis = request.map(|request| request.0.clone());
         Ok(run_hosted_hook(
             move |host| async move {
-                Box::pin(callback.handle_with(&input, host, redis.as_ref())).await
+                redis_call
+                    .scope(Box::pin(callback.handle_with(&input, host, redis.as_ref())))
+                    .await
             },
             host,
         ))
