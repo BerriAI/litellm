@@ -62,6 +62,62 @@ class TestGetPermissionsForTeamMember:
         assert KeyManagementRoutes.KEY_GENERATE in result
         assert KeyManagementRoutes.KEY_HEALTH in result
 
+    def test_unknown_permissions_are_gracefully_ignored(self):
+        """Invalid or unknown permissions do not raise ValueError and are skipped."""
+        team = _make_team_table(["/key/generate", "/unknown/permission/route"])
+
+        result = TeamMemberPermissionChecks.get_permissions_for_team_member(team_table=team)
+
+        assert KeyManagementRoutes.KEY_GENERATE in result
+        assert KeyManagementRoutes.KEY_INFO in result
+        assert KeyManagementRoutes.KEY_HEALTH in result
+        assert len(result) == 3
+
+    def test_team_daily_activity_routes_recognized(self):
+        """Team daily activity routes offered by /team/permissions_list are valid KeyManagementRoutes."""
+        routes = [
+            "/team/daily/activity/aggregated/keys",
+            "/team/daily/activity/aggregated/search",
+            "/team/daily/activity/aggregated/model_top_keys",
+            "/team/daily/activity/export",
+        ]
+        team = _make_team_table(routes)
+
+        result = TeamMemberPermissionChecks.get_permissions_for_team_member(team_table=team)
+
+        assert KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED_KEYS in result
+        assert KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH in result
+        assert KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED_MODEL_TOP_KEYS in result
+        assert KeyManagementRoutes.TEAM_DAILY_ACTIVITY_EXPORT in result
+        assert KeyManagementRoutes.KEY_INFO in result
+        assert KeyManagementRoutes.KEY_HEALTH in result
+
+    def test_update_team_member_permissions_request_rejects_unknown_permission(self):
+        """Invalid or unknown permissions are rejected at write time by Pydantic."""
+        from pydantic import ValidationError
+
+        from litellm.types.proxy.management_endpoints.team_endpoints import (
+            UpdateTeamMemberPermissionsRequest,
+        )
+
+        # Valid routes succeed
+        req = UpdateTeamMemberPermissionsRequest(
+            team_id="team-1",
+            team_member_permissions=[
+                "/key/generate",
+                "/team/daily/activity/aggregated/keys",
+            ],
+        )
+        assert KeyManagementRoutes.KEY_GENERATE in req.team_member_permissions
+        assert KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED_KEYS in req.team_member_permissions
+
+        # Unknown routes raise ValidationError at write time
+        with pytest.raises(ValidationError):
+            UpdateTeamMemberPermissionsRequest(
+                team_id="team-1",
+                team_member_permissions=["/unknown/permission/route"],
+            )
+
 
 class TestGetDefaultTeamParam:
     def test_returns_none_when_no_config(self, monkeypatch):
