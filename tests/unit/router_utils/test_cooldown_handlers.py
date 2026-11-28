@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 import respx
+from prometheus_client import REGISTRY
 from prometheus_client.samples import Sample
 
 import litellm
@@ -1409,6 +1410,41 @@ async def test_cooldown_without_request_history_labels_the_state_with_the_resolv
         for sample in deployment_state_samples("dep-1")
     }
     assert labelled == {expected_model_and_provider}
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown", "isolated_prometheus_registry")
+@pytest.mark.asyncio
+async def test_the_cooled_down_counter_names_the_deployment_as_its_state_does_when_group_name_differs_from_model(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_state_samples: Callable[[str], list[Sample]],
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [PrometheusLogger()])
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "prod-chat",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake",
+                    "api_base": "https://upstream.example/v1",
+                },
+                "model_info": {"id": "dep-1"},
+            }
+        ]
+    )
+
+    await router_cooldown_event_callback(
+        ctx=RoutingContext(router), deployment_id="dep-1", exception_status=404, cooldown_time=5.0
+    )
+
+    cooled_down: Final = {
+        (sample.labels["litellm_model_name"], sample.value)
+        for family in REGISTRY.collect()
+        for sample in family.samples
+        if sample.name == "litellm_deployment_cooled_down_total" and sample.labels["model_id"] == "dep-1"
+    }
+    assert cooled_down == {("gpt-5.4-mini", 1.0)}
+    assert {sample.labels["litellm_model_name"] for sample in deployment_state_samples("dep-1")} == {"gpt-5.4-mini"}
 
 
 def test_a_model_litellm_cannot_resolve_keeps_its_configured_name_and_has_no_provider() -> None:

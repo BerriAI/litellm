@@ -72,7 +72,7 @@ async def router_cooldown_event_callback(
         )
 
         prometheusLogger.increment_deployment_cooled_down(
-            litellm_model_name=_model_name,
+            litellm_model_name=litellm_model_name,
             model_id=str(model_id),
             api_base=_api_base,
             api_provider=llm_provider,
