@@ -23,6 +23,7 @@ from fastapi import FastAPI, HTTPException, Request, Response  # noqa: E402  # o
 from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from starlette.routing import Route  # noqa: E402
+from starlette.types import ASGIApp, Receive, Scope, Send  # noqa: E402
 import httpx  # noqa: E402
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
 from opentelemetry.instrumentation.propagators import (  # noqa: E402
@@ -37,7 +38,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
 )
 from opentelemetry import trace  # noqa: E402
 from opentelemetry.sdk.trace.sampling import ALWAYS_OFF  # noqa: E402
-from opentelemetry.trace import SpanKind  # noqa: E402
+from opentelemetry.trace import SpanKind, StatusCode  # noqa: E402
 
 from litellm.constants import LITELLM_UI_ALLOW_HEADERS  # noqa: E402
 from litellm.types.services import ServiceLoggerPayload, ServiceTypes  # noqa: E402  # optional dependencies are skipped first
@@ -372,6 +373,102 @@ def _exporting_provider():
 
 def _server_spans_by_route(exporter):
     return {(s.attributes or {})["http.route"]: s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER}
+
+
+class _OuterTracer:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+        self.paths: Final[list[str]] = []
+        self.ran_inside_a_server_span: Final[list[bool]] = []
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            self.paths.append(scope["path"])
+            self.ran_inside_a_server_span.append(trace.get_current_span().get_span_context().is_valid)
+        await self.app(scope, receive, send)
+
+
+class _AppWrappedByAnotherTracer(FastAPI):
+    def build_middleware_stack(self) -> ASGIApp:
+        self.outer_tracer = _OuterTracer(super().build_middleware_stack())
+        return self.outer_tracer
+
+
+class _AppWrappedByAnOpaqueCallable(FastAPI):
+    def build_middleware_stack(self) -> ASGIApp:
+        stack: Final = super().build_middleware_stack()
+
+        async def opaque(scope: Scope, receive: Receive, send: Send) -> None:
+            await stack(scope, receive, send)
+
+        return opaque
+
+
+def _app_with_error_handler(
+    monkeypatch: pytest.MonkeyPatch, app: FastAPI, provider: TracerProvider
+) -> tuple[TestClient, list[str]]:
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
+    handled: Final[list[str]] = []
+
+    async def on_error(request: Request, exc: Exception) -> Response:
+        handled.append(request.url.path)
+        return Response(status_code=500)
+
+    app.add_exception_handler(Exception, on_error)
+
+    @app.get("/ok")
+    async def ok() -> dict[str, bool]:
+        return {"ok": True}
+
+    @app.get("/crash")
+    async def crash() -> None:
+        raise RuntimeError("unhandled")
+
+    instrument_fastapi_app(app, tracer_provider=provider)
+    return TestClient(app, raise_server_exceptions=False), handled
+
+
+def test_server_spans_survive_another_tracer_wrapping_the_middleware_stack(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider, exporter = _exporting_provider()
+    app: Final = _AppWrappedByAnotherTracer()
+    client, handled = _app_with_error_handler(monkeypatch, app, provider)
+
+    assert client.get("/ok").status_code == 200
+    assert client.get("/crash").status_code == 500
+
+    server_spans: Final = [span for span in exporter.get_finished_spans() if span.kind is SpanKind.SERVER]
+    assert sorted((span.attributes or {})["http.route"] for span in server_spans) == ["/crash", "/ok"]
+    crashed: Final = _server_spans_by_route(exporter)["/crash"]
+    assert crashed.status.status_code is StatusCode.ERROR
+    assert [event.name for event in crashed.events] == ["exception"]
+    assert app.outer_tracer.paths == ["/ok", "/crash"]
+    assert app.outer_tracer.ran_inside_a_server_span == [False, False]
+    assert handled == ["/crash"]
+
+
+def test_a_wrapper_that_hides_the_middleware_stack_keeps_serving_without_server_spans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider, exporter = _exporting_provider()
+    client, handled = _app_with_error_handler(monkeypatch, _AppWrappedByAnOpaqueCallable(), provider)
+
+    assert client.get("/ok").status_code == 200
+    assert client.get("/crash").status_code == 500
+
+    assert [span for span in exporter.get_finished_spans() if span.kind is SpanKind.SERVER] == []
+    assert handled == ["/crash"]
+
+
+def test_an_unhandled_error_is_recorded_on_the_server_span_of_an_unwrapped_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider, exporter = _exporting_provider()
+    client, handled = _app_with_error_handler(monkeypatch, FastAPI(), provider)
+
+    assert client.get("/crash").status_code == 500
+
+    crashed: Final = _server_spans_by_route(exporter)["/crash"]
+    assert [event.name for event in crashed.events] == ["exception"]
+    assert handled == ["/crash"]
 
 
 def test_every_traced_response_names_its_own_server_span(monkeypatch):
