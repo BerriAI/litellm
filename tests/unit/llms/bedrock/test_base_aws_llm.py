@@ -30,6 +30,7 @@ from litellm.llms.bedrock.base_aws_llm import (
     AwsAuthError,
     BaseAWSLLM,
     Boto3CredentialsInfo,
+    _boto3_default_region,
     run_aws_signing,
     run_off_loop_if_aws,
 )
@@ -54,6 +55,7 @@ BASE_AWS_LLM_PATH = os.path.join(
 def flush_shared_bedrock_iam_cache():
     """Process-wide IAM cache must not leak static/env credential entries across tests."""
     BaseAWSLLM._shared_iam_cache.flush_cache()
+    _boto3_default_region.cache_clear()
     yield
 
 
@@ -472,6 +474,75 @@ def test_auth_functions_tracer_wrapping():
             ), f"Auth function on line {line_number} is not wrapped with @tracer.wrap: {line.strip()}"
 
 
+@pytest.mark.parametrize("region_source", ["none", "environment", "config", "credentials"])
+def test_default_region_lookup_reuses_sessions(
+    region_source: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if region_source == "environment":
+        monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-west-1")
+    elif region_source in ("config", "credentials"):
+        config: Final = tmp_path / region_source
+        config.write_text("[default]\nregion = eu-west-1\n")
+        monkeypatch.setenv(
+            "AWS_CONFIG_FILE" if region_source == "config" else "AWS_SHARED_CREDENTIALS_FILE", str(config)
+        )
+    expected: Final = "us-west-2" if region_source == "none" else "eu-west-1"
+    llm: Final = BaseAWSLLM()
+
+    with patch("boto3.Session", wraps=boto3.Session) as sessions:
+        regions: Final = tuple(llm.get_aws_region_name({}) for _ in range(5))
+
+    assert regions == (expected,) * 5
+    assert sessions.call_count == 1
+
+
+@pytest.mark.parametrize("setting", ["AWS_DEFAULT_REGION", "AWS_PROFILE", "AWS_DEFAULT_PROFILE"])
+def test_default_region_cache_follows_environment_changes(
+    setting: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config: Final = tmp_path / "config"
+    config.write_text("[default]\nregion = eu-west-1\n[profile changed]\nregion = ap-southeast-2\n")
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(config))
+    llm: Final = BaseAWSLLM()
+
+    with patch("boto3.Session", wraps=boto3.Session) as sessions:
+        initial: Final = tuple(llm.get_aws_region_name({}) for _ in range(2))
+        monkeypatch.setenv(setting, "ap-southeast-2" if setting == "AWS_DEFAULT_REGION" else "changed")
+        changed: Final = tuple(llm.get_aws_region_name({}) for _ in range(2))
+
+    assert initial == ("eu-west-1",) * 2
+    assert changed == ("ap-southeast-2",) * 2
+    assert sessions.call_count == 2
+
+
+@pytest.mark.parametrize("setting", ["AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE"])
+@pytest.mark.parametrize("change", ["contents", "path", "created", "deleted"])
+def test_default_region_cache_follows_config_file_changes(
+    setting: str, change: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config: Final = tmp_path / "region-config"
+    if change != "created":
+        config.write_text("[default]\nregion = eu-west-1\n")
+    monkeypatch.setenv(setting, str(config))
+    llm: Final = BaseAWSLLM()
+
+    with patch("boto3.Session", wraps=boto3.Session) as sessions:
+        initial: Final = tuple(llm.get_aws_region_name({}) for _ in range(2))
+        if change == "deleted":
+            config.unlink()
+        elif change == "path":
+            other_config: Final = tmp_path / "other-config"
+            other_config.write_text("[default]\nregion = ap-southeast-2\n")
+            monkeypatch.setenv(setting, str(other_config))
+        else:
+            config.write_text("[default]\nregion = ap-southeast-2\n")
+        changed: Final = tuple(llm.get_aws_region_name({}) for _ in range(2))
+
+    assert initial == (("us-west-2" if change == "created" else "eu-west-1"),) * 2
+    assert changed == (("us-west-2" if change == "deleted" else "ap-southeast-2"),) * 2
+    assert sessions.call_count == 2
+
+
 def test_get_aws_region_name_boto3_fallback():
     """
     Test the boto3 session fallback logic in _get_aws_region_name method.
@@ -497,6 +568,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.assert_called_once()
 
     # Test case 2: boto3.Session() returns None for region (should default to us-west-2)
+    _boto3_default_region.cache_clear()
     with patch("litellm.llms.bedrock.base_aws_llm.get_secret") as mock_get_secret:
         mock_get_secret.return_value = None  # No region in env vars
 
@@ -512,6 +584,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.assert_called_once()
 
     # Test case 3: boto3 import/session creation raises exception (should default to us-west-2)
+    _boto3_default_region.cache_clear()
     with patch("litellm.llms.bedrock.base_aws_llm.get_secret") as mock_get_secret:
         mock_get_secret.return_value = None  # No region in env vars
 
