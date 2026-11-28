@@ -1135,11 +1135,14 @@ def image_edit(
             )
         )
 
-        if image_edit_provider_config.use_multipart_form_data() and (
+        # Multipart OpenAI-compatible routes merge the caller's params here, flattened
+        # and with extra_body taking precedence; the default path below must not redo it.
+        merged_provider_params: Final = image_edit_provider_config.use_multipart_form_data() and (
             custom_llm_provider == "openai"
             or custom_llm_provider == "azure"
             or custom_llm_provider in litellm.openai_compatible_providers
-        ):
+        )
+        if merged_provider_params:
             dropped_form_params: Final = header_auth_params(custom_llm_provider)
             drops_for_upstream: Final = custom_llm_provider != LlmProviders.LITELLM_PROXY.value
             unsupported_edit_params: Final[frozenset[str]] = (
@@ -1238,6 +1241,21 @@ def image_edit(
                 extra_headers=extra_headers,
                 client=http_client_of(kwargs.get("client")),
                 aimage_edit=_is_async,
+            )
+        if not merged_provider_params and custom_llm_provider != litellm.LlmProviders.TENCENT.value:
+            # Forward caller-supplied params the provider config does not map itself
+            # (e.g. OpenRouter's image_config) on the default handler path; without this
+            # they are silently dropped before the request. Params the config supports were
+            # already mapped above (e.g. size -> width/height), so never re-add or override them.
+            image_edit_request_params.update(
+                {
+                    key: value
+                    for key, value in non_default_params.items()
+                    if key not in provider_supported_params
+                    and key not in image_edit_request_params
+                    and key not in additional_drop_params
+                    and key not in header_auth_params(custom_llm_provider)
+                }
             )
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.image_edit_handler(
