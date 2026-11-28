@@ -9397,14 +9397,29 @@ def process_system_message(system_message: object, max_tokens: float, model: str
     return system_message_event, max_tokens - system_message_tokens
 
 
+def _is_tool_call_message(message: AllMessageValues) -> bool:
+    return message["role"] == "assistant" and bool(message.get("tool_calls"))
+
+
+def _continues_tool_turn(messages: Sequence[AllMessageValues], index: int) -> bool:
+    if index == 0 or messages[index]["role"] != "tool":
+        return False
+    previous: Final = messages[index - 1]
+    return previous["role"] == "tool" or _is_tool_call_message(previous)
+
+
+def _group_tool_call_turns(messages: Sequence[AllMessageValues]) -> tuple[tuple[AllMessageValues, ...], ...]:
+    starts: Final = tuple(i for i in range(len(messages)) if not _continues_tool_turn(messages, i))
+    ends: Final = (*starts[1:], len(messages))
+    return tuple(tuple(messages[start:end]) for start, end in zip(starts, ends))
+
+
 def process_messages(messages, max_tokens: float, model: str | None):
-    # Process messages from older to more recent
-    messages = messages[::-1]
     final_messages = []
     verbose_logger.debug(
         "calling process_messages with messages: %s, max_tokens: %s, model: %s", messages, max_tokens, model
     )
-    for message in messages:
+    for group in reversed(_group_tool_call_turns(messages)):
         verbose_logger.debug("processing final_messages: %s", final_messages)
         used_tokens = get_token_count(final_messages, model)
         available_tokens = max_tokens - used_tokens
@@ -9412,9 +9427,15 @@ def process_messages(messages, max_tokens: float, model: str | None):
         if available_tokens <= 3:
             break
 
+        if len(group) > 1 or _is_tool_call_message(group[0]):
+            with_group: Final = list(group) + final_messages
+            if get_token_count(with_group, model) <= max_tokens:
+                final_messages = with_group
+            continue
+
         final_messages = attempt_message_addition(
             final_messages=final_messages,
-            message=message,
+            message=group[0],
             available_tokens=available_tokens,
             max_tokens=max_tokens,
             model=model,
@@ -9554,17 +9575,10 @@ def trim_messages(
                 system_message += "\n" if system_message else ""
                 system_message += message["content"]
 
-        ## Handle Tool Call ## - check if last message is a tool response, return as is - https://github.com/BerriAI/litellm/issues/4931
-        tool_messages: Final = []
-
-        for message in reversed(messages):
-            if message["role"] != "tool":
-                break
-            tool_messages.append(message)
-        tool_messages.reverse()
-        # # Remove the collected tool messages from the original list
-        if len(tool_messages):
-            messages = messages[: -len(tool_messages)]
+        ## Handle Tool Call ## - keep a trailing tool turn as is - https://github.com/BerriAI/litellm/issues/4931
+        last_turn: Final = _group_tool_call_turns(messages)[-1] if messages else ()
+        tool_messages: Final = list(last_turn) if last_turn[-1:] and last_turn[-1]["role"] == "tool" else []
+        messages = messages[: len(messages) - len(tool_messages)]
 
         current_tokens: Final = token_counter(model=model or "", messages=messages)
         print_verbose(f"Current tokens: {current_tokens}, max tokens: {max_tokens}")
