@@ -161,6 +161,11 @@ model_list:
       model: anthropic/claude-opus-5-5
       api_base: http://127.0.0.1:8191
       api_key: synthetic-anthropic-key
+  - model_name: anthropic/claude-fable-5-2
+    litellm_params:
+      model: anthropic/claude-fable-5-2
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-anthropic-key
   - model_name: anthropic/claude-fable-5-1
     litellm_params:
       model: anthropic/claude-fable-5-1
@@ -316,9 +321,19 @@ model_list:
       model: openai/gpt-6-luna
       api_base: http://127.0.0.1:8191
       api_key: synthetic-openai-key
+  - model_name: openai/gpt-6.2-sol
+    litellm_params:
+      model: openai/gpt-6.2-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
   - model_name: openai/gpt-6.1-sol
     litellm_params:
       model: openai/gpt-6.1-sol
+      api_base: http://127.0.0.1:8191
+      api_key: synthetic-openai-key
+  - model_name: openai/gpt-6.2-astra
+    litellm_params:
+      model: openai/gpt-6.2-astra
       api_base: http://127.0.0.1:8191
       api_key: synthetic-openai-key
   - model_name: openai/gpt-6-astra

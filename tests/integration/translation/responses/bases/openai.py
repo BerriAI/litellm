@@ -655,6 +655,185 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
     },
 )
 
+GPT_6_2_SOL_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/responses",
+    litellm_request={**RESPONSES_REQUEST, "model": "openai/gpt-6.2-sol"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
+    expected_provider_request={**OPENAI_RESPONSES_REQUEST, "model": "gpt-6.2-sol"},
+    mock_provider_response={
+        **OPENAI_RESPONSES_RESPONSE,
+        "access_programs": {"cyber": "standard"},
+        "completed_at": 1795362211,
+        "created_at": 1795362210,
+        "id": "resp_09136dddadec140b006b030da252f487d0ac63e2a9ca365eb6",
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "content": [
+                    {
+                        "annotations": [],
+                        "logprobs": [],
+                        "text": (
+                            "I’ll read `shop/validation.py` first to see how it handles zero, negative, and non-integer quant"
+                            "ities before checking the tests."
+                        ),
+                        "type": "output_text",
+                    }
+                ],
+                "id": "msg_09136dddadec140b006b030da3206487d084a1bdf37af4aa5b",
+                "phase": "commentary",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message",
+            },
+            {
+                "arguments": '{"path":"shop/validation.py","start_line":1,"end_line":100}',
+                "call_id": "call_345b5225d8414f82a2fb4a6f1ab0cb94",
+                "id": "fc_09136dddadec140b006b030da39cfc87d08653befb11f1f8b5",
+                "name": "read_file",
+                "status": "completed",
+                "type": "function_call",
+            },
+        ],
+        "top_p": 1.0,
+        "usage": {
+            "input_tokens": 329,
+            "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+                "cached_tokens": 0,
+            },
+            "output_tokens": 67,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 396,
+        },
+    },
+    expected_litellm_response={
+        **RESPONSES_NATIVE_RESPONSE,
+        "created_at": 1795362210,
+        "model": "openai/gpt-6.2-sol",
+        "output": [
+            {
+                "id": "msg_09136dddadec140b006b030da3206487d084a1bdf37af4aa5b",
+                "content": [
+                    {
+                        "annotations": [],
+                        "text": (
+                            "I’ll read `shop/validation.py` first to see how it handles zero, negative, and non-integer quant"
+                            "ities before checking the tests."
+                        ),
+                        "type": "output_text",
+                        "logprobs": [],
+                    }
+                ],
+                "role": "assistant",
+                "status": "completed",
+                "type": "message",
+                "phase": "commentary",
+            },
+            {
+                "arguments": '{"path":"shop/validation.py","start_line":1,"end_line":100}',
+                "call_id": "call_345b5225d8414f82a2fb4a6f1ab0cb94",
+                "name": "read_file",
+                "type": "function_call",
+                "id": "fc_09136dddadec140b006b030da39cfc87d08653befb11f1f8b5",
+                "namespace": None,
+                "status": "completed",
+            },
+        ],
+        "parallel_tool_calls": True,
+        "temperature": 1.0,
+        "tools": [
+            {
+                "name": "search_files",
+                "parameters": {
+                    "additionalProperties": False,
+                    "properties": {
+                        "paths": {"items": {"type": "string"}, "type": "array"},
+                        "query": {"type": "string"},
+                    },
+                    "required": ["query", "paths"],
+                    "type": "object",
+                },
+                "strict": True,
+                "type": "function",
+                "defer_loading": None,
+                "description": "Search source and test files for a literal term.",
+                "output_schema": None,
+            },
+            {
+                "name": "read_file",
+                "parameters": {
+                    "additionalProperties": False,
+                    "properties": {
+                        "end_line": {"minimum": 1, "type": "integer"},
+                        "path": {"type": "string"},
+                        "start_line": {"minimum": 1, "type": "integer"},
+                    },
+                    "required": ["path", "start_line", "end_line"],
+                    "type": "object",
+                },
+                "strict": True,
+                "type": "function",
+                "defer_loading": None,
+                "description": "Read a range of lines from a project file.",
+                "output_schema": None,
+            },
+        ],
+        "top_p": 1.0,
+        "reasoning": {"context": "all_turns", "effort": "high", "mode": "standard", "summary": None},
+        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 329,
+            "input_tokens_details": {
+                "audio_tokens": None,
+                "cached_tokens": 0,
+                "cached_tokens_details": None,
+                "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 0, "ttl_12h_tokens": 0},
+                "image_tokens": None,
+                "text_tokens": None,
+                "video_tokens": None,
+            },
+            "output_tokens": 67,
+            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 0, "text_tokens": None},
+            "total_tokens": 396,
+            "cost": None,
+        },
+        "store": True,
+        "access_programs": {"cyber": "standard"},
+        "background": False,
+        "billing": {"payer": "developer"},
+        "completed_at": 1795362211,
+        "frequency_penalty": 0.0,
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
+        "max_tool_calls": None,
+        "moderation": None,
+        "presence_penalty": 0.0,
+        "prompt_cache_key": None,
+        "prompt_cache_retention": "24h",
+        "safety_identifier": None,
+        "service_tier": "default",
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "total_tokens": 0,
+            },
+            "web_search": {"num_requests": 0},
+        },
+        "top_logprobs": 0,
+    },
+)
+
 GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/responses",
@@ -773,6 +952,234 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         "billing": {"payer": "developer"},
         "completed_at": 1792025519,
         "frequency_penalty": 0.0,
+        "max_tool_calls": None,
+        "moderation": None,
+        "presence_penalty": 0.0,
+        "prompt_cache_key": None,
+        "prompt_cache_retention": "24h",
+        "safety_identifier": None,
+        "service_tier": "default",
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "total_tokens": 0,
+            },
+            "web_search": {"num_requests": 0},
+        },
+        "top_logprobs": 0,
+    },
+)
+
+GPT_6_2_ASTRA_ENCRYPTED_CONTENT_0: Final = (
+    "gAAAAABrAw3dJ3jTKXcBtla4UJqhuF9byXc7zDtxwKw1dP6RhIaPiJH8ly6ICSwnfi912oZAVdQ4RCUIoK6UTrGSwH-fp8Y7"
+    "BTcqUs1vqAebdcv_AJqKy05ocxP4N9ufnFEYCfJ1MwUZPc5rWFXJmisvza-QXl92_zRL1vFSMzfDwmvUz5DRWPFvscb7BEbx"
+    "WnjOh9wQig9pETgtKXCLokQpZZb68EbtrT5vxBaRjeOtoaR35zv7LrolGVUWf2Ch1UR7JGwK97jiRO2S6tR-iaOMOZ-dro7W"
+    "nu1qpVCY5r-Rhg7CPR_OTtTmR5QJboeI4WYvK9a_5CasKw0jlLcWQNu2hH0_AXOOb8lxRO9v48T0LmvGoWS4wkWTKFlJUfFZ"
+    "W0Ll6x6EQFXgff1Qnvx7-acCrYRe0I-vQQjOfAFu0h3gCUUDE_mXnVVO3RHjfBX5nWM2fxC-TsA8P5aSLvCmEcox8sJvaVks"
+    "OTRuRseZ4M_ga59bhz9YWh7zqiDDeojxdel-QijNHioc7AYneIbkX5qmTfksdPC40fcvLKe5vJEHTEO7jIq-s8tlZoQvMakA"
+    "8maC-rXRRObDb36V1CkbITmQCSYcr1dpcSLgomCatU-u3fKeWZqUXkXzURg9t7gfBY5sFyjQLGk6Q8QmzM3poPup1PRPc8mf"
+    "3M45A6iYcHrrjkxi8z6mSYHwj8VlR1VeGNU5ETzalyLtrNIWeI4hQKC47tcSG2hh7KcResAI3i5VEuT3gVi0tamlXslh1E1U"
+    "WDJVj6fLoq6EKsAUk_2fsRde5lHguYE8yCshaHXqmtxjjMznKzinoY6G7EhXZany1ZdKJbbGq5PMsHlVA4PtpbC_XHoOhZ4K"
+    "x2nArisOwx8x7sMDwHsdN9F8a6nlSx7GPi5VMM6ZexUULVT7S4108PKrC4ikuRK8EJchXdIAax20bmfXTjBDHTidxMJX-mGv"
+    "iM6trpvv6cWAFtDBwQ5PenWJT6dw7oTpGk6f-Wm6A_Ci7wdAGqjmujUPBAztP_k9J73JN9_yugcQ2kCI3CkA80OhBGb0YGxf"
+    "n_9hxISlfKH9YiQu2dX6ThcnX0HQQ777-iEqG_uVHZOegEI-6dODk4vp9Fm0jZiVLGBP12KJNQazijIwf93sly5IHtEvydXd"
+    "g-eaJQBdfe6RGpe7eWflp39Zug6CjOm0F0IkcTyaRpbIa8Nyq8-_rwqNzlHBAVE4Ih605wBqpIbOsz91z741yQCdj3flV3vO"
+    "CRwF20ewu3S1EW7dT0se3fTy9A1bYsL-kRvioyIaR-p5IRUP3HR3sPsDizBa6e3_CZzv2GNlbwK_qk30hqgInoDKU6K_ZxnP"
+    "oZgXmQ4_T0McGQjA7MGP4M58C5nS1O2fhKh_rFYasxHw1lxahjqu4FUQhAs_wos7qfCx0ix1YjC3SDiBDAH3wGjcKNuse0W0"
+    "ftHQ9Lo3ignhh5uSNeyzl1vjFz4ADEctgpBvC3xSP5EYvvUNguULOWGOtJZSjDrKo71M0oMzLWB_PSjX8UTb9LT2Z7SPoWoA"
+    "qJPgd8AYwCYBn1IgCEvOVtrpdvddjJzeQ6AkyG9isUTz8SeWSCv5gM9yb5FhQh42l6_sgNmNAoRYqdZ3xnKEvZN_ZsQ6U84L"
+    "deISKwY4sY3VreWEtTSA0k8ueGQq4qHj798txWW9ePYmnRk7f-u0lEsfiW_e3LolWwfxqiKw-tOpQz6h3SamSfPwE_etGZwe"
+    "iPh_ejdul2b9FfZ-ai4vu3Y3owd1jMKnn5Q857nzFPGYsvOQUm_8f1E0FVveOejGIf0epHln_UVv83xoAg0EAgomHbAYjW5k"
+    "OnGGFc-FEYEHDVYrOqRW5IBP3Gt4pv6Jb3Yj0vlh-wBye51I2wQHI_FSkzQCHDAJIiZg6EgzjfwcXhzH5hzVyyL8x_kytfUq"
+    "61M675NmJC8pvvYKcZhNg9JM2Y1ejnndJGSNAOBkV7y6kvRkkMDRF_NP69ghiJaoFjfZipl6p_5DrAQ1DoSdkHsTVkPWIHlb"
+    "60I8cR_xq68jEUbK978MDN_x15sxeveRAuQmADGJAkab2coSQDZGL4q4UvkH1X3JmZArW9JriFiyWtSE6YyPSTUxh4opKI-e"
+    "HrICWfGJAtHhhulheyNyItZ43LQfd3VicDZcow361lLchkOzSkwCXtKIO1inf21F1ETKb9EAbgNUzQTC2C39pIucT7_hLQPL"
+    "PfbjI0ANZBsGvfRpS9AHMw4h4e0dwgUx7Qr3CAXH8iayGN95OyKU9PjWYLSt5fsBzSleCl4kXf-zAUY2r19A61KoRjNnBEWm"
+    "CzkQ3tgsMO7GkOH14OJRqpWTTodIwTysRvGn6ZkWUqkpUfRdFI_fCehN0geP-BxAzJOUE4wlZbMVXdK1odBqsL37hoqgkYIQ"
+    "VUe1P0yRy8CGZqzc6Gy2aeK-GBVslI0bz_MbuMOD41PtdTGwo-E7BMATSkWvzdJfJ6QXUtMT9s9Cfdf2RbQOK5nzeb6efKNk"
+    "MGvSOh3FDOiPKBgSAzN9rwN7q3rbcvrsqALKFFcr7JcqR9rJEvnmBmcMzWbXOzD1LKm2bgnERenZHHd3AEysVwyCrgMZLGzh"
+    "Xk3O_QWs9xOPIAdw7XzIYnVeUKBKohSMwNvZJRDqFmNw62AHSVvQyibF1Y1lv8CFAuQPk5eyy-yAxxQXjsjcWkyaYye1rPcb"
+    "0oo5jAA9GJPaOOSqFcxtOwg0Kl3kqCXYyPDdWZ58Hdpww84reH3lPO_sG9a3cXDsVJ5yUjlw0LMUDJJBsX3jR73nmiu2sA-l"
+    "Ya5tb1pyD742O2-SKmxBMGASs0j8zFaEslshOZdS5gaI4TLrtV6SdIkPNZ8XutRXdqZaj-Ah2ZxkPW4_VzQGIa2XtcsQmYJH"
+    "ytRWg7zIvlVlPw1P23qi_aphZaW8Y2KfKE5qSGScxOLSsINdDtoAzodJ42IEgqCP1u9O4IxLAyvs7DABjbXSp1B2yNffJgLi"
+    "oilkEU7oKZkeUFbpc97dArI1Wlyr8dLin440-qJz3Jw-yhRpPVRwSkPdkp-V3ffyeL_XGUt41IpJitgWmiwxwhI="
+)
+
+GPT_6_2_ASTRA_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/responses",
+    litellm_request={**RESPONSES_REQUEST, "model": "openai/gpt-6.2-astra"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
+    expected_provider_request={**OPENAI_RESPONSES_REQUEST, "model": "gpt-6.2-astra"},
+    mock_provider_response={
+        **OPENAI_RESPONSES_RESPONSE,
+        "access_programs": {"cyber": "standard"},
+        "completed_at": 1795362270,
+        "created_at": 1795362267,
+        "id": "resp_08766c8b55107c78006b030ddbbfc087d0b33b7568c2ab40d3",
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
+        "model": "gpt-6.2-astra",
+        "output": [
+            {
+                "content": [],
+                "encrypted_content": GPT_6_2_ASTRA_ENCRYPTED_CONTENT_0,
+                "id": "rs_08766c8b55107c78006b030ddd5ef487d0a0749f9c8b151fd5",
+                "summary": [],
+                "type": "reasoning",
+            },
+            {
+                "content": [
+                    {
+                        "annotations": [],
+                        "logprobs": [],
+                        "text": (
+                            "I’ll read `shop/validation.py` first to see how `validate_quantity` handles zero, negative value"
+                            "s, and non-integers."
+                        ),
+                        "type": "output_text",
+                    }
+                ],
+                "id": "msg_08766c8b55107c78006b030ddd641087d081c8aa2fd20528bf",
+                "phase": "commentary",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message",
+            },
+            {
+                "arguments": '{"path":"shop/validation.py","start_line":1,"end_line":200}',
+                "call_id": "call_107bd45035d24c2d95ebc3529d4eeaf7",
+                "id": "fc_08766c8b55107c78006b030dddb5c087d08e78042cce132482",
+                "name": "read_file",
+                "status": "completed",
+                "type": "function_call",
+            },
+        ],
+        "top_p": 1.0,
+        "usage": {
+            "input_tokens": 329,
+            "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+                "cached_tokens": 0,
+            },
+            "output_tokens": 90,
+            "output_tokens_details": {"reasoning_tokens": 21},
+            "total_tokens": 419,
+        },
+    },
+    expected_litellm_response={
+        **RESPONSES_NATIVE_RESPONSE,
+        "created_at": 1795362267,
+        "model": "openai/gpt-6.2-astra",
+        "output": [
+            {
+                "id": "rs_08766c8b55107c78006b030ddd5ef487d0a0749f9c8b151fd5",
+                "summary": [],
+                "type": "reasoning",
+                "content": [],
+                "encrypted_content": GPT_6_2_ASTRA_ENCRYPTED_CONTENT_0,
+            },
+            {
+                "id": "msg_08766c8b55107c78006b030ddd641087d081c8aa2fd20528bf",
+                "content": [
+                    {
+                        "annotations": [],
+                        "text": (
+                            "I’ll read `shop/validation.py` first to see how `validate_quantity` handles zero, negative value"
+                            "s, and non-integers."
+                        ),
+                        "type": "output_text",
+                        "logprobs": [],
+                    }
+                ],
+                "role": "assistant",
+                "status": "completed",
+                "type": "message",
+                "phase": "commentary",
+            },
+            {
+                "arguments": '{"path":"shop/validation.py","start_line":1,"end_line":200}',
+                "call_id": "call_107bd45035d24c2d95ebc3529d4eeaf7",
+                "name": "read_file",
+                "type": "function_call",
+                "id": "fc_08766c8b55107c78006b030dddb5c087d08e78042cce132482",
+                "namespace": None,
+                "status": "completed",
+            },
+        ],
+        "parallel_tool_calls": True,
+        "temperature": 1.0,
+        "tools": [
+            {
+                "name": "search_files",
+                "parameters": {
+                    "additionalProperties": False,
+                    "properties": {
+                        "paths": {"items": {"type": "string"}, "type": "array"},
+                        "query": {"type": "string"},
+                    },
+                    "required": ["query", "paths"],
+                    "type": "object",
+                },
+                "strict": True,
+                "type": "function",
+                "defer_loading": None,
+                "description": "Search source and test files for a literal term.",
+                "output_schema": None,
+            },
+            {
+                "name": "read_file",
+                "parameters": {
+                    "additionalProperties": False,
+                    "properties": {
+                        "end_line": {"minimum": 1, "type": "integer"},
+                        "path": {"type": "string"},
+                        "start_line": {"minimum": 1, "type": "integer"},
+                    },
+                    "required": ["path", "start_line", "end_line"],
+                    "type": "object",
+                },
+                "strict": True,
+                "type": "function",
+                "defer_loading": None,
+                "description": "Read a range of lines from a project file.",
+                "output_schema": None,
+            },
+        ],
+        "top_p": 1.0,
+        "reasoning": {"context": "all_turns", "effort": "high", "mode": "standard", "summary": None},
+        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 329,
+            "input_tokens_details": {
+                "audio_tokens": None,
+                "cached_tokens": 0,
+                "cached_tokens_details": None,
+                "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_30m_tokens": 0, "ttl_12h_tokens": 0},
+                "image_tokens": None,
+                "text_tokens": None,
+                "video_tokens": None,
+            },
+            "output_tokens": 90,
+            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 21, "text_tokens": None},
+            "total_tokens": 419,
+            "cost": None,
+        },
+        "store": True,
+        "access_programs": {"cyber": "standard"},
+        "background": False,
+        "billing": {"payer": "developer"},
+        "completed_at": 1795362270,
+        "frequency_penalty": 0.0,
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
         "max_tool_calls": None,
         "moderation": None,
         "presence_penalty": 0.0,

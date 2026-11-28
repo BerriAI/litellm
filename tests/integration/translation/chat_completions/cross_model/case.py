@@ -15,6 +15,11 @@ AgentCases = tuple[TranslationTestCase, TranslationTestCase, StreamingTranslatio
 
 SMALL: Final[tuple[AgentCases, ...]] = (
     (
+        vertex_ai.CLAUDE_HAIKU_5_5_AGENT_TEST_CASE,
+        vertex_ai.CLAUDE_HAIKU_5_5_AGENT_FOLLOWUP_TEST_CASE,
+        vertex_ai.CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE,
+    ),
+    (
         anthropic.CLAUDE_HAIKU_4_5_AGENT_TEST_CASE,
         anthropic.CLAUDE_HAIKU_4_5_AGENT_FOLLOWUP_TEST_CASE,
         anthropic.CLAUDE_HAIKU_4_5_AGENT_STREAMING_TEST_CASE,
@@ -216,6 +221,11 @@ MID: Final[tuple[AgentCases, ...]] = (
 )
 
 HIGH: Final[tuple[AgentCases, ...]] = (
+    (
+        anthropic.CLAUDE_FABLE_5_2_AGENT_TEST_CASE,
+        anthropic.CLAUDE_FABLE_5_2_AGENT_FOLLOWUP_TEST_CASE,
+        anthropic.CLAUDE_FABLE_5_2_AGENT_STREAMING_TEST_CASE,
+    ),
     (
         anthropic.CLAUDE_FABLE_5_1_AGENT_TEST_CASE,
         anthropic.CLAUDE_FABLE_5_1_AGENT_FOLLOWUP_TEST_CASE,
