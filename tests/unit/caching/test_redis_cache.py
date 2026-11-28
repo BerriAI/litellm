@@ -23,6 +23,7 @@ from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError, RedisHealth
 from litellm.redis.store_settings import RedisBreakerSettings, breaker_settings
 from litellm.rust_bridge._native import NativeRedisBreaker
+from tests.unit.conftest import RouterRedis
 
 
 @pytest.fixture
@@ -263,6 +264,29 @@ async def test_async_lpop_pipeline_empty_list(monkeypatch, redis_no_ping):
 
     assert result == []
     mock_redis_instance.pipeline.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("count", "expected", "remaining"),
+    [
+        (None, ["first"], ["second", "third"]),
+        (0, None, ["first", "second", "third"]),
+        (1, ["first"], ["second", "third"]),
+        (2, ["first", "second"], ["third"]),
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_lpop_pipeline_returns_the_items_it_removes(
+    router_redis: RouterRedis, count: int | None, expected: list[str] | None, remaining: list[str]
+) -> None:
+    cache, _ = router_redis
+    await cache.async_rpush("jobs", ["first", "second", "third"])
+
+    assert await cache.async_lpop_pipeline([{"key": "jobs", "count": count}, {"key": "empty", "count": count}]) == [
+        expected,
+        None,
+    ]
+    assert await cache.async_lpop_pipeline([{"key": "jobs", "count": 3}]) == [remaining]
 
 
 # LIT-3374: the namespace must be applied uniformly across every key-taking
