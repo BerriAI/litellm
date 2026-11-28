@@ -26,6 +26,12 @@ from litellm.types.utils import SpecialEnums
 
 _PREFIX: Final = SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value  # "litellm_proxy"
 _DISCRIMINATOR: Final = "passthrough"
+_PASSTHROUGH_PLAINTEXT_HEAD: Final = f"{_PREFIX}:{_DISCRIMINATOR};"
+# Every urlsafe_b64encode("litellm_proxy:passthrough;...") shares these first 34 chars
+# (25 bytes + top 4 bits of ';' = 204 bits, so char 34 does not depend on following bytes).
+PASSTHROUGH_MANAGED_ID_B64_PREFIX: Final = base64.urlsafe_b64encode(_PASSTHROUGH_PLAINTEXT_HEAD.encode("utf-8")).decode(
+    "ascii"
+)[: (len(_PASSTHROUGH_PLAINTEXT_HEAD) * 8) // 6]
 
 
 @dataclass(frozen=True)
