@@ -804,9 +804,9 @@ def test_extra_body_cache_key_keeps_its_preimage(
     monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool, extra_body: object, extra_body_preimage: str
 ) -> None:
     monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
-    expected: Final = hashlib.sha256(f"model: mmessages: hi{extra_body_preimage}".encode()).hexdigest()
+    expected: Final = hashlib.sha256(extra_body_preimage.encode()).hexdigest()
 
-    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="hi", extra_body=extra_body) == expected
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(extra_body=extra_body) == expected
 
 
 @pytest.mark.parametrize("mapping_type", [MappingProxyType, UserDict])
@@ -1232,7 +1232,10 @@ def test_get_cache_key():
                 "litellm_logging_obj": {},
             }
         )
-        cache_key_str = "model: gpt-3.5-turbomessages: [{'role': 'user', 'content': 'write a one sentence poem about: 7510'}]max_tokens: 40temperature: 0.2stream: True"
+        cache_key_str = (
+            "max_tokens: 40messages: [{'content': 'write a one sentence poem about: 7510', 'role': 'user'}]"
+            "model: gpt-3.5-turbostream: Truetemperature: 0.2"
+        )
         hash_object = hashlib.sha256(cache_key_str.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
@@ -1257,7 +1260,7 @@ def test_get_cache_key():
 
         print(embedding_cache_key)
 
-        embedding_cache_key_str = "model: azure/text-embedding-ada-002input: ['hi who is ishaan']"
+        embedding_cache_key_str = "input: ['hi who is ishaan']model: azure/text-embedding-ada-002"
         hash_object = hashlib.sha256(embedding_cache_key_str.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
@@ -1316,7 +1319,7 @@ def test_get_cache_key():
         )
 
         print(embedding_cache_key_2)
-        embedding_cache_key_str_2 = "model: EMBEDDING_MODEL_GROUPinput: ['hi who is ishaan']"
+        embedding_cache_key_str_2 = "input: ['hi who is ishaan']model: EMBEDDING_MODEL_GROUP"
         hash_object = hashlib.sha256(embedding_cache_key_str_2.encode())
         # Hexadecimal representation of the hash
         hash_hex = hash_object.hexdigest()
@@ -1325,6 +1328,54 @@ def test_get_cache_key():
     except Exception as e:
         traceback.print_exc()
         pytest.fail(f"Error occurred:", e)
+
+
+@pytest.mark.parametrize("field", ("messages", "input"))
+def test_response_cache_reuses_reordered_request_objects(field: str) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    first: Final = {"role": "user", "content": [{"type": "text", "text": "first"}]}
+    second: Final = {"role": "user", "content": "second"}
+    reordered: Final = {"content": [{"text": "first", "type": "text"}], "role": "user"}
+    request: Final = {"model": "model", field: [first, second], "temperature": 0}
+    response: Final = {"id": "cached-response"}
+
+    cache.add_cache(response, **request)
+
+    assert cache.get_cache(**{field: [reordered, second], "temperature": 0, "model": "model"}) == response
+    assert cache.get_cache(**{**request, field: [second, first]}) is None
+    assert cache.get_cache(**{**request, field: [{**first, "content": "different"}, second]}) is None
+
+
+def test_response_cache_distinguishes_ordered_schema_and_tool_data() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    properties: Final = {"first": {"type": "string"}, "second": {"type": "integer"}}
+    reversed_properties: Final = dict(reversed(tuple(properties.items())))
+    tool_input: Final = {"first": "x", "second": 1}
+    reversed_input: Final = dict(reversed(tuple(tool_input.items())))
+    schema: Final = {"type": "object", "properties": properties}
+    response_format: Final = {"type": "json_schema", "json_schema": {"name": "example", "schema": schema}}
+    messages: Final = [{"role": "assistant", "content": [{"type": "tool_use", "id": "tool", "input": tool_input}]}]
+    base: Final = cache.get_cache_key(model="model", messages=messages, response_format=response_format)
+
+    assert base != cache.get_cache_key(
+        model="model",
+        messages=messages,
+        response_format={
+            **response_format,
+            "json_schema": {
+                "name": "example",
+                "schema": {
+                    **schema,
+                    "properties": reversed_properties,
+                },
+            },
+        },
+    )
+    assert base != cache.get_cache_key(
+        model="model",
+        messages=[{"role": "assistant", "content": [{"type": "tool_use", "id": "tool", "input": reversed_input}]}],
+        response_format=response_format,
+    )
 
 
 def test_redis_caching_multiple_namespaces():
@@ -2609,10 +2660,10 @@ _KEY_PREIMAGE_CASES: Final = MappingProxyType(
 
 
 @pytest.mark.parametrize("case", _KEY_PREIMAGE_CASES.values(), ids=_KEY_PREIMAGE_CASES.keys())
-def test_cache_key_stays_the_sha256_of_the_formatted_request(case: object) -> None:
-    expected: Final = hashlib.sha256(f"model: mmessages: {case}stream: True".encode()).hexdigest()
+def test_cache_key_preserves_the_representation_of_opaque_parameters(case: object) -> None:
+    expected: Final = hashlib.sha256(f"model: mstream: Truetools: {case}".encode()).hexdigest()
 
-    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages=case, stream=True) == expected
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", tools=case, stream=True) == expected
 
 
 @pytest.mark.parametrize("provider_specific_params_keyed", [False, True])
@@ -2622,9 +2673,9 @@ def test_extra_body_cache_key_formats_any_accepted_value_like_the_request(
 ) -> None:
     monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
     extra_body: Final = {"payload": case}
-    expected: Final = hashlib.sha256(f"model: mmessages: hiextra_body: {extra_body}".encode()).hexdigest()
+    expected: Final = hashlib.sha256(f"extra_body: {extra_body}".encode()).hexdigest()
 
-    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="hi", extra_body=extra_body) == expected
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(extra_body=extra_body) == expected
 
 
 def test_cache_key_for_a_top_level_lone_surrogate_still_raises() -> None:
