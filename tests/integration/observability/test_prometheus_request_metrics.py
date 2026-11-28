@@ -1,22 +1,30 @@
 from __future__ import annotations
 
+import base64
 import json
 import uuid
-from hashlib import sha256
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
 import httpx
 import pytest
 import yaml
+
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.types.integrations.prometheus import LATENCY_BUCKETS
-
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from tests.integration._support.process import owned_proxy
-from tests.integration._support.prometheus_series import Sample, label_values, scrape
+from tests.integration._support.prometheus_series import (
+    OVERFLOW,
+    PROXY_FAILURES,
+    PROXY_REQUESTS,
+    Sample,
+    label_values,
+    scrape,
+)
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 _GOOD: Final = "prometheus-good-endpoint"
@@ -25,6 +33,17 @@ _FAILING: Final = "prometheus-failing-endpoint"
 _LATENCY: Final = "prometheus-latency-endpoint"
 _DEPLOYMENT: Final = "openai/prometheus-scripted-chat"
 _DEPLOYMENT_FAILURE_PROMPT: Final = "return a provider error for this deployment"
+_IMAGE_DEPLOYMENT: Final = "openai/gpt-image-1"
+_IMAGE_PROMPT: Final = "scripted multipart provider failure"
+_PNG: Final = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jf6sAAAAASUVORK5CYII="
+)
+_BILLED_IMAGE: Final = "gemini-3.1-flash-image"
+_BILLED_IMAGE_GROUP: Final = "prometheus-billed-image"
+_BILLED_IMAGE_PATH: Final = f"/v1/models/{_BILLED_IMAGE}:generateContent"
+_BILLED_IMAGE_PROMPT: Final = "scripted image request that returns only text"
+_BILLED_INPUT_RATE: Final = 0.001
+_BILLED_OUTPUT_RATE: Final = 0.002
 _END_USER: Final = f"prometheus-end-user-{uuid.uuid4().hex}"
 
 
@@ -35,6 +54,19 @@ class _Rig:
 
 
 def _respond(request: Request) -> Reply:
+    if request.target == "/v1/images/edits":
+        return Reply(status=429, body=b'{"error":{"message":"rate limited","type":"rate_limit_error"}}')
+    if request.target == _BILLED_IMAGE_PATH:
+        return Reply(
+            body=json.dumps(
+                {
+                    "candidates": [
+                        {"finishReason": "NO_IMAGE", "content": {"role": "model", "parts": [{"text": "No image"}]}}
+                    ],
+                    "usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 5, "totalTokenCount": 17},
+                }
+            ).encode()
+        )
     body: Final = json.loads(request.body)
     if (
         body["model"] == _DEPLOYMENT.removeprefix("openai/")
@@ -82,6 +114,16 @@ def _config(directory: Path, upstream: Wire) -> Path:
         {"model_name": _LIMITED, "litellm_params": {"model": "openai/429", **params}},
         {"model_name": _FAILING, "litellm_params": {"model": "openai/429", **params}},
         {"model_name": "prometheus-chat-alias", "litellm_params": {"model": _DEPLOYMENT, **params}},
+        {"model_name": "prometheus-image-alias", "litellm_params": {"model": _IMAGE_DEPLOYMENT, **params}},
+        {
+            "model_name": _BILLED_IMAGE_GROUP,
+            "litellm_params": {
+                "model": f"gemini/{_BILLED_IMAGE}",
+                "input_cost_per_token": _BILLED_INPUT_RATE,
+                "output_cost_per_token": _BILLED_OUTPUT_RATE,
+                **params,
+            },
+        },
     ]
     configuration["litellm_settings"]["callbacks"] = ["prometheus"]
     configuration["litellm_settings"]["disable_end_user_cost_tracking_prometheus_only"] = True
@@ -143,6 +185,57 @@ def test_a_deployment_name_labels_both_success_and_provider_failure(rig: _Rig) -
     totals: Final = _until(rig, total, status_code="503")
     assert [(sample.labels["requested_model"], sample.value) for sample in failed] == [(_DEPLOYMENT, 1.0)]
     assert [(sample.labels["requested_model"], sample.value) for sample in totals] == [(_DEPLOYMENT, 1.0)]
+
+
+def test_unmatched_models_share_one_failure_series_without_reaching_a_provider(rig: _Rig) -> None:
+    with rig.gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        for prefix in ("unmatched-one", "unmatched-two"):
+            response: Final = _ask(rig, f"{prefix}-{uuid.uuid4().hex}", key)
+            assert response.status_code == 400, response.text
+        assert rig.upstream.drain() == ()
+        hashed_key: Final = sha256(key.encode()).hexdigest()
+        for metric, status_label in ((PROXY_FAILURES, "exception_status"), (PROXY_REQUESTS, "status_code")):
+            samples: Final = _until(rig, metric, hashed_api_key=hashed_key, **{status_label: "400"})
+            assert [(sample.labels["requested_model"], sample.value) for sample in samples] == [(OVERFLOW, 2.0)]
+
+
+def test_multipart_image_edit_failure_keeps_the_raw_deployment_label(rig: _Rig) -> None:
+    response: Final = rig.gateway.request_multipart(
+        "/images/edits",
+        {"model": _IMAGE_DEPLOYMENT, "prompt": _IMAGE_PROMPT},
+        {"image": ("input.png", _PNG, "image/png")},
+    )
+    assert response.status_code == 429, response.text
+    (forwarded,) = rig.upstream.drain()
+    assert (forwarded.method, forwarded.target) == ("POST", "/v1/images/edits")
+    assert forwarded.headers["content-type"].startswith("multipart/form-data; boundary=")
+    assert b"gpt-image-1" in forwarded.body and _IMAGE_PROMPT.encode() in forwarded.body and _PNG in forwarded.body
+
+    for metric, status_label in ((PROXY_FAILURES, "exception_status"), (PROXY_REQUESTS, "status_code")):
+        samples: Final = _until(rig, metric, route="/images/edits", **{status_label: "429"})
+        assert [(sample.labels["requested_model"], sample.value) for sample in samples] == [(_IMAGE_DEPLOYMENT, 1.0)]
+
+
+def test_billed_image_failure_exports_cost_and_tokens_under_the_routed_group(rig: _Rig) -> None:
+    response: Final = rig.gateway.request(
+        "POST", "/v1/images/generations", {"model": _BILLED_IMAGE_GROUP, "prompt": _BILLED_IMAGE_PROMPT}
+    )
+    assert response.status_code == 422, response.text
+    (forwarded,) = rig.upstream.drain()
+    assert (forwarded.method, forwarded.target) == ("POST", _BILLED_IMAGE_PATH)
+    assert json.loads(forwarded.body)["contents"][0]["parts"][0]["text"] == _BILLED_IMAGE_PROMPT
+
+    for metric, expected in (
+        ("litellm_spend_metric_total", 12 * _BILLED_INPUT_RATE + 5 * _BILLED_OUTPUT_RATE),
+        ("litellm_total_tokens_metric_total", 17.0),
+        ("litellm_input_tokens_metric_total", 12.0),
+        ("litellm_output_tokens_metric_total", 5.0),
+    ):
+        samples: Final = _until(rig, metric, model=_BILLED_IMAGE)
+        assert [(sample.labels["requested_model"], sample.value) for sample in samples] == [
+            (_BILLED_IMAGE_GROUP, pytest.approx(expected))
+        ]
 
 
 def test_a_rate_limited_call_counts_as_a_failed_and_a_429_total_request(rig: _Rig) -> None:
