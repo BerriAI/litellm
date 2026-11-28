@@ -40,13 +40,9 @@ export const decisionsRequestSchema = z.looseObject({
     .refine((value) => value.trim().length > 0, { error: () => i18n.t("playground.systemOne.schemas.modelNonEmpty") })
     .optional(),
   state: decisionsJson,
-  questions: z.record(z.string().min(1), decisionQuestionSchema).refine(
-    (value) => {
-      const count = Object.keys(value).length;
-      return count >= 1 && count <= 128;
-    },
-    { error: () => i18n.t("playground.systemOne.schemas.questionCount") },
-  ),
+  questions: z.record(z.string().min(1), decisionQuestionSchema).refine((value) => Object.keys(value).length >= 1, {
+    error: () => i18n.t("playground.systemOne.schemas.questionCount"),
+  }),
 });
 
 export type DecisionRequest = z.infer<typeof decisionsRequestSchema>;
