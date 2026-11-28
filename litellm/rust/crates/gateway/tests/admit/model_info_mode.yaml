@@ -1,0 +1,58 @@
+# `model_info.mode` decides nothing on a native `/v1/messages` call when it is `chat` or
+# `completion`. Python dispatches a Claude deployment to the Messages API whatever its mode, prices
+# it from its token rates and keeps the cost map's capability flags. Every other mode changes a
+# Python call: `responses` and `batch` reroute it, `embedding` holds a prompt to its window exactly
+# in the pre-call checks and `image_generation` prices a per-second row at zero.
+config:
+  model_list:
+    - model_name: chat
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        mode: chat
+    - model_name: completion
+      litellm_params:
+        model: bedrock/us.anthropic.claude-opus-5-5-v1:0
+        aws_region_name: us-west-2
+      model_info:
+        mode: completion
+    - model_name: embedding
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        mode: embedding
+    - model_name: responses
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        mode: responses
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: a chat deployment
+    headers: {authorization: Bearer gateway-key}
+    body: {model: chat, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a completion deployment
+    headers: {authorization: Bearer gateway-key}
+    body: {model: completion, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: an embedding deployment
+    headers: {authorization: Bearer gateway-key}
+    body: {model: embedding, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.model_info.mode
+
+  - name: a responses deployment
+    headers: {authorization: Bearer gateway-key}
+    body: {model: responses, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.model_info.mode

@@ -269,6 +269,7 @@ impl Sent {
 #[case::virtual_key_team("virtual_key_team")]
 #[case::virtual_key_owner("virtual_key_owner")]
 #[case::virtual_key_project("virtual_key_project")]
+#[case::model_info_mode("model_info_mode")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();

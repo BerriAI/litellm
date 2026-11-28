@@ -56,6 +56,13 @@ const OFF_BY_DEFAULT_PARAMS: [&str; 4] = [
 ];
 /// `ModelInfo.member_auto_router`, which `/model/new` stores as `false`, its default.
 const OFF_BY_DEFAULT_MODEL_INFO: [&str; 1] = ["member_auto_router"];
+/// The `model_info.mode` values a Python `/v1/messages` call to a Claude deployment does not read.
+/// It sends the call to the Messages API and prices it from its token rates whatever the mode, and
+/// these two keep the cost map's capability flags. `responses` and `batch` reroute a call,
+/// `embedding` holds a prompt to its window exactly and `image_generation` prices a per-second row
+/// at zero.
+const UNREAD_MODES: [&str; 2] = ["chat", "completion"];
+const MODE: &str = "mode";
 
 pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let model = fields.get("model").and_then(Value::as_str)?;
@@ -310,7 +317,11 @@ fn deployment(model: &Model) -> Vec<Box<str>> {
             model_info.iter().filter_map(|(key, value)| {
                 let off = *value == litellm_config::Value::Bool(false)
                     && OFF_BY_DEFAULT_MODEL_INFO.contains(&key.as_str());
-                (!off).then_some(key)
+                let unread_mode = key == MODE
+                    && value
+                        .as_str()
+                        .is_some_and(|mode| UNREAD_MODES.contains(&mode));
+                (!off && !unread_mode).then_some(key)
             }),
             &HONORED_MODEL_INFO,
         ))
