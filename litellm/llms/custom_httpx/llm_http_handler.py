@@ -281,6 +281,30 @@ def _merge_headers_case_insensitive(
     }
 
 
+def _image_wire_headers(
+    config: BaseImageEditConfig | BaseImageGenerationConfig,
+    headers: dict[str, object],  # mutable-ok: non-Vertex calls forward the request dict unchanged
+    extra_headers: Mapping[str, object] | None,
+    handler: HTTPHandler | AsyncHTTPHandler,
+) -> dict[str, object]:  # mutable-ok: the HTTP handlers accept a dict of headers
+    from litellm.llms.vertex_ai.image_edit.vertex_gemini_transformation import VertexAIGeminiImageEditConfig
+    from litellm.llms.vertex_ai.image_generation.vertex_gemini_transformation import VertexAIGeminiImageGenerationConfig
+
+    if not isinstance(config, (VertexAIGeminiImageEditConfig, VertexAIGeminiImageGenerationConfig)):
+        return headers
+
+    overrides: Final = {key: value for key, value in (extra_headers or {}).items() if key.lower() == "accept-encoding"}
+    return {
+        "Accept-Encoding": "identity"
+        if handler.uses_default_accept_encoding
+        else handler.client.headers["accept-encoding"],
+        **{
+            "Accept-Encoding" if key.lower() == "accept-encoding" else key: value
+            for key, value in chain(headers.items(), overrides.items())
+        },
+    }
+
+
 def _client_request_headers(
     response_api_optional_request_params: Mapping[str, object],
     extra_headers: Mapping[str, object] | None,
@@ -7693,6 +7717,10 @@ class BaseLLMHTTPHandler:
         )
         data = image_edit_provider_config.finalize_image_edit_request_data(data, api_base)
 
+        wire_headers: Final = _image_wire_headers(
+            image_edit_provider_config, {**headers}, extra_headers, sync_httpx_client
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=prompt,
@@ -7700,7 +7728,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": files,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": wire_headers,
             },
         )
 
@@ -7715,7 +7743,7 @@ class BaseLLMHTTPHandler:
             if stream_body is not None:
                 return sync_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # legacy post signature has untyped parameters
                     url=api_base,
-                    headers=_image_edit_stream_headers(headers, stream_body),  # pyright: ignore[reportUnknownArgumentType]  # legacy provider headers are untyped
+                    headers=_image_edit_stream_headers(wire_headers, stream_body),
                     content=_ImageEditContent(stream_body),
                     timeout=timeout,
                     stream=stream,
@@ -7723,14 +7751,14 @@ class BaseLLMHTTPHandler:
             if json_body:
                 return sync_httpx_client.post(
                     url=api_base,
-                    headers=headers,
+                    headers=wire_headers,
                     json=data,
                     timeout=timeout,
                     stream=stream,
                 )
             return sync_httpx_client.post(
                 url=api_base,
-                headers=headers,
+                headers=wire_headers,
                 data=data,
                 files=files,
                 timeout=timeout,
@@ -7833,6 +7861,10 @@ class BaseLLMHTTPHandler:
         )
         data = image_edit_provider_config.finalize_image_edit_request_data(data, api_base)
 
+        wire_headers: Final = _image_wire_headers(
+            image_edit_provider_config, {**headers}, extra_headers, async_httpx_client
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=prompt,
@@ -7840,7 +7872,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": wire_headers,
             },
         )
 
@@ -7855,7 +7887,7 @@ class BaseLLMHTTPHandler:
             if stream_body is not None:
                 return await async_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # legacy post signature has untyped parameters
                     url=api_base,
-                    headers=_image_edit_stream_headers(headers, stream_body),  # pyright: ignore[reportUnknownArgumentType]  # legacy provider headers are untyped
+                    headers=_image_edit_stream_headers(wire_headers, stream_body),
                     content=_AsyncImageEditContent(stream_body),
                     timeout=timeout,
                     stream=stream,
@@ -7863,14 +7895,14 @@ class BaseLLMHTTPHandler:
             if json_body:
                 return await async_httpx_client.post(
                     url=api_base,
-                    headers=headers,
+                    headers=wire_headers,
                     json=data,
                     timeout=timeout,
                     stream=stream,
                 )
             return await async_httpx_client.post(
                 url=api_base,
-                headers=headers,
+                headers=wire_headers,
                 data=data,
                 files=files,
                 timeout=timeout,
@@ -7970,7 +8002,7 @@ class BaseLLMHTTPHandler:
 
         headers: Final[dict[str, object]] = image_generation_provider_config.validate_environment(
             api_key=api_key,
-            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            headers=dict(as_str_mapping(image_generation_optional_request_params.get("extra_headers")) or {}),
             model=model,
             messages=[],
             optional_params=image_generation_optional_request_params,
@@ -7996,6 +8028,10 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
+        wire_headers: Final = _image_wire_headers(
+            image_generation_provider_config, {**headers}, extra_headers, sync_httpx_client
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=prompt,
@@ -8003,7 +8039,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": wire_headers,
             },
         )
 
@@ -8011,14 +8047,14 @@ class BaseLLMHTTPHandler:
             if image_generation_provider_config.use_multipart_form_data():
                 return sync_httpx_client.post(
                     url=api_base,
-                    headers=headers,
+                    headers=wire_headers,
                     data=data,
                     files={"none": ""},  # Forces multipart/form-data
                     timeout=timeout,
                 )
             return sync_httpx_client.post(
                 url=api_base,
-                headers=headers,
+                headers=wire_headers,
                 json=data,
                 timeout=timeout,
             )
@@ -8060,7 +8096,7 @@ class BaseLLMHTTPHandler:
         model: str,
         prompt: str,
         image_generation_provider_config: BaseImageGenerationConfig,
-        image_generation_optional_request_params: dict,
+        image_generation_optional_request_params: dict[str, object],
         custom_llm_provider: str,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
@@ -8085,9 +8121,10 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final[dict[str, object]] = image_generation_provider_config.validate_environment(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(
+            image_generation_provider_config.validate_environment,
             api_key=api_key,
-            headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
+            headers=dict(as_str_mapping(image_generation_optional_request_params.get("extra_headers")) or {}),
             model=model,
             messages=[],
             optional_params=image_generation_optional_request_params,
@@ -8113,6 +8150,10 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
+        wire_headers: Final = _image_wire_headers(
+            image_generation_provider_config, {**headers}, extra_headers, async_httpx_client
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=prompt,
@@ -8120,7 +8161,7 @@ class BaseLLMHTTPHandler:
             additional_args={
                 "complete_input_dict": data,
                 "api_base": api_base,
-                "headers": headers,
+                "headers": wire_headers,
             },
         )
 
@@ -8128,14 +8169,14 @@ class BaseLLMHTTPHandler:
             if image_generation_provider_config.use_multipart_form_data():
                 return await async_httpx_client.post(
                     url=api_base,
-                    headers=headers,
+                    headers=wire_headers,
                     data=data,
                     files={"none": ""},  # Forces multipart/form-data
                     timeout=timeout,
                 )
             return await async_httpx_client.post(
                 url=api_base,
-                headers=headers,
+                headers=wire_headers,
                 json=data,
                 timeout=timeout,
             )

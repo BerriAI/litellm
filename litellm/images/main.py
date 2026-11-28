@@ -3,6 +3,7 @@ import contextvars
 import importlib
 from collections.abc import Callable, Collection, Coroutine, Mapping
 from functools import partial
+from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 from pydantic import TypeAdapter, ValidationError
@@ -23,6 +24,7 @@ from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.images.streaming import AsyncImageStream, ImageStream
 from litellm.litellm_core_utils.call_kwargs import http_client_of, logging_obj_of, optional_str
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     callable_of,
     drops_unsupported_params,
     require_attributes,
@@ -337,7 +339,7 @@ def image_generation(
         litellm_logging_obj: Final = logging_obj_of(kwargs.get("litellm_logging_obj"))
         client: Final = kwargs.get("client", None)
         extra_headers: Final = kwargs.get("extra_headers", None)
-        headers: Final = require_attributes(kwargs.get("headers", None) or {}, dict[str, str], "update")
+        headers: Final = dict(require_attributes(kwargs.get("headers", None) or {}, dict[str, str], "update"))
         base_model: Final = str_param(kwargs, "base_model")
         call_kwargs: Final[Mapping[str, object]] = kwargs
         max_retries: Final = call_kwargs.get("max_retries")
@@ -537,6 +539,10 @@ def image_generation(
             litellm.LlmProviders.MINIMAX,
             litellm.LlmProviders.VOLCENGINE,
         ) or (custom_llm_provider == litellm.LlmProviders.TENCENT and image_generation_config is not None):
+            from litellm.llms.vertex_ai.image_generation.vertex_gemini_transformation import (
+                VertexAIGeminiImageGenerationConfig,
+            )
+
             if image_generation_config is None:
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
 
@@ -554,6 +560,8 @@ def image_generation(
                 else api_base or litellm.api_base
             )
             litellm_params_dict["api_base"] = _api_base
+            http_handler: Final = _image_http_handler(supplied_openai_client, call_kwargs.get("client"))
+            vertex_gemini: Final = isinstance(image_generation_config, VertexAIGeminiImageGenerationConfig)
 
             return llm_http_handler.image_generation_handler(
                 api_key=api_key if supplied_openai_client is None else supplied_openai_client.api_key,
@@ -569,8 +577,21 @@ def image_generation(
                 litellm_params=litellm_params_dict,
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
-                client=_image_http_handler(supplied_openai_client, call_kwargs.get("client")),
-                _is_async=aimg_generation is True and custom_llm_provider in _ASYNC_IMAGE_HANDLER_PROVIDERS,
+                client=http_handler,
+                extra_headers=(
+                    {
+                        "Accept-Encoding": value
+                        for name, value in chain(headers.items(), (as_str_mapping(extra_headers) or {}).items())
+                        if name.lower() == "accept-encoding"
+                    }
+                    if vertex_gemini
+                    else None
+                ),
+                _is_async=aimg_generation is True
+                and (
+                    custom_llm_provider in _ASYNC_IMAGE_HANDLER_PROVIDERS
+                    or (isinstance(http_handler, AsyncHTTPHandler) and vertex_gemini)
+                ),
                 max_retries=(
                     _sdk_max_retries(max_retries, is_router_call)
                     if custom_llm_provider == litellm.LlmProviders.VOLCENGINE

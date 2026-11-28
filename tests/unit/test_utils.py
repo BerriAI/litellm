@@ -57,7 +57,7 @@ from litellm.litellm_core_utils.duration_parser import (
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import SpendLogsPayload
@@ -11062,80 +11062,46 @@ def test_usage_object_null_tokens():
     assert usage_obj.completion_tokens == 0
 
 
-@mock.patch("httpx.AsyncClient")
-@mock.patch.dict(
-    os.environ,
-    {"SSL_VERIFY": "/certificate.pem", "SSL_CERTIFICATE": "/client.pem"},
-    clear=True,
-)
-def test_async_http_handler(mock_async_client):
+@pytest.mark.asyncio
+async def test_async_http_handler_uses_client_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     import ssl
 
-    timeout = 120
-    event_hooks = {"request": [lambda r: r]}
-    concurrent_limit = 2
+    import certifi
 
-    with mock.patch.object(AsyncHTTPHandler, "create_async_transport") as mock_create_transport:
-        mock_transport = mock.MagicMock()
-        mock_create_transport.return_value = mock_transport
-
-        AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
-
-        call_args = mock_async_client.call_args[1]
-
-        assert call_args["cert"] == "/client.pem"
-        assert isinstance(call_args["verify"], ssl.SSLContext)
-        assert call_args["transport"] == mock_transport
-        assert call_args["event_hooks"] == event_hooks
-        assert call_args["headers"] == headers
-        assert call_args["timeout"] == timeout
-        assert call_args["follow_redirects"] is True
-
-
-@mock.patch("httpx.AsyncClient")
-@mock.patch.dict(os.environ, {}, clear=True)
-def test_async_http_handler_force_ipv4(mock_async_client):
-    """
-    Test AsyncHTTPHandler when litellm.force_ipv4 is True
-
-    This is prod test - we need to ensure that httpx always uses ipv4 when litellm.force_ipv4 is True
-    """
-    import httpx
-    import ssl
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
-    # Set force_ipv4 to True
-    litellm.force_ipv4 = True
-    litellm.disable_aiohttp_transport = True
-
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setenv("SSL_VERIFY", certifi.where())
+    monkeypatch.setenv("SSL_CERTIFICATE", "/client.pem")
+    monkeypatch.setenv("LITELLM_USER_AGENT", "configured-agent")
+    on_request: Final = AsyncMock()
+    with patch.object(ssl.SSLContext, "load_cert_chain") as load_certificate:
+        handler: Final = AsyncHTTPHandler(timeout=120, event_hooks={"request": [on_request]})
     try:
-        timeout = 120
-        event_hooks = {"request": [lambda r: r]}
-        concurrent_limit = 2
-
-        AsyncHTTPHandler(timeout, event_hooks, concurrent_limit)
-
-        # Get the call arguments
-        call_args = mock_async_client.call_args[1]
-
-        ############# IMPORTANT ASSERTION #################
-        # Assert transport exists and is configured correctly for using ipv4
-        assert isinstance(call_args["transport"], httpx.AsyncHTTPTransport)
-        print(call_args["transport"])
-        assert call_args["transport"]._pool._local_address == "0.0.0.0"
-        ####################################
-
-        # Assert other parameters match
-        assert call_args["event_hooks"] == event_hooks
-        assert call_args["headers"] == headers
-        assert call_args["timeout"] == timeout
-        assert isinstance(call_args["verify"], ssl.SSLContext)
-        assert call_args["cert"] is None
-        assert call_args["follow_redirects"] is True
-
+        load_certificate.assert_any_call("/client.pem")
+        with respx.mock(using="httpx") as upstream:
+            upstream.get("https://http.test/start").respond(307, headers={"Location": "/final"})
+            upstream.get("https://http.test/final").respond(200)
+            response: Final = await handler.client.get("https://http.test/start")
+            assert response.status_code == 200
+            assert response.request.headers["user-agent"] == "configured-agent"
+            assert response.request.extensions["timeout"] == httpx.Timeout(120).as_dict()
+            on_request.assert_awaited_with(response.request)
     finally:
-        # Reset force_ipv4 to default
-        litellm.force_ipv4 = False
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_http_handler_force_ipv4(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "force_ipv4", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.setenv("NO_PROXY", "*")
+    handler: Final = AsyncHTTPHandler()
+    try:
+        with patch("anyio.connect_tcp", side_effect=OSError("stopped before connect")) as connect:
+            with pytest.raises(httpx.ConnectError, match="stopped before connect"):
+                await handler.client.get("https://http.test/")
+            assert connect.call_args.kwargs["local_host"] == "0.0.0.0"
+    finally:
+        await handler.close()
 
 
 def test_is_base64_encoded_2():

@@ -12,11 +12,12 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.common_utils import map_openai_size_to_gemini_image_config
 from litellm.llms.vertex_ai.image_edit.vertex_gemini_transformation import (
     VertexAIGeminiImageEditConfig,
@@ -1029,3 +1030,57 @@ def test_vertex_gemini_edit_leaves_out_output_compression_without_failing_the_ca
 
 def test_vertex_gemini_edit_auto_size_keeps_the_input_image_shape() -> None:
     assert _sent_gemini_edit_generation_config(size="auto") == {"responseModalities": ["IMAGE"]}
+
+
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize(
+    "write", ("untouched", "item", "update", "replace", "unrelated", "replace-unrelated", "request")
+)
+async def test_vertex_gemini_edit_preserves_explicit_client_encoding(asynchronous: bool, write: str) -> None:
+    handler: Final = AsyncHTTPHandler() if asynchronous else HTTPHandler()
+    original: Final = handler.client.headers["accept-encoding"]
+    if write == "item":
+        handler.client.headers["aCcEpT-EnCoDiNg"] = original
+    elif write == "update":
+        handler.client.headers.update(handler.client.headers.raw)
+    elif write == "replace":
+        handler.client.headers = handler.client.headers.raw
+    elif write == "unrelated":
+        handler.client.headers.update({"X-Test": "1"})
+    elif write == "replace-unrelated":
+        handler.client.headers = {"X-Test": "1"}
+
+    client_defaults: Final = handler.client.headers.raw
+    try:
+        with respx.mock(using="httpx") as upstream:
+            route: Final = upstream.post("https://vertex.test/edit").respond(
+                json={
+                    "candidates": [{"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}]
+                }
+            )
+            args: Final = dict(
+                model="vertex_ai/gemini-3.1-flash-image",
+                prompt="mountains",
+                api_base="https://vertex.test/edit",
+                client=handler,
+                extra_headers={"aCcEpT-EnCoDiNg": "br"} if write == "request" else {},
+            )
+            image: Final = BytesIO(b"\x89PNG\r\n\x1a\nimage")
+            if asynchronous:
+                await litellm.aimage_edit(image=image, **args)
+            else:
+                litellm.image_edit(image=image, **args)
+            expected: Final = (
+                "br" if write == "request" else original if write in ("item", "update", "replace") else "identity"
+            )
+            assert route.calls.last.request.headers.get_list("accept-encoding") == [expected]
+            assert handler.client.headers.raw == client_defaults
+    finally:
+        if isinstance(handler, AsyncHTTPHandler):
+            await handler.close()
+        else:
+            handler.close()
+
+
+def test_vertex_gemini_edit_lowercase_request_encoding_replaces_client_encoding() -> None:
+    assert _sent_gemini_edit({"accept-encoding": "br"}).headers.get_list("accept-encoding") == ["br"]

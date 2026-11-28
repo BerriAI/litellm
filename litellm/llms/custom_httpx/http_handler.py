@@ -19,9 +19,9 @@ import certifi
 import httpx
 from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
-from httpx._client import UseClientDefault
+from httpx._client import BaseClient, UseClientDefault
 from httpx._config import DEFAULT_LIMITS
-from httpx._types import CertTypes, QueryParamTypes, RequestFiles
+from httpx._types import CertTypes, HeaderTypes, QueryParamTypes, RequestFiles
 from httpx._utils import get_environment_proxies
 from pydantic import TypeAdapter
 
@@ -808,6 +808,51 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         self.status_code = original_error.response.status_code
 
 
+class _ManagedHeaders(httpx.Headers):
+    encoding_was_set: bool = False
+
+    def __setitem__(self, key: str, value: str) -> None:
+        super().__setitem__(key, value)
+        if key.lower() == "accept-encoding":
+            self.encoding_was_set = True
+
+    def update(self, headers: HeaderTypes | None = None) -> None:
+        incoming: Final = httpx.Headers(headers)
+        super().update(incoming)
+        if "accept-encoding" in incoming:
+            self.encoding_was_set = True
+
+
+class _ManagedClientHeaders(BaseClient):
+    @property
+    def headers(self) -> httpx.Headers:
+        return super().headers
+
+    @headers.setter
+    def headers(self, headers: HeaderTypes) -> None:
+        incoming: Final = httpx.Headers(headers)
+        # HTTPX uses this setter both for our constructor defaults and for caller replacements.
+        explicit: Final = hasattr(self, "_headers") and "accept-encoding" in incoming
+        BaseClient.headers.__set__(self, incoming)
+        tracked: Final = _ManagedHeaders(super().headers)
+        tracked.encoding_was_set = explicit
+        self._headers = tracked
+
+
+class _ManagedAsyncClient(_ManagedClientHeaders, httpx.AsyncClient):
+    pass
+
+
+class _ManagedSyncClient(_ManagedClientHeaders, httpx.Client):
+    pass
+
+
+def _default_accept_encoding(headers: httpx.Headers, owned: bool) -> bool:
+    return "accept-encoding" not in headers or (
+        owned and isinstance(headers, _ManagedHeaders) and not headers.encoding_was_set
+    )
+
+
 class AsyncHTTPHandler:
     def __init__(
         self,
@@ -861,6 +906,10 @@ class AsyncHTTPHandler:
         self._client = client
         self._owns_client = False
 
+    @property
+    def uses_default_accept_encoding(self) -> bool:
+        return _default_accept_encoding(self.client.headers, self._owns_client)
+
     def create_client(
         self,
         timeout: float | httpx.Timeout | None,
@@ -869,7 +918,7 @@ class AsyncHTTPHandler:
         shared_session: Optional["ClientSession"] = None,
     ) -> httpx.AsyncClient:
         if self.transport is not None:
-            return httpx.AsyncClient(
+            return _ManagedAsyncClient(
                 transport=self.transport,
                 event_hooks=event_hooks,
                 timeout=timeout if timeout is not None else _DEFAULT_TIMEOUT,
@@ -905,7 +954,7 @@ class AsyncHTTPHandler:
         default_headers: Final = get_default_headers()
         trust_env: Final = not (replaces_aiohttp and _aiohttp_env_proxies_disabled())
 
-        return httpx.AsyncClient(
+        return _ManagedAsyncClient(
             transport=transport,
             mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(
                 transport, verify=ssl_config, cert=cert, http2=use_http2, limits=limits
@@ -1707,7 +1756,7 @@ class HTTPHandler:
         transport: Final = self._create_sync_transport(verify=ssl_config, cert=cert, http2=use_http2)
 
         # Create a client with a connection pool
-        return httpx.Client(
+        return _ManagedSyncClient(
             transport=transport,
             mounts=self._create_sync_proxy_mounts(transport, verify=ssl_config, cert=cert, http2=use_http2),
             timeout=self.timeout if self.timeout is not None else _DEFAULT_TIMEOUT,
@@ -1731,6 +1780,10 @@ class HTTPHandler:
     def client(self, client: httpx.Client) -> None:
         self._client = client
         self._owns_client = False
+
+    @property
+    def uses_default_accept_encoding(self) -> bool:
+        return _default_accept_encoding(self.client.headers, self._owns_client)
 
     def close(self):
         # Close the client when you're done with it
