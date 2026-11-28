@@ -84,6 +84,7 @@ from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     answer_json_text,
     decoded_answer_object,
+    optional_str,
     response_format_answer_json,
     response_format_schema,
     split_response_format_answer,
@@ -157,6 +158,7 @@ from ..common_utils import (
     STOP_REASON_FIELDS,
     AnthropicError,
     AnthropicModelInfo,
+    chat_target_keeps_unsigned_thinking,
     eager_input_streaming_flag,
     process_anthropic_headers,
     refusal_params,
@@ -2767,10 +2769,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook, cache_control_count
         from litellm.litellm_core_utils.prompt_templates.factory import (
             anthropic_messages_pt,
+            with_reasoning_content_as_thinking_block,
         )
         from litellm.llms.anthropic.messages.native.utils import renames_tool_use_ids_up_front
 
         drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
+        deployment_params: Final = _REQUEST_PARAMS_ADAPTER.validate_python(litellm_params)
+        keeps_unsigned_thinking: Final = chat_target_keeps_unsigned_thinking(
+            self._resolved_provider,
+            model,
+            optional_str(deployment_params.get("base_model")),
+            optional_str(deployment_params.get("api_base")),
+        )
         api_base: Final = litellm_params.get("api_base") or litellm.api_base
         rewrites_tool_use_ids: Final = renames_tool_use_ids_up_front(
             model, self._resolved_provider, api_base if isinstance(api_base, str) else None
@@ -2796,8 +2806,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if drop_params
             else translated_messages
         )
+        replayed_messages: Final = (
+            [with_reasoning_content_as_thinking_block(message) for message in capped_messages]
+            if keeps_unsigned_thinking
+            else capped_messages
+        )
 
-        if "tools" not in optional_params and has_tool_call_blocks(capped_messages):
+        if "tools" not in optional_params and has_tool_call_blocks(replayed_messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
@@ -2816,7 +2831,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
 
-        drop_thinking_without_replayed_blocks(capped_messages)
+        drop_thinking_without_replayed_blocks(replayed_messages)
 
         AnthropicConfig._maybe_drop_speed_param(
             model=model,
@@ -2855,9 +2870,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params=optional_params,
         )
         request_messages: Final = (
-            self._rewrite_tool_names_in_messages(capped_messages, _name_forward_map)
+            self._rewrite_tool_names_in_messages(replayed_messages, _name_forward_map)
             if _name_forward_map
-            else capped_messages
+            else replayed_messages
         )
         if _name_reverse_map and isinstance(litellm_params, dict):
             litellm_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = _name_reverse_map
@@ -2891,6 +2906,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     llm_provider=self._resolved_provider,
                     drop_params=drop_params,
                     rewrites_tool_use_ids=rewrites_tool_use_ids,
+                    keeps_unsigned_thinking=keeps_unsigned_thinking,
                 ),
                 conversation,
                 messages,

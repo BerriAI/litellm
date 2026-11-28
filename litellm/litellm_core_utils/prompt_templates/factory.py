@@ -3332,13 +3332,52 @@ def _replayable_thinking_blocks(
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
     *,
     drop_params: bool = False,
+    keeps_unsigned_thinking: bool = False,
 ) -> list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock]:
     keys_to_drop: Final = _UNSUPPORTED_THINKING_KEYS if drop_params else _STREAM_ONLY_THINKING_KEYS
     return [
         _without_keys(_with_native_redacted_data(block), keys_to_drop)
         for block in thinking_blocks
-        if not (is_unsignable_thinking_block(block) or (drop_params and has_blank_redacted_data(block)))
+        if _is_replayable_thinking_block(
+            block, drop_params=drop_params, keeps_unsigned_thinking=keeps_unsigned_thinking
+        )
     ]
+
+
+def _is_replayable_thinking_block(
+    block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock,
+    *,
+    drop_params: bool,
+    keeps_unsigned_thinking: bool,
+) -> bool:
+    if drop_params and has_blank_redacted_data(block):
+        return False
+    if not is_unsignable_thinking_block(block):
+        return True
+    return keeps_unsigned_thinking and _is_unsigned_thinking_with_text(block)
+
+
+def _is_unsigned_thinking_with_text(block: ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock) -> bool:
+    if is_encrypted_reasoning_block(block):
+        return False
+    match block:
+        case {"type": "thinking", "thinking": str() as text}:
+            return bool(text.strip())
+        case _:
+            return False
+
+
+def with_reasoning_content_as_thinking_block(message: AllMessageValues) -> AllMessageValues:
+    match message:
+        case {"role": "assistant", "reasoning_content": str() as reasoning} if reasoning.strip() and not message.get(
+            "thinking_blocks"
+        ):
+            thinking_block: Final = ChatCompletionThinkingBlock(type="thinking", thinking=reasoning)
+            return cast(  # cast-ok: the pattern matched an assistant message, which carries thinking_blocks
+                AllMessageValues, {**message, "thinking_blocks": [thinking_block]}
+            )
+        case _:
+            return message
 
 
 def _as_thinking_block(item: object) -> ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock | None:
@@ -3514,6 +3553,8 @@ def anthropic_messages_pt(
     llm_provider: str,
     drop_params: bool = False,
     rewrites_tool_use_ids: bool = True,
+    *,
+    keeps_unsigned_thinking: bool = False,
 ) -> _AnthropicMessageList:
     """
     format messages for anthropic
@@ -3714,7 +3755,9 @@ def anthropic_messages_pt(
 
             _raw_thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             thinking_blocks = (
-                _replayable_thinking_blocks(_raw_thinking_blocks, drop_params=drop_params)
+                _replayable_thinking_blocks(
+                    _raw_thinking_blocks, drop_params=drop_params, keeps_unsigned_thinking=keeps_unsigned_thinking
+                )
                 if _raw_thinking_blocks is not None
                 else None
             )
@@ -3883,7 +3926,11 @@ def anthropic_messages_pt(
                             assistant_content.extend(
                                 ()
                                 if turn_paused
-                                else _replayable_thinking_blocks([thinking_block], drop_params=drop_params)
+                                else _replayable_thinking_blocks(
+                                    [thinking_block],
+                                    drop_params=drop_params,
+                                    keeps_unsigned_thinking=keeps_unsigned_thinking,
+                                )
                             )
                             continue
                         text_block = cast(str, m.get("text", ""))
