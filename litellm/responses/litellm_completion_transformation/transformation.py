@@ -2191,17 +2191,18 @@ class LiteLLMCompletionResponsesConfig:
                 ]
             ],
         ) -> None:
+            current: Final = msg
             pending_texts: Final = tuple(text for text, _ in pending_items if text)
             pending_blocks: Final = tuple(block for _, blocks in pending_items for block in blocks or ())
             if pending_texts:
-                existing_text: Final = _reasoning_text(msg)
+                existing_text: Final = _reasoning_text(current)
                 combined: Final = "\n".join(pending_texts + ((existing_text,) if existing_text else ()))
                 if isinstance(msg, dict):
                     cast(dict[str, object], msg)["reasoning_content"] = combined  # cast-ok: mutable reasoning carrier
                 else:
                     setattr(msg, "reasoning_content", combined)  # noqa: B010  # attribute name is fixed, not dynamic
             if pending_blocks:
-                replayed: Final = list(pending_blocks + (_thinking_blocks(msg) or ()))
+                replayed: Final = list(pending_blocks + (_thinking_blocks(current) or ()))
                 if isinstance(msg, dict):
                     cast(dict[str, object], msg)["thinking_blocks"] = replayed  # cast-ok: mutable reasoning carrier
                 else:
@@ -4056,14 +4057,24 @@ class LiteLLMCompletionResponsesConfig:
         ] = []
 
         responses_output.extend(LiteLLMCompletionResponsesConfig._extract_compaction_output_items(choices))
-        responses_output.extend(
-            LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(chat_completion_response, choices)
+        interleaved_items = LiteLLMCompletionResponsesConfig._extract_interleaved_reasoning_and_message_output_items(
+            chat_completion_response, choices
         )
+        if interleaved_items is not None:
+            responses_output.extend(interleaved_items)
+        else:
+            responses_output.extend(
+                LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(chat_completion_response, choices)
+            )
         responses_output.extend(
             LiteLLMCompletionResponsesConfig._unclaimed_web_search_calls(chat_completion_response, choices)
         )
         responses_output.extend(
-            LiteLLMCompletionResponsesConfig._extract_message_output_items(chat_completion_response, choices)
+            LiteLLMCompletionResponsesConfig._extract_message_output_items(
+                chat_completion_response,
+                choices,
+                skip_first_choice_message=interleaved_items is not None,
+            )
         )
         responses_output.extend(
             LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
@@ -4164,6 +4175,115 @@ class LiteLLMCompletionResponsesConfig:
     def _encode_thinking_blocks(message: Message) -> str | None:
         thinking_blocks: Final[Sequence[Mapping[str, object]]] = getattr(message, "thinking_blocks", None) or ()
         return encode_thinking_blocks(thinking_blocks)
+
+    @staticmethod
+    def _thinking_text_segments(message: Message) -> tuple[Mapping[str, object], ...] | None:
+        """Ordered thinking/text segments the provider recorded for this message."""
+        psf = getattr(message, "provider_specific_fields", None)
+        if not isinstance(psf, Mapping):
+            return None
+        segments = psf.get("thinking_text_segments")
+        if not isinstance(segments, (list, tuple)) or not segments:
+            return None
+        parsed: Final = tuple(segment for segment in segments if isinstance(segment, Mapping))
+        return parsed if len(parsed) == len(segments) else None
+
+    @staticmethod
+    def _segment_run_output_item(
+        run_type: object,
+        run: tuple[Mapping[str, object], ...],
+        thinking_blocks: tuple[Mapping[str, object], ...],
+        choice: Choices,
+        status: ResponsesAPIStatus,
+    ) -> GenericResponseOutputItem:
+        if run_type == "thinking":
+            blocks: Final = tuple(thinking_blocks[cast(int, segment.get("index"))] for segment in run)
+            thinking_text: Final = "".join(
+                thinking for block in blocks if isinstance(thinking := block.get("thinking"), str)
+            )
+            return GenericResponseOutputItem(
+                type="reasoning",
+                id=mint_reasoning_item_id(),
+                status=status,
+                role="assistant",
+                content=([OutputText(type="output_text", text=thinking_text, annotations=[])] if thinking_text else []),
+                encrypted_content=encode_thinking_blocks(blocks),
+            )
+        return GenericResponseOutputItem(
+            type="message",
+            id=f"msg_{uuid.uuid4()}",
+            status=status,
+            role=choice.message.role,
+            content=[
+                OutputText(
+                    type="output_text",
+                    text="".join(cast(str, segment.get("text")) for segment in run),
+                    annotations=[],
+                )
+            ],
+        )
+
+    @staticmethod
+    def _extract_interleaved_reasoning_and_message_output_items(
+        chat_completion_response: ModelResponse,
+        choices: list[Choices],
+    ) -> list[GenericResponseOutputItem] | None:
+        """One reasoning/message item per thinking/text segment, in order.
+
+        When the provider recorded the segment order, a multi-thinking-block
+        answer is emitted as alternating ``reasoning``/``message`` items instead
+        of one reasoning item holding every signed block plus one message item
+        holding the joined answer. Replaying those items then rebuilds the
+        assistant turn in the order Anthropic produced it, so signed blocks stay
+        bound to the content that preceded them. Returns ``None`` unless the
+        layout is present and consistent with the message as it stands now:
+        every thinking block covered exactly once, in order, and the text
+        segments joined equal ``message.content``. Anything else falls back to
+        the single-pair shape; boundaries are never inferred from thinking text.
+        """
+        if not choices:
+            return None
+        choice = choices[0]
+        message = getattr(choice, "message", None)
+        if message is None:
+            return None
+        if getattr(message, "tool_calls", None) or anthropic_server_tool_calls(message):
+            return None
+        if openai_chat_refusal_text(message) is not None:
+            return None
+        if getattr(message, "annotations", None):
+            return None
+        segments = LiteLLMCompletionResponsesConfig._thinking_text_segments(message)
+        if segments is None:
+            return None
+        thinking_blocks: Final = tuple(getattr(message, "thinking_blocks", None) or ())
+        content = getattr(message, "content", None)
+        joined_text: Final = content if isinstance(content, str) else ""
+        thinking_indices: Final = tuple(
+            segment.get("index") for segment in segments if segment.get("type") == "thinking"
+        )
+        text_parts: Final = tuple(
+            segment.get("text")
+            for segment in segments
+            if segment.get("type") == "text" and isinstance(segment.get("text"), str) and segment.get("text")
+        )
+        if (
+            not all(segment.get("type") in ("thinking", "text") for segment in segments)
+            or thinking_indices != tuple(range(len(thinking_blocks)))
+            or len(text_parts) != sum(1 for segment in segments if segment.get("type") == "text")
+            or not thinking_indices
+            or not text_parts
+            or "".join(cast(str, part) for part in text_parts) != joined_text
+        ):
+            return None
+        status: Final = LiteLLMCompletionResponsesConfig._responses_status_for_choice(choice)
+        runs: Final = tuple(
+            (run_type, tuple(run)) for run_type, run in groupby(segments, key=lambda segment: segment.get("type"))
+        )
+        return [
+            LiteLLMCompletionResponsesConfig._segment_run_output_item(run_type, run, thinking_blocks, choice, status)
+            for run_type, run in runs
+        ]
 
     @staticmethod
     def _extract_reasoning_output_items(
@@ -4294,9 +4414,10 @@ class LiteLLMCompletionResponsesConfig:
     def _extract_message_output_items(
         chat_completion_response: ModelResponse,
         choices: list[Choices],
+        skip_first_choice_message: bool = False,
     ) -> list[GenericResponseOutputItem | OutputImageGenerationCall]:
         message_output_items: Final[list[GenericResponseOutputItem | OutputImageGenerationCall]] = []
-        for choice in choices:
+        for index, choice in enumerate(choices):
             # Check if message has images (image generation)
             if hasattr(choice.message, "images") and choice.message.images:
                 # Extract image generation output
@@ -4304,7 +4425,12 @@ class LiteLLMCompletionResponsesConfig:
                     choice=choice,
                 )
                 message_output_items.extend(image_generation_items)
-            elif content := LiteLLMCompletionResponsesConfig._message_output_content(choice.message):
+                continue
+            if index == 0 and skip_first_choice_message:
+                # The message item was already emitted as part of the
+                # interleaved reasoning/message set.
+                continue
+            if content := LiteLLMCompletionResponsesConfig._message_output_content(choice.message):
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
