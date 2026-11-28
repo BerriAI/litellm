@@ -144,6 +144,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
 
     api_key: str | None = None
     _access_group_rule_grants: frozenset[str] = PrivateAttr(default=frozenset())
+    _access_groups_added_by_rules: frozenset[str] = PrivateAttr(default=frozenset())
     _dashboard_session_origin: "UserAPIKeyAuth | None" = PrivateAttr(default=None)
     _dashboard_session_billing_team_id: str | None = PrivateAttr(default=None)
     _dashboard_session_model: str | None = PrivateAttr(default=None)
@@ -192,9 +193,14 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     def access_group_rule_grants(self) -> frozenset[str]:
         return self._access_group_rule_grants
 
+    @property
+    def has_attached_access_groups(self) -> bool:
+        return not self._access_groups_added_by_rules.issuperset(self.access_group_ids or ())
+
     def apply_access_group_rule_grants(self, grants: tuple[str, ...]) -> None:
         if grants:
             self._access_group_rule_grants = frozenset(grants)
+            self._access_groups_added_by_rules |= self._access_group_rule_grants.difference(self.access_group_ids or ())
             self.access_group_ids = list(dict.fromkeys((*(self.access_group_ids or ()), *grants)))
 
     user_role: LitellmUserRoles | None = None

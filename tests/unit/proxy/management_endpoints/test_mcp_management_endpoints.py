@@ -46,6 +46,7 @@ from litellm.proxy.management_endpoints import (
 from litellm.proxy.mcp_server.mcp_server_manager import MCPServerConfig, MCPServerManager
 from litellm.proxy.utils import ProxyLogging
 from litellm.rust_bridge._native import RustOrganizationRepository, RustTeamRepository, RustUserRepository
+from litellm.types.agents import AgentCaller
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
 from tests.unit.proxy.rust_auth_stores import FakeUserStore, RustAuthStores
@@ -408,7 +409,7 @@ class TestListMCPServers:
                 transport="http",
             ),
         ]
-        mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=mock_servers)
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=mock_servers)
 
         for idx, server in enumerate(mock_servers):
             server.credentials = {"auth_value": f"secret_{idx}"}
@@ -655,7 +656,7 @@ class TestListMCPServers:
                 transport="http",
             ),
         ]
-        mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=mock_servers)
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=mock_servers)
 
         for idx, server in enumerate(mock_servers):
             server.credentials = {"auth_value": f"secret_{idx}"}
@@ -826,28 +827,11 @@ class TestListMCPServers:
                     assert server.alias == "Allowed Zapier MCP"
 
     @pytest.mark.asyncio
-    async def test_admin_user_with_object_permission_respects_mcp_servers(self):
-        """
-        Test that admin users with explicit object_permission.mcp_servers
-        only see the servers specified in object_permission.
-
-        Scenario: Admin user has object_permission.mcp_servers set to specific servers
-        Expected: Only those servers are returned, not all servers in the registry
-        """
-        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
-
-        # Create mock object permission with specific servers
+    async def test_admin_key_mcp_scope_does_not_narrow_the_management_list(self):
         mock_object_permission = LiteLLM_ObjectPermissionTable(
             object_permission_id="test-obj-perm-id",
-            mcp_servers=["server-1", "server-2"],  # Only these two servers
-            mcp_access_groups=[],
-            mcp_tool_permissions={},
-            vector_stores=[],
-            agents=[],
-            agent_access_groups=[],
+            mcp_servers=["server-1", "server-2"],
         )
-
-        # Create admin user with object permission
         mock_user_auth = UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             user_id="admin_user_id",
@@ -855,42 +839,22 @@ class TestListMCPServers:
             object_permission=mock_object_permission,
             object_permission_id="test-obj-perm-id",
         )
-
-        # Mock servers that the user should see
-        server_1 = generate_mock_mcp_server_db_record(
-            server_id="server-1", alias="Server 1", url="https://server1.example.com"
-        )
-        server_2 = generate_mock_mcp_server_db_record(
-            server_id="server-2", alias="Server 2", url="https://server2.example.com"
-        )
-
-        # Mock manager
+        servers = [
+            generate_mock_mcp_server_db_record(server_id=f"server-{idx}", alias=f"Server {idx}") for idx in (1, 2, 3)
+        ]
+        for server in servers:
+            server.credentials = {"auth_value": "secret"}
         mock_manager = MagicMock()
-        mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=[server_1, server_2])
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=servers)
 
-        with (
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
-                mock_manager,
-            ),
-            patch(
-                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
-                AsyncMock(return_value=[mock_user_auth]),
-            ),
+        with patch(  # test-quality-ok: the route reads a module-global manager with no injection seam
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
         ):
-            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
-                fetch_all_mcp_servers,
-            )
+            result = await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
 
-            result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
-
-            # Verify results - should only return the 2 servers in object_permission
-            assert len(result) == 2
-            server_ids = {server.server_id for server in result}
-            assert server_ids == {"server-1", "server-2"}
-
-            # Verify credentials are redacted
-            assert all(server.credentials is None for server in result)
+        assert {server.server_id for server in result} == {"server-1", "server-2", "server-3"}
+        assert all(server.credentials is None for server in result)
 
     @pytest.mark.asyncio
     async def test_fetch_single_mcp_server_redacts_credentials(self):
@@ -2024,7 +1988,7 @@ class TestFetchAllMCPServersOrdering:
         )
         resolved: Final = list(reversed(servers) if reverse else servers)
         mock_manager: Final = MagicMock()
-        mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=resolved)
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=resolved)
         with (
             patch(  # test-quality-ok: the route reads a module-global manager with no injection seam
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
@@ -9839,6 +9803,126 @@ class TestMCPServerResolutionRegressions:
 
 @pytest.mark.usefixtures("rust_auth_stores", "mcp_resolution_auth_stores")
 class TestMCPServerResolutionCharacterization:
+    @pytest.mark.asyncio
+    async def test_full_admin_lists_full_catalog_whatever_the_key_mcp_scope(
+        self, rust_auth_stores: RustAuthStores, mcp_resolution_auth_stores: RustAuthStores
+    ) -> None:
+        granted: Final = "personal-server"
+        other: Final = "other-server"
+        prisma, manager, member = await self._detail_grant_case(
+            rust_auth_stores, "config", "direct user object_permission", granted
+        )
+        manager.config_mcp_servers = {
+            **manager.config_mcp_servers,
+            other: generate_mock_mcp_server_config_record(server_id=other),
+        }
+        admin: Final = member.model_copy(update={"user_role": LitellmUserRoles.PROXY_ADMIN, "team_id": None})
+        key_permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="key", mcp_servers=[granted])
+        key: Final = admin.model_copy(update={"object_permission": key_permission})
+        vector_permission: Final = key_permission.model_copy(update={"mcp_servers": [], "vector_stores": ["store"]})
+        vector_key: Final = admin.model_copy(update={"object_permission": vector_permission})
+        organization: Final = LiteLLM_OrganizationTable(
+            organization_id="org", organization_alias="org", budget_id="budget", created_by="admin", updated_by="admin"
+        )
+        mcp_resolution_auth_stores.organization.rows[organization.organization_id] = organization
+        group: Final = LiteLLM_AccessGroupTable(access_group_id="group", access_group_name="group")
+        rust_auth_stores.access_group.seed(group.access_group_id, group)
+        empty_permission: Final = key_permission.model_copy(update={"mcp_servers": []})
+        with (
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+        ):
+            for caller, expected in (
+                (admin, {granted, other}),
+                (vector_key, {granted, other}),
+                (key, {granted, other}),
+                (admin.model_copy(update={"object_permission": empty_permission}), {granted, other}),
+                (admin.model_copy(update={"object_permission_id": "unloaded"}), {granted, other}),
+                (admin.model_copy(update={"org_id": organization.organization_id}), set()),
+                (admin.model_copy(update={"access_group_ids": [group.access_group_id]}), set()),
+                (member.model_copy(update={"user_role": LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY}), {granted}),
+                (member, {granted}),
+            ):
+                servers: Final = await mgmt_endpoints.fetch_all_mcp_servers(caller, team_id=None)
+                assert {server.server_id for server in servers} == expected
+            for bound in (
+                {"team_id": "team"},
+                {"end_user_id": "end-user"},
+                {"agent_id": "agent"},
+                {"agent_caller": AgentCaller(user_id="caller")},
+                {"mcp_admitted_user_subject": True},
+                {"mcp_explicit_grants_only": True},
+                {"mcp_toolset_id": "toolset"},
+                {"allowed_routes": ["/v1/mcp/server"]},
+            ):
+                listed: Final = await mgmt_endpoints.fetch_all_mcp_servers(
+                    vector_key.model_copy(update=bound), team_id=None
+                )
+                assert other not in {server.server_id for server in listed}, bound
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "attached,additional_rule,full_catalog",
+        [
+            (True, None, False),
+            (False, None, True),
+            (False, "servers", False),
+            (False, "tools", False),
+            (False, "missing", False),
+            (False, "unreadable", False),
+            (False, "updated", False),
+        ],
+    )
+    async def test_admin_catalog_with_rule_granted_groups(
+        self, rust_auth_stores: RustAuthStores, attached: bool, additional_rule: str | None, full_catalog: bool
+    ) -> None:
+        personal: Final = "personal-server"
+        other: Final = "other-server"
+        prisma, manager, member = await self._detail_grant_case(
+            rust_auth_stores, "config", "direct user object_permission", personal
+        )
+        manager.config_mcp_servers = {
+            **manager.config_mcp_servers,
+            other: generate_mock_mcp_server_config_record(server_id=other),
+        }
+        models: Final = LiteLLM_AccessGroupTable(
+            access_group_id="models", access_group_name="models", access_model_names=["test-model"]
+        )
+        for group in (
+            models,
+            models.model_copy(update={"access_group_id": "servers", "access_mcp_server_ids": [personal]}),
+            models.model_copy(update={"access_group_id": "tools", "mcp_tool_permissions": {personal: ["add"]}}),
+        ):
+            rust_auth_stores.access_group.seed(group.access_group_id, group)
+        updated: Final = models.model_copy(update={"access_group_id": "updated"})
+        rust_auth_stores.access_group.seed("updated", updated)
+        rust_auth_stores.access_group.writer["updated"] = updated.model_copy(update={"access_mcp_server_ids": [personal]})
+        rust_auth_stores.access_group.seed("unreadable", RuntimeError("access group unavailable"))
+        with (
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+        ):
+            for team_id in (None, UI_SESSION_TOKEN_TEAM_ID):
+                caller: Final = member.model_copy(
+                    update={
+                        "user_role": LitellmUserRoles.PROXY_ADMIN,
+                        "team_id": team_id,
+                        "access_group_ids": [models.access_group_id] if attached else None,
+                        "requires_fresh_policy": additional_rule == "updated",
+                    }
+                )
+                caller.apply_access_group_rule_grants((models.access_group_id,))
+                grants: Final = (
+                    (models.access_group_id, additional_rule) if additional_rule else (models.access_group_id,)
+                )
+                caller.apply_access_group_rule_grants(grants)
+                listed: Final = await mgmt_endpoints.fetch_all_mcp_servers(caller, team_id=None)
+                assert (other in {server.server_id for server in listed}) is full_catalog
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("caller", ["denied", "admin"])
     @pytest.mark.parametrize(

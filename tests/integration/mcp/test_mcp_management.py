@@ -1,12 +1,13 @@
 import itertools
 import uuid
 from functools import partial
+from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
 import pytest
 import yaml
-from integration._support.client import JSON_OBJECT, Gateway, eventually
+from integration._support.client import JSON_OBJECT, Gateway, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.mcp import (
     McpCaller,
@@ -41,6 +42,57 @@ def _servers(gateway: Gateway, key: str | None = None) -> dict[str, dict[str, ob
     response: Final = gateway.client.get("/v1/mcp/server", headers={"x-litellm-api-key": key or gateway.key})
     assert response.status_code == 200, response.text
     return {server["server_id"]: server for server in response.json()}
+
+
+def test_admin_can_grant_a_server_outside_their_personal_mcp_list(gateway: Gateway, tmp_path: Path) -> None:
+    group: Final = f"model-group-{uuid.uuid4().hex}"
+    admin_id: Final = f"admin-{uuid.uuid4().hex}"
+    config: Final = yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
+    config["general_settings"]["access_group_rules"] = [
+        {"attribute": "user_id", "equals": admin_id, "access_group": group}
+    ]
+    path: Final = tmp_path / "admin-access-group.yaml"
+    path.write_text(yaml.safe_dump(config))
+    with mcp_peer() as peer, owned_proxy(gateway, tmp_path, {}, config=path) as proxy, proxy.scenario() as scenario:
+        created: Final = proxy.request(
+            "POST", "/v1/access_group", {"access_group_name": group, "access_model_names": [scenario.model()]}
+        )
+        assert created.status_code == 201, created.text
+        group_id: Final = string_value(created.json()["access_group_id"])
+        scenario.cleanups.callback(proxy.request, "DELETE", f"/v1/access_group/{group_id}")
+        first: Final = register_mcp(scenario, peer, "first" + uuid.uuid4().hex)
+        second: Final = register_mcp(scenario, peer, "second" + uuid.uuid4().hex)
+        admin: Final = scenario.user(
+            user_id=admin_id, user_role="proxy_admin", object_permission={"mcp_servers": [first]}
+        )
+        session: Final = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+            LiteLLM_UserTable(user_id=admin, user_role="proxy_admin", models=[])
+        )
+        plain_key: Final = scenario.key(user_id=admin)
+        group_key: Final = scenario.key(user_id=admin, access_group_ids=[group_id])
+        scoped_key: Final = scenario.key(user_id=admin, object_permission={"mcp_servers": [first]})
+        vector_key: Final = scenario.key(user_id=admin, object_permission={"vector_stores": ["store"]})
+        stored: Final = proxy.rows(
+            'SELECT p.mcp_servers FROM "LiteLLM_VerificationToken" t JOIN "LiteLLM_ObjectPermissionTable" p'
+            " ON p.object_permission_id = t.object_permission_id WHERE t.token = %s",
+            (sha256(vector_key.encode()).hexdigest(),),
+        )
+        assert stored == [{"mcp_servers": []}]
+        for credential in (session, plain_key, scoped_key, vector_key):
+            assert {first, second} <= _servers(proxy, credential).keys()
+        assert second not in _servers(proxy, group_key)
+        for credential in (session, scoped_key, vector_key):
+            assert call_tool(proxy, credential, second, "add", ADD).status_code == 403
+        assert call_tool(proxy, scoped_key, first, "add", ADD).status_code == 200
+
+        recipient: Final = scenario.user(user_role="internal_user")
+        recipient_session: Final = _dashboard_ui_session_token(recipient)
+        assert second not in _servers(proxy, recipient_session)
+        granted: Final = proxy.request(
+            "POST", "/user/update", {"user_id": recipient, "object_permission": {"mcp_servers": [second]}}, key=session
+        )
+        assert granted.status_code == 200, granted.text
+        assert {first, second}.intersection(_servers(proxy, recipient_session)) == {second}
 
 
 def test_non_admin_key_cannot_create_edit_or_delete_servers(gateway: Gateway) -> None:
