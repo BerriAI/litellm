@@ -209,7 +209,7 @@ async fn admin<H: AuthHost>(
         request.runs_inference_checks,
         team_id_upsert,
     )
-    .await;
+    .await?;
     let user = user::admin_user(
         host,
         claims,
@@ -745,6 +745,28 @@ mod tests {
         assert_eq!(identity.user_id.as_deref(), Some("u1"));
         assert_eq!(identity.team_id.as_deref(), team_id);
         assert_eq!(calls(&host), expected_calls);
+    }
+
+    #[tokio::test]
+    async fn an_admin_header_team_the_host_declines_ends_the_call() {
+        let host = ScriptedHost {
+            teams: HashMap::from([("t1", Err(Error::HostDeclined))]),
+            users: HashMap::from([("u1", user("u1", "internal_user", &[]))]),
+            ..host(json!({"sub": "u1", "scope": "litellm_proxy_admin"}))
+        };
+        let settings = settings(JwtAuthSettings {
+            admin_allowed_routes: Box::new(["openai_routes".to_owned()]),
+            ..config()
+        });
+        let request = JwtRequest {
+            team_header: Some("t1"),
+            runs_inference_checks: true,
+            ..request(CHAT)
+        };
+        let denial = authorize_with(&host, request, &settings, PROVISIONED)
+            .await
+            .unwrap_err();
+        assert_eq!(denial, Error::HostDeclined);
     }
 
     #[tokio::test]

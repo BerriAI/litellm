@@ -11,6 +11,8 @@ use super::{Admit, Reason, Refused, config::messages_only};
 
 const MESSAGES: &str = "/v1/messages";
 const CALL_ID: &str = "x-litellm-call-id";
+/// The one proxy header the auth core reads, so the caller check decides on it.
+pub(super) const TEAM_HEADER: &str = "x-litellm-team-id";
 const FORWARDED_FOR: &str = "x-forwarded-for";
 const CLAUDE_CODE: [&str; 2] = ["claude-cli/", "claude-code/"];
 
@@ -39,10 +41,15 @@ pub(super) fn headers(admit: &Admit, request: &Parts) -> Option<Reason> {
     [
         (
             "proxy_header",
+            headers.keys().map(|name| name.as_str()).any(|name| {
+                name.starts_with("x-litellm-") && name != CALL_ID && name != TEAM_HEADER
+            }),
+        ),
+        (
+            TEAM_HEADER,
             headers
-                .keys()
-                .map(|name| name.as_str())
-                .any(|name| name.starts_with("x-litellm-") && name != CALL_ID),
+                .get(TEAM_HEADER)
+                .is_some_and(|team| team.to_str().is_err()),
         ),
         ("content_encoding", headers.contains_key(CONTENT_ENCODING)),
         (
@@ -126,6 +133,14 @@ mod tests {
 
     fn messages(yaml: &str, uri: &str, sent: &[(&str, &str)]) -> Option<String> {
         head(yaml, Method::POST, uri, sent)
+    }
+
+    #[test]
+    fn a_team_header_that_is_not_ascii_stays_with_python() {
+        assert_eq!(
+            messages(DROP_PARAMS, MESSAGES, &[(TEAM_HEADER, "équipe")]).as_deref(),
+            Some(TEAM_HEADER)
+        );
     }
 
     #[rstest]

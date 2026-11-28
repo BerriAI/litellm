@@ -1,5 +1,6 @@
 # JWTs the native app verifies itself under an enterprise license: one that names no team or key
-# mapping is served, and one the core refuses goes to Python over the core's error.
+# mapping is served, and one the core refuses goes to Python over the core's error. A team chosen
+# by header reaches the core, which asks for a team read that is not native yet.
 enterprise: true
 
 config:
@@ -38,6 +39,37 @@ requests:
     expect: python
     reason: credential
     over: expired
+
+  - name: a JWT choosing a team by header
+    jwt: {claims: {sub: user-123}}
+    headers: {x-litellm-team-id: team-1}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a proxy admin JWT choosing a team by header
+    jwt: {claims: {scope: litellm_proxy_admin}}
+    headers: {x-litellm-team-id: team-1}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a JWT whose team header is not ASCII
+    jwt: {claims: {sub: user-123}}
+    headers: {x-litellm-team-id: équipe}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: headers
+    over: x-litellm-team-id
+
+  - name: the master key choosing a team by header
+    headers: {authorization: Bearer gateway-key, x-litellm-team-id: team-1}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: headers
+    over: x-litellm-team-id
 
   - name: the master key beside JWT auth
     headers: {authorization: Bearer gateway-key}

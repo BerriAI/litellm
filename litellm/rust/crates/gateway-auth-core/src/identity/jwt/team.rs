@@ -317,18 +317,22 @@ pub async fn load_header_team<H: AuthHost>(
     }
 }
 
-/// `_attach_team_from_header_for_admin`: the header team to attach, if it loads.
+/// `_attach_team_from_header_for_admin`: the header team to attach, if it loads. A team the host
+/// declines to hand back ends the call, so the admin is never served without it.
 pub async fn admin_header_team<H: AuthHost>(
     host: &H,
     header_value: Option<&str>,
     runs_inference_checks: bool,
     upsert: bool,
-) -> Option<HostTeam<H>> {
-    let header_value = header_value.filter(|text| !text.is_empty())?;
+) -> Result<Option<HostTeam<H>>, Error> {
+    let Some(header_value) = header_value.filter(|text| !text.is_empty()) else {
+        return Ok(None);
+    };
     if !runs_inference_checks {
-        return None;
+        return Ok(None);
     }
-    host.team(header_value, upsert).await.ok()?.found()
+    let read = host.team(header_value, upsert).await.map(TeamRead::found);
+    Error::absent_unless_declined(read)
 }
 
 /// The team with the user's membership in it, read when there is a user.
@@ -1036,17 +1040,18 @@ mod tests {
     }
 
     #[rstest]
-    #[case::llm_route(Some("a"), true, Some("a".to_owned()), &["team a upsert"])]
-    #[case::management_route(Some("a"), false, None, &[])]
-    #[case::no_header(None, true, None, &[])]
-    #[case::absent(Some("x"), true, None, &["team x upsert"])]
-    #[case::unreadable(Some("u"), true, None, &["team u upsert"])]
-    #[case::lookup_fails(Some("down"), true, None, &["team down upsert"])]
+    #[case::llm_route(Some("a"), true, Ok(Some("a".to_owned())), &["team a upsert"])]
+    #[case::management_route(Some("a"), false, Ok(None), &[])]
+    #[case::no_header(None, true, Ok(None), &[])]
+    #[case::absent(Some("x"), true, Ok(None), &["team x upsert"])]
+    #[case::unreadable(Some("u"), true, Ok(None), &["team u upsert"])]
+    #[case::lookup_fails(Some("down"), true, Ok(None), &["team down upsert"])]
+    #[case::declined(Some("held"), true, Err(Error::HostDeclined), &["team held upsert"])]
     #[tokio::test]
     async fn attaches_an_admin_header_team(
         #[case] header_value: Option<&str>,
         #[case] runs_inference_checks: bool,
-        #[case] expected: Option<String>,
+        #[case] expected: Result<Option<String>, Error>,
         #[case] calls: &[&str],
     ) {
         let host = ScriptedHost {
@@ -1054,11 +1059,14 @@ mod tests {
                 ("a", found("a")),
                 ("u", Ok(TeamRead::Unreadable)),
                 ("down", Err(Error::HostFailed)),
+                ("held", Err(Error::HostDeclined)),
             ]),
             ..ScriptedHost::default()
         };
         assert_eq!(
-            id(admin_header_team(&host, header_value, runs_inference_checks, true).await),
+            admin_header_team(&host, header_value, runs_inference_checks, true)
+                .await
+                .map(id),
             expected
         );
         assert_eq!(host.calls(), calls);
