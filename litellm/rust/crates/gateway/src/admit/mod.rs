@@ -507,7 +507,7 @@ mod tests {
     ) {
         let config = Config::from_yaml(&format!("{CONFIG}  enable_jwt_auth: true\n")).unwrap();
         let admit = Arc::new(Admit {
-            auth: host::auth::auth_over(&config, None, false, None, true, &|_: &str| None),
+            auth: host::auth::auth_over(&config, None, false, None, true, &|_: &str| None, None),
             ..Admit::over(&config, Vec::new())
         });
         let polled = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -540,7 +540,7 @@ mod tests {
         const CHUNK: usize = 1024;
         let config = Config::from_yaml(&format!("{CONFIG}  enable_jwt_auth: true\n")).unwrap();
         let admit = Arc::new(Admit {
-            auth: host::auth::auth_over(&config, None, false, None, true, &|_: &str| None),
+            auth: host::auth::auth_over(&config, None, false, None, true, &|_: &str| None, None),
             unauthenticated_body_limit: 2 * CHUNK,
             ..Admit::over(&config, Vec::new())
         });

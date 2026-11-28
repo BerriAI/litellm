@@ -30,6 +30,7 @@ use litellm_gateway_auth_core::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
         key::Keyed,
     },
+    authz::{Layer, ModelList},
     body::Params,
     identity::{
         jwt::{
@@ -40,7 +41,9 @@ use litellm_gateway_auth_core::{
     },
     record::{EndUserRecord, MembershipRecord, OrgRecord, ProjectRecord, TeamRecord, UserRecord},
 };
+use litellm_gateway_inference::routing;
 use litellm_redis_store::auth_cache::{KeyEntry, UserEntry};
+use litellm_router_core::{Router, resolve};
 use serde_json::Value;
 
 pub(crate) use affiliation::{
@@ -54,10 +57,9 @@ pub use store::AuthStore;
 
 /// The rows the native host hands the core: a key's, and a core record for each thing a caller
 /// belongs to. The host reads a key's team, owner, membership, organization and project, and a JWT's
-/// team, user and membership. Those associations still go to Python at admit. The steps that read the other records decline. `Infallible` is a row this
-/// host has no record for, so no identity that needs one exists. The end user's record is empty
-/// for a request that names none, and names the end user alone for one whose row holds nothing
-/// the native app would have to apply.
+/// team, user and membership. The model can choose the JWT's team. These associations still go
+/// to Python at admit. The other record reads decline. A row this host cannot read is `Infallible`.
+/// An end user's record names the end user alone when its row holds nothing the native app applies.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeRows;
 
@@ -86,6 +88,9 @@ pub struct NativeAuthHost {
     /// HTTP and document-cache IO for JWT verification (JWKS, OIDC discovery). `None` on a host
     /// that authenticates no request, as the credential store is.
     jwt_io: Option<Arc<JwtIo>>,
+    /// The router the native app serves through, which says what a model's name resolves to when
+    /// a team's model list is judged. `None` on a host built with no router.
+    router: Option<Router>,
 }
 
 impl NativeAuthHost {
@@ -96,6 +101,7 @@ impl NativeAuthHost {
             master: None,
             own_budget: false,
             jwt_io: None,
+            router: None,
         }
     }
 
@@ -119,6 +125,16 @@ fn is_entra_agent_candidate(claims: &Value) -> bool {
     ["iss", "tid", "azp"]
         .into_iter()
         .all(|field| object.get(field).is_some_and(Value::is_string))
+}
+
+/// Whether Python resolves `model` differently for `team_id` than for no team: a deployment the
+/// team owns, which it reaches by its internal name or which gives the model other access groups.
+/// The model rule is asked with no team, so its answer for such a model is not Python's.
+fn resolved_by_team(router: &Router, team_id: &str, model: &str) -> bool {
+    let registry = router.registry();
+    model.starts_with(&format!("model_name_{team_id}_"))
+        || resolve::model_access_groups(&registry, model, Some(team_id))
+            != resolve::model_access_groups(&registry, model, None)
 }
 
 /// The request needs `step`, which this host does not answer yet.
@@ -193,11 +209,19 @@ pub fn auth(
     store: Option<Arc<AuthStore>>,
     budgets_checked: bool,
 ) -> Auth<NativeRows> {
-    auth_over(config, store, budgets_checked, None, false, &|_: &str| None)
+    auth_over(
+        config,
+        store,
+        budgets_checked,
+        None,
+        false,
+        &|_: &str| None,
+        None,
+    )
 }
 
 /// Like [`auth`], with the JWT verification IO, license entitlement, and environment lookup from
-/// `AppState`.
+/// `AppState`, and the router the native app built from `config`.
 pub fn auth_over(
     config: &Config,
     store: Option<Arc<AuthStore>>,
@@ -205,6 +229,7 @@ pub fn auth_over(
     jwt_io: Option<Arc<JwtIo>>,
     premium: bool,
     environment: &dyn Lookup,
+    router: Option<Router>,
 ) -> Auth<NativeRows> {
     let settings = settings(config, store.is_some(), premium, environment);
     let host = NativeAuthHost {
@@ -212,6 +237,7 @@ pub fn auth_over(
         master: master_key(config).map(|key| Token::new(key.clone()).hash()),
         own_budget: budgets_checked && config.general_settings.disable_budget_reservation,
         jwt_io,
+        router,
     };
     let keys = CoreAuthenticator::new(host, settings, Arc::new(SystemClock));
     Auth::new(Arc::new(keys)).with_extractor(Arc::new(BearerOrXApiKey))
@@ -593,8 +619,25 @@ impl AuthHost for NativeAuthHost {
         Ok(false)
     }
 
-    async fn team_model_access(&self, _: &TeamRecord, _: &str) -> Result<ModelAccess, Error> {
-        declined("team_model_access")
+    /// `can_team_access_model`, by the rule a caller's own model lists are judged by after
+    /// authentication. A team with model aliases or access group ids was declined when it was
+    /// read, so its `models` is all Python reads of it here.
+    async fn team_model_access(
+        &self,
+        team: &TeamRecord,
+        model: &str,
+    ) -> Result<ModelAccess, Error> {
+        let Some(router) = &self.router else {
+            return declined("team_model_access");
+        };
+        if resolved_by_team(router, &team.team_id, model) {
+            return declined("team_owned_deployment");
+        }
+        let team_layer = [Layer::Team(ModelList::read(&team.models))];
+        Ok(match routing::reaches(router, team_layer, model) {
+            Ok(()) => ModelAccess::Allowed,
+            Err(_) => ModelAccess::Denied,
+        })
     }
 
     async fn team_member_budget(&self, _: &Key, _: Option<&UserRecord>) -> Result<(), Error> {
@@ -1818,7 +1861,15 @@ mod tests {
         let environment =
             move |name: &str| (name == "JWT_PUBLIC_KEY_URL").then(|| jwks_url.clone());
         let jwt_io = Arc::new(JwtIo::new(litellm_http::Client::for_test()));
-        auth_over(&config, store, false, Some(jwt_io), true, &environment)
+        auth_over(
+            &config,
+            store,
+            false,
+            Some(jwt_io),
+            true,
+            &environment,
+            None,
+        )
     }
 
     /// A gateway that verifies a JWT as [`verifying_with`] does, reads no key and lets a proxy
@@ -2082,6 +2133,163 @@ mod tests {
         );
     }
 
+    /// One model group, `claude`, whose deployment is in the access group `fast` and which the
+    /// router also serves as `sonnet`, and one, `gpt`, in no access group.
+    const ROUTED: &str = "model_list:
+  - model_name: claude
+    litellm_params: {model: anthropic/claude-haiku-5-5, api_key: provider-key}
+    model_info: {access_groups: [fast]}
+  - model_name: gpt
+    litellm_params: {model: openai/gpt-5.5, api_key: provider-key}
+router_settings:
+  model_group_alias: {sonnet: claude}
+general_settings:
+  master_key: sk-master
+  enable_jwt_auth: true
+  litellm_jwtauth:
+    team_ids_jwt_field: groups
+";
+
+    /// The team the core picks for a JWT that lists every one of `teams`, an object of each
+    /// team's id and model list, on a request for `model` to a gateway serving `config`.
+    async fn team_chosen_for(
+        config: &str,
+        teams: Columns,
+        model: &'static str,
+    ) -> Result<Option<String>, Rejected> {
+        let held = Held::start().await;
+        let teams = teams.as_object().unwrap();
+        let rows = teams.iter().map(async |(team_id, models)| {
+            let row = json!({"team_id": team_id, "models": models});
+            held.insert_named("LiteLLM_TeamTable", &row).await;
+        });
+        futures_util::future::join_all(rows).await;
+        let config = Config::from_yaml(config).unwrap();
+        let jwks = jwt::serve_jwks().await;
+        let jwks_url = jwks.url.clone();
+        let environment =
+            move |name: &str| (name == "JWT_PUBLIC_KEY_URL").then(|| jwks_url.clone());
+        let store = AuthStore::new(keys::memory_cache(), held.database());
+        let gateway = auth_over(
+            &config,
+            Some(Arc::new(store)),
+            false,
+            Some(Arc::new(JwtIo::new(litellm_http::Client::for_test()))),
+            true,
+            &environment,
+            Some(crate::boot::unhosted(&config)),
+        );
+        let listed: Vec<&String> = teams.keys().collect();
+        let token = jwt::issue(json!({"groups": listed}).as_object().unwrap(), 3600);
+        let bearer = format!("Bearer {token}");
+
+        let caller = gateway
+            .authenticate_parts(
+                &parts(("authorization", &bearer)),
+                Model::Named(Some(model)),
+            )
+            .await?;
+
+        Ok(match caller.affiliation.holder.team() {
+            Some(litellm_gateway_auth_core::Team::Row(team)) => Some(team.team_id.clone()),
+            _ => None,
+        })
+    }
+
+    #[rstest]
+    #[case::the_team_whose_list_names_the_model(
+        json!({"team-a": ["gpt"], "team-b": ["claude"]}),
+        "claude",
+        "team-b"
+    )]
+    #[case::the_first_listed_team_that_reaches_it(
+        json!({"team-a": ["claude"], "team-b": ["claude"]}),
+        "claude",
+        "team-a"
+    )]
+    #[case::a_team_with_an_empty_list(json!({"team-a": ["gpt"], "team-b": []}), "claude", "team-b")]
+    #[case::a_team_that_reaches_every_proxy_model(
+        json!({"team-a": ["gpt"], "team-b": ["all-proxy-models"]}),
+        "claude",
+        "team-b"
+    )]
+    #[case::a_team_whose_list_holds_a_star(
+        json!({"team-a": ["gpt"], "team-b": ["*"]}),
+        "claude",
+        "team-b"
+    )]
+    #[case::a_team_that_names_an_access_group_of_the_model(
+        json!({"team-a": ["gpt"], "team-b": ["fast"]}),
+        "claude",
+        "team-b"
+    )]
+    #[case::a_team_that_names_the_group_a_router_alias_stands_for(
+        json!({"team-a": ["gpt"], "team-b": ["claude"]}),
+        "sonnet",
+        "team-b"
+    )]
+    #[case::a_team_that_names_only_the_alias_does_not_reach_its_group(
+        json!({"team-a": ["sonnet"], "team-b": ["claude"]}),
+        "claude",
+        "team-b"
+    )]
+    #[case::the_first_team_when_none_reaches_the_model(
+        json!({"team-a": ["gpt"], "team-b": ["slow"]}),
+        "claude",
+        "team-a"
+    )]
+    #[tokio::test]
+    async fn a_jwt_listing_teams_acts_in_the_one_whose_models_reach_the_model_it_names(
+        #[case] teams: Columns,
+        #[case] model: &'static str,
+        #[case] chosen: &str,
+    ) {
+        let team = team_chosen_for(ROUTED, teams, model).await;
+
+        assert_eq!(team.ok().flatten().as_deref(), Some(chosen));
+    }
+
+    /// [`ROUTED`] with a deployment `team-a` owns, which that team alone calls as `shared` and
+    /// which is in the access group `fast`.
+    fn with_a_deployment_team_a_owns() -> String {
+        ROUTED.replacen(
+            "router_settings:",
+            "  - model_name: model_name_team-a_1234
+    litellm_params: {model: anthropic/claude-haiku-5-5, api_key: provider-key}
+    model_info: {team_id: team-a, team_public_model_name: shared, access_groups: [fast]}
+router_settings:",
+            1,
+        )
+    }
+
+    #[rstest]
+    #[case::by_its_internal_name("model_name_team-a_1234")]
+    #[case::by_the_name_only_that_team_calls_it("shared")]
+    #[tokio::test]
+    async fn a_model_python_resolves_by_the_team_that_owns_it_is_not_native(
+        #[case] model: &'static str,
+    ) {
+        let config = with_a_deployment_team_a_owns();
+
+        let team = team_chosen_for(&config, json!({"team-a": ["fast"]}), model).await;
+
+        assert!(matches!(team, Err(Rejected::NotNative)), "{team:?}");
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_host_built_with_no_router_declines_to_pick_a_team_by_model() {
+        let held = Held::start().await;
+        held.insert_named("LiteLLM_TeamTable", &json!({"team_id": "team"}))
+            .await;
+        let host = affiliated(&keys::memory_cache(), &held);
+        let team = host.team("team", false).await.unwrap().found().unwrap();
+
+        let answer = host.team_model_access(&team.row, "claude").await;
+
+        assert_eq!(answer, Err(Error::HostDeclined));
+    }
+
     /// A host that reads a JWT's team, membership and user from `held` behind `cache`.
     fn affiliated(cache: &Arc<AuthCache>, held: &Held) -> NativeAuthHost {
         NativeAuthHost {
@@ -2089,6 +2297,7 @@ mod tests {
             master: None,
             own_budget: false,
             jwt_io: None,
+            router: None,
         }
     }
 

@@ -374,6 +374,7 @@ impl Sent {
 #[case::jwt_key_mapping("jwt_key_mapping")]
 #[case::jwt_key_mapping_without_database("jwt_key_mapping_without_database")]
 #[case::jwt_team_header("jwt_team_header")]
+#[case::jwt_team_by_model("jwt_team_by_model")]
 #[case::jwt_team_alias("jwt_team_alias")]
 #[case::jwt_team_id_upsert("jwt_team_id_upsert")]
 #[case::jwt_user_claim("jwt_user_claim")]
