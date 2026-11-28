@@ -9,13 +9,21 @@ from typing import Final
 
 import httpx
 import openai
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
+)
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
+from litellm.llms.anthropic.count_tokens.transformation import (
+    ChatCountTranslationError,
+    counted_chat_tool_choice,
+    counted_tool_choice,
+)
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
 from litellm.llms.anthropic.messages.responses_adapters.handler import (
@@ -45,6 +53,36 @@ from litellm.types.utils import CountContextManagement, LlmProviders, TokenCount
 
 # Global handler instance - reuse across all token counting requests
 openai_count_tokens_handler: Final = OpenAICountTokensHandler()
+_RESPONSES_TOOL_CHOICE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+_RESPONSES_BRIDGE: Final = LiteLLMResponsesTransformationHandler()
+
+
+def _responses_tool_choice(
+    messages_format: TokenCountMessagesFormat,
+    count_options: Mapping[str, JsonValue],
+    chat_params: Mapping[str, JsonValue],
+    tools: Sequence[Mapping[str, object]] | None,
+    drops_params: bool,
+) -> JsonValue | ChatCountTranslationError:
+    match messages_format:
+        case "anthropic":
+            match counted_tool_choice(count_options.get("tool_choice"), drops_params):
+                case ChatCountTranslationError() | None as unsent:
+                    return unsent
+                case anthropic_choice:
+                    return _RESPONSES_TOOL_CHOICE.validate_python(
+                        LiteLLMAnthropicToResponsesAPIAdapter.translate_tool_choice_to_responses_api(anthropic_choice)
+                    )
+        case "openai":
+            match counted_chat_tool_choice(chat_params.get("tool_choice") if tools else None, drops_params):
+                case ChatCountTranslationError() | None as unsent:
+                    return unsent
+                case chat_choice:
+                    return _RESPONSES_TOOL_CHOICE.validate_python(
+                        _RESPONSES_BRIDGE.normalize_tool_choice_for_responses_api(chat_choice)
+                    )
+        case _:
+            assert_never(messages_format)
 
 
 def _workload_identity_config(
@@ -165,10 +203,9 @@ class OpenAITokenCounter(BaseTokenCounter):
         if not messages:
             return None
 
+        drops_params: Final = deployment_drops_params(deployment)
         malformed_error: Final = (
-            OpenAICountTokensConfig.malformed_anthropic_messages_error(
-                messages, drop_params=deployment_drops_params(deployment)
-            )
+            OpenAICountTokensConfig.malformed_anthropic_messages_error(messages, drop_params=drops_params)
             if messages_format == "anthropic"
             else None
         )
@@ -184,6 +221,9 @@ class OpenAITokenCounter(BaseTokenCounter):
                 status_code=400,
                 rejected_before_provider_call=True,
             )
+        tool_choice: Final = _responses_tool_choice(messages_format, count_options, chat_params, tools, drops_params)
+        if isinstance(tool_choice, ChatCountTranslationError):
+            return tool_choice.response(request_model, model_to_use, "openai_api")
 
         sent_messages: Final = await count_messages_as_sent(
             model=model_to_use,
@@ -233,6 +273,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                 tools=counted_tools,
                 instructions=instructions,
                 text=text,
+                tool_choice=tool_choice if counted_tools or not drops_params else None,
                 timeout=resolved.timeout,
             ),
             model_to_use,

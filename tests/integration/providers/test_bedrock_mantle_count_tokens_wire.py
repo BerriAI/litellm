@@ -1781,7 +1781,7 @@ _RUNTIME_COUNTED_SHAPES: Final[Mapping[str, tuple[frozenset[str], str, JsonValue
     {
         "converse": (frozenset({"messages", "system", "toolConfig"}), "toolConfig", _CONVERSE_WEATHER_TOOLS),
         "invokeModel": (
-            frozenset({"anthropic_version", "max_tokens", "messages", "system", "tools"}),
+            frozenset({"anthropic_version", "max_tokens", "messages", "system", "tools", "tool_choice"}),
             "tools",
             _INVOKE_WEATHER_TOOLS,
         ),
@@ -1799,10 +1799,19 @@ def _runtime_counted_request(count_body: Mapping[str, JsonValue]) -> tuple[str, 
     return "invokeModel", _JSON_OBJECT.validate_json(base64.b64decode(encoded))
 
 
-@pytest.mark.parametrize("request_body", _RUNTIME_COUNTED_OPTIONS.values(), ids=_RUNTIME_COUNTED_OPTIONS.keys())
+_RUNTIME_COUNTED_TOOL_CHOICES: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "forced-tool-choice-dropped": {"type": "tool", "name": "get_weather", "disable_parallel_tool_use": True},
+        "forced-tool-choice": {"type": "tool", "name": "get_weather"},
+    }
+)
+
+
+@pytest.mark.parametrize("case", _RUNTIME_COUNTED_OPTIONS.keys())
 def test_responses_input_tokens_sends_the_runtime_the_tools_without_the_options_it_refuses(
-    counting_proxy: OwnedProxy, mantle_port: int, request_body: dict[str, JsonValue]
+    counting_proxy: OwnedProxy, mantle_port: int, case: str
 ) -> None:
+    request_body: Final = _RUNTIME_COUNTED_OPTIONS[case]
     gateway: Final = counting_proxy.gateway
     with (
         wire_server(_runtime) as runtime,
@@ -1818,6 +1827,7 @@ def test_responses_input_tokens_sends_the_runtime_the_tools_without_the_options_
         allowed_fields, tools_field, weather_tools = _RUNTIME_COUNTED_SHAPES[shape]
         assert set(counted) <= allowed_fields, counted
         assert counted.get(tools_field) == (weather_tools if "tools" in request_body else None), counted
+        assert counted.get("tool_choice") == _RUNTIME_COUNTED_TOOL_CHOICES.get(case), counted
         assert mantle.drain() == ()
 
 

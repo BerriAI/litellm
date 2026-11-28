@@ -631,6 +631,7 @@ async def _sent_count_body(
     messages_format: TokenCountMessagesFormat = "openai",
     system: object = None,
     count_options: dict[str, JsonValue] | None = None,
+    deployment_params: dict[str, object] | None = None,
 ) -> Mapping[str, object]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     with respx.mock:
@@ -641,7 +642,7 @@ async def _sent_count_body(
             model_to_use=model,
             messages=messages,
             contents=None,
-            deployment={"litellm_params": {"api_key": "test-key"}},
+            deployment={"litellm_params": {"api_key": "test-key", **(deployment_params or {})}},
             request_model=f"mistral/{model}",
             tools=tools,
             chat_params=chat_params or {},
@@ -1238,4 +1239,22 @@ async def test_anthropic_count_rejects_an_unknown_tool_choice_before_calling_mis
 
     assert result is not None
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
+    assert str(result.error_message).startswith("tool_choice.type: ")
     assert not route.called
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_drops_an_unknown_tool_choice_when_the_deployment_drops_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: Final = await _sent_count_body(
+        monkeypatch,
+        "mistral-large-4",
+        _LOOKUP_ASK,
+        tools=[_ANTHROPIC_LOOKUP_TOOL],
+        messages_format="anthropic",
+        count_options={"tool_choice": {"type": "sometimes"}},
+        deployment_params={"drop_params": True},
+    )
+
+    assert "tool_choice" not in sent

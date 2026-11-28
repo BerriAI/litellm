@@ -18,7 +18,7 @@ from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
-from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError
+from litellm.llms.anthropic.count_tokens.transformation import ChatCountTranslationError, counted_tool_choice
 from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
@@ -38,7 +38,7 @@ from litellm.llms.openai.responses.count_tokens.transformation import (
     chat_content_blocks_to_responses_content,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicMessagesToolChoice
+from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.utils import CountContextManagement, LlmProviders, TokenCountMessagesFormat, TokenCountResponse
 from litellm.utils import catalog_with_runtime_registrations
 
@@ -46,9 +46,6 @@ mistral_count_tokens_handler: Final = MistralCountTokensHandler()
 _MISTRAL_CHAT_CONFIG: Final = MistralConfig()
 _CHAT_TO_RESPONSES: Final = LiteLLMResponsesTransformationHandler()
 _MODES_MISTRAL_COUNTS: Final = frozenset({"chat", "responses"})
-_ANTHROPIC_TOOL_CHOICE: Final[TypeAdapter[AnthropicMessagesToolChoice | None]] = TypeAdapter(
-    AnthropicMessagesToolChoice | None
-)
 _ANTHROPIC_OPTIONS_AS_CHAT: Final = TypeAdapter(AnthropicMessagesRequest)
 _CHAT_PARAMS: Final = TypeAdapter(Mapping[str, JsonValue])
 _CHAT_REQUEST: Final = TypeAdapter(Mapping[str, object])
@@ -266,10 +263,17 @@ def _counted_tool_choice(tool_choice: object) -> JsonValue:
 def _anthropic_options_as_chat_params(
     model: str, count_options: Mapping[str, JsonValue], drop_params: bool
 ) -> Mapping[str, JsonValue] | ChatCountTranslationError:
+    tool_choice: Final = counted_tool_choice(count_options.get("tool_choice"), drop_params)
+    if isinstance(tool_choice, ChatCountTranslationError):
+        return tool_choice
+    sent_options: Final = (
+        count_options
+        if tool_choice is not None
+        else {name: value for name, value in count_options.items() if name != "tool_choice"}
+    )
     try:
-        _ = _ANTHROPIC_TOOL_CHOICE.validate_python(count_options.get("tool_choice"))
         chat_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            _ANTHROPIC_OPTIONS_AS_CHAT.validate_python({**count_options, "model": model, "messages": []}),
+            _ANTHROPIC_OPTIONS_AS_CHAT.validate_python({**sent_options, "model": model, "messages": []}),
             custom_llm_provider=LlmProviders.MISTRAL.value,
             drop_params=drop_params,
         )

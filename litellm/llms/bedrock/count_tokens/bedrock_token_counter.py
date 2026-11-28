@@ -12,6 +12,7 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import CALLER_ERROR_LOG_EXTRA, verbose_logger
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import (
@@ -22,14 +23,19 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.llms.anthropic.count_tokens.transformation import (
     ChatCountTranslationError,
     anthropic_count_fields,
+    counted_chat_tool_choice,
+    counted_tool_choice,
     messages_count_options,
 )
+from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params
+from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.llms.base_llm.base_utils import BaseTokenCounter, deployment_litellm_params
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
     BedrockError,
     bedrock_capability_model,
+    bedrock_converse_supports_parallel_tool_use_config,
     get_bedrock_base_model,
     strip_bedrock_routing_prefix,
 )
@@ -95,21 +101,12 @@ def _deployment_route(litellm_params: Mapping[str, object]) -> tuple[str, LlmPro
     return model, LlmProviders(provider)
 
 
-def _deployment_chat_config(litellm_params: Mapping[str, object]) -> BaseConfig | None:
-    route: Final = _deployment_route(litellm_params)
-    return None if route is None else litellm.ProviderConfigManager.get_provider_chat_config(*route)
-
-
-def _claude_messages_translator(litellm_params: Mapping[str, object]) -> "AnthropicMessagesConfig":
+def _claude_messages_translator(messages_config: BaseAnthropicMessagesConfig | None) -> "AnthropicMessagesConfig":
     from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
     from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
     )
 
-    route: Final = _deployment_route(litellm_params)
-    messages_config: Final = (
-        None if route is None else litellm.ProviderConfigManager.get_provider_anthropic_messages_config(*route)
-    )
     return (
         messages_config
         if isinstance(messages_config, AnthropicMessagesConfig)
@@ -123,6 +120,70 @@ def _inference_capability_model(litellm_params: Mapping[str, object], counted_mo
         strip_bedrock_routing_prefix(deployment_model) if isinstance(deployment_model, str) else counted_model,
         litellm_params.get("base_model"),
     )
+
+
+def _chat_params_inference_honors(
+    deployment_config: BaseConfig | None,
+    chat_params: Mapping[str, JsonValue],
+    capability_model: str,
+    tools: Sequence[Mapping[str, object]] | None,
+    drops_params: bool,
+) -> Mapping[str, JsonValue] | ChatCountTranslationError:
+    if not isinstance(deployment_config, litellm.AmazonConverseConfig):
+        return chat_params
+    tool_choice: Final = chat_params.get("tool_choice")
+    counted_choice: Final = counted_chat_tool_choice(tool_choice, drops_params) if tools else tool_choice
+    if isinstance(counted_choice, ChatCountTranslationError):
+        return counted_choice
+    unsent: Final = frozenset(
+        (
+            *(() if bedrock_converse_supports_parallel_tool_use_config(capability_model) else ("parallel_tool_calls",)),
+            *(("tool_choice",) if counted_choice is None else ()),
+        )
+    )
+    return MappingProxyType({key: value for key, value in chat_params.items() if key not in unsent})
+
+
+def _without_parallel_tool_use_flag(options: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    match options.get("tool_choice"):
+        case {"disable_parallel_tool_use": _} as tool_choice:
+            return MappingProxyType(
+                {
+                    **options,
+                    "tool_choice": {
+                        key: value for key, value in tool_choice.items() if key != "disable_parallel_tool_use"
+                    },
+                }
+            )
+        case _:
+            return options
+
+
+def _caller_forces_json_tool(chat_params: Mapping[str, JsonValue]) -> bool:
+    match chat_params.get("tool_choice"):
+        case {"function": {"name": caller_name}}:
+            return caller_name == RESPONSE_FORMAT_TOOL_NAME
+        case _:
+            return False
+
+
+def _options_inference_sends(
+    options: Mapping[str, JsonValue],
+    deployment_config: BaseConfig | None,
+    chat_params: Mapping[str, JsonValue],
+    capability_model: str,
+    model_info: Mapping[str, object] | None,
+) -> Mapping[str, JsonValue]:
+    match options.get("tool_choice"), deployment_config:
+        case {"type": "tool", "name": name}, litellm.AmazonConverseConfig() as converse_config if (
+            name == RESPONSE_FORMAT_TOOL_NAME
+            and isinstance(chat_params.get("response_format"), dict)
+            and not _caller_forces_json_tool(chat_params)
+            and not converse_config.response_format_adds_tools(chat_params, capability_model, model_info)
+        ):
+            return MappingProxyType({key: value for key, value in options.items() if key != "tool_choice"})
+        case _:
+            return options
 
 
 def _has_role(message: Mapping[str, object]) -> bool:
@@ -159,10 +220,10 @@ def _runtime_rejected_claude_model(outcome: CountTokensOutcome, resolved_model: 
 
 
 def _mantle_retry_outcome(
-    runtime: CountTokensOutcome, mantle: CountTokensOutcome, carried_edits: bool
+    runtime: CountTokensOutcome, mantle: CountTokensOutcome, carried_invoke_fields: bool
 ) -> CountTokensOutcome:
     match runtime, mantle:
-        case CountTokensFailure(status_code=400), CountTokensFailure(status_code=404) if carried_edits:
+        case CountTokensFailure(status_code=400), CountTokensFailure(status_code=404) if carried_invoke_fields:
             return runtime
         case _:
             return mantle
@@ -204,6 +265,26 @@ def _invoke_context_management(context_management: CountContextManagement | None
             "anthropic_beta": list(context_management_betas(supported_spec)),
         }
     )
+
+
+def _invoke_tool_choice(
+    options: Mapping[str, JsonValue],
+    tools: Sequence[Mapping[str, object]] | None,
+    drops_params: bool,
+    drops_choice_without_tools: bool,
+) -> Mapping[str, JsonValue] | ChatCountTranslationError:
+    tool_choice: Final = options.get("tool_choice")
+    match counted_tool_choice(tool_choice, drops_params):
+        case ChatCountTranslationError() as error:
+            return error
+        case None:
+            return _NO_OPTIONS
+        case {"type": "auto" | "none"} as choice if not choice.get("disable_parallel_tool_use"):
+            return _NO_OPTIONS
+        case _ if (drops_params or drops_choice_without_tools) and not tools:
+            return _NO_OPTIONS
+        case _:
+            return MappingProxyType({"tool_choice": tool_choice})
 
 
 class BedrockTokenCounter(BaseTokenCounter):
@@ -284,8 +365,23 @@ class BedrockTokenCounter(BaseTokenCounter):
         primary_tokenizer: Final = MANTLE_TOKENIZER_TYPE if use_mantle else RUNTIME_TOKENIZER_TYPE
         litellm_params: Final = dict(deployment_litellm_params(deployment))
         claude: Final = is_mantle_claude_model(resolved_model)
-        deployment_config: Final = _deployment_chat_config(litellm_params) if claude else None
+        drops_params: Final = deployment_drops_params(deployment)
+        route: Final = _deployment_route(litellm_params) if claude else None
+        deployment_config: Final = (
+            None if route is None else litellm.ProviderConfigManager.get_provider_chat_config(*route)
+        )
+        messages_config: Final = (
+            None if route is None else litellm.ProviderConfigManager.get_provider_anthropic_messages_config(*route)
+        )
+        messages_bridged_through_chat: Final = (
+            messages_format == "anthropic" and route is not None and messages_config is None
+        )
+        converse_inference: Final = isinstance(deployment_config, litellm.AmazonConverseConfig) and (
+            messages_format == "openai" or messages_bridged_through_chat
+        )
         chat_config: Final = deployment_config if isinstance(deployment_config, AnthropicConfig) else None
+        capability_model: Final = _inference_capability_model(litellm_params, counted_model)
+        model_info: Final = _deployment_model_info(deployment)
         converse_config: Final = (
             deployment_config
             if messages_format == "openai"
@@ -301,13 +397,18 @@ class BedrockTokenCounter(BaseTokenCounter):
                 rendered_messages,
                 tools,
                 chat_params,
-                _inference_capability_model(litellm_params, counted_model),
-                _deployment_model_info(deployment),
+                capability_model,
+                model_info,
                 litellm_params,
             )
         )
         if isinstance(counted_input, ChatCountTranslationError):
             return counted_input.response(request_model, model_to_use, primary_tokenizer)
+        honored_chat_params: Final = _chat_params_inference_honors(
+            deployment_config, chat_params, capability_model, tools, drops_params
+        )
+        if isinstance(honored_chat_params, ChatCountTranslationError):
+            return honored_chat_params.response(request_model, model_to_use, primary_tokenizer)
         translated: Final = (
             await anthropic_count_fields(
                 counted_model,
@@ -316,7 +417,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 tools,
                 messages_format,
                 chat_config or AnthropicConfig(),
-                chat_params,
+                honored_chat_params,
                 messages_are_converse_turns=converse_config is not None,
                 translate_contentless_turns=chat_config is not None,
             )
@@ -326,10 +427,12 @@ class BedrockTokenCounter(BaseTokenCounter):
         if isinstance(translated, ChatCountTranslationError):
             return translated.response(request_model, model_to_use, primary_tokenizer)
         options: Final[Mapping[str, JsonValue] | ChatCountTranslationError] = (
-            translated.options
+            _options_inference_sends(
+                translated.options, deployment_config, honored_chat_params, capability_model, model_info
+            )
             if translated is not None
             else await asyncify(messages_count_options)(
-                _claude_messages_translator(litellm_params),
+                _claude_messages_translator(messages_config),
                 counted_model,
                 _COUNTED_MESSAGES.validate_python(rendered_messages),
                 count_options,
@@ -340,18 +443,31 @@ class BedrockTokenCounter(BaseTokenCounter):
         )
         if isinstance(options, ChatCountTranslationError):
             return options.response(request_model, model_to_use, primary_tokenizer)
+        inference_options: Final = (
+            _without_parallel_tool_use_flag(options) if messages_bridged_through_chat else options
+        )
         native_context_management: Final = _invoke_context_management(context_management if claude else None)
         counted_messages: Final = counted_input if translated is None else translated.messages
+        counted_tools: Final = tools if translated is None else translated.tools
+        invoke_tool_choice: Final = _invoke_tool_choice(
+            inference_options, counted_tools, drops_params, drops_choice_without_tools=converse_inference
+        )
+        if isinstance(invoke_tool_choice, ChatCountTranslationError):
+            return invoke_tool_choice.response(request_model, model_to_use, primary_tokenizer)
+        invoke_fields: Final = {**native_context_management, **invoke_tool_choice}
         runtime_request: Final = {
             **_request_data(
                 model_to_use,
-                tuple(map(_invoke_model_message, counted_messages)) if native_context_management else counted_messages,
-                tools if translated is None else translated.tools,
+                tuple(map(_invoke_model_message, counted_messages)) if invoke_fields else counted_messages,
+                counted_tools,
                 system if translated is None else translated.system,
             ),
-            **native_context_management,
+            **invoke_fields,
         }
-        mantle_request: Final = {**runtime_request, **options}
+        mantle_options: Final = MappingProxyType(
+            {key: value for key, value in inference_options.items() if key != "tool_choice"}
+        )
+        mantle_request: Final = {**runtime_request, **mantle_options}
 
         primary: Final = (
             await self._count_with(
@@ -368,7 +484,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 await self._count_with(
                     self._mantle_handler, MANTLE_TOKENIZER_TYPE, mantle_request, litellm_params, resolved_model
                 ),
-                carried_edits=bool(native_context_management),
+                carried_invoke_fields=bool(invoke_fields),
             )
             if not use_mantle and _runtime_rejected_claude_model(primary, resolved_model)
             else primary
