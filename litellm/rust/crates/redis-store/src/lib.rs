@@ -9,6 +9,7 @@ mod dual_cache;
 mod error;
 mod failure_log;
 mod memory;
+pub mod model_budgets;
 mod number;
 pub mod rate_limits;
 mod remote;
