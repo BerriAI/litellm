@@ -44,6 +44,7 @@ def _unregister_everything() -> None:
 @pytest.fixture(autouse=True)
 def clean_registry(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setattr(litellm, "prometheus_metrics_config", None)
+    monkeypatch.setattr(litellm, "prometheus_user_budget_label_include_email_alias", True)
     _unregister_everything()
     yield
     _unregister_everything()
@@ -75,6 +76,20 @@ def test_setter_emits_three_series_with_team_and_user_labels() -> None:
         MAX_METRIC: _sample(MAX_METRIC, ALICE_IN_SEARCH),
         REMAINING_METRIC: _sample(REMAINING_METRIC, ALICE_IN_SEARCH),
         HOURS_METRIC: _sample(HOURS_METRIC, ALICE_IN_SEARCH),
+    } == {MAX_METRIC: 10.0, REMAINING_METRIC: 6.0, HOURS_METRIC: pytest.approx(2.5)}
+
+
+def test_member_series_leave_out_email_unless_email_labels_are_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "prometheus_user_budget_label_include_email_alias", False)
+    logger: Final = PrometheusLogger()
+
+    _set_alice(logger, budget_reset_at=NOW + timedelta(minutes=150))
+
+    without_email: Final = {"team": "t-search", "team_alias": "search", "user": "alice"}
+    assert {
+        MAX_METRIC: _sample(MAX_METRIC, without_email),
+        REMAINING_METRIC: _sample(REMAINING_METRIC, without_email),
+        HOURS_METRIC: _sample(HOURS_METRIC, without_email),
     } == {MAX_METRIC: 10.0, REMAINING_METRIC: 6.0, HOURS_METRIC: pytest.approx(2.5)}
 
 
@@ -520,3 +535,22 @@ async def test_sweep_page_without_budgeted_members_reads_no_emails_or_counters(d
 
     assert reads == []
     assert _series(MAX_METRIC) == {}
+
+
+@pytest.mark.asyncio
+async def test_sweep_reads_no_emails_when_member_series_leave_out_email(
+    db_connected: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "prometheus_user_budget_label_include_email_alias", False)
+    directory: Final = _Directory(memberships=(_member("alice", "t-search", own_budget=20.0),))
+    real_io: Final = directory.sweep_io()
+    email_reads: Final[list[Sequence[str]]] = []
+
+    async def fetch_emails(user_ids: Sequence[str]) -> Mapping[str, str | None]:
+        email_reads.append(user_ids)
+        return await real_io.fetch_emails(user_ids)
+
+    await PrometheusLogger()._sweep_team_member_budget_metrics(replace(real_io, fetch_emails=fetch_emails), now=NOW)
+
+    assert email_reads == []
+    assert _series(MAX_METRIC) == {("t-search", "alice"): 20.0}

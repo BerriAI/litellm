@@ -828,7 +828,7 @@ async def test_authed_request_sets_member_gauges_without_lookups(prometheus_logg
     assert all(getter.await_count == 0 for getter in getters.values()), {
         name: getter.await_count for name, getter in getters.items()
     }
-    member: Final = {"team": "t1", "team_alias": "team-alias", "user": "u1", "user_email": "alice@example.com"}
+    member: Final = {"team": "t1", "team_alias": "team-alias", "user": "u1"}
     assert {
         name: REGISTRY.get_sample_value(name, member)
         for name in (

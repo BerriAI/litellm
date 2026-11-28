@@ -384,5 +384,5 @@ async def test_each_member_gauge_enabled_alone_still_emits_on_requests(monkeypat
     with time_machine.travel(datetime(2026, 10, 1, 12, tzinfo=timezone.utc), tick=False):
         await logger._increment_remaining_budget_metrics(**{**COMMON_KWARGS, "litellm_params": {"metadata": metadata}})
 
-    member = {"team": "team-123", "team_alias": "my-team", "user": "user-1", "user_email": "user-1@example.com"}
+    member = {"team": "team-123", "team_alias": "my-team", "user": "user-1"}
     assert REGISTRY.get_sample_value(only_enabled, member) == pytest.approx(expected)
