@@ -8,14 +8,18 @@ X-Content-Type-Options: nosniff stops MIME sniffing.
 Strict-Transport-Security is opt-in via LITELLM_ENABLE_HSTS because it only
 makes sense over HTTPS and would lock browsers out of plain-http deployments.
 
-Headers are set with setdefault so a route that intentionally sets its own
-value is never overridden.
+Framing headers use setdefault so a route that sets its own value keeps it.
+A response that omits Cache-Control gets no-store, except a successful
+non-HTML static file, which keeps its existing policy so hashed build assets
+stay cacheable. HTML, errors, and bodyless responses that omit a policy
+cannot be stored. A route that already set Cache-Control keeps that value.
 """
 
 import os
 from typing import Final
 
 from starlette.datastructures import MutableHeaders
+from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 STATIC_SECURITY_HEADERS: Final = (
@@ -45,6 +49,13 @@ class SecurityHeadersMiddleware:
                 applied: Final = (*STATIC_SECURITY_HEADERS, HSTS_HEADER) if _hsts_enabled() else STATIC_SECURITY_HEADERS
                 for name, value in applied:
                     headers.setdefault(name, value)
+                static_asset: Final = (
+                    isinstance(scope.get("endpoint"), StaticFiles)
+                    and 200 <= message["status"] < 300
+                    and "text/html" not in headers.get("content-type", "").lower()
+                )
+                if not static_asset and not headers.get("cache-control"):
+                    headers["Cache-Control"] = "no-store"
             await send(message)
 
         await self.app(scope, receive, send_with_security_headers)
