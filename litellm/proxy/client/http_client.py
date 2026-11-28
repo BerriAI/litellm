@@ -1,6 +1,7 @@
 """HTTP client for making requests to the LiteLLM proxy server."""
 
 from collections.abc import Mapping
+from enum import Enum
 from typing import Final
 
 import requests
@@ -12,6 +13,10 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 class _RequestOptions(TypedDict, total=False, extra_items=object):
     pass
+
+
+class _DefaultTimeout(Enum):
+    CLIENT = "client"
 
 
 class HTTPClient:
@@ -37,6 +42,7 @@ class HTTPClient:
         data: Mapping[str, object] | list | bytes | None = None,
         json: object = None,
         headers: dict[str, str] | None = None,
+        timeout: float | tuple[float, float] | None | _DefaultTimeout = _DefaultTimeout.CLIENT,
         **kwargs: Unpack[_RequestOptions],
     ) -> object:
         """Make an HTTP request to the LiteLLM proxy server.
@@ -52,6 +58,7 @@ class HTTPClient:
             json: (optional) A JSON serializable Python object to send in the body
                 of the request.
             headers: (optional) Dictionary of HTTP headers to send with the request.
+            timeout: Override the client's timeout for this request. None disables the timeout.
             **kwargs: Additional keyword arguments to pass to the request.
 
         Returns:
@@ -94,7 +101,7 @@ class HTTPClient:
             data=data,
             json=json,
             headers=request_headers,
-            timeout=self._timeout,
+            timeout=self._timeout if timeout is _DefaultTimeout.CLIENT else timeout,
             **kwargs,
         )
 
