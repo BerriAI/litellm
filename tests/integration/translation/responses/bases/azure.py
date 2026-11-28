@@ -238,6 +238,7 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
         "object": "response",
         "created_at": 1791231854,
         "status": "completed",
+        "access_programs": None,
         "background": False,
         "completed_at": 1791231857,
         "content_filters": [
@@ -371,6 +372,7 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
         },
         "user": None,
         "store": True,
+        "access_programs": None,
         "background": False,
         "completed_at": 1791231857,
         "content_filters": [
@@ -447,6 +449,7 @@ GPT_5_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         "object": "response",
         "created_at": 1791231858,
         "status": "completed",
+        "access_programs": None,
         "background": False,
         "completed_at": 1791231859,
         "content_filters": [
@@ -580,6 +583,7 @@ GPT_5_6_LUNA_TEST_CASE: Final = TranslationTestCase(
         },
         "user": None,
         "store": True,
+        "access_programs": None,
         "background": False,
         "completed_at": 1791231859,
         "content_filters": [
@@ -780,6 +784,7 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
     },
     expected_litellm_response={
         **RESPONSES_NATIVE_RESPONSE,
+        "access_programs": None,
         "id": ANY,
         "created_at": 1792025532,
         "model": "azure/gpt-6-luna",
@@ -1043,6 +1048,7 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
     },
     expected_litellm_response={
         **RESPONSES_NATIVE_RESPONSE,
+        "access_programs": None,
         "id": ANY,
         "created_at": 1792025524,
         "model": "azure/gpt-6.1-sol",
@@ -1307,6 +1313,7 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
     },
     expected_litellm_response={
         **RESPONSES_NATIVE_RESPONSE,
+        "access_programs": None,
         "id": ANY,
         "created_at": 1792025543,
         "model": "azure/gpt-6-astra",
@@ -1566,6 +1573,7 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
     },
     expected_litellm_response={
         **RESPONSES_NATIVE_RESPONSE,
+        "access_programs": None,
         "id": ANY,
         "created_at": 1792025553,
         "model": "azure/gpt-5.6-terra",
