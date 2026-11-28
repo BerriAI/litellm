@@ -120,6 +120,25 @@ impl Key {
     }
 }
 
+#[cfg(test)]
+impl Key {
+    /// A key that holds nothing beside its `models`.
+    pub(crate) fn listing(models: &[&str]) -> Self {
+        Self {
+            record: KeyRecord::default(),
+            models: models.iter().map(|model| (*model).to_owned()).collect(),
+            limits: KeyLimits::default(),
+            priority: None,
+            alias: None,
+            name: None,
+            own_budget: Budget::default(),
+            budget: None,
+            checked_budget: None,
+            aliased: false,
+        }
+    }
+}
+
 /// What the key holds beside the fields the core's record carries.
 struct Held {
     /// The first column that holds something no host step is asked about.

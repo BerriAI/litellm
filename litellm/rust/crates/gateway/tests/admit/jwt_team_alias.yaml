@@ -1,0 +1,52 @@
+# A JWT naming its team by alias has the team read natively by that alias. The one team with it
+# is found, and its caller still goes to Python, since the native spend log charges no team yet.
+# A team that holds a budget is not native, and an alias no team or two teams hold is the core's
+# to refuse.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      team_alias_jwt_field: team_alias
+
+teams:
+  team-1: {team_alias: alpha}
+  team-2: {team_alias: shared}
+  team-3: {team_alias: shared}
+  team-capped: {team_alias: capped, max_budget: 10}
+
+requests:
+  - name: a JWT naming a team's alias
+    jwt: {claims: {sub: user-123, team_alias: alpha}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a JWT naming the alias of a team with a budget
+    jwt: {claims: {sub: user-123, team_alias: capped}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: max_budget
+
+  - name: a JWT naming an alias no team holds
+    jwt: {claims: {sub: user-123, team_alias: nobody}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: invalid_token
+
+  - name: a JWT naming an alias two teams hold
+    jwt: {claims: {sub: user-123, team_alias: shared}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: forbidden

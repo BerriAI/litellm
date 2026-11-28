@@ -53,10 +53,13 @@ pub(crate) fn allowed_models(identity: &Authenticated<NativeRows>) -> Vec<String
 
 #[cfg(test)]
 mod tests {
-    use litellm_gateway_auth_core::{TeamCopy, record::TeamRecord};
+    use litellm_config::LitellmRole;
+    use litellm_gateway_auth_core::{
+        Affiliation, Caller, Holder, JwtActor, JwtStamp, TeamCopy, Via, record::TeamRecord,
+    };
     use rstest::rstest;
 
-    use super::*;
+    use super::{super::Key, *};
 
     fn row(models: &[&str]) -> Team<NativeRows> {
         Team::Row(TeamRecord {
@@ -86,6 +89,89 @@ mod tests {
         assert_eq!(
             team_list(&team).map(|list| list == ModelList::Every),
             reaches_every_model
+        );
+    }
+
+    fn in_team(
+        credential: Credential<NativeRows>,
+        team: Option<Team<NativeRows>>,
+    ) -> Authenticated<NativeRows> {
+        Authenticated::from(Caller {
+            credential,
+            affiliation: Affiliation {
+                holder: Holder::new(None, team.map(|team| (team, None))),
+                org: None,
+                project: None,
+            },
+            end_user: None,
+        })
+    }
+
+    fn jwt_in(team: Option<Team<NativeRows>>) -> Authenticated<NativeRows> {
+        let credential = Credential::Jwt {
+            jwt: JwtStamp {
+                claims: serde_json::Map::new(),
+                user_email: None,
+            },
+            actor: JwtActor::User {
+                role: LitellmRole::InternalUser,
+            },
+        };
+        in_team(credential, team)
+    }
+
+    fn owned(models: &[&str]) -> Vec<String> {
+        models.iter().map(|model| (*model).to_owned()).collect()
+    }
+
+    #[rstest]
+    #[case::a_team_that_names_its_models(Some(row(&["claude"])), Some(&["claude"][..]))]
+    #[case::a_team_with_no_list(Some(row(&[])), Some(&[][..]))]
+    #[case::a_team_no_row_stands_behind(Some(Team::Unstored("team-1".to_owned())), None)]
+    #[case::no_team(None, None)]
+    fn a_jwt_is_checked_against_its_teams_list(
+        #[case] team: Option<Team<NativeRows>>,
+        #[case] listed: Option<&[&str]>,
+    ) {
+        let identity = jwt_in(team);
+        let listed = listed.map(owned);
+
+        assert_eq!(
+            (
+                layers(&identity).collect::<Vec<_>>(),
+                allowed_models(&identity)
+            ),
+            (
+                listed
+                    .iter()
+                    .map(|models| Layer::Team(ModelList::read(models)))
+                    .collect(),
+                listed.clone().unwrap_or_default()
+            )
+        );
+    }
+
+    #[test]
+    fn a_keys_list_is_read_before_its_teams() {
+        let credential = Credential::Key {
+            key: Key::listing(&["claude"]),
+            via: Via::OwnToken,
+        };
+        let identity = in_team(credential, Some(row(&["haiku"])));
+        let (key, team) = (owned(&["claude"]), owned(&["haiku"]));
+
+        assert_eq!(
+            (
+                layers(&identity).collect::<Vec<_>>(),
+                allowed_models(&identity)
+            ),
+            (
+                vec![
+                    Layer::Key(ModelList::read(&key)),
+                    Layer::Team(ModelList::read(&team))
+                ],
+                owned(&["claude", "haiku"])
+            )
         );
     }
 }

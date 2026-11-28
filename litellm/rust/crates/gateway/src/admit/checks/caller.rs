@@ -18,6 +18,7 @@ use crate::{
 /// with Python over the first unserved column or association. This also applies to mapped keys.
 /// Python resolves a JWT customer claim after auth and applies its budgets and models. A key
 /// that sends the team header also stays with Python, which reads that header after auth.
+/// A JWT naming a team or user stays with Python until Rust charges those associations.
 pub(super) fn caller(
     admit: &Admit,
     request: &Parts,
@@ -62,7 +63,10 @@ pub(super) fn caller(
                     .or_else(key_team)
                     .or_else(scope_mappings)
                     .or_else(|| customer_claims(admit)),
-                Credential::Jwt { .. } => customer_claims(admit),
+                Credential::Jwt { .. } => customer_claims(admit).or_else(|| {
+                    let holder = &caller.affiliation.holder;
+                    Some(Reason::new(Refused::Credential, charged(holder)?))
+                }),
             }
         }
         Err(error) => Some(Reason::new(

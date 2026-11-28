@@ -1,5 +1,7 @@
-# With a team claim configured, a JWT naming a team needs a team read, which only Python serves
-# yet, and one naming none is refused by the core.
+# With a team claim configured, a JWT naming a team has the team read natively. A team the
+# database holds is found, and its caller still goes to Python, since the native spend log
+# charges no team yet. A team the database does not hold, and a JWT naming none, are the core's
+# to refuse.
 enterprise: true
 
 config:
@@ -14,13 +16,23 @@ config:
     litellm_jwtauth:
       team_id_jwt_field: team_id
 
+teams:
+  team-1: {}
+
 requests:
   - name: a JWT naming a team
     jwt: {claims: {sub: user-123, team_id: team-1}}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
-    over: not_native
+    over: team
+
+  - name: a JWT naming a team the database does not hold
+    jwt: {claims: {sub: user-123, team_id: team-gone}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: invalid_token
 
   - name: a JWT naming no team
     jwt: {claims: {sub: user-123}}

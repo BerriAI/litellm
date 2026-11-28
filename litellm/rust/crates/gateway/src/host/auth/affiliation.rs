@@ -1,4 +1,4 @@
-//! Reads a caller's team, key owner and their membership, organization and project from the auth
+//! Reads a caller's team, user and their team membership, organization and project from the auth
 //! cache into core records. Each entry is taken apart by name, so a field added to it does not
 //! compile here until it is copied onto the record, read for nothing or declined. A column that
 //! holds a structure no record field has a type for yet is declined here, naming the field, and
@@ -742,5 +742,50 @@ mod tests {
         #[case] declined: Option<&str>,
     ) {
         assert_eq!(team(&cached(entry)).err(), declined);
+    }
+
+    fn cached_membership(entry: &str) -> TeamMembershipEntry {
+        TeamMembershipEntry::from_value(&json::loads(entry).unwrap()).unwrap()
+    }
+
+    #[rstest]
+    #[case::budget_id(r#"{"budget_id": "budget"}"#, "budget_id")]
+    #[case::rollover_credit(r#"{"rollover_credit": 1.5}"#, "rollover_credit")]
+    #[case::litellm_budget_table(
+        r#"{"litellm_budget_table": {"max_budget": 5.0, "created_at": "2026-01-01T00:00:00"}}"#,
+        "litellm_budget_table"
+    )]
+    #[case::a_field_a_newer_pod_wrote(r#"{"token_budget": 5}"#, "unread")]
+    fn a_membership_holding_a_budget_of_its_own_is_declined_over_that_field(
+        #[case] held: &str,
+        #[case] field: &str,
+    ) {
+        let entry = format!(
+            r#"{{"user_id": "user-1", "team_id": "team", {}"#,
+            &held[1..]
+        );
+
+        assert_eq!(
+            membership(&cached_membership(&entry), AffiliationRead::Jwt),
+            Err(field)
+        );
+    }
+
+    #[test]
+    fn a_membership_is_read_as_the_user_and_the_team_it_joins() {
+        let entry = r#"{"user_id": "user-1", "team_id": "team", "spend": 2.0, "total_spend": 5.0}"#;
+
+        assert_eq!(
+            membership(&cached_membership(entry), AffiliationRead::Jwt),
+            Ok(MembershipRecord {
+                user_id: "user-1".to_owned(),
+                team_id: "team".to_owned(),
+                budget: Budget {
+                    max: None,
+                    spend: 2.0,
+                },
+                ..MembershipRecord::default()
+            })
+        );
     }
 }
