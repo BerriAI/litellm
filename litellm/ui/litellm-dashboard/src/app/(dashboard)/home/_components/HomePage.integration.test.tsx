@@ -7,6 +7,7 @@ import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActiv
 import { all_admin_roles } from "@/utils/roles";
 import { LiteAdminFrame } from "@/components/liteadmin/LiteAdmin";
 import HomePage from "./HomePage";
+import { HOME_USAGE_DAYS } from "./useHomeUsage";
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const auth = vi.hoisted(() => ({
@@ -124,6 +125,12 @@ describe("HomePage", () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("shows the rolling usage period alongside the usage totals", async () => {
+    renderHome();
+    expect(await screen.findByText("$501.74")).toBeVisible();
+    expect(screen.getByText(`Last ${HOME_USAGE_DAYS} days`, { exact: true })).toBeVisible();
   });
 
   it("shows the usage totals from the daily activity API and links Create New Virtual Key to the key creation flow", async () => {
