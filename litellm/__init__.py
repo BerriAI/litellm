@@ -721,6 +721,7 @@ kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared mo
 streamlake_models: Final[Set[str]] = set()
 resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 wally_models: Final[Set[str]] = set()
+nodecode_models: Final[Set[str]] = set()
 huawei_maas_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set[str] = set()
@@ -904,6 +905,7 @@ def _provider_model_sets() -> Mapping[str, set[str]]:  # mutable-ok: live provid
             "streamlake": streamlake_models,
             "resetdata": resetdata_models,
             "wally": wally_models,
+            "nodecode": nodecode_models,
             "huawei_maas": huawei_maas_models,
             "zerogpu": zerogpu_models,
             "v0": v0_models,
@@ -1213,6 +1215,7 @@ def _known_models() -> frozenset[str]:
         | streamlake_models
         | resetdata_models
         | wally_models
+        | nodecode_models
         | huawei_maas_models
         | zerogpu_models
         | v0_models
@@ -1354,6 +1357,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "streamlake": streamlake_models,
         "resetdata": resetdata_models,
         "wally": wally_models,
+        "nodecode": nodecode_models,
         "huawei_maas": huawei_maas_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
