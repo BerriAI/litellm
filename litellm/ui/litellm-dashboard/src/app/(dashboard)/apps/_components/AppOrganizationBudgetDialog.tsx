@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
+import { useWatch } from "react-hook-form";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -8,18 +9,17 @@ import { Input } from "@/components/ui/input";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { fetchClient } from "@/lib/http/api";
 import { extractProxyErrorMessage } from "@/lib/http/client";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { CustomerBudgetDialog, CustomerBudgetForm } from "../../customers/_components/CustomerBudgetDialog";
-import { useCustomerBudgetForm } from "../../customers/_components/useCustomerBudgetForm";
+import { useCustomerBudgetSave } from "../../customers/_components/useCustomerBudgetSave";
 import { CustomerBudgetEditor } from "../../customers/_components/CustomerLimitsFields";
-import {
-  compactBudgetEditorFields,
-  budgetPolicyChanges,
-  customerBudgetPatch,
-  hasLegacyCustomerBudget,
-} from "../../customers/_components/customerBudgetForm";
+import { compactBudgetEditorFields, hasLegacyCustomerBudget } from "../../customers/_components/customerBudgetForm";
 import { appBaseBudget, appOrganizationPresetId, type App, type AppResource, type AppOrganization } from "./appForms";
 import { organizationAppKey, loadOrganizationApp } from "./appApi";
 import { useAppBudgetGroups } from "./useAppBudgetGroups";
+import { appResourceBody } from "./appSettingsMapper";
+import { organizationAppDraft, organizationBudgetSource } from "./organizationAppMapper";
+import { createOrganizationAppSchema } from "./organizationAppSchema";
 
 export function AppOrganizationBudgetDialog({
   app,
@@ -152,12 +152,6 @@ export function OrganizationApp({
   );
 }
 
-function organizationBudgetSource(row: AppOrganization | null): "inherit" | "profile" | "custom" {
-  if (row?.budget || hasLegacyCustomerBudget(row)) return "custom";
-  if (row?.budget_id || row?.tier_budget_id) return "profile";
-  return "inherit";
-}
-
 function OrganizationAppForm({
   resource,
   organizationId,
@@ -184,62 +178,46 @@ function OrganizationAppForm({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [original] = useState(() => appBaseBudget(row, inherited));
-  const form = useCustomerBudgetForm(
-    {
-      initial: {
-        source:
-          organizationBudgetSource(row) === "profile"
-            ? `profile:${row?.budget_id ?? row?.tier_budget_id}`
-            : organizationBudgetSource(row),
-        budget: compactBudgetEditorFields(original),
-        policy: original,
-      },
-      parse: ({ source, budget, policy }) => {
-        const parsed = customerBudgetPatch({ ...budget, budgetEnabled: source === "custom" }, original, row);
-        if (!parsed.ok) return { ok: false, error: t(parsed.error) };
-        const policyChanges = budgetPolicyChanges(policy, original);
-        return {
-          ok: true,
-          value: {
-            ...(source === "custom"
-              ? { ...parsed.value, budget: { ...parsed.value.budget, ...policyChanges } }
-              : { budget_id: source.startsWith("profile:") ? source.slice(8) : null }),
-            ...(hasLegacyCustomerBudget(row) ? { budget_override: null } : {}),
-          },
-        };
-      },
-      write: async (body) => {
-        const appId =
-          resource.app_id ??
-          (
-            await fetchClient.POST("/management/v1/apps", {
-              body: { resource_id: resource.resource_id, resource_type: resource.resource_type },
-            })
-          ).data?.app_id;
-        if (!appId) throw new Error(t("apps.saveFailed"));
-        await fetchClient.PUT("/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}", {
-          params: { path: { app_id: appId, customer_org_id: organizationId } },
-          body,
-        });
-        await Promise.all(
-          ["apps", "app-resources", "app-organization", "app-member"].map((key) =>
-            queryClient.invalidateQueries({ queryKey: [key] }),
-          ),
-        );
-        onClose();
-      },
-    },
-    onPendingChange,
-  );
-  const { fields, update, error, save } = form;
+  const schema = createOrganizationAppSchema(original, row, t);
+  const form = useZodForm(schema, { defaultValues: { draft: organizationAppDraft(row, original) } });
+  const fields = useWatch({ control: form.control, name: "draft" });
+  const { pending: saving, error, setError, run } = useCustomerBudgetSave(onPendingChange);
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    if (saving) return;
+    const result = schema.safeParse({ draft: fields });
+    if (!result.success) return setError(result.error.issues[0].message);
+    await run(async () => {
+      const appId =
+        resource.app_id ??
+        (await fetchClient.POST("/management/v1/apps", { body: appResourceBody(resource) })).data?.app_id;
+      if (!appId) throw new Error(t("apps.saveFailed"));
+      await fetchClient.PUT("/management/v1/apps/{app_id}/customer_organizations/{customer_org_id}", {
+        params: { path: { app_id: appId, customer_org_id: organizationId } },
+        body: result.data,
+      });
+      await Promise.all(
+        ["apps", "app-resources", "app-organization", "app-member"].map((key) =>
+          queryClient.invalidateQueries({ queryKey: [key] }),
+        ),
+      );
+      onClose();
+    });
+  };
   const changeSource = (source: string | null) => {
     if (!source) return;
     const selected = groups.find((group) => `profile:${group.budget_id}` === fields.source);
-    if (source === "custom") {
-      update("policy", selected ?? original);
-      update("budget", compactBudgetEditorFields(selected ?? original));
-    }
-    update("source", source);
+    const policy = selected ?? original;
+    form.setValue("draft", {
+      ...form.getValues("draft"),
+      ...(source === "custom" ? { policy, budget: compactBudgetEditorFields(policy) } : {}),
+      source,
+    });
+    setError(null);
+  };
+  const changeBudget = (budget: typeof fields.budget) => {
+    form.setValue("draft", { ...form.getValues("draft"), budget });
+    setError(null);
   };
   return (
     <CustomerBudgetForm
@@ -257,7 +235,7 @@ function OrganizationAppForm({
         budget={{
           modelScope: resource,
           fields: fields.budget,
-          onChange: (value) => update("budget", value),
+          onChange: changeBudget,
           disabled: pending,
           id: "org-app-override",
         }}

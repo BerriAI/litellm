@@ -2,6 +2,8 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { createSerializer } from "nuqs";
+import type { FormEvent } from "react";
+import { useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -10,35 +12,21 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { useAppGroups } from "./appGroupApi";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { fetchClient } from "@/lib/http/api";
 import { uiHref } from "@/utils/uiHref";
-import {
-  budgetSelectionFields,
-  budgetSelectionValue,
-  changeBudgetSelection,
-} from "../../customers/_components/customerBudgetForm";
-import { useCustomerBudgetForm } from "../../customers/_components/useCustomerBudgetForm";
+import { changeBudgetSelection } from "../../customers/_components/customerBudgetForm";
+import { useCustomerBudgetSave } from "../../customers/_components/useCustomerBudgetSave";
 import { CustomerBudgetForm } from "../../customers/_components/CustomerBudgetDialog";
 import type { BudgetGroups } from "../../customers/_components/customerBudgetGroupsPlan";
-import { appSurchargeField, appSurchargeValue, type App, type AppResource } from "./appForms";
+import type { App, AppResource } from "./appForms";
 import { invalidateAppBudgets } from "./appApi";
+import { appSettingsDraft, createAppSettingsBody } from "./appSettingsMapper";
+import { createAppSettingsSchema, type AppSettingsDraft } from "./appSettingsSchema";
 import { CustomerBudgetEditor } from "../../customers/_components/CustomerLimitsFields";
 import { customerAppParsers } from "../../customers/_components/CustomerHierarchyNavigation";
 
 const appHref = createSerializer(customerAppParsers);
-
-const appDefaultsFields = (
-  app: App | undefined,
-  profiles: BudgetGroups["default_budgets"],
-  defaultBudgetId?: string | null,
-) => {
-  return {
-    ...budgetSelectionFields(app, profiles, defaultBudgetId),
-    autoCreate: app?.auto_create_customers ?? true,
-    surcharge: appSurchargeField(app?.customer_margin),
-    appGroupId: app?.app_group_id ?? null,
-  };
-};
 
 export default function AppSettingsForm({
   resource,
@@ -58,41 +46,36 @@ export default function AppSettingsForm({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const appGroups = useAppGroups();
-  const { fields, setFields, update, pending, error, save, dirty } = useCustomerBudgetForm(
-    {
-      initial: appDefaultsFields(app, profiles, defaultBudgetId),
-      parse: (fields) => {
-        const budget = budgetSelectionValue(fields, app?.budget);
-        if (!budget.ok) return { ok: false, error: t(budget.error) };
-        const margin = appSurchargeValue(fields.surcharge);
-        if (!margin.ok) return { ok: false, error: t("apps.surchargeInvalid") };
-        return {
-          ok: true,
-          value: {
-            ...budget.value,
-            ...(fields.appGroupId !== (app?.app_group_id ?? null) ? { app_group_id: fields.appGroupId } : {}),
-            auto_create_customers: fields.autoCreate,
-            customer_margin: margin.value,
-          },
-        };
-      },
-      write: async (body) => {
-        const response = app
-          ? await fetchClient.PATCH("/management/v1/apps/{app_id}", { params: { path: { app_id: app.app_id } }, body })
-          : await fetchClient.POST("/management/v1/apps", {
-              body: { ...body, resource_id: resource.resource_id, resource_type: resource.resource_type },
-            });
-        if (response.data) setFields(appDefaultsFields(response.data, profiles));
-        await invalidateAppBudgets(queryClient);
-        toast.success(t("apps.saved"));
-        onClose?.();
-      },
-    },
-    onPendingChange,
-  );
+  const initial = appSettingsDraft(app, profiles, defaultBudgetId);
+  const schema = createAppSettingsSchema(app, t);
+  const form = useZodForm(schema, { defaultValues: { draft: initial } });
+  const fields = useWatch({ control: form.control, name: "draft" });
+  const { pending, error, setError, run } = useCustomerBudgetSave(onPendingChange);
+  const dirty = JSON.stringify(fields) !== JSON.stringify(initial);
+  const update = <K extends keyof AppSettingsDraft>(key: K, value: AppSettingsDraft[K]) => {
+    form.setValue("draft", { ...form.getValues("draft"), [key]: value });
+    setError(null);
+  };
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    if (pending) return;
+    const result = schema.safeParse({ draft: fields });
+    if (!result.success) return setError(result.error.issues[0].message);
+    const body = result.data;
+    await run(async () => {
+      const response = app
+        ? await fetchClient.PATCH("/management/v1/apps/{app_id}", { params: { path: { app_id: app.app_id } }, body })
+        : await fetchClient.POST("/management/v1/apps", { body: createAppSettingsBody(body, resource) });
+      if (response.data) form.setValue("draft", appSettingsDraft(response.data, profiles));
+      await invalidateAppBudgets(queryClient);
+      toast.success(t("apps.saved"));
+      onClose?.();
+    });
+  };
   const changeBudgetSource = (source: string | null) => {
     if (!source) return;
-    setFields((current) => ({ ...current, ...changeBudgetSelection(current, source, profiles) }));
+    const current = form.getValues("draft");
+    form.setValue("draft", { ...current, ...changeBudgetSelection(current, source, profiles) });
   };
   return (
     <CustomerBudgetForm
