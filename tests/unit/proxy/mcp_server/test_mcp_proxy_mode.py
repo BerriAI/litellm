@@ -46,9 +46,11 @@ def proxy_mode():
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("proxy_mode")
-async def test_proxy_call_rejects_non_proxy_tool_names() -> None:
+@pytest.mark.parametrize("name", ("math_stdio-add", "check_workflow", "find_workflow_sources"))
+async def test_proxy_call_rejects_non_proxy_tool_names(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "mcp_tool_search", {})
     result = await mcp_operations._dispatch_virtual_mcp_tool(
-        name="math_stdio-add", arguments={"a": 1, "b": 2}, user_api_key_auth=AUTH, client_ip=None, mcp_proxy_mode=True
+        name=name, arguments={"a": 1, "b": 2}, user_api_key_auth=AUTH, client_ip=None, mcp_proxy_mode=True
     )
 
     assert result is not None
