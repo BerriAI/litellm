@@ -126,6 +126,258 @@ def test_vispark_chat_completion_request_maps_max_completion_tokens():
     assert response.choices[0].message.content == "Hello from Vispark"
 
 
+@pytest.mark.parametrize("additional_properties", [False, True])
+def test_vispark_strips_additional_properties_from_a_json_schema_response_format(additional_properties: bool):
+    city_schema: Final = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "additionalProperties": additional_properties,
+    }
+    schema: Final = {
+        "type": "object",
+        "properties": {"city": city_schema},
+        "required": ["city"],
+        "additionalProperties": False,
+    }
+    response_format: Final = {"type": "json_schema", "json_schema": {"name": "City", "schema": schema, "strict": True}}
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        litellm.completion(
+            model="vispark/vision-medium",
+            messages=[{"role": "user", "content": "Capital of France as JSON"}],
+            response_format=response_format,
+            api_key="vispark-test-key",
+        )
+
+    sent_format: Final = json.loads(route.calls.last.request.content)["response_format"]
+    assert "additionalProperties" not in json.dumps(sent_format)
+    assert sent_format["json_schema"]["strict"] is True
+    assert sent_format["json_schema"]["schema"]["properties"]["city"]["properties"] == {"name": {"type": "string"}}
+    assert city_schema["additionalProperties"] == additional_properties
+
+
+def _map_field_response_format() -> dict[str, object]:
+    schema: Final = {
+        "type": "object",
+        "properties": {"facts": {"type": "object", "additionalProperties": {"type": "string"}}},
+        "required": ["facts"],
+        "additionalProperties": False,
+    }
+    return {"type": "json_schema", "json_schema": {"name": "Facts", "schema": schema}}
+
+
+def test_vispark_rejects_a_map_field_response_format_without_drop_params():
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as error:
+            litellm.completion(
+                model="vispark/vision-medium",
+                messages=[{"role": "user", "content": "Facts about Paris as JSON"}],
+                response_format=_map_field_response_format(),
+                api_key="vispark-test-key",
+            )
+
+    assert error.value.status_code == 400
+    assert route.call_count == 0
+
+
+def test_vispark_drops_a_map_field_schema_with_drop_params():
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        litellm.completion(
+            model="vispark/vision-medium",
+            messages=[{"role": "user", "content": "Facts about Paris as JSON"}],
+            response_format=_map_field_response_format(),
+            drop_params=True,
+            api_key="vispark-test-key",
+        )
+
+    sent_schema: Final = json.loads(route.calls.last.request.content)["response_format"]["json_schema"]["schema"]
+    assert sent_schema == {"type": "object", "properties": {"facts": {"type": "object"}}, "required": ["facts"]}
+
+
+def test_vispark_keeps_a_schema_property_named_additional_properties():
+    schema: Final = {
+        "type": "object",
+        "properties": {"additionalProperties": {"type": "string", "additionalProperties": False}},
+        "required": ["additionalProperties"],
+        "additionalProperties": False,
+    }
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        litellm.completion(
+            model="vispark/vision-medium",
+            messages=[{"role": "user", "content": "Describe Paris as JSON"}],
+            response_format={"type": "json_schema", "json_schema": {"name": "Notes", "schema": schema}},
+            api_key="vispark-test-key",
+        )
+
+    sent_schema: Final = json.loads(route.calls.last.request.content)["response_format"]["json_schema"]["schema"]
+    assert sent_schema == {
+        "type": "object",
+        "properties": {"additionalProperties": {"type": "string"}},
+        "required": ["additionalProperties"],
+    }
+
+
+def test_vispark_keeps_additional_properties_keys_inside_schema_literals():
+    literal: Final = {"additionalProperties": {"color": "red"}}
+    settings: Final = {
+        "type": "object",
+        "properties": {"additionalProperties": {"type": "object"}},
+        "default": literal,
+        "enum": [literal],
+        "examples": [literal],
+    }
+    flag: Final = {"const": {"additionalProperties": True}}
+    schema: Final = {
+        "type": "object",
+        "properties": {"settings": {**settings, "additionalProperties": False}, "flag": flag},
+        "additionalProperties": False,
+    }
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        litellm.completion(
+            model="vispark/vision-medium",
+            messages=[{"role": "user", "content": "Describe the settings as JSON"}],
+            response_format={"type": "json_schema", "json_schema": {"name": "Settings", "schema": schema}},
+            api_key="vispark-test-key",
+        )
+
+    sent_schema: Final = json.loads(route.calls.last.request.content)["response_format"]["json_schema"]["schema"]
+    assert sent_schema == {"type": "object", "properties": {"settings": settings, "flag": flag}}
+
+
+def _file_id_messages() -> list[dict[str, object]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this file"},
+                {"type": "file", "file": {"file_id": "file-abc123"}},
+            ],
+        }
+    ]
+
+
+def test_vispark_rejects_a_file_part_sent_by_file_id_without_drop_params():
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        with pytest.raises(litellm.BadRequestError, match="file_id") as error:
+            litellm.completion(model="vispark/vision-medium", messages=_file_id_messages(), api_key="vispark-test-key")
+
+    assert error.value.status_code == 400
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize("file_part", [{"type": "file"}, {"type": "file", "file": None}], ids=["missing", "null"])
+def test_vispark_answers_400_for_a_file_part_without_its_file(file_part: dict[str, object], drop_params: bool):
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field") as error:
+            litellm.completion(
+                model="vispark/vision-medium",
+                messages=[{"role": "user", "content": [{"type": "text", "text": "Summarize this file"}, file_part]}],
+                drop_params=drop_params,
+                api_key="vispark-test-key",
+            )
+
+    assert error.value.status_code == 400
+    assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_vispark_drops_a_file_part_sent_by_file_id_with_drop_params(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        await litellm.acompletion(
+            model="vispark/vision-medium",
+            messages=_file_id_messages(),
+            drop_params=True,
+            api_key="vispark-test-key",
+        )
+
+    sent_content: Final = json.loads(route.calls.last.request.content)["messages"][0]["content"]
+    assert sent_content == [{"type": "text", "text": "Summarize this file"}]
+
+
+def test_other_json_providers_keep_additional_properties_and_file_parts():
+    file_part: Final = {"type": "file", "file": {"file_data": "data:application/pdf;base64,JVBERi0xLjQK"}}
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "City",
+            "schema": {"type": "object", "properties": {"name": {"type": "string"}}, "additionalProperties": False},
+        },
+    }
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.scaleway.ai/v1/chat/completions").respond(200, json=_CHAT_COMPLETION)
+        litellm.completion(
+            model="scaleway/llama-3.3-70b-instruct",
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Read this"}, file_part]}],
+            response_format=response_format,
+            api_key="scaleway-test-key",
+        )
+
+    body: Final = json.loads(route.calls.last.request.content)
+    sent_part: Final = body["messages"][0]["content"][1]
+    assert body["response_format"] == response_format
+    assert sent_part["type"] == "file"
+    assert sent_part["file"]["file_data"] == file_part["file"]["file_data"]
+
+
+_PDF_DATA_URL: Final = "data:application/pdf;base64,JVBERi0xLjQK"
+
+
+@pytest.mark.parametrize(
+    "file",
+    [{"file_data": _PDF_DATA_URL}, {"file_id": "file-abc123", "file_data": _PDF_DATA_URL}],
+    ids=["file_data", "file_id_and_file_data"],
+)
+def test_vispark_sends_a_pdf_file_part_as_an_image_url(file: dict[str, str]):
+    with respx.mock() as upstream:
+        route: Final = upstream.post("https://api.lab.vispark.in/v1/chat/completions").respond(
+            200, json=_CHAT_COMPLETION
+        )
+        litellm.completion(
+            model="vispark/vision-medium",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What code is in this PDF?"},
+                        {"type": "file", "file": file},
+                    ],
+                }
+            ],
+            api_key="vispark-test-key",
+        )
+
+    sent_content: Final = json.loads(route.calls.last.request.content)["messages"][0]["content"]
+    assert sent_content[0] == {"type": "text", "text": "What code is in this PDF?"}
+    assert sent_content[1]["type"] == "image_url"
+    assert sent_content[1]["image_url"]["url"] == _PDF_DATA_URL
+    assert all(part["type"] != "file" for part in sent_content)
+
+
 def test_vispark_text_completion_request():
     with respx.mock() as upstream:
         route: Final = upstream.post("https://api.lab.vispark.in/v1/completions").respond(200, json=_TEXT_COMPLETION)
