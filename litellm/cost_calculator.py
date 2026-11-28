@@ -3193,10 +3193,29 @@ def pricing_entry_for_cost_calc(
         )
         selected_entry: Final[Mapping[str, object]] = bedrock_model_info
         return key, MappingProxyType({name: value for name, value in selected_entry.items() if name in declared_keys})
-    candidates: Final = (selected_model, _get_response_model(completion_response), model)
+    base_model_provider: Final = (
+        _base_model_pricing_provider(
+            base_model,
+            _get_provider_for_cost_calc(
+                model=model,
+                custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            ),
+        )
+        if base_model is not None and custom_pricing is not True
+        else None
+    )
+    pricing_provider: Final = base_model_provider or custom_llm_provider
+    candidates: Final = (
+        (selected_model, pricing_provider),
+        (_get_response_model(completion_response), custom_llm_provider),
+        (model, custom_llm_provider),
+        *(((selected_model, None),) if base_model is not None else ()),
+    )
     api_base: Final = _request_api_base(litellm_logging_obj, _response_api_base(completion_response))
     api_key: Final = _request_api_key(litellm_logging_obj)
-    lookups: Final = (_cost_map_model_info(name, custom_llm_provider, api_base, api_key) for name in candidates if name)
+    lookups: Final = (
+        _cost_map_model_info(name, provider, api_base, api_key) for name, provider in candidates if name
+    )
     resolved: Final = next(
         (info for info in lookups if info),
         None,
