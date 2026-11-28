@@ -719,6 +719,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     "arguments": json.dumps(first.get("input", {})),
                 },
             )
+        if btype == "text":
+            return (
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": first.get("text", "")}],
+                },
+            )
         if btype == "mcp_tool_use":
             return (cls._mcp_call_item(first, mcp_results.get(first.get("id"))),)
         return ()
@@ -912,19 +920,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 elif isinstance(content, list):
                     blocks = tuple(block for block in content if isinstance(block, dict))
                     input_items.extend(self._assistant_blocks_to_input_items(blocks, tool_search))
-                    asst_parts: list[dict[str, object]] = [  # mutable-ok: API message payload
-                        {"type": "output_text", "text": block.get("text", "")}
-                        for block in blocks
-                        if block.get("type") == "text"
-                    ]
-                    if asst_parts:
-                        input_items.append(
-                            {
-                                "type": "message",
-                                "role": "assistant",
-                                "content": asst_parts,
-                            }
-                        )
 
         return input_items
 
