@@ -5030,6 +5030,7 @@ class SandboxProviders(str, Enum):
     """
 
     E2B = "e2b"
+    KOSA8 = "kosa8"
     OPENSANDBOX = "opensandbox"
 
 
