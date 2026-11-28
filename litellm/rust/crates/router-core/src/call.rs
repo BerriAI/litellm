@@ -669,6 +669,15 @@ impl<H: RouterHost> Call<'_, H> {
             if !chain.attempted.contains(&failed) {
                 chain.attempted.push(failed);
             }
+            // A request made through a model_group_alias serves the alias target,
+            // but `target.group` stays the alias name. Record the resolved group
+            // too, so a fallback list that starts with that group does not call it again.
+            if let Some(alias_target) = snapshot.registry.alias_of(&target.group) {
+                let resolved = Tried::Target(FallbackTarget::Name(alias_target.to_owned()));
+                if !chain.attempted.contains(&resolved) {
+                    chain.attempted.push(resolved);
+                }
+            }
             // Before the loop, or the refusal would be one target's failure: no target of the
             // chain is tried, and the walk raises a `ValueError` the host holds.
             let dicts: Vec<Map<String, Value>> = targets
@@ -714,7 +723,8 @@ impl<H: RouterHost> Call<'_, H> {
                     // The group that just failed: the pre-routing selection when there was one, so
                     // a subagent bound to another tier can fall back to the model it asked for.
                     Next::Fallback(FallbackTarget::Name(name))
-                        if *name == target.routed.as_deref().unwrap_or(&target.group) =>
+                        if *name == target.routed.as_deref().unwrap_or(&target.group)
+                            || snapshot.registry.alias_of(&target.group) == Some(name.as_str()) =>
                     {
                         continue;
                     }

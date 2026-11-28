@@ -991,6 +991,51 @@ async def test_default_and_model_fallbacks_do_not_repeat_failed_models(
 
 
 @pytest.mark.asyncio
+async def test_alias_target_listed_first_in_its_fallback_chain_is_not_called_twice(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A model_group_alias that fails should not be retried when it is also the first fallback."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "head",
+                "litellm_params": {
+                    "model": "openai/head",
+                    "api_key": "test-key",
+                    "api_base": "https://fallback-migration.local/v1",
+                },
+            },
+            {
+                "model_name": "second",
+                "litellm_params": {
+                    "model": "openai/second",
+                    "api_key": "test-key",
+                    "api_base": "https://fallback-migration.local/v1",
+                },
+            },
+        ],
+        model_group_alias={"my-router": "head"},
+        fallbacks=[{"my-router": ["head", "second"]}],
+        num_retries=0,
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        model = json.loads(request.content)["model"]
+        if model == "head":
+            return _fallback_unavailable_response()
+        return _fallback_chat_response("second", "served by second")
+
+    route: Final = respx_mock.post("https://fallback-migration.local/v1/chat/completions").mock(side_effect=respond)
+
+    response: Final = await router.acompletion(model="my-router", messages=[{"role": "user", "content": "hi"}])
+
+    outbound_models: Final = tuple(json.loads(call.request.content)["model"] for call in route.calls)
+    assert outbound_models == ("head", "second")
+    assert response.choices[0].message.content == "served by second"
+
+
+@pytest.mark.asyncio
 async def test_unknown_default_fallback_raises_after_primary_failure(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
