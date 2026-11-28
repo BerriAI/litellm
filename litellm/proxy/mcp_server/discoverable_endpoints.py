@@ -928,7 +928,7 @@ async def _dcr_bridge_relay_upstream_issuer(mcp_server: MCPServer) -> str | None
     if not mcp_server.is_true_passthrough:
         return None
     resolved: Final = await _server_with_oauth_endpoints(mcp_server, _register_flow_needed_endpoint)
-    if not _dcr_bridge_relays_client_registration(resolved):
+    if not _register_relays_bridge_client(resolved):
         return None
     metadata: Final = resolved.authorization_server_metadata
     if not resolved.issuer or metadata is None or metadata.get("issuer") != resolved.issuer:
