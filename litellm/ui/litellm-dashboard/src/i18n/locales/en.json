@@ -18046,6 +18046,28 @@
         "proxyControlledKey": "Only proxy admins can set this key",
         "cannotBeEmpty": "This field cannot be left empty"
       }
+    },
+    "bulkKeys": {
+      "title": "Bulk actions ({{count}} keys)",
+      "action": "Action",
+      "budget": "Set budget",
+      "rpm": "Set requests per minute",
+      "tpm": "Set tokens per minute",
+      "expiry": "Change expiry",
+      "block": "Block",
+      "unblock": "Unblock",
+      "delete": "Delete",
+      "duration": "Duration from now (for example 14d or 24h)",
+      "value": "Value",
+      "summary": "{{action}} for {{count}} selected keys.",
+      "deleteWarning": "Deleted keys cannot be recovered.",
+      "invalid": "Enter a nonnegative budget, whole-number limit, or positive duration.",
+      "noResult": "The API returned no result for this key.",
+      "result": "{{success}} of {{total}} keys updated.",
+      "applying": "Applying…",
+      "confirm": "Confirm for {{count}} keys",
+      "selectionHint": "Selection can span pages. The header checkbox selects the current page.",
+      "limit": "Select at most 500 keys at a time."
     }
   },
   "memberTable": {

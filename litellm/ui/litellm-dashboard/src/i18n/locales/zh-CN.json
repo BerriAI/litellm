@@ -18046,6 +18046,28 @@
         "proxyControlledKey": "只有代理管理员可以设置此键",
         "cannotBeEmpty": "此字段不能为空"
       }
+    },
+    "bulkKeys": {
+      "title": "批量操作（{{count}} 个密钥）",
+      "action": "操作",
+      "budget": "设置预算",
+      "rpm": "设置每分钟请求数",
+      "tpm": "设置每分钟 token 数",
+      "expiry": "更改过期时间",
+      "block": "禁用",
+      "unblock": "启用",
+      "delete": "删除",
+      "duration": "从现在起的有效期（例如 14d 或 24h）",
+      "value": "值",
+      "summary": "对 {{count}} 个选定密钥执行{{action}}。",
+      "deleteWarning": "删除的密钥无法恢复。",
+      "invalid": "请输入非负预算、整数限制或正有效期。",
+      "noResult": "API 未返回此密钥的结果。",
+      "result": "已更新 {{total}} 个密钥中的 {{success}} 个。",
+      "applying": "正在应用…",
+      "confirm": "确认操作 {{count}} 个密钥",
+      "selectionHint": "可跨页选择。表头复选框仅选择当前页。",
+      "limit": "每次最多选择 500 个密钥。"
     }
   },
   "memberTable": {

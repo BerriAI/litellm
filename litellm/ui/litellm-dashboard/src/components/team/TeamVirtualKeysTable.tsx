@@ -1,4 +1,6 @@
 "use client";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import BulkKeyActions from "./BulkKeyActions";
 import { useResetDetailState } from "@/hooks/useUrlTab";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
@@ -14,6 +16,7 @@ import {
 } from "@/components/shared/table_cells";
 import {
   DataTable,
+  createSelectionColumn,
   DataTableFilterDrawer,
   DataTableFilterField,
   DataTableSortHeader,
@@ -27,7 +30,14 @@ import { DEFAULT_PROXY_ADMIN_USER_ID } from "@/utils/sentinels";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
-import { ColumnDef, ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
+import {
+  ColumnDef,
+  ColumnFiltersState,
+  OnChangeFn,
+  PaginationState,
+  RowSelectionState,
+  SortingState,
+} from "@tanstack/react-table";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -44,6 +54,7 @@ interface TeamVirtualKeysTableProps {
   teamAlias?: string;
   organization: Organization | null;
   initialOwnerFilter?: string;
+  canEdit?: boolean;
 }
 
 /**
@@ -57,8 +68,12 @@ export function TeamVirtualKeysTable({
   teamAlias,
   organization,
   initialOwnerFilter,
+  canEdit = false,
 }: TeamVirtualKeysTableProps) {
   const { t } = useTranslation();
+  const { accessToken } = useAuthorized();
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const canSelect = canEdit && !!accessToken;
   const resetKeyDetailState = useResetDetailState("key_tab");
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_SORTING);
@@ -569,6 +584,19 @@ export function TeamVirtualKeysTable({
     [expandedAccordions, teamMemberBudgets, teamId, organization?.organization_id, t, resetKeyDetailState],
   );
 
+  const selectionScope = JSON.stringify([teamId, searchQuery, columnFilters]);
+  const [previousSelectionScope, setPreviousSelectionScope] = useState(selectionScope);
+  if (previousSelectionScope !== selectionScope) {
+    setPreviousSelectionScope(selectionScope);
+    setRowSelection({});
+  }
+
+  const selectableColumns = useMemo(
+    () => (canSelect ? [createSelectionColumn<KeyResponse>(), ...columns] : columns),
+    [canSelect, columns],
+  );
+  const selectedTokens = useMemo(() => Object.keys(rowSelection).filter((key) => rowSelection[key]), [rowSelection]);
+
   const handleSortingChange = useCallback((updaterOrValue: React.SetStateAction<SortingState>) => {
     setSorting(updaterOrValue);
     setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
@@ -592,7 +620,11 @@ export function TeamVirtualKeysTable({
         <div className="py-4">
           <DataTable
             data={displayKeys}
-            columns={columns}
+            columns={selectableColumns}
+            getRowId={(row) => row.token}
+            enableRowSelection={canSelect && !isFetching && !isPlaceholderData}
+            rowSelection={rowSelection}
+            onRowSelectionChange={setRowSelection}
             sortingMode="server"
             sorting={sorting}
             onSortingChange={handleSortingChange}
@@ -610,6 +642,21 @@ export function TeamVirtualKeysTable({
             size="compact"
             toolbar={(table) => (
               <>
+                {canEdit && accessToken && (
+                  <div className="space-y-2 py-2">
+                    <BulkKeyActions
+                      accessToken={accessToken}
+                      teamId={teamId}
+                      selectedKeys={selectedTokens}
+                      onUpdated={() => {
+                        setRowSelection({});
+                        void refetch();
+                      }}
+                    />
+                    <p className="text-sm text-muted-foreground">{t("teams.bulkKeys.selectionHint")}</p>
+                    {selectedTokens.length > 500 && <p role="alert">{t("teams.bulkKeys.limit")}</p>}
+                  </div>
+                )}
                 <DataTableToolbar
                   table={table}
                   searchValue={searchInput}
