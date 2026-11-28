@@ -3,6 +3,7 @@ Callbacks triggered on cooling down deployments
 """
 
 import copy
+import time
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -22,6 +23,16 @@ def resolved_model_and_provider(model: str, custom_llm_provider: str | None) -> 
     except Exception:
         return model, ""
     return resolved_model, provider
+
+
+async def cooldown_seconds_left(ctx: "RoutingContext", deployment_id: str, cooldown_time: float) -> float:
+    """The seconds until the router's stored cooldown of the deployment ends, or ``cooldown_time`` when none is read."""
+    try:
+        active: Final = await ctx.health().cooldowns.async_get_active_cooldowns([deployment_id], parent_otel_span=None)
+    except Exception:  # noqa: BLE001  # an unreadable cooldown keeps the length the event carried
+        return cooldown_time
+    stored: Final = next((cooldown for active_id, cooldown in active if active_id == deployment_id), None)
+    return cooldown_time if stored is None else stored["timestamp"] + stored["cooldown_time"] - time.time()
 
 
 @renamed_router_param("litellm_router_instance")
@@ -66,10 +77,8 @@ async def router_cooldown_event_callback(
             api_base=_api_base,
             api_provider=llm_provider,
         )
-        prometheusLogger.set_deployment_cooldown_time(
-            model_id=model_id,
-            cooldown_time=ctx.health().cooldowns.default_cooldown_time if cooldown_time is None else cooldown_time,
-        )
+        cooldown_length: Final = ctx.health().cooldowns.default_cooldown_time if cooldown_time is None else cooldown_time
+        prometheusLogger.set_deployment_cooldown_time(model_id=model_id, cooldown_time=cooldown_length)
 
         prometheusLogger.increment_deployment_cooled_down(
             litellm_model_name=_model_name,
@@ -77,6 +86,9 @@ async def router_cooldown_event_callback(
             api_base=_api_base,
             api_provider=llm_provider,
             exception_status=str(exception_status),
+        )
+        prometheusLogger.set_deployment_cooldown_time(
+            model_id=model_id, cooldown_time=await cooldown_seconds_left(ctx, deployment_id, cooldown_length)
         )
 
     return
