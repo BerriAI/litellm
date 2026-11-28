@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypedDict
+from uuid import uuid4
 
 import requests
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
@@ -188,7 +189,8 @@ def build_bearer_meter_provider(config: BillingMetricsConfig) -> MeterProvider:
     session: Final = _BillingMetricsBearerSession(auth)
     exporter: Final = OTLPMetricExporter(endpoint=_metrics_endpoint(config.endpoint), session=session)
     reader: Final = PeriodicExportingMetricReader(exporter, export_interval_millis=config.export_interval_ms)
-    return MeterProvider(metric_readers=[reader], resource=Resource(resource_attributes(config)))
+    resource: Final = Resource({**resource_attributes(config), "service.instance.id": str(uuid4())})
+    return MeterProvider(metric_readers=[reader], resource=resource)
 
 
 class BillingMetricsRecorder:
