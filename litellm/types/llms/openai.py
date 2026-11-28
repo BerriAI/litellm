@@ -1890,8 +1890,9 @@ class ResponsePartAddedEvent(BaseResponsesStreamEvent):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_PART_ADDED]
     item_id: str
     output_index: int
-    summary_index: int = 0
+    sequence_number: int
     part: dict
+    summary_index: int = 0
 
 
 class ReasoningSummaryTextDeltaEvent(BaseResponsesStreamEvent):
