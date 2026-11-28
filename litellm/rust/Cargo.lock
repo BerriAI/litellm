@@ -4303,11 +4303,13 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "jiff",
+ "litellm-config",
  "litellm-error",
  "litellm-gateway-auth-core",
  "litellm-secret-value",
  "rstest",
  "serde",
+ "serde_json",
  "strum",
  "thiserror 2.0.21",
  "tokio",

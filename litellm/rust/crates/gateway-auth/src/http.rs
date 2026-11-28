@@ -174,7 +174,9 @@ impl<R: Rows> FromRequestParts<Auth<R>> for RequireMasterKey {
                 parts.extensions.insert(caller);
                 Ok(Self)
             }
-            auth_core::Credential::Key { .. } => Err(Error::InvalidToken),
+            auth_core::Credential::Key { .. } | auth_core::Credential::Jwt { .. } => {
+                Err(Error::InvalidToken)
+            }
         }
     }
 }

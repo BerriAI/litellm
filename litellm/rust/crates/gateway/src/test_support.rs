@@ -15,7 +15,7 @@ use crate::{
 
 /// The caller the master key authenticates.
 pub(crate) fn master() -> Authenticated<NativeRows> {
-    Authenticated::from(Caller::master_key(EndUserRecord::default()))
+    Authenticated::from(Caller::master_key(None))
 }
 
 pub(crate) fn key(
@@ -27,9 +27,10 @@ pub(crate) fn key(
     Authenticated::from(Caller {
         credential: auth_core::Credential::Key {
             key: Key::stored(hash, alias),
+            via: auth_core::Via::OwnToken,
         },
         affiliation,
-        end_user,
+        end_user: Some(end_user),
     })
 }
 

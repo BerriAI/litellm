@@ -1,4 +1,4 @@
-use litellm_gateway_auth_core::{Credential, Holder, Named, Team, record::ProjectRecord};
+use litellm_gateway_auth_core::{Credential, Holder, Named, Team, Via, record::ProjectRecord};
 
 use super::{Admit, Authentication, Reason, Refused};
 use crate::{
@@ -11,15 +11,15 @@ use crate::{
 
 /// Each caller the core hands back is matched by name, with no catch-all, so a caller the native
 /// host learns to serve does not compile here until it is named native or not. A credential the
-/// core did not authenticate is over the error's name. A key in a team or with an owner stays
-/// with Python: over the first column its team, owner or membership holds that nothing native reads
-/// yet, and otherwise over `team` or `user`, since the native spend log charges neither yet. A key
-/// in an organization or project stays with Python the same way, after team and owner.
+/// core did not authenticate is over the error's name. A key that holds a team, owner,
+/// organization or project stays with Python over the first unserved column or association.
 pub(super) fn caller(_: &Admit, authentication: &Authentication) -> Option<Reason> {
     match authentication {
         Ok(caller) => match &caller.credential {
             Credential::MasterKey => None,
-            Credential::Key { .. } => {
+            Credential::Key {
+                via: Via::OwnToken, ..
+            } => {
                 let project = caller.affiliation.project.as_ref();
                 charged(&caller.affiliation.holder)
                     .or_else(|| {
@@ -34,6 +34,11 @@ pub(super) fn caller(_: &Admit, authentication: &Authentication) -> Option<Reaso
                     })
                     .map(|over| Reason::new(Refused::Credential, over))
             }
+            Credential::Key {
+                via: Via::MappedJwt(_),
+                ..
+            }
+            | Credential::Jwt { .. } => Some(Reason::new(Refused::Credential, "not_native")),
         },
         Err(error) => Some(Reason::new(
             Refused::Credential,
@@ -89,10 +94,10 @@ pub(super) fn budgets(admit: &Admit, authentication: &Authentication) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use litellm_config::Config;
+    use litellm_config::{Config, LitellmRole};
     use litellm_gateway_auth::Authenticated;
     use litellm_gateway_auth_core::{
-        Affiliation, Caller,
+        Affiliation, Caller, JwtActor, JwtStamp,
         record::{Budget, EndUserRecord},
     };
     use rstest::rstest;
@@ -114,19 +119,20 @@ mod tests {
         Authenticated::from(Caller {
             credential: Credential::Key {
                 key: Key::stored("hash", None).with_budget(budget(max)),
+                via: Via::OwnToken,
             },
             affiliation: Affiliation::nobody(),
-            end_user: EndUserRecord::default(),
+            end_user: None,
         })
     }
 
     fn master_for_a_budgeted_end_user() -> Authenticated<NativeRows> {
-        Authenticated::from(Caller::master_key(EndUserRecord {
+        Authenticated::from(Caller::master_key(Some(EndUserRecord {
             end_user_id: Some("e1".to_owned()),
             found: true,
             budget: budget(5.0),
             ..EndUserRecord::default()
-        }))
+        })))
     }
 
     fn reserving(disabled: bool) -> Admit {
@@ -157,5 +163,46 @@ mod tests {
                 "general_settings.disable_budget_reservation"
             ))
         );
+    }
+
+    fn stamp() -> JwtStamp {
+        JwtStamp {
+            claims: serde_json::Map::new(),
+            user_email: None,
+        }
+    }
+
+    fn mapped_key() -> Credential<NativeRows> {
+        Credential::Key {
+            key: Key::stored("stored", None),
+            via: Via::MappedJwt(stamp()),
+        }
+    }
+
+    fn jwt() -> Credential<NativeRows> {
+        Credential::Jwt {
+            jwt: stamp(),
+            actor: JwtActor::User {
+                role: LitellmRole::InternalUser,
+            },
+        }
+    }
+
+    #[rstest]
+    #[case::a_key_a_jwt_maps_to(mapped_key())]
+    #[case::a_jwt(jwt())]
+    fn a_caller_no_native_route_serves_yet_goes_to_python(
+        #[case] credential: Credential<NativeRows>,
+    ) {
+        let config = Config::from_yaml("general_settings:\n  master_key: gateway-key\n").unwrap();
+        let authentication: Authentication = Ok(Authenticated::from(Caller {
+            credential,
+            affiliation: Affiliation::nobody(),
+            end_user: None,
+        }));
+
+        let reason = caller(&Admit::over(&config, vec![]), &authentication);
+
+        assert_eq!(reason, Some(Reason::new(Refused::Credential, "not_native")));
     }
 }

@@ -105,7 +105,14 @@ pub(crate) fn unserved(end_user: &EndUserRecord) -> Option<&'static str> {
             spend: _,
         },
     } = end_user;
-    carried![blocked, default_model, models, rpm_limit, tpm_limit, max_budget]
+    carried![
+        blocked,
+        default_model,
+        models,
+        rpm_limit,
+        tpm_limit,
+        max_budget
+    ]
 }
 
 #[cfg(test)]

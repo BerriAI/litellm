@@ -3,8 +3,9 @@
 
 use std::sync::Arc;
 
+use litellm_config::LitellmRole;
 use litellm_gateway_auth_core::{
-    Affiliation, Caller, Credential, KeyHash, Rows, authn::key::KeyRecord,
+    Affiliation, Caller, Credential, JwtActor, JwtStamp, KeyHash, Rows, Via, authn::key::KeyRecord,
 };
 use litellm_router_core::{Deployment, DeploymentSpec, RouterConfig};
 use litellm_router_types::RouterSettings;
@@ -34,9 +35,30 @@ pub(crate) fn key(stored: &str, is_proxy_admin: bool) -> Caller<Held> {
                 is_proxy_admin,
                 ..KeyRecord::default()
             },
+            via: Via::OwnToken,
         },
         affiliation: Affiliation::nobody(),
-        end_user: (),
+        end_user: Some(()),
+    }
+}
+
+/// A JWT acting as itself, verified with `claims`.
+pub(crate) fn jwt(claims: Value) -> Caller<Held> {
+    let Value::Object(claims) = claims else {
+        panic!("JWT claims are an object");
+    };
+    Caller {
+        credential: Credential::Jwt {
+            jwt: JwtStamp {
+                claims,
+                user_email: None,
+            },
+            actor: JwtActor::User {
+                role: LitellmRole::InternalUser,
+            },
+        },
+        affiliation: Affiliation::nobody(),
+        end_user: Some(()),
     }
 }
 

@@ -60,8 +60,8 @@ pub(crate) fn counters(
         end_user,
     } = &**identity;
     let key = match credential {
-        Credential::MasterKey => None,
-        Credential::Key { key } => Some(key),
+        Credential::MasterKey | Credential::Jwt { .. } => None,
+        Credential::Key { key, .. } => Some(key),
     };
     let token = identity.hash().map(ToString::to_string);
     let team = match holder.team() {
@@ -124,7 +124,8 @@ pub(crate) fn counters(
                 user.budget,
             )
         }),
-        end_user.end_user_id.as_ref().and_then(|end_user_id| {
+        end_user.as_ref().and_then(|end_user| {
+            let end_user_id = end_user.end_user_id.as_ref()?;
             planned(
                 SpendCounter::EndUser(end_user_id.clone()),
                 "EndUser",
@@ -216,6 +217,7 @@ mod tests {
                     max: Some(10.0),
                     spend: 0.5,
                 }),
+                via: litellm_gateway_auth_core::Via::OwnToken,
             },
             affiliation: Affiliation {
                 holder,
@@ -236,7 +238,7 @@ mod tests {
                     ..ProjectRecord::default()
                 })),
             },
-            end_user,
+            end_user: Some(end_user),
         })
     }
 
@@ -290,7 +292,7 @@ mod tests {
     fn the_master_key_reserves_against_the_end_user_its_request_names() {
         assert_eq!(
             planned(
-                &Authenticated::from(Caller::master_key(end_user())),
+                &Authenticated::from(Caller::master_key(Some(end_user()))),
                 Settings::default()
             ),
             [row("spend:end_user:e1", "EndUser", "e1", 40.0, 4.0)]

@@ -1,11 +1,11 @@
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{DelegatedTeam, JwtIdentity, ManagedAgent, team::ClaimedTeam};
 use crate::{Affiliation, AuthHost, Error, Holder, Rows, authn::jwt::JwtSettings, host::AgentRow};
 
 /// An autonomous managed agent acts as itself, with no user, team or organization.
 pub(crate) fn autonomous_identity<R: Rows>(
-    claims: Value,
+    claims: Map<String, Value>,
     agent: ManagedAgent<R::Agent>,
 ) -> JwtIdentity<R> {
     JwtIdentity {

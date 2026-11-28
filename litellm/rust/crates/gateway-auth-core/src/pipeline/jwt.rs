@@ -1,6 +1,6 @@
 use jiff::Timestamp;
 use litellm_config::{LitellmRole, RbacRole, UnregisteredJwtClientBehavior as Behavior};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::{
     Affiliation, AuthHost, Error, Holder, JwtDenial, Named, Rows, Token,
@@ -143,7 +143,6 @@ async fn authorize<H: AuthHost>(
         None => claims::user_info(claims, settings),
     };
     policy.email_domain(&caller, &info)?;
-    let claims_value = Value::Object(claims.0.clone());
     let grants = match &caller.agent {
         Some(agent) => Grants::default().with(Grant::RecordAgentAuthentication(agent.row.clone())),
         None => Grants::default(),
@@ -151,7 +150,7 @@ async fn authorize<H: AuthHost>(
     if let (CallerKind::ManagedAgent(AgentMode::Autonomous), Some(agent)) =
         (caller.kind, caller.agent.clone())
     {
-        let identity = agent::autonomous_identity::<H::Rows>(claims_value, agent);
+        let identity = agent::autonomous_identity::<H::Rows>(claims.0.clone(), agent);
         return Ok(Authorized { identity, grants });
     }
     if caller.kind == CallerKind::ProxyAdmin {
@@ -181,7 +180,7 @@ async fn authorize<H: AuthHost>(
     )
     .await?;
     policy.principal(&principal, &target)?;
-    Ok(identity_of(claims_value, principal))
+    Ok(identity_of(claims.0.clone(), principal))
 }
 
 /// A proxy admin's identity: the header team on LLM routes and the admin's user row.
@@ -231,7 +230,7 @@ async fn admin<H: AuthHost>(
     let team = bind_team_member(host, team, member_id).await?;
     let org_id = claims::org_id(claims, settings);
     Ok(JwtIdentity {
-        claims: Value::Object(claims.0.clone()),
+        claims: claims.0.clone(),
         is_proxy_admin: true,
         affiliation: Affiliation {
             holder: Holder::new(
@@ -401,7 +400,7 @@ async fn bind_team_member<H: AuthHost>(
     }
 }
 
-fn identity_of<R: Rows>(claims: Value, principal: Principal<R>) -> Authorized<R> {
+fn identity_of<R: Rows>(claims: Map<String, Value>, principal: Principal<R>) -> Authorized<R> {
     let Principal {
         caller,
         user_id,

@@ -7,6 +7,7 @@ use axum::{
     middleware::from_extractor_with_state,
     routing::get,
 };
+use litellm_config::LitellmRole;
 use litellm_gateway_auth::{
     Auth, AuthFuture, Authenticated, Authenticator, Credential, CredentialExtractor, Error,
     RequireMasterKey, authenticate,
@@ -20,6 +21,7 @@ use tower::ServiceExt;
 
 const MASTER_TOKEN: &str = "master-token";
 const KEY_TOKEN: &str = "key-token";
+const ADMIN_JWT: &str = "admin-jwt";
 
 #[derive(Clone, Debug, PartialEq)]
 struct Held;
@@ -43,9 +45,10 @@ fn stored_key() -> Caller<Held> {
                 token: Some(KeyHash::new("stored")),
                 ..KeyRecord::default()
             },
+            via: auth_core::Via::OwnToken,
         },
         affiliation: Affiliation::nobody(),
-        end_user: (),
+        end_user: None,
     }
 }
 
@@ -53,11 +56,27 @@ fn master_key() -> Caller<Held> {
     Caller {
         credential: auth_core::Credential::MasterKey,
         affiliation: Affiliation::nobody(),
-        end_user: (),
+        end_user: None,
     }
 }
 
-/// Knows [`MASTER_TOKEN`] and [`KEY_TOKEN`], and answers a request that presents no token the way
+fn admin_jwt() -> Caller<Held> {
+    Caller {
+        credential: auth_core::Credential::Jwt {
+            jwt: auth_core::JwtStamp {
+                claims: serde_json::Map::new(),
+                user_email: None,
+            },
+            actor: auth_core::JwtActor::User {
+                role: LitellmRole::ProxyAdmin,
+            },
+        },
+        affiliation: Affiliation::nobody(),
+        end_user: None,
+    }
+}
+
+/// Knows [`MASTER_TOKEN`], [`KEY_TOKEN`] and [`ADMIN_JWT`], and answers a request that presents no token the way
 /// a server with no master key does.
 struct Verifier {
     failure: Option<u16>,
@@ -79,6 +98,7 @@ impl Authenticator<Held> for Verifier {
                 (None, Credential::Token(token)) => match token.expose() {
                     MASTER_TOKEN => Ok(master_key()),
                     KEY_TOKEN => Ok(stored_key()),
+                    ADMIN_JWT => Ok(admin_jwt()),
                     _ => Err(Error::InvalidToken),
                 },
             }
@@ -202,6 +222,7 @@ async fn route_profile_uses_only_its_selected_credentials(
 #[rstest]
 #[case::the_master_key(Some("Bearer master-token"), 204)]
 #[case::a_key(Some("Bearer key-token"), 401)]
+#[case::an_admin_jwt(Some("Bearer admin-jwt"), 401)]
 #[case::an_unknown_token(Some("Bearer other-token"), 401)]
 #[case::no_token_is_still_put_to_the_authenticator(None, 500)]
 #[case::a_malformed_header_is_no_token(Some("Basic master-token"), 500)]

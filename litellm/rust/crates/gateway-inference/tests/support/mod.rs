@@ -237,9 +237,7 @@ async fn as_the_master_key(
 ) -> Response {
     request
         .extensions_mut()
-        .insert(Authenticated::<NativeRows>::from(Caller::master_key(
-            Default::default(),
-        )));
+        .insert(Authenticated::<NativeRows>::from(Caller::master_key(None)));
     next.run(request).await
 }
 

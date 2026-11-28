@@ -147,8 +147,8 @@ fn entities(identity: &Authenticated<NativeRows>, counter: &SpendCounter) -> Vec
             window: None,
         } => {
             let key = match &identity.credential {
-                Credential::Key { key } => Some(key),
-                Credential::MasterKey => None,
+                Credential::Key { key, .. } => Some(key),
+                Credential::MasterKey | Credential::Jwt { .. } => None,
             };
             vec![Entity::Key {
                 token,
@@ -474,6 +474,7 @@ mod tests {
         Authenticated::from(Caller {
             credential: Credential::Key {
                 key: key.with_budget(holds.key.unwrap_or_default()),
+                via: litellm_gateway_auth_core::Via::OwnToken,
             },
             affiliation: Affiliation {
                 holder,
@@ -492,14 +493,12 @@ mod tests {
                     })
                 }),
             },
-            end_user: holds
-                .end_user
-                .map_or_else(EndUserRecord::default, |budget| EndUserRecord {
-                    end_user_id: Some("e1".to_owned()),
-                    found: true,
-                    budget,
-                    ..EndUserRecord::default()
-                }),
+            end_user: holds.end_user.map(|budget| EndUserRecord {
+                end_user_id: Some("e1".to_owned()),
+                found: true,
+                budget,
+                ..EndUserRecord::default()
+            }),
         })
     }
 

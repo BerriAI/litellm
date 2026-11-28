@@ -63,7 +63,9 @@ impl FromValue for RestrictedEndUsers {
                     })
                     .collect(),
             )),
-            _ => Err(DecodeError::Shape("a list of end user ids or the overflow word")),
+            _ => Err(DecodeError::Shape(
+                "a list of end user ids or the overflow word",
+            )),
         }
     }
 }
