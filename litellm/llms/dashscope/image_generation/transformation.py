@@ -247,7 +247,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
             }
         )
         input_image_count: Final = usage_fields.get("input_image_count")
-        if isinstance(input_image_count, int) and input_image_count > 0:
+        if isinstance(input_image_count, int) and not isinstance(input_image_count, bool) and input_image_count > 0:
             image_response.hidden_params = {
                 **model_response.hidden_params,
                 "billable_input_image_count": input_image_count,

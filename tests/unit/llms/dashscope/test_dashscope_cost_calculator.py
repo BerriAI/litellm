@@ -25,6 +25,9 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.llms.dashscope.cost_calculator import (
     cost_per_token as dashscope_cost_per_token,
 )
+from litellm.llms.dashscope.image_generation.cost_calculator import (
+    cost_calculator as dashscope_image_cost_calculator,
+)
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     ModelInfo,
@@ -1324,3 +1327,15 @@ class TestDashscopeCostCalculator:
 
         assert math.isclose(prompt_cost, 1000 * 1.2e-06, rel_tol=1e-10)
         assert math.isclose(completion_cost, 200 * 2.4e-06, rel_tol=1e-10)
+
+    def test_a_boolean_input_image_count_is_not_billed_as_an_input_image(self) -> None:
+        response = litellm.ImageResponse(data=[{"url": "https://example.test/image.png"}])
+        response.hidden_params = {"billable_input_image_count": True}
+
+        cost = dashscope_image_cost_calculator(
+            model="qwen-image-cost-guard-test",
+            image_response=response,
+            model_info=ModelInfo(input_cost_per_image=0.004, output_cost_per_image=0.04),
+        )
+
+        assert cost == pytest.approx(0.04)
