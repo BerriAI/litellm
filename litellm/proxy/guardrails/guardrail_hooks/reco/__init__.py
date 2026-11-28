@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, TypeAdapter
 
+from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 from litellm.types.proxy.guardrails.guardrail_hooks.reco import RecoOptionalParams
@@ -14,6 +15,8 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 _CONFIG_MAPPING: Final = TypeAdapter(Mapping[str, object])
+# The guardrail registry renders an unset os.environ reference on a stored guardrail as this text.
+_UNSET_REFERENCE_TEXT: Final = str(None)
 
 
 def _optional_params_mapping(optional_params: object) -> Mapping[str, object]:
@@ -47,11 +50,18 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     reco_params: Final = RecoOptionalParams.model_validate(
         {field_name: value for field_name, value in configured if value is not None}
     )
+    api_key: Final = _first_configured("api_key", ({"api_key": litellm_params.api_key},))
+    if sources[0].get("api_key") is not None:
+        verbose_proxy_logger.warning(
+            "Reco guardrail '%s': optional_params.api_key is ignored. Set api_key at the top level of litellm_params",
+            guardrail["guardrail_name"],
+        )
 
     _reco_callback: Final = RecoGuardrail(
         guardrail_name=guardrail["guardrail_name"],
         reco_tenant_id=reco_params.reco_tenant_id,
         api_base=reco_params.api_base,
+        api_key=api_key if isinstance(api_key, str) and api_key != _UNSET_REFERENCE_TEXT else None,
         unreachable_fallback=reco_params.unreachable_fallback,
         fail_on_error=reco_params.fail_on_error,
         event_hook=litellm_params.mode,
