@@ -800,6 +800,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     request_routing_metadata,
     request_served_model,
     sanitize_for_log,
+    strip_unapproved_client_message_redaction_opt_out,
 )
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
@@ -20095,6 +20096,7 @@ async def async_queue_request(
         str_keyed_body: Final = as_str_mapping(queued_body)
         data: Final = str_keyed_body if isinstance(str_keyed_body, dict) else {**unpackable_mapping(queued_body)}
         data.pop(STREAM_USAGE_INJECTED_FIELD, None)
+        strip_unapproved_client_message_redaction_opt_out(data, user_api_key_dict)
         await refuse_s3_media_the_key_may_not_read(
             data, user_api_key_dict, general_settings, proxy_logging_obj.get_proxy_hook("managed_files")
         )
