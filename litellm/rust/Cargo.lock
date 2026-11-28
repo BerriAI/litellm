@@ -4949,7 +4949,7 @@ dependencies = [
 name = "litellm-redis-client"
 version = "0.1.0"
 dependencies = [
- "aws-lc-rs",
+ "aws-lc-fips-sys",
  "futures-util",
  "litellm-circuit-breaker",
  "litellm-python-compat",
@@ -4966,7 +4966,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
- "zeroize",
 ]
 
 [[package]]

@@ -11,8 +11,6 @@ use redis::{
 use litellm_circuit_breaker::Breaker;
 use litellm_secret_value::SecretValue;
 
-use pkcs8::EncryptedPrivateKeyInfo;
-
 #[cfg(feature = "fips")]
 use crate::fips::decrypt;
 use crate::{ConnectError, KeyError, Namespace, RedisEvents};
@@ -205,10 +203,7 @@ fn client_key(path: &PathBuf, password: Option<&SecretValue>) -> Result<Vec<u8>,
     match (encrypted, password) {
         (Some(_), None) => Err(key_error(KeyError::MissingPassword)),
         (Some(section), Some(password)) => {
-            let decrypted = EncryptedPrivateKeyInfo::try_from(section.contents())
-                .map_err(KeyError::Decrypt)
-                .and_then(|info| decrypt(&info, password.expose()))
-                .map_err(key_error)?;
+            let decrypted = decrypt(section.contents(), password.expose()).map_err(key_error)?;
             Ok(pem::encode(&pem::Pem::new("PRIVATE KEY", decrypted.as_bytes())).into_bytes())
         }
         (None, _) if sections.iter().any(is_legacy_encrypted) => {
@@ -219,11 +214,10 @@ fn client_key(path: &PathBuf, password: Option<&SecretValue>) -> Result<Vec<u8>,
 }
 
 #[cfg(not(feature = "fips"))]
-fn decrypt(
-    info: &EncryptedPrivateKeyInfo<'_>,
-    password: &str,
-) -> Result<pkcs8::SecretDocument, KeyError> {
-    info.decrypt(password).map_err(KeyError::Decrypt)
+fn decrypt(der: &[u8], password: &str) -> Result<pkcs8::SecretDocument, KeyError> {
+    pkcs8::EncryptedPrivateKeyInfo::try_from(der)
+        .and_then(|info| info.decrypt(password))
+        .map_err(KeyError::Decrypt)
 }
 
 fn is_legacy_encrypted(section: &pem::Pem) -> bool {
@@ -367,7 +361,7 @@ pub(crate) async fn authenticated(
 mod tests {
     use litellm_redis_types::{RedisUrl, UnixSocket};
     use pkcs8::{
-        SecretDocument,
+        EncryptedPrivateKeyInfo,
         der::Encode,
         pkcs5::{self, pbes2},
     };
@@ -476,7 +470,6 @@ mod tests {
     const SALT: &[u8] = b"redis-client-key-salt";
     const AES_IV: [u8; 16] = [7; 16];
     const DES_IV: [u8; 8] = [7; 8];
-    const DER_SEQUENCE: &[u8] = &[0x30, 0x03, 0x02, 0x01, 0x00];
     const OPENSSL_KEY: &str = "-----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIPZi/sVwfl31RuldRWGBkxFUm0MRR4zS/AbJfSTz5gOw
 -----END PRIVATE KEY-----";
@@ -485,6 +478,19 @@ MIGNMEkGCSqGSIb3DQEFDTA8MBsGCSqGSIb3DQEFDDAOBAgDuXPNju0QywICCAAw
 HQYJYIZIAWUDBAEqBBA8MVTinGPVUQDLB4P3mZuRBEB/tXUkOHEL20ANYfQoI+P0
 CCHipAQfdXEEZS/iF+yOZZivchKhFk93s8NXqb1XEq6w/PboxfF3V+QKwSHajMYL
 -----END ENCRYPTED PRIVATE KEY-----";
+    // `openssl pkcs8 -topk8 -v1 PBE-SHA1-3DES` and `-v1 PBE-SHA1-RC4-128` (OpenSSL 3.0.13) of `OPENSSL_KEY`
+    const OPENSSL_PBE_SHA1_3DES_KEY: &str = "-----BEGIN ENCRYPTED PRIVATE KEY-----
+MFgwHAYKKoZIhvcNAQwBAzAOBAiCCdCCvCTnsAICCAAEOMVv1UPE3cHvyeVvhGCd
+zXA1SpqeOrKcBoTKZLC4qYz3gAVroajHXDfTrpKq/N+ojqtnYPwGCWpD
+-----END ENCRYPTED PRIVATE KEY-----";
+    const OPENSSL_PBE_SHA1_RC4_128_KEY: &str = "-----BEGIN ENCRYPTED PRIVATE KEY-----
+MFAwHAYKKoZIhvcNAQwBATAOBAjTvdpgk5rFsQICCAAEMKXaF0krhnKC9g4DqR0A
+7s6f0+miF76+Nl6x6lN0KbFcxUIAju2eZsGlwWmfs8fgXA==
+-----END ENCRYPTED PRIVATE KEY-----";
+
+    fn key_der() -> Vec<u8> {
+        pem::parse(OPENSSL_KEY).unwrap().into_contents()
+    }
 
     fn pbkdf2(prf: pbes2::Pbkdf2Prf) -> pbes2::Kdf<'static> {
         pbes2::Pbkdf2Params {
@@ -508,7 +514,7 @@ CCHipAQfdXEEZS/iF+yOZZivchKhFk93s8NXqb1XEq6w/PboxfF3V+QKwSHajMYL
         encryption: pbes2::EncryptionScheme<'static>,
     ) -> Vec<u8> {
         let params = pbes2::Parameters { kdf, encryption };
-        let encrypted_data = params.encrypt(KEY_PASSWORD, DER_SEQUENCE).unwrap();
+        let encrypted_data = params.encrypt(KEY_PASSWORD, &key_der()).unwrap();
         EncryptedPrivateKeyInfo {
             encryption_algorithm: params.into(),
             encrypted_data: &encrypted_data,
@@ -517,107 +523,105 @@ CCHipAQfdXEEZS/iF+yOZZivchKhFk93s8NXqb1XEq6w/PboxfF3V+QKwSHajMYL
         .unwrap()
     }
 
-    fn decrypted(key: &[u8], password: &str) -> Result<SecretDocument, KeyError> {
-        decrypt(&EncryptedPrivateKeyInfo::try_from(key).unwrap(), password)
+    /// The decrypted key, or the reason AWS-LC gave in the FIPS build and the error message otherwise
+    fn decrypted(key: &[u8], password: &str) -> Result<Vec<u8>, String> {
+        decrypt(key, password)
+            .map(|document| document.as_bytes().to_vec())
+            .map_err(|error| match error {
+                #[cfg(feature = "fips")]
+                KeyError::FipsDecrypt(reason) => reason,
+                error => error.to_string(),
+            })
     }
 
     #[rstest]
-    #[case::sha256_aes_256(
-        pbes2::Pbkdf2Prf::HmacWithSha256,
-        pbes2::EncryptionScheme::Aes256Cbc { iv: &AES_IV }
-    )]
-    #[case::sha384_aes_128(
-        pbes2::Pbkdf2Prf::HmacWithSha384,
-        pbes2::EncryptionScheme::Aes128Cbc { iv: &AES_IV }
-    )]
-    #[case::sha512_aes_192(
-        pbes2::Pbkdf2Prf::HmacWithSha512,
-        pbes2::EncryptionScheme::Aes192Cbc { iv: &AES_IV }
-    )]
-    fn a_pbkdf2_aes_cbc_key_decrypts_only_with_its_ssl_password(
-        #[case] prf: pbes2::Pbkdf2Prf,
+    #[case::aes_128(pbes2::EncryptionScheme::Aes128Cbc { iv: &AES_IV })]
+    #[case::aes_192(pbes2::EncryptionScheme::Aes192Cbc { iv: &AES_IV })]
+    #[case::aes_256(pbes2::EncryptionScheme::Aes256Cbc { iv: &AES_IV })]
+    fn a_pbkdf2_hmac_sha256_aes_cbc_key_decrypts_only_with_its_ssl_password(
         #[case] encryption: pbes2::EncryptionScheme<'static>,
     ) {
-        let key = encrypted(pbkdf2(prf), encryption);
+        let key = encrypted(pbkdf2(pbes2::Pbkdf2Prf::HmacWithSha256), encryption);
 
-        assert_eq!(
-            decrypted(&key, KEY_PASSWORD).unwrap().as_bytes(),
-            DER_SEQUENCE
+        assert_eq!(decrypted(&key, KEY_PASSWORD), Ok(key_der()));
+        let wrong = decrypt(&key, "wrong-password").unwrap_err().to_string();
+        assert!(
+            wrong.starts_with("ssl_password does not decrypt the key"),
+            "{wrong}"
         );
-        assert!(matches!(
-            decrypted(&key, "wrong-password"),
-            Err(KeyError::Decrypt(_))
-        ));
     }
 
     #[rstest]
     fn an_openssl_key_whose_prf_defaults_to_hmac_with_sha1_decrypts_only_in_the_fips_build() {
         let key = pem::parse(OPENSSL_HMAC_WITH_SHA1_KEY).unwrap();
 
-        let plaintext = decrypted(key.contents(), KEY_PASSWORD)
-            .map(|document| document.as_bytes().to_vec())
-            .ok();
+        let plaintext = decrypted(key.contents(), KEY_PASSWORD).ok();
 
-        let expected = pem::parse(OPENSSL_KEY).unwrap().contents().to_vec();
-        assert_eq!(plaintext, cfg!(feature = "fips").then_some(expected));
+        assert_eq!(plaintext, cfg!(feature = "fips").then(key_der));
     }
 
-    #[cfg(not(feature = "fips"))]
-    #[rstest]
-    #[case::scrypt(scrypt(), pbes2::EncryptionScheme::Aes256Cbc { iv: &AES_IV })]
-    #[case::des_ede3_cbc(
-        pbkdf2(pbes2::Pbkdf2Prf::HmacWithSha256),
-        pbes2::EncryptionScheme::DesEde3Cbc { iv: &DES_IV }
-    )]
-    #[case::hmac_with_sha224(
-        pbkdf2(pbes2::Pbkdf2Prf::HmacWithSha224),
-        pbes2::EncryptionScheme::Aes256Cbc { iv: &AES_IV }
-    )]
-    fn the_default_build_decrypts_every_pbes2_scheme_rustcrypto_offers(
-        #[case] kdf: pbes2::Kdf<'static>,
-        #[case] encryption: pbes2::EncryptionScheme<'static>,
-    ) {
-        let key = encrypted(kdf, encryption);
-
-        assert_eq!(
-            decrypted(&key, KEY_PASSWORD).unwrap().as_bytes(),
-            DER_SEQUENCE
-        );
-    }
-
-    #[cfg(feature = "fips")]
     #[rstest]
     #[case::scrypt(
         scrypt(),
         pbes2::EncryptionScheme::Aes256Cbc { iv: &AES_IV },
-        crate::UnapprovedScheme::Scrypt
-    )]
-    #[case::des_ede3_cbc(
-        pbkdf2(pbes2::Pbkdf2Prf::HmacWithSha256),
-        pbes2::EncryptionScheme::DesEde3Cbc { iv: &DES_IV },
-        crate::UnapprovedScheme::DesEde3Cbc
+        "UNSUPPORTED_KEY_DERIVATION_FUNCTION"
     )]
     #[case::hmac_with_sha224(
         pbkdf2(pbes2::Pbkdf2Prf::HmacWithSha224),
         pbes2::EncryptionScheme::Aes256Cbc { iv: &AES_IV },
-        crate::UnapprovedScheme::HmacWithSha224
+        "UNSUPPORTED_PRF"
     )]
-    fn the_fips_build_refuses_a_scheme_outside_the_module_by_name(
+    #[case::hmac_with_sha384(
+        pbkdf2(pbes2::Pbkdf2Prf::HmacWithSha384),
+        pbes2::EncryptionScheme::Aes128Cbc { iv: &AES_IV },
+        "UNSUPPORTED_PRF"
+    )]
+    #[case::hmac_with_sha512(
+        pbkdf2(pbes2::Pbkdf2Prf::HmacWithSha512),
+        pbes2::EncryptionScheme::Aes192Cbc { iv: &AES_IV },
+        "UNSUPPORTED_PRF"
+    )]
+    fn a_scheme_aws_lc_does_not_read_decrypts_only_in_the_default_build(
         #[case] kdf: pbes2::Kdf<'static>,
         #[case] encryption: pbes2::EncryptionScheme<'static>,
-        #[case] scheme: crate::UnapprovedScheme,
+        #[case] refusal_in_fips_build: &str,
     ) {
         let key = encrypted(kdf, encryption);
 
-        let error = decrypted(&key, KEY_PASSWORD).unwrap_err();
+        let expected = if cfg!(feature = "fips") {
+            Err(refusal_in_fips_build.to_owned())
+        } else {
+            Ok(key_der())
+        };
+        assert_eq!(decrypted(&key, KEY_PASSWORD), expected);
+    }
 
-        assert!(
-            matches!(&error, KeyError::NotFipsApproved(refused) if *refused == scheme),
-            "{error:?}"
+    #[rstest]
+    fn a_des_ede3_cbc_key_is_refused_before_aws_lc_decrypts_it_in_the_fips_build() {
+        let key = encrypted(
+            pbkdf2(pbes2::Pbkdf2Prf::HmacWithSha256),
+            pbes2::EncryptionScheme::DesEde3Cbc { iv: &DES_IV },
         );
+
+        let result = decrypt(&key, KEY_PASSWORD);
+
+        #[cfg(feature = "fips")]
         assert!(
-            error.to_string().contains("openssl pkcs8 -topk8"),
-            "{error}"
+            matches!(&result, Err(error @ KeyError::TripleDes) if error.to_string().contains("openssl pkcs8 -topk8")),
+            "{result:?}"
         );
+        #[cfg(not(feature = "fips"))]
+        assert_eq!(result.unwrap().as_bytes(), key_der());
+    }
+
+    #[rstest]
+    #[case::pbe_sha1_3des(OPENSSL_PBE_SHA1_3DES_KEY)]
+    #[case::pbe_sha1_rc4_128(OPENSSL_PBE_SHA1_RC4_128_KEY)]
+    fn a_pkcs12_pbe_key_is_refused_before_it_reaches_aws_lc(#[case] key: &str) {
+        let key = pem::parse(key).unwrap();
+
+        let result = decrypt(key.contents(), KEY_PASSWORD);
+
+        assert!(matches!(result, Err(KeyError::Decrypt(_))), "{result:?}");
     }
 }

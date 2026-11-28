@@ -42,22 +42,14 @@ pub enum KeyError {
     LegacyEncryption,
     #[cfg(feature = "fips")]
     #[error(
-        "the key is encrypted with {0}, which the FIPS build does not allow. Re-encrypt it with PBKDF2-HMAC-SHA256 and AES-256-CBC: `openssl pkcs8 -topk8 -v2 aes-256-cbc -v2prf hmacWithSHA256`"
+        "the key is encrypted with des-ede3-cbc, which the FIPS build does not allow. Re-encrypt it with PBKDF2-HMAC-SHA256 and AES-256-CBC: `openssl pkcs8 -topk8 -v2 aes-256-cbc -v2prf hmacWithSHA256`"
     )]
-    NotFipsApproved(UnapprovedScheme),
-}
-
-#[cfg(feature = "fips")]
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub enum UnapprovedScheme {
-    #[error("scrypt")]
-    Scrypt,
-    #[error("des-ede3-cbc")]
-    DesEde3Cbc,
-    #[error("hmacWithSHA224")]
-    HmacWithSha224,
-    #[error("PKCS#5 algorithm {0}")]
-    Other(pkcs8::ObjectIdentifier),
+    TripleDes,
+    #[cfg(feature = "fips")]
+    #[error(
+        "ssl_password does not decrypt the key, or the FIPS module does not read its encryption scheme (AWS-LC: {0}). Keys encrypted with PBKDF2-HMAC-SHA256 and AES-256-CBC are read: `openssl pkcs8 -topk8 -v2 aes-256-cbc -v2prf hmacWithSHA256`"
+    )]
+    FipsDecrypt(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

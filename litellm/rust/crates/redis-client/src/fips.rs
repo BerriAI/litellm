@@ -1,68 +1,77 @@
-//! The FIPS build's decryption of a PKCS#8 `ENCRYPTED PRIVATE KEY`: PBES2 with PBKDF2 (HMAC-SHA1, SHA-256, SHA-384 or
-//! SHA-512) and AES-CBC, both run by the AWS-LC FIPS module through aws-lc-rs, with `pkcs8` only parsing the ASN.1.
-//! scrypt, des-ede3-cbc and hmacWithSHA224, which the default build decrypts in RustCrypto, are refused
+//! The FIPS build's decryption of a PKCS#8 `ENCRYPTED PRIVATE KEY`: AWS-LC's own `PKCS8_parse_encrypted_private_key`
+//! runs PBKDF2 and the cipher in the FIPS module and decides which PBES2 schemes it reads. Two kinds of key never reach
+//! it, because AWS-LC decrypts them with code outside the module: keys `pkcs8` fails to parse, among them the PKCS#12
+//! schemes and PBES2 with rc2-cbc, and PBES2 with des-ede3-cbc, which is refused by name
 
-use std::num::NonZeroU32;
+use std::{ffi::CStr, ptr, slice};
 
-use aws_lc_rs::{
-    cipher::{self, DecryptionContext, PaddedBlockDecryptingKey, UnboundCipherKey},
-    iv::FixedLength,
-    pbkdf2,
+use aws_lc_fips_sys::{
+    CBB, CBB_cleanup, CBB_finish, CBB_init, CBS, ERR_clear_error, ERR_get_error,
+    ERR_reason_error_string, EVP_PKEY_free, EVP_marshal_private_key, OPENSSL_free,
+    PKCS8_parse_encrypted_private_key,
 };
-use pkcs8::{
-    EncryptedPrivateKeyInfo, SecretDocument,
-    pkcs5::{self, pbes2},
-};
-use zeroize::Zeroizing;
+use pkcs8::{EncryptedPrivateKeyInfo, SecretDocument, pkcs5::pbes2};
 
-use crate::{KeyError, UnapprovedScheme};
+use crate::KeyError;
 
-pub(crate) fn decrypt(
-    info: &EncryptedPrivateKeyInfo<'_>,
-    password: &str,
-) -> Result<SecretDocument, KeyError> {
-    let refused = |scheme| Err(KeyError::NotFipsApproved(scheme));
-    let pkcs5::EncryptionScheme::Pbes2(params) = &info.encryption_algorithm else {
-        return refused(UnapprovedScheme::Other(info.encryption_algorithm.oid()));
-    };
-    let kdf = match &params.kdf {
-        pbes2::Kdf::Pbkdf2(kdf) => kdf,
-        pbes2::Kdf::Scrypt(_) => return refused(UnapprovedScheme::Scrypt),
-        kdf => return refused(UnapprovedScheme::Other(kdf.oid())),
-    };
-    let prf = match kdf.prf {
-        pbes2::Pbkdf2Prf::HmacWithSha1 => pbkdf2::PBKDF2_HMAC_SHA1,
-        pbes2::Pbkdf2Prf::HmacWithSha256 => pbkdf2::PBKDF2_HMAC_SHA256,
-        pbes2::Pbkdf2Prf::HmacWithSha384 => pbkdf2::PBKDF2_HMAC_SHA384,
-        pbes2::Pbkdf2Prf::HmacWithSha512 => pbkdf2::PBKDF2_HMAC_SHA512,
-        pbes2::Pbkdf2Prf::HmacWithSha224 => return refused(UnapprovedScheme::HmacWithSha224),
-        prf => return refused(UnapprovedScheme::Other(prf.oid())),
-    };
-    let (algorithm, iv) = match params.encryption {
-        pbes2::EncryptionScheme::Aes128Cbc { iv } => (&cipher::AES_128, iv),
-        pbes2::EncryptionScheme::Aes192Cbc { iv } => (&cipher::AES_192, iv),
-        pbes2::EncryptionScheme::Aes256Cbc { iv } => (&cipher::AES_256, iv),
-        pbes2::EncryptionScheme::DesEde3Cbc { .. } => {
-            return refused(UnapprovedScheme::DesEde3Cbc);
-        }
-        scheme => return refused(UnapprovedScheme::Other(scheme.oid())),
-    };
-    let invalid = || KeyError::Decrypt(params.kdf.to_alg_params_invalid().into());
-    let key_size = params.encryption.key_size();
-    if kdf
-        .key_length
-        .is_some_and(|length| usize::from(length) != key_size)
+pub(crate) fn decrypt(der: &[u8], password: &str) -> Result<SecretDocument, KeyError> {
+    let info = EncryptedPrivateKeyInfo::try_from(der).map_err(KeyError::Decrypt)?;
+    if let Some(pbes2::Parameters {
+        encryption: pbes2::EncryptionScheme::DesEde3Cbc { .. },
+        ..
+    }) = info.encryption_algorithm.pbes2()
     {
-        return Err(invalid());
+        return Err(KeyError::TripleDes);
     }
-    let iterations = NonZeroU32::new(kdf.iteration_count).ok_or_else(invalid)?;
-    let mut key = Zeroizing::new([0; 32]);
-    let key = &mut key[..key_size];
-    pbkdf2::derive(prf, iterations, kdf.salt, password.as_bytes(), key);
-    let mut buffer = Zeroizing::new(info.encrypted_data.to_vec());
-    let decrypted = UnboundCipherKey::new(algorithm, key)
-        .and_then(PaddedBlockDecryptingKey::cbc_pkcs7)
-        .and_then(|key| key.decrypt(&mut buffer, DecryptionContext::Iv128(FixedLength::from(iv))))
-        .map_err(|_| KeyError::Decrypt(pkcs5::Error::DecryptFailed.into()))?;
-    SecretDocument::try_from(&*decrypted).map_err(|error| KeyError::Decrypt(error.into()))
+    let mut cbs = CBS {
+        data: der.as_ptr(),
+        len: der.len(),
+    };
+    // SAFETY: `cbs` reads `der`, which outlives the call, and the password is passed with its length, so it needs no
+    // NUL terminator
+    let key = unsafe {
+        PKCS8_parse_encrypted_private_key(&mut cbs, password.as_ptr().cast(), password.len())
+    };
+    if key.is_null() {
+        return Err(KeyError::FipsDecrypt(module_error()));
+    }
+    let (mut out, mut out_len) = (ptr::null_mut(), 0);
+    // SAFETY: `key` is the key parsed above and is freed once, here. A zeroed `CBB` is what `CBB_init` writes before it
+    // can fail, and `CBB_cleanup` frees the buffer only when `CBB_finish` did not hand it over in `out`
+    let marshalled = unsafe {
+        let mut cbb: CBB = std::mem::zeroed();
+        let marshalled = CBB_init(&mut cbb, 0) == 1
+            && EVP_marshal_private_key(&mut cbb, key) == 1
+            && CBB_finish(&mut cbb, &mut out, &mut out_len) == 1;
+        CBB_cleanup(&mut cbb);
+        EVP_PKEY_free(key);
+        marshalled
+    };
+    if !marshalled {
+        return Err(KeyError::FipsDecrypt(module_error()));
+    }
+    // SAFETY: `CBB_finish` handed over `out_len` initialized bytes at `out`, and `OPENSSL_free` zeroes them before it
+    // frees them
+    let document = unsafe {
+        let document = SecretDocument::try_from(slice::from_raw_parts(out, out_len));
+        OPENSSL_free(out.cast());
+        document
+    };
+    document.map_err(|error| KeyError::Decrypt(error.into()))
+}
+
+/// The reason AWS-LC gave for the earliest error it queued on this thread, such as `BAD_DECRYPT` or `UNSUPPORTED_PRF`,
+/// after which the queue is cleared
+fn module_error() -> String {
+    // SAFETY: `ERR_reason_error_string` returns NULL or a static NUL-terminated string
+    unsafe {
+        let error = ERR_get_error();
+        ERR_clear_error();
+        let reason = ERR_reason_error_string(error);
+        if reason.is_null() {
+            format!("error {error:#x}")
+        } else {
+            CStr::from_ptr(reason).to_string_lossy().into_owned()
+        }
+    }
 }

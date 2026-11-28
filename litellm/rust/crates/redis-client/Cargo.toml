@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-fips = ["dep:aws-lc-rs", "dep:zeroize"]
+fips = ["dep:aws-lc-fips-sys"]
 
 [dependencies]
 tracing.workspace = true
@@ -25,12 +25,11 @@ redis = { workspace = true, features = [
 ] }
 pem = "4.0.0"
 pkcs8 = { version = "0.10.2", features = ["3des", "encryption", "std"] }
-aws-lc-rs = { version = "1.17.3", default-features = false, features = ["fips"], optional = true }
+aws-lc-fips-sys = { version = "0.13.17", optional = true }
 rustls-native-certs.workspace = true
 socket2 = "0.6.5"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
-zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 litellm-redis-testing.workspace = true

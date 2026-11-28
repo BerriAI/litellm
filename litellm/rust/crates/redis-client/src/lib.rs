@@ -16,8 +16,6 @@ pub use batch::{Declared, RedisBatch};
 pub use client::{RedisClient, Ttl, WeakRedisClient};
 pub use commands::{Amount, Command, Expiry};
 pub use config::{Credentials, CredentialsProvider, DEFAULT_TIMEOUT, RedisConfig, Timeouts};
-#[cfg(feature = "fips")]
-pub use error::UnapprovedScheme;
 pub use error::{ConnectError, Error, KeyError};
 pub use events::{
     CallEvent, CallTag, FailureKind, Operation, Outcome, RedisEvents, current_tag, tagged,
