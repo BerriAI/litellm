@@ -260,6 +260,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     KeySearchWhere,
     SuccessfulKeyUpdate,
 )
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 from litellm.types.router import Deployment
 from litellm.types.utils import (
     BudgetConfig,
@@ -1472,6 +1473,7 @@ async def validate_team_id_used_in_service_account_request(
 def _enforce_upperbound_key_params(
     data: GenerateKeyRequest | UpdateKeyRequest,
     fill_defaults: bool = True,
+    existing_key_row: LiteLLM_VerificationToken | None = None,
 ) -> None:
     """
     Enforce upperbound limits on key parameters.
@@ -1503,6 +1505,8 @@ def _enforce_upperbound_key_params(
     if upperbound is None:
         return
 
+    if existing_key_row is not None:
+        _reject_removing_capped_limit(data, upperbound, existing_key_row)
     _enforce_duration_upperbound(data, "duration", data.duration, upperbound.duration, fill_defaults=fill_defaults)
     _enforce_numeric_upperbound(data, "max_budget", data.max_budget, upperbound.max_budget, fill_defaults=fill_defaults)
     _enforce_numeric_upperbound(
@@ -1516,6 +1520,40 @@ def _enforce_upperbound_key_params(
     _enforce_numeric_upperbound(data, "rpm_limit", data.rpm_limit, upperbound.rpm_limit, fill_defaults=fill_defaults)
     _enforce_duration_upperbound(
         data, "budget_duration", data.budget_duration, upperbound.budget_duration, fill_defaults=fill_defaults
+    )
+
+
+def _reject_removing_capped_limit(
+    data: GenerateKeyRequest | UpdateKeyRequest,
+    upperbound: LiteLLM_UpperboundKeyGenerateParams,
+    existing_key_row: LiteLLM_VerificationToken,
+) -> None:
+    capped_fields: Final = (
+        ("duration", data.duration, upperbound.duration, existing_key_row.expires),
+        ("max_budget", data.max_budget, upperbound.max_budget, existing_key_row.max_budget),
+        (
+            "max_parallel_requests",
+            data.max_parallel_requests,
+            upperbound.max_parallel_requests,
+            existing_key_row.max_parallel_requests,
+        ),
+        ("tpm_limit", data.tpm_limit, upperbound.tpm_limit, existing_key_row.tpm_limit),
+        ("rpm_limit", data.rpm_limit, upperbound.rpm_limit, existing_key_row.rpm_limit),
+        ("budget_duration", data.budget_duration, upperbound.budget_duration, existing_key_row.budget_duration),
+    )
+    removed: Final = next(
+        (
+            (key, cap)
+            for key, value, cap, stored in capped_fields
+            if value is None and cap is not None and stored is not None and key in data.model_fields_set
+        ),
+        None,
+    )
+    if removed is None:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={"error": f"{removed[0]} cannot be removed, max limit set in config - max_value={removed[1]}"},
     )
 
 
@@ -3753,7 +3791,7 @@ async def _process_single_key_update(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
 
     # Enforce upperbound key params on update (don't fill defaults)
-    _enforce_upperbound_key_params(update_key_request, fill_defaults=False)
+    _enforce_upperbound_key_params(update_key_request, fill_defaults=False, existing_key_row=existing_key_row)
 
     # Get team object and check team limits if team_id is provided
     team_obj: LiteLLM_TeamTableCachedObj | None = None
@@ -4054,6 +4092,46 @@ async def _acting_as_team_admin_for_key_update(
     return True
 
 
+def _caller_created_and_owns_key(key_row: LiteLLM_VerificationToken, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """
+    Personal-key bypass: the caller both created the key AND still owns it. Checking only created_by would let a
+    demoted admin who created a key for another user keep editing it without admin rights after it was reassigned.
+    """
+    return (
+        user_api_key_dict.user_id is not None
+        and key_row.created_by == user_api_key_dict.user_id
+        and key_row.user_id == user_api_key_dict.user_id
+    )
+
+
+async def _require_regenerate_budget_change_rights(
+    update_request: UpdateKeyRequest,
+    key_in_db: LiteLLM_VerificationToken,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    budget_change: Final = classify_key_budget_change(data=update_request, existing=key_in_db)
+    if isinstance(budget_change, KeyBudgetUnchanged):
+        return
+    if _caller_created_and_owns_key(key_in_db, user_api_key_dict) and await _owner_may_change_key_budget(
+        budget_change=budget_change,
+        data=update_request,
+        existing_key_row=key_in_db,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+    ):
+        return
+    await _check_key_admin_access(
+        user_api_key_dict=user_api_key_dict,
+        hashed_token=key_in_db.token,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        route="/key/regenerate (max_budget/spend)",
+    )
+
+
 async def _owner_may_change_key_budget(
     budget_change: KeyBudgetChange,
     data: UpdateKeyRequest,
@@ -4252,15 +4330,7 @@ async def _validate_update_key_data(
         entity="key",
     )
 
-    # Personal-key bypass: the caller both created the key AND still owns it
-    # (user_id == caller).  Checking only created_by would let a demoted admin
-    # who originally created a key for another user continue editing it without
-    # admin authorization after the key was reassigned.
-    caller_is_creator: Final = (
-        user_api_key_dict.user_id is not None
-        and getattr(existing_key_row, "created_by", None) == user_api_key_dict.user_id
-        and getattr(existing_key_row, "user_id", None) == user_api_key_dict.user_id
-    )
+    caller_is_creator: Final = _caller_created_and_owns_key(existing_key_row, user_api_key_dict)
     # Team keys: can_team_member_execute_key_management_endpoint (called above)
     # already validated team membership + /key/update permission and would have
     # raised if the caller lacked it.  Reaching this point on a team key for a
@@ -4564,7 +4634,7 @@ async def update_key_fn(
         await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=data)
 
         # Enforce upperbound key params on update (don't fill defaults)
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, fill_defaults=False, existing_key_row=existing_key_row)
         non_default_values: Final = await prepare_key_update_data(
             data=data,
             existing_key_row=existing_key_row,
@@ -6767,8 +6837,15 @@ async def _execute_virtual_key_regeneration(
         update_request: Final = _regenerate_request_as_update_request(key=hashed_api_key, data=data)
         if update_request is not None:
             await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=update_request)
+            await _require_regenerate_budget_change_rights(
+                update_request=update_request,
+                key_in_db=key_in_db,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
         # Enforce upperbound key params on regenerate (don't fill defaults)
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, fill_defaults=False, existing_key_row=key_in_db)
         non_default_values = await prepare_key_update_data(
             data=data,
             existing_key_row=key_in_db,

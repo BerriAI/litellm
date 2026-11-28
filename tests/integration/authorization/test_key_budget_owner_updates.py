@@ -10,6 +10,7 @@ from integration._support.client import (
     JSON_OBJECT,
     Gateway,
     Scenario,
+    delete_key_if_present,
     eventually,
     gateway_from_environment,
     string_value,
@@ -193,3 +194,20 @@ def test_self_serve_policy_gates_a_new_reset_period_like_a_raised_cap(self_serve
         ), shorten.text
         assert clear.status_code == 200, clear.text
         assert _key_row(proxy, cleared)["budget_duration"] is None
+
+
+def test_self_serve_policy_lets_the_owner_lower_a_budget_on_regenerate(self_serve: tuple[str, Gateway]) -> None:
+    _, proxy = self_serve
+    with proxy.scenario() as scenario:
+        owner: Final = _owner_credential(scenario)
+        created: Final = proxy.request("POST", "/key/generate", {"max_budget": 50.0}, key=owner)
+        assert created.status_code == 200, created.text
+        original: Final = string_value(JSON_OBJECT.validate_json(created.content)["key"])
+        scenario.cleanups.callback(delete_key_if_present, proxy, original)
+
+        lowered: Final = proxy.request("POST", "/key/regenerate", {"key": original, "max_budget": 10.0}, key=owner)
+
+        assert lowered.status_code == 200, lowered.text
+        regenerated: Final = string_value(JSON_OBJECT.validate_json(lowered.content)["key"])
+        scenario.cleanups.callback(delete_key_if_present, proxy, regenerated)
+        assert _key_row(proxy, regenerated)["max_budget"] == 10.0

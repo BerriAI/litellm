@@ -5,7 +5,7 @@ import pytest
 from litellm.proxy.utils import hash_token
 
 from tests.integration._support.actors import TEAM_ALPHA, TEAM_BETA, Actor
-from tests.integration._support.actors import create_scratch_key
+from tests.integration._support.actors import create_scratch_key, owned_settings_client
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -182,3 +182,45 @@ async def test_key_update_denied_does_not_touch_budget_counters(
     assert row.max_budget is None, "denied but max_budget applied"
     assert row.tpm_limit is None, "denied but tpm_limit applied"
     assert row.rpm_limit is None, "denied but rpm_limit applied"
+
+
+async def test_key_update_explicit_null_cannot_remove_capped_limit(gateway_client, db, resources, actors, tmp_path):
+    admin = actors.keys[Actor.PROXY_ADMIN]
+    headers = {"Authorization": f"Bearer {admin.cleartext}"}
+    limited = await create_scratch_key(
+        gateway_client,
+        admin.cleartext,
+        resources.prefix,
+        user_id=admin.user_id,
+        key_alias=f"{resources.prefix}-limited",
+    )
+    unlimited = await create_scratch_key(
+        gateway_client,
+        admin.cleartext,
+        resources.prefix,
+        user_id=admin.user_id,
+        key_alias=f"{resources.prefix}-unlimited",
+    )
+    seeded = await gateway_client.post(
+        "/key/update", headers=headers, json={"key": limited, "duration": "1h", "max_budget": 50.0}
+    )
+    assert seeded.status_code == 200, seeded.text
+    before = await db.db.litellm_verificationtoken.find_unique(where={"token": hash_token(limited)})
+    assert before is not None and before.expires is not None and before.max_budget == 50.0
+
+    with owned_settings_client(
+        gateway_client, tmp_path, {"upperbound_key_generate_params": {"duration": "2h", "max_budget": 100.0}}
+    ) as client:
+        null_duration = await client.post("/key/update", headers=headers, json={"key": limited, "duration": None})
+        null_budget = await client.post("/key/update", headers=headers, json={"key": limited, "max_budget": None})
+        nothing_stored = await client.post(
+            "/key/update", headers=headers, json={"key": unlimited, "duration": None, "max_budget": None}
+        )
+
+    assert null_duration.status_code == 400, null_duration.text
+    assert null_budget.status_code == 400, null_budget.text
+    assert nothing_stored.status_code == 200, nothing_stored.text
+    after = await db.db.litellm_verificationtoken.find_unique(where={"token": hash_token(limited)})
+    assert after is not None
+    assert after.expires == before.expires
+    assert after.max_budget == 50.0
