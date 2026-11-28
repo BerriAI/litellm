@@ -12,7 +12,6 @@ import respx
 from pydantic import ValidationError
 
 import litellm
-
 from litellm.llms.dashscope.common_utils import DashScopeError
 from litellm.llms.dashscope.rerank.transformation import (
     DEFAULT_RERANK_URL,
@@ -66,9 +65,7 @@ class TestDashScopeRerankURL:
         assert url == "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"
 
     def test_rerank_env_var_wins_over_chat_shaped_base(self, monkeypatch):
-        monkeypatch.setenv(
-            "DASHSCOPE_API_BASE_RERANK", "https://rerank.example.com/v1/reranks"
-        )
+        monkeypatch.setenv("DASHSCOPE_API_BASE_RERANK", "https://rerank.example.com/v1/reranks")
         url = self.config.get_complete_url(
             api_base="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
             model="qwen3-rerank",
@@ -88,14 +85,10 @@ class TestDashScopeRerankURL:
 
     def test_trailing_slash_stripped(self):
         full = "https://dashscope.aliyuncs.com/compatible-api/v1/reranks/"
-        assert self.config.get_complete_url(
-            api_base=full, model="qwen3-rerank"
-        ) == full.rstrip("/")
+        assert self.config.get_complete_url(api_base=full, model="qwen3-rerank") == full.rstrip("/")
 
     def test_custom_v1_base_appends_reranks(self):
-        url = self.config.get_complete_url(
-            api_base="https://my-proxy.example.com/v1", model="qwen3-rerank"
-        )
+        url = self.config.get_complete_url(api_base="https://my-proxy.example.com/v1", model="qwen3-rerank")
         assert url == "https://my-proxy.example.com/v1/reranks"
 
 
@@ -104,24 +97,18 @@ class TestDashScopeRerankRequest:
         self.config = DashScopeRerankConfig()
 
     def test_validate_environment_with_explicit_key(self):
-        headers = self.config.validate_environment(
-            headers={}, model="qwen3-rerank", api_key="sk-test"
-        )
+        headers = self.config.validate_environment(headers={}, model="qwen3-rerank", api_key="sk-test")
         assert headers["Authorization"] == "Bearer sk-test"
         assert headers["content-type"] == "application/json"
 
     def test_validate_environment_missing_key(self, monkeypatch):
         monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
         with pytest.raises(ValueError, match="DASHSCOPE_API_KEY"):
-            self.config.validate_environment(
-                headers={}, model="qwen3-rerank", api_key=None
-            )
+            self.config.validate_environment(headers={}, model="qwen3-rerank", api_key=None)
 
     def test_validate_environment_falls_back_to_env(self, monkeypatch):
         monkeypatch.setenv("DASHSCOPE_API_KEY", "env-key")
-        headers = self.config.validate_environment(
-            headers={}, model="qwen3-rerank", api_key=None
-        )
+        headers = self.config.validate_environment(headers={}, model="qwen3-rerank", api_key=None)
         assert headers["Authorization"] == "Bearer env-key"
 
     def test_supported_params(self):
@@ -246,16 +233,12 @@ class TestDashScopeRerankResponse:
             "object": "list",
             "results": [
                 {
-                    "document": {
-                        "text": "苹果派的制作步骤包括准备面团、切苹果、调制馅料、组装和烘烤。"
-                    },
+                    "document": {"text": "苹果派的制作步骤包括准备面团、切苹果、调制馅料、组装和烘烤。"},
                     "index": 1,
                     "relevance_score": 0.8304247466067356,
                 },
                 {
-                    "document": {
-                        "text": "制作苹果派时，预先煮软苹果可以缩短烘烤时间。"
-                    },
+                    "document": {"text": "制作苹果派时，预先煮软苹果可以缩短烘烤时间。"},
                     "index": 3,
                     "relevance_score": 0.7142660211908354,
                 },
@@ -276,9 +259,7 @@ class TestDashScopeRerankResponse:
             {
                 "index": 1,
                 "relevance_score": 0.8304247466067356,
-                "document": {
-                    "text": "苹果派的制作步骤包括准备面团、切苹果、调制馅料、组装和烘烤。"
-                },
+                "document": {"text": "苹果派的制作步骤包括准备面团、切苹果、调制馅料、组装和烘烤。"},
             },
             {
                 "index": 3,
@@ -347,9 +328,7 @@ class TestDashScopeRerankResponse:
             )
 
     def test_get_error_class(self):
-        err = self.config.get_error_class(
-            error_message="boom", status_code=500, headers={}
-        )
+        err = self.config.get_error_class(error_message="boom", status_code=500, headers={})
         assert isinstance(err, DashScopeError)
         assert err.status_code == 500
 
@@ -392,6 +371,45 @@ def test_transform_rerank_response_reads_total_tokens_from_usage(usage: object, 
         "billed_units": {"total_tokens": expected_total_tokens},
         "tokens": {"input_tokens": expected_total_tokens},
     }
+
+
+@pytest.mark.parametrize("call_type", ["rerank", "arerank"])
+@pytest.mark.parametrize(
+    ("token_rate", "usage", "expected_cost"),
+    [
+        (0.000002, {"prompt_tokens": 79, "total_tokens": 79}, 0.000158),
+        (0.0, {"prompt_tokens": 79, "total_tokens": 79}, 0.0),
+        (0.000002, {}, 0.0),
+        (0.000002, {"total_tokens": -1}, 0.0),
+    ],
+    ids=["deployment-rate", "free-deployment", "missing-usage", "negative-usage"],
+)
+def test_dashscope_rerank_bills_reported_tokens_at_the_deployment_rate(
+    call_type: str, token_rate: float, usage: dict[str, int], expected_cost: float
+) -> None:
+    model: Final = "dashscope/qwen3.7-text-rerank"
+    litellm.register_model({model: {"mode": "rerank", "litellm_provider": "dashscope", "input_cost_per_token": 0.001}})
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "dashscope-rerank-pricing-test",
+                "litellm_params": {"model": model, "input_cost_per_token": token_rate},
+                "model_info": {"mode": "rerank"},
+            }
+        ]
+    )
+    response: Final = _transform({"id": "rerank-1", "results": [{"index": 0, "relevance_score": 0.9}], "usage": usage})
+
+    cost: Final = litellm.completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="dashscope",
+        call_type=call_type,
+        custom_pricing=True,
+        router_model_id=router.registry().all()[0]["model_info"]["id"],
+    )
+
+    assert cost == pytest.approx(expected_cost)
 
 
 def test_transform_rerank_response_keeps_provider_id_and_drops_unknown_result_fields():

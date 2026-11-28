@@ -45,6 +45,7 @@ from litellm.types.rerank import (
     RerankResponseMeta,
     RerankTokens,
 )
+from litellm.types.utils import ModelInfo
 
 from ..common_utils import DashScopeError, resolve_dashscope_family_rerank_api_base
 
@@ -244,6 +245,23 @@ class DashScopeRerankConfig(BaseRerankConfig):
             results=transformed_results,
             meta=meta,
         )
+
+    def calculate_rerank_cost(
+        self,
+        model: str,
+        custom_llm_provider: str | None = None,
+        billed_units: RerankBilledUnits | None = None,
+        model_info: ModelInfo | None = None,
+    ) -> tuple[float, float]:
+        if billed_units is None or model_info is None:
+            return 0.0, 0.0
+
+        total_tokens: Final = billed_units.get("total_tokens")
+        token_rate: Final = model_info.get("input_cost_per_token")
+        if total_tokens is None or total_tokens <= 0 or token_rate is None:
+            return 0.0, 0.0
+
+        return total_tokens * token_rate, 0.0
 
     def get_error_class(
         self,
