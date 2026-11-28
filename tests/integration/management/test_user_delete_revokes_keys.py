@@ -7,7 +7,7 @@ from typing import Final
 import httpx
 import psycopg
 import pytest
-from integration._support.client import Gateway, eventually, object_value, string_value
+from integration._support.client import Gateway, chat_until_denied, eventually, object_value, string_value
 from integration._support.database import read_rows
 from pydantic import JsonValue
 
@@ -133,16 +133,13 @@ def test_user_delete_revokes_keys_and_memberships(gateway: Gateway, peer: Gatewa
             denied: Final = _chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
             assert denied.status_code == 401, denied.text
             assert denied.json() == _token_not_found_error(), denied.text
+        assert _observed(upstream) == []
         for key in keys:
-            denied_peer: Final = eventually(
-                lambda k=key: _chat(peer, model, k, f"denied {uuid.uuid4().hex}"),
-                lambda response: response.status_code == 401,
-                seconds=10,
+            denied_peer: Final = chat_until_denied(
+                upstream, lambda text, k=key: _chat(peer, model, k, text), _observation, status=401
             )
             assert denied_peer.json() == _token_not_found_error(), denied_peer.text
 
-        denied_observations: Final = _observed(upstream)
-        assert denied_observations == [], denied_observations
         for proxy in (gateway, peer):
             for key in keys:
                 denied_again: Final = _chat(proxy, model, key, f"denied {uuid.uuid4().hex}")

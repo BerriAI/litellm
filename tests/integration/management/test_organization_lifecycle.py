@@ -4,7 +4,7 @@ from hashlib import sha256
 from typing import Final
 
 import httpx
-from integration._support.client import Gateway, eventually, object_value, string_value
+from integration._support.client import Gateway, chat_until_denied, eventually, object_value, string_value
 from integration._support.database import read_rows
 from pydantic import JsonValue
 
@@ -188,15 +188,12 @@ def test_organization_delete_revokes_org_and_team_keys_on_gateway_and_peer(gatew
             refused: Final = _chat(gateway, model, key, f"refused {uuid.uuid4().hex}")
             assert refused.status_code == 401, refused.text
             assert refused.json() == _token_not_found_error(), refused.text
+        assert _observed(upstream) == []
         for key in (organization_key, team_key):
-            refused_peer: Final = eventually(
-                lambda k=key: _chat(peer, model, k, f"refused {uuid.uuid4().hex}"),
-                lambda response: response.status_code == 401,
-                seconds=10,
+            refused_peer: Final = chat_until_denied(
+                upstream, lambda text, k=key: _chat(peer, model, k, text), _observation, status=401
             )
             assert refused_peer.json() == _token_not_found_error(), refused_peer.text
-        refused_observations: Final = _observed(upstream)
-        assert refused_observations == [], refused_observations
         for proxy in (gateway, peer):
             for key in (organization_key, team_key):
                 refused_again: Final = _chat(proxy, model, key, f"refused {uuid.uuid4().hex}")

@@ -18,7 +18,14 @@ from redis.client import PubSub
 
 from litellm.proxy.common_utils.cache_invalidation_pubsub import _BULK_EVICTION_WAIT_SECONDS
 from tests.integration._support.budget import case_timeout_seconds
-from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
+from tests.integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    chat_until_denied,
+    eventually,
+    object_value,
+    string_value,
+)
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy_process
 from tests.integration._support.redis_process import owned_redis
@@ -471,16 +478,11 @@ def test_user_budget_update_propagates_to_gateway_and_peer(gateway: Gateway, pee
         shrink: Final = gateway.request("POST", "/user/update", {"user_id": user_id, "max_budget": 0.01})
         assert shrink.status_code == 200, shrink.text
         _assert_user_budget_refusal(_user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}"), user_id)
+        assert _observed(upstream) == []
         _assert_user_budget_refusal(
-            eventually(
-                lambda: _user_chat(peer, model, key, f"denied {uuid.uuid4().hex}"),
-                lambda response: response.status_code == 422,
-                seconds=10,
-            ),
+            chat_until_denied(upstream, lambda text: _user_chat(peer, model, key, text), _chat_observation, status=422),
             user_id,
         )
-        denied_observations: Final = _observed(upstream)
-        assert denied_observations == [], denied_observations
         for proxy in (gateway, peer):
             _assert_user_budget_refusal(_user_chat(proxy, model, key, f"denied {uuid.uuid4().hex}"), user_id)
         assert _observed(upstream) == []
@@ -542,14 +544,11 @@ def test_user_models_update_with_metadata_propagates_to_gateway_and_peer(gateway
         denied_gateway: Final = _user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
         assert denied_gateway.status_code == 403, denied_gateway.text
         assert denied_gateway.json() == _user_model_denied_error(model), denied_gateway.text
-        denied_peer: Final = eventually(
-            lambda: _user_chat(peer, model, key, f"denied {uuid.uuid4().hex}"),
-            lambda response: response.status_code == 403,
-            seconds=30,
+        assert _observed(upstream) == []
+        denied_peer: Final = chat_until_denied(
+            upstream, lambda text: _user_chat(peer, model, key, text), _chat_observation, status=403, seconds=30
         )
         assert denied_peer.json() == _user_model_denied_error(model), denied_peer.text
-        model_denied_observations: Final = _observed(upstream)
-        assert model_denied_observations == [], model_denied_observations
         for proxy in (gateway, peer):
             denied_again: Final = _user_chat(proxy, model, key, f"denied {uuid.uuid4().hex}")
             assert denied_again.status_code == 403, denied_again.text
@@ -668,14 +667,11 @@ def test_user_models_update_without_metadata_propagates_to_gateway_and_peer(gate
         denied_gateway: Final = _user_chat(gateway, model, key, f"denied {uuid.uuid4().hex}")
         assert denied_gateway.status_code == 403, denied_gateway.text
         assert denied_gateway.json() == _user_model_denied_error(model), denied_gateway.text
-        denied_peer: Final = eventually(
-            lambda: _user_chat(peer, model, key, f"denied {uuid.uuid4().hex}"),
-            lambda response: response.status_code == 403,
-            seconds=10,
+        assert _observed(upstream) == []
+        denied_peer: Final = chat_until_denied(
+            upstream, lambda text: _user_chat(peer, model, key, text), _chat_observation, status=403
         )
         assert denied_peer.json() == _user_model_denied_error(model), denied_peer.text
-        denied_observations: Final = _observed(upstream)
-        assert denied_observations == [], denied_observations
         for proxy in (gateway, peer):
             refused = _user_chat(proxy, model, key, f"denied {uuid.uuid4().hex}")
             assert refused.json() == _user_model_denied_error(model), refused.text
