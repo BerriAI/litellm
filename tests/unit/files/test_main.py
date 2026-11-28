@@ -1,6 +1,7 @@
 import asyncio
 import time
 from collections.abc import Awaitable, Callable, Mapping
+from inspect import isawaitable
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -43,6 +44,93 @@ def test_create_file_passthrough_is_rejected_outside_a_vertex_batch(custom_llm_p
 
     assert "vertex_ai" in str(exc_info.value)
     assert "batch" in str(exc_info.value)
+
+
+async def _call_file_operation(call: Callable[[], object]) -> None:
+    result: Final = call()
+    if isawaitable(result):
+        await result
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(
+            lambda: litellm.create_file(
+                file=("test.txt", b"test"),
+                purpose="assistants",
+                custom_llm_provider="unsupported_provider",  # pyright: ignore[reportArgumentType]  # invalid runtime input
+            ),
+            id="create",
+        ),
+        pytest.param(
+            lambda: litellm.file_retrieve(
+                file_id="file-test",
+                custom_llm_provider="unsupported_provider",  # pyright: ignore[reportArgumentType]  # invalid runtime input
+            ),
+            id="retrieve",
+        ),
+        pytest.param(
+            lambda: litellm.file_delete(
+                file_id="file-test",
+                custom_llm_provider="unsupported_provider",
+            ),
+            id="delete",
+        ),
+        pytest.param(
+            lambda: litellm.file_list(
+                custom_llm_provider="unsupported_provider",  # pyright: ignore[reportArgumentType]  # invalid runtime input
+            ),
+            id="list",
+        ),
+        pytest.param(
+            lambda: litellm.file_content(file_id="file-test", custom_llm_provider="unsupported_provider"),
+            id="content",
+        ),
+        pytest.param(
+            lambda: litellm.acreate_file(
+                file=("test.txt", b"test"),
+                purpose="assistants",
+                custom_llm_provider="unsupported_provider",  # pyright: ignore[reportArgumentType]  # invalid runtime input
+            ),
+            id="async-create",
+        ),
+        pytest.param(
+            lambda: litellm.afile_retrieve(
+                file_id="file-test",
+                custom_llm_provider="unsupported_provider",  # pyright: ignore[reportArgumentType]  # invalid runtime input
+            ),
+            id="async-retrieve",
+        ),
+        pytest.param(
+            lambda: litellm.afile_delete(
+                file_id="file-test",
+                custom_llm_provider="unsupported_provider",  # pyright: ignore[reportArgumentType]  # invalid runtime input
+            ),
+            id="async-delete",
+        ),
+        pytest.param(
+            lambda: litellm.afile_list(
+                custom_llm_provider="unsupported_provider",  # pyright: ignore[reportArgumentType]  # invalid runtime input
+            ),
+            id="async-list",
+        ),
+        pytest.param(
+            lambda: litellm.afile_content(
+                file_id="file-test",
+                custom_llm_provider="unsupported_provider",  # pyright: ignore[reportArgumentType]  # invalid runtime input
+            ),
+            id="async-content",
+        ),
+    ],
+)
+async def test_unknown_file_provider_returns_bad_request(call: Callable[[], object]) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await _call_file_operation(call)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.llm_provider == "unsupported_provider"
+    assert "unsupported_provider" in str(exc_info.value)
 
 
 def _gcs_upload_transport(uploads: list[httpx.Request]) -> httpx.MockTransport:
