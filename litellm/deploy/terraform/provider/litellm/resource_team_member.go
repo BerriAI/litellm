@@ -1,8 +1,11 @@
 package litellm
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
@@ -135,7 +138,7 @@ func resourceLiteLLMTeamMemberDelete(d *schema.ResourceData, m interface{}) erro
 	}
 	defer resp.Body.Close()
 
-	if err := handleResponse(resp, "deleting team member"); err != nil {
+	if err := handleTeamMemberDeleteResponse(resp); err != nil {
 		return err
 	}
 
@@ -143,4 +146,25 @@ func resourceLiteLLMTeamMemberDelete(d *schema.ResourceData, m interface{}) erro
 
 	d.SetId("")
 	return nil
+}
+
+func handleTeamMemberDeleteResponse(resp *http.Response) error {
+	if resp.StatusCode == http.StatusNotFound {
+		log.Printf("[WARN] Team member already removed: %s", resp.Status)
+		return nil
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		return handleResponse(resp, "deleting team member")
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var parsed struct {
+		Detail struct {
+			Error string `json:"error"`
+		} `json:"detail"`
+	}
+	if json.Unmarshal(body, &parsed) == nil && parsed.Detail.Error == "User not found in team" {
+		log.Printf("[WARN] Team member already removed: %s", resp.Status)
+		return nil
+	}
+	return fmt.Errorf("error deleting team member: %s - %s", resp.Status, redactResponseBody(body))
 }
