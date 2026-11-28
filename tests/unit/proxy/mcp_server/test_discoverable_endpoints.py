@@ -5850,6 +5850,72 @@ def test_oauth_authorization_server_404_for_non_bridge_client_forwarded_server()
     assert exc.value.status_code == 404
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_standard_pattern", (False, True))
+async def test_true_passthrough_relay_discovery_names_upstream_issuer(use_standard_pattern: bool) -> None:
+    from litellm.proxy.mcp_server.discoverable_endpoints import (
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server: Final = _bridge_server(
+        issuer="https://provider.com",
+        authorization_server_metadata={
+            "issuer": "https://provider.com",
+            "registration_endpoint": "https://provider.com/oauth/register",
+        },
+    )
+    with patch.dict(global_mcp_server_manager.registry, {server.server_id: server}, clear=True):
+        response: Final = await _build_oauth_protected_resource_response(
+            request=_bridge_mock_request(),
+            mcp_server_name=server.server_name,
+            use_standard_pattern=use_standard_pattern,
+        )
+    assert response["authorization_servers"] == ["https://provider.com"]
+    resource_path: Final = f"/mcp/{server.server_name}" if use_standard_pattern else f"/{server.server_name}/mcp"
+    assert response["resource"] == f"https://litellm.example.com{resource_path}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        pytest.param({"auth_type": MCPAuth.oauth_delegate}, id="gateway-envelope"),
+        pytest.param(
+            {"authorization_server_metadata": {"issuer": "https://provider.com"}},
+            id="no-published-registration",
+        ),
+        pytest.param({"issuer": None}, id="no-upstream-issuer"),
+        pytest.param({"registration_url": "https://provider.com/custom-register"}, id="configured-registration"),
+    ),
+)
+async def test_relay_discovery_keeps_gateway_when_upstream_cannot_be_the_as(overrides: dict[str, object]) -> None:
+    from litellm.proxy.mcp_server.discoverable_endpoints import (
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    fields: Final = {
+        "issuer": "https://provider.com",
+        "authorization_server_metadata": {
+            "issuer": "https://provider.com",
+            "registration_endpoint": "https://provider.com/oauth/register",
+        },
+    }
+    server: Final = _bridge_server(**(fields | overrides))
+    with patch.dict(global_mcp_server_manager.registry, {server.server_id: server}, clear=True):
+        response: Final = await _build_oauth_protected_resource_response(
+            request=_bridge_mock_request(),
+            mcp_server_name=server.server_name,
+            use_standard_pattern=True,
+        )
+    assert response["authorization_servers"] == [f"https://litellm.example.com/{server.server_name}"]
+
+
 async def _bridge_register_response(
     server: "MCPServer",
     request_payload: _BridgeRegistrationPayload,
