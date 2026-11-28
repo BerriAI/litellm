@@ -132,7 +132,9 @@ class CliTokenSecret(LiteLLMBaseModel):
     refresh token is one of them: it buys a fresh key from the proxy on demand,
     so leaving it on disk would leave the login readable there. `key` is
     optional because the file can hold a refresh token without one, and moving
-    that into the keychain must not invent a key to go with it.
+    that into the keychain must not invent a key to go with it. `expires_at`
+    travels with the key, because a save stopped after the keychain took it
+    leaves the file describing the key it replaced.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -142,6 +144,7 @@ class CliTokenSecret(LiteLLMBaseModel):
     jwt_token: str = ""
     refresh_token: str | None = None
     timestamp: float = 0.0
+    expires_at: float | None = None
 
 
 CLI_TOKEN_FRESHNESS_BUFFER_SECONDS: Final = 360
@@ -525,9 +528,16 @@ def _apply_vault_secret(record: CliTokenRecord, blob: str, vault: SecretVault) -
                 "jwt_token": secret.jwt_token,
                 "refresh_token": secret.refresh_token,
                 "timestamp": max(secret.timestamp, record.timestamp),
+                "expires_at": _expiry_of_the_later_login(record, secret),
             }
         )
     )
+
+
+def _expiry_of_the_later_login(record: CliTokenRecord, secret: CliTokenSecret) -> float | None:
+    if secret.timestamp > record.timestamp and secret.expires_at is not None:
+        return secret.expires_at
+    return record.expires_at
 
 
 def _rejoined(record: CliTokenRecord, secret: CliTokenSecret | None) -> CliTokenRecord:
@@ -648,6 +658,7 @@ def _encode_secret(record: CliTokenRecord) -> str:
         jwt_token=record.jwt_token,
         refresh_token=record.refresh_token,
         timestamp=record.timestamp,
+        expires_at=record.expires_at,
     ).model_dump_json()
 
 

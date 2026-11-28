@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.cli_keyring import (
     KEYRING_ACCOUNT,
     KEYRING_PREFLIGHT_ACCOUNT,
     KEYRING_SERVICE,
+    KEYRING_STAGING_ACCOUNT,
     KeyringDisabled,
     KeyringDiscardsWrites,
     KeyringNotInstalled,
@@ -1120,35 +1121,72 @@ class TestIsCliTokenFresh:
         assert is_cli_token_fresh(ahead) is True
 
 
+class _NoSuchEntry(Exception):
+    """What keyring raises when asked to delete an entry that is not there."""
+
+
 class _FakeKeyringModule:
     def __init__(self, stored=None, *, get_error=None, set_error=None, delete_error=None, discard=False):
-        self.stored = stored
+        self.entries = {} if stored is None else {KEYRING_ACCOUNT: stored}
         self.get_error = get_error
         self.set_error = set_error
         self.delete_error = delete_error
         self.discard = discard
         self.calls = []
 
+    @property
+    def stored(self):
+        return self.entries.get(KEYRING_ACCOUNT)
+
     def get_password(self, service_name, username):
         self.calls.append(("get", service_name, username))
         if self.get_error is not None:
             raise self.get_error
-        return self.stored
+        return self.entries.get(username)
 
     def set_password(self, service_name, username, password):
         self.calls.append(("set", service_name, username))
         if self.set_error is not None:
             raise self.set_error
-        if self.discard or username != KEYRING_ACCOUNT:
-            return
-        self.stored = password
+        if not self.discard:
+            self.entries[username] = password
 
     def delete_password(self, service_name, username):
         self.calls.append(("delete", service_name, username))
         if self.delete_error is not None:
             raise self.delete_error
-        if username == KEYRING_ACCOUNT:
-            self.stored = None
+        if username not in self.entries:
+            raise _NoSuchEntry(username)
+        del self.entries[username]
+
+
+class _ProcessKilled(BaseException):
+    """Stands in for a SIGKILL or a closed laptop lid: nothing in the code under test gets to catch it."""
+
+
+class _DeleteThenAddKeyringModule(_FakeKeyringModule):
+    """How keyring replaces an entry on macOS: SecItemDelete, then SecItemAdd. `kill_at` names the one
+    step the process dies at, either just before an entry is replaced or between its delete and its add."""
+
+    def __init__(self, kill_at=None):
+        super().__init__()
+        self.kill_at = kill_at
+        self.refused = frozenset()
+
+    def set_password(self, service_name, username, password):
+        self.calls.append(("set", service_name, username))
+        if username in self.refused:
+            raise RuntimeError(f"{username} refused")
+        self._die_at(("replace", username))
+        if username in self.entries:
+            del self.entries[username]
+            self._die_at(("deleted", username))
+        self.entries[username] = password
+
+    def _die_at(self, step):
+        if step == self.kill_at:
+            self.kill_at = None
+            raise _ProcessKilled(step)
 
 
 class _NeverAnsweringKeyringModule(_FakeKeyringModule):
@@ -1204,8 +1242,19 @@ class TestKeyringVault:
         assert vault.read() == SecretFound("blob-1")
         assert vault.erase() == SecretErased()
         assert vault.read() == SecretMissing()
+        assert fake.entries == {}
         assert {call[1] for call in fake.calls} == {KEYRING_SERVICE}
-        assert {call[2] for call in fake.calls} == {KEYRING_ACCOUNT, KEYRING_PREFLIGHT_ACCOUNT}
+        assert {call[2] for call in fake.calls} == {KEYRING_ACCOUNT, KEYRING_STAGING_ACCOUNT, KEYRING_PREFLIGHT_ACCOUNT}
+
+    def test_a_settled_write_leaves_nothing_an_older_logout_would_miss(self, install_fake_keyring):
+        """A litellm version that predates staging logs out by deleting the live entry alone, so a staged
+        copy kept past the write it guarded would hand that login back on the next read."""
+        fake = install_fake_keyring(_FakeKeyringModule())
+
+        KeyringVault().write("blob-1")
+        fake.delete_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
+
+        assert KeyringVault().read() == SecretMissing()
 
     def test_the_kill_switch_reports_no_keychain(self, monkeypatch):
         """`LITELLM_CLI_DISABLE_KEYRING` has to work without importing keyring, because keyring
@@ -1349,6 +1398,108 @@ class TestKeyringVault:
         install_fake_keyring(_FakeKeyringModule(get_error=RuntimeError("locked")))
 
         assert KeyringVault().erase() == KeyringUnreachable()
+
+
+def _about_to_expire():
+    return CliTokenRecord(
+        base_url=SERVER, key="sk-first", refresh_token="rt-spent", timestamp=1000.0, expires_at=time.time() + 60
+    )
+
+
+def _renewed():
+    return CliTokenRecord(
+        base_url=SERVER, key="sk-renewed", refresh_token="rt-renewed", timestamp=2000.0, expires_at=time.time() + 86400
+    )
+
+
+class TestARenewalStoppedMidSave:
+    """`lite login --pkce` renews by spending the refresh token on the proxy before the new one is saved,
+    and keyring replaces the keychain entry on macOS by deleting it and then adding the new one. A
+    process stopped anywhere in that save must still leave the next one a credential that works."""
+
+    @pytest.fixture
+    def renewal_stopped_at(self, isolated_home, install_fake_keyring):
+        def _stop(step):
+            fake = install_fake_keyring(_DeleteThenAddKeyringModule())
+            save_cli_token(_about_to_expire(), vault=KeyringVault())
+            fake.kill_at = step
+            with pytest.raises(_ProcessKilled):
+                save_cli_token(_renewed(), vault=KeyringVault())
+            return fake
+
+        return _stop
+
+    @pytest.mark.parametrize(
+        "step",
+        [("replace", KEYRING_ACCOUNT), ("deleted", KEYRING_ACCOUNT)],
+        ids=["before-the-old-entry-goes", "between-the-delete-and-the-add"],
+    )
+    def test_the_next_process_signs_in_with_the_renewed_credential(self, renewal_stopped_at, step):
+        renewal_stopped_at(step)
+
+        record = load_cli_token(vault=KeyringVault())
+
+        assert (record.key, record.refresh_token) == ("sk-renewed", "rt-renewed")
+
+    def test_the_renewed_key_is_judged_by_its_own_expiry(self, renewal_stopped_at):
+        """The stopped save never rewrote the token file, which still carries the expiry of the key it replaced."""
+        renewal_stopped_at(("deleted", KEYRING_ACCOUNT))
+
+        assert is_cli_token_fresh(load_cli_token(vault=KeyringVault())) is True
+
+    def test_a_later_write_to_the_live_entry_alone_wins(self, renewal_stopped_at):
+        """A sign-in by a litellm version that predates staging writes only the live entry, and is newer
+        than anything the stopped save left behind."""
+        fake = renewal_stopped_at(("deleted", KEYRING_ACCOUNT))
+        newer = _blob(key="sk-older-litellm", timestamp=3000.0)
+
+        fake.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, newer)
+
+        assert KeyringVault().read() == SecretFound(newer)
+
+    def test_a_logout_afterwards_leaves_no_credential_behind(self, isolated_home, renewal_stopped_at):
+        fake = renewal_stopped_at(("deleted", KEYRING_ACCOUNT))
+
+        assert clear_cli_token(vault=KeyringVault()) == SecretErased()
+        assert KeyringVault().read() == SecretMissing()
+        assert fake.entries == {}
+
+    def test_a_keychain_that_refuses_the_staged_copy_never_has_the_live_entry_replaced(
+        self, isolated_home, install_fake_keyring
+    ):
+        """Replacing the live entry with nothing staged would reopen the window staging closes, so the
+        renewal stays in the token file instead, where a process stopped mid-save cannot take it."""
+        fake = install_fake_keyring(_DeleteThenAddKeyringModule())
+        save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-first", refresh_token="rt-spent", timestamp=1000.0),
+            vault=KeyringVault(),
+        )
+        fake.refused = frozenset((KEYRING_STAGING_ACCOUNT,))
+        fake.kill_at = ("deleted", KEYRING_ACCOUNT)
+
+        outcome = save_cli_token(
+            CliTokenRecord(base_url=SERVER, key="sk-renewed", refresh_token="rt-renewed", timestamp=2000.0),
+            vault=KeyringVault(),
+        )
+        record = load_cli_token(vault=KeyringVault())
+
+        assert outcome == KeyringUnreachable()
+        assert (record.key, record.refresh_token) == ("sk-renewed", "rt-renewed")
+
+    def test_a_live_entry_that_refuses_the_renewal_leaves_no_staged_copy_behind(
+        self, isolated_home, install_fake_keyring
+    ):
+        """The renewal then lives in the token file, so a staged copy left in the keychain would be a second
+        copy of the same secret."""
+        fake = install_fake_keyring(_DeleteThenAddKeyringModule())
+        save_cli_token(_about_to_expire(), vault=KeyringVault())
+        fake.refused = frozenset((KEYRING_ACCOUNT,))
+
+        outcome = save_cli_token(_renewed(), vault=KeyringVault())
+
+        assert outcome == KeyringUnreachable()
+        assert load_cli_token(vault=KeyringVault()).key == "sk-renewed"
+        assert KEYRING_STAGING_ACCOUNT not in fake.entries
 
 
 class TestIsCliTokenFreshWithExpiresAt:

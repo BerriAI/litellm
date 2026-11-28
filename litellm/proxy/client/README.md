@@ -365,7 +365,7 @@ The CLI provides these authentication commands:
 
 ### Token Storage
 
-The key itself, together with the refresh token that renews a `--pkce` credential, goes into the OS keychain (macOS Keychain, Windows Credential Manager, or the Linux Secret Service) under service `litellm-cli`, account `credential`. Only the non-secret session metadata is written to `~/.litellm/token.json`, in a `0700` directory with `0600` file permissions:
+The key itself, together with the refresh token that renews a `--pkce` credential, goes into the OS keychain (macOS Keychain, Windows Credential Manager, or the Linux Secret Service) under service `litellm-cli`, account `credential`. A save first parks the new secret under account `credential-staging` and removes it once `credential` holds the new secret, so a save stopped partway leaves it there for the next run. Remove both accounts if you clear the keychain by hand. Only the non-secret session metadata is written to `~/.litellm/token.json`, in a `0700` directory with `0600` file permissions:
 
 ```json
 {
