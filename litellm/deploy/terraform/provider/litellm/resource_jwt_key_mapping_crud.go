@@ -16,6 +16,7 @@ func resourceLiteLLMJWTKeyMappingCreate(d *schema.ResourceData, m interface{}) e
 	client := m.(*Client)
 
 	createRequest := JWTKeyMappingRequest{
+		JWTIssuer:     d.Get("jwt_issuer").(string),
 		JWTClaimName:  d.Get("jwt_claim_name").(string),
 		JWTClaimValue: d.Get("jwt_claim_value").(string),
 		Key:           d.Get("key").(string),
@@ -80,6 +81,7 @@ func resourceLiteLLMJWTKeyMappingRead(d *schema.ResourceData, m interface{}) err
 	}
 
 	d.SetId(mapping.ID)
+	d.Set("jwt_issuer", mapping.JWTIssuer)
 	d.Set("jwt_claim_name", mapping.JWTClaimName)
 	d.Set("jwt_claim_value", mapping.JWTClaimValue)
 	d.Set("description", mapping.Description)
@@ -95,6 +97,7 @@ func resourceLiteLLMJWTKeyMappingRead(d *schema.ResourceData, m interface{}) err
 func resourceLiteLLMJWTKeyMappingUpdate(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 
+	oldIssuer, _ := d.GetChange("jwt_issuer")
 	oldKey, _ := d.GetChange("key")
 	oldTokenID, _ := d.GetChange("token_id")
 	oldDescription, _ := d.GetChange("description")
@@ -105,6 +108,7 @@ func resourceLiteLLMJWTKeyMappingUpdate(d *schema.ResourceData, m interface{}) e
 		// server-side. Revert every field the update could have changed before
 		// attempting to resync, so a failed refresh can't leave the rejected
 		// values persisted into state.
+		d.Set("jwt_issuer", oldIssuer)
 		d.Set("key", oldKey)
 		d.Set("token_id", oldTokenID)
 		d.Set("description", oldDescription)
@@ -148,6 +152,7 @@ func deleteJWTKeyMapping(id string, client *Client) error {
 func updateJWTKeyMapping(d *schema.ResourceData, client *Client) error {
 	updateRequest := JWTKeyMappingUpdateRequest{
 		ID:          d.Id(),
+		JWTIssuer:   d.Get("jwt_issuer").(string),
 		Key:         d.Get("key").(string),
 		Token:       d.Get("token_id").(string),
 		Description: d.Get("description").(string),

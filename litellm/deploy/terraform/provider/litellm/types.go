@@ -334,6 +334,7 @@ type VectorStoreInfoRequest struct {
 }
 
 type JWTKeyMappingRequest struct {
+	JWTIssuer     string `json:"jwt_issuer,omitempty"`
 	JWTClaimName  string `json:"jwt_claim_name"`
 	JWTClaimValue string `json:"jwt_claim_value"`
 	Key           string `json:"key,omitempty"`
@@ -343,6 +344,7 @@ type JWTKeyMappingRequest struct {
 
 type JWTKeyMappingUpdateRequest struct {
 	ID          string `json:"id"`
+	JWTIssuer   string `json:"jwt_issuer"`
 	Key         string `json:"key,omitempty"`
 	Token       string `json:"token,omitempty"`
 	Description string `json:"description"`
@@ -355,6 +357,7 @@ type JWTKeyMappingDeleteRequest struct {
 
 type JWTKeyMappingResponse struct {
 	ID            string `json:"id"`
+	JWTIssuer     string `json:"jwt_issuer,omitempty"`
 	JWTClaimName  string `json:"jwt_claim_name"`
 	JWTClaimValue string `json:"jwt_claim_value"`
 	Description   string `json:"description,omitempty"`

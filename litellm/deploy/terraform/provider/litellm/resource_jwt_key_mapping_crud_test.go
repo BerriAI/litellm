@@ -724,3 +724,243 @@ func TestJWTKeyMappingUpdateSendsTokenIDAndOmitsKey(t *testing.T) {
 		t.Fatalf("key must be omitted when token_id is used, got: %v", update.Body)
 	}
 }
+
+const jwtKeyMappingTestIssuer = "https://container.googleapis.com/v1/projects/p/locations/l/clusters/a"
+
+func TestJWTKeyMappingCreateSendsIssuer(t *testing.T) {
+	mapping := jwtKeyMappingFixture()
+	mapping.JWTIssuer = jwtKeyMappingTestIssuer
+	srv, calls := jwtKeyMappingTestServer(t, mapping)
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_issuer":      jwtKeyMappingTestIssuer,
+		"jwt_claim_name":  "sub",
+		"jwt_claim_value": "system:serviceaccount:ns:sa",
+		"token_id":        "1111111111111111111111111111111111111111111111111111111111111111",
+		"is_active":       true,
+	})
+
+	if err := resourceLiteLLMJWTKeyMappingCreate(d, client); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	if (*calls)[0].Body["jwt_issuer"] != jwtKeyMappingTestIssuer {
+		t.Fatalf("issuer not sent on create: %v", (*calls)[0].Body)
+	}
+	if d.Get("jwt_issuer").(string) != jwtKeyMappingTestIssuer {
+		t.Fatalf("issuer not kept in state after create, got %q", d.Get("jwt_issuer").(string))
+	}
+}
+
+func TestJWTKeyMappingCreateOmitsUnsetIssuer(t *testing.T) {
+	srv, calls := jwtKeyMappingTestServer(t, jwtKeyMappingFixture())
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-abc123",
+		"is_active":       true,
+	})
+
+	if err := resourceLiteLLMJWTKeyMappingCreate(d, client); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	if _, sent := (*calls)[0].Body["jwt_issuer"]; sent {
+		t.Fatalf("an unset issuer must be omitted so the mapping stays global: %v", (*calls)[0].Body)
+	}
+}
+
+func TestJWTKeyMappingReadDetectsIssuerDrift(t *testing.T) {
+	mapping := jwtKeyMappingFixture()
+	mapping.JWTIssuer = "https://other-issuer.example"
+	srv, _ := jwtKeyMappingTestServer(t, mapping)
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_issuer":      jwtKeyMappingTestIssuer,
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-abc123",
+	})
+	d.SetId("map-abc-123")
+
+	if err := resourceLiteLLMJWTKeyMappingRead(d, client); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if d.Get("jwt_issuer").(string) != "https://other-issuer.example" {
+		t.Fatalf("state must reflect the issuer the proxy stores, got %q", d.Get("jwt_issuer").(string))
+	}
+}
+
+func TestJWTKeyMappingReadMapsGlobalMappingToEmptyIssuer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"map-abc-123","jwt_issuer":null,"jwt_claim_name":"client_id","jwt_claim_value":"dev-alice","is_active":true}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := schema.TestResourceDataRaw(t, resourceLiteLLMJWTKeyMapping().Schema, map[string]interface{}{
+		"jwt_issuer":      jwtKeyMappingTestIssuer,
+		"jwt_claim_name":  "client_id",
+		"jwt_claim_value": "dev-alice",
+		"key":             "sk-abc123",
+	})
+	d.SetId("map-abc-123")
+
+	if err := resourceLiteLLMJWTKeyMappingRead(d, client); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if d.Get("jwt_issuer").(string) != "" {
+		t.Fatalf("a global mapping must read back as an empty issuer so a configured one shows as drift, got %q", d.Get("jwt_issuer").(string))
+	}
+}
+
+func TestJWTKeyMappingIssuerChangeIsAnInPlaceUpdate(t *testing.T) {
+	sm := schema.InternalMap(resourceLiteLLMJWTKeyMapping().Schema)
+	state := &terraform.InstanceState{ID: "map-abc-123", Attributes: map[string]string{
+		"id":              "map-abc-123",
+		"jwt_claim_name":  "sub",
+		"jwt_claim_value": "system:serviceaccount:ns:sa",
+		"token_id":        "1111111111111111111111111111111111111111111111111111111111111111",
+		"is_active":       "true",
+	}}
+	config := terraform.NewResourceConfigRaw(map[string]interface{}{
+		"jwt_issuer":      jwtKeyMappingTestIssuer,
+		"jwt_claim_name":  "sub",
+		"jwt_claim_value": "system:serviceaccount:ns:sa",
+		"token_id":        "1111111111111111111111111111111111111111111111111111111111111111",
+		"is_active":       true,
+	})
+
+	diff, err := sm.Diff(context.Background(), state, config, nil, nil, true)
+	if err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	attr, ok := diff.Attributes["jwt_issuer"]
+	if !ok || attr.New != jwtKeyMappingTestIssuer {
+		t.Fatalf("expected a jwt_issuer change in the plan, got %v", diff.Attributes)
+	}
+	if diff.RequiresNew() {
+		t.Fatal("scoping an existing mapping to an issuer must not replace it, which would leave the claim unmapped in between")
+	}
+}
+
+func TestJWTKeyMappingUpdateSendsIssuerAndClearsIt(t *testing.T) {
+	cases := []struct {
+		name      string
+		oldIssuer string
+		newRaw    map[string]interface{}
+		want      string
+	}{
+		{
+			name:      "scope a global mapping",
+			oldIssuer: "",
+			newRaw:    map[string]interface{}{"jwt_issuer": jwtKeyMappingTestIssuer},
+			want:      jwtKeyMappingTestIssuer,
+		},
+		{
+			name:      "drop the issuer",
+			oldIssuer: jwtKeyMappingTestIssuer,
+			newRaw:    map[string]interface{}{},
+			want:      "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mapping := jwtKeyMappingFixture()
+			mapping.JWTIssuer = tc.want
+			srv, calls := jwtKeyMappingTestServer(t, mapping)
+			defer srv.Close()
+
+			newRaw := map[string]interface{}{
+				"jwt_claim_name":  "client_id",
+				"jwt_claim_value": "dev-alice",
+				"key":             "sk-abc123",
+				"is_active":       true,
+			}
+			for k, v := range tc.newRaw {
+				newRaw[k] = v
+			}
+
+			client := NewClient(srv.URL, "test-key", true)
+			d := resourceDataWithChange(t,
+				map[string]string{
+					"id":              "map-abc-123",
+					"jwt_issuer":      tc.oldIssuer,
+					"jwt_claim_name":  "client_id",
+					"jwt_claim_value": "dev-alice",
+					"key":             "sk-abc123",
+					"is_active":       "true",
+				},
+				newRaw,
+			)
+			d.SetId("map-abc-123")
+
+			if err := resourceLiteLLMJWTKeyMappingUpdate(d, client); err != nil {
+				t.Fatalf("update failed: %v", err)
+			}
+
+			update := (*calls)[0]
+			if update.Path != "/jwt/key/mapping/update" {
+				t.Fatalf("expected an in-place update, got %s %s", update.Method, update.Path)
+			}
+			issuer, sent := update.Body["jwt_issuer"]
+			if !sent || issuer != tc.want {
+				t.Fatalf("expected jwt_issuer %q to be sent explicitly, since the proxy ignores absent fields: %v", tc.want, update.Body)
+			}
+			if d.Get("jwt_issuer").(string) != tc.want {
+				t.Fatalf("expected issuer %q in state, got %q", tc.want, d.Get("jwt_issuer").(string))
+			}
+		})
+	}
+}
+
+func TestJWTKeyMappingUpdateRevertsIssuerWhenTheRecoveryReadAlsoFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/jwt/key/mapping/update":
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"detail": "A mapping with those claim values already exists."})
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]string{"detail": "proxy unavailable"})
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-key", true)
+	d := resourceDataWithChange(t,
+		map[string]string{
+			"id":              "map-abc-123",
+			"jwt_claim_name":  "client_id",
+			"jwt_claim_value": "dev-alice",
+			"key":             "sk-abc123",
+			"is_active":       "true",
+		},
+		map[string]interface{}{
+			"jwt_issuer":      jwtKeyMappingTestIssuer,
+			"jwt_claim_name":  "client_id",
+			"jwt_claim_value": "dev-alice",
+			"key":             "sk-abc123",
+			"is_active":       true,
+		},
+	)
+	d.SetId("map-abc-123")
+
+	err := resourceLiteLLMJWTKeyMappingUpdate(d, client)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected the proxy conflict to surface, got %v", err)
+	}
+	if d.Get("jwt_issuer").(string) != "" {
+		t.Fatalf("a rejected issuer must not persist into state, got %q", d.Get("jwt_issuer").(string))
+	}
+}
