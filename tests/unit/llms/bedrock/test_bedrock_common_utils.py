@@ -23,7 +23,10 @@ from litellm.llms.bedrock.common_utils import (
     strip_bedrock_routing_prefix,
     strip_bedrock_throughput_suffix,
     without_bedrock_native_output_opt_in,
+    get_bedrock_tool_name,
 )
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.prompt_templates.factory import make_valid_bedrock_tool_name
 from collections.abc import Iterator
 from litellm import completion
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
@@ -2815,3 +2818,29 @@ def test_normalize_json_schema_custom_types_to_object_reaches_subschemas_under_d
         "properties": {"tool": {"$ref": "#/$defs/Tool"}},
         "$defs": {"Tool": tool_schema("object")},
     }
+
+
+def test_get_bedrock_tool_name_prefers_request_mapping_over_global_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache: Final = InMemoryCache(max_size_in_memory=50, default_ttl=600)
+    monkeypatch.setattr(litellm, "bedrock_tool_name_mappings", cache)
+    cache.set_cache(key="mcp__srv__get-items", value="mcp__srv::get-items")
+
+    assert get_bedrock_tool_name("mcp__srv__get-items", tool_name_mapping={}) == "mcp__srv__get-items"
+    assert get_bedrock_tool_name("foo_bar", tool_name_mapping={"foo_bar": "foo:bar"}) == "foo:bar"
+
+
+def test_get_bedrock_tool_name_honours_ttl_on_fallback_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now: Final[list[float]] = [1000.0]
+    cache: Final = InMemoryCache(max_size_in_memory=50, default_ttl=60, clock=lambda: now[0])
+    monkeypatch.setattr(litellm, "bedrock_tool_name_mappings", cache)
+
+    assert make_valid_bedrock_tool_name("mcp__srv::get-items") == "mcp__srv__get-items"
+    assert get_bedrock_tool_name("mcp__srv__get-items") == "mcp__srv::get-items"
+
+    now[0] += 61.0
+    assert get_bedrock_tool_name("mcp__srv__get-items") == "mcp__srv__get-items"
+    assert "mcp__srv__get-items" not in cache.cache_dict

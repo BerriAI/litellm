@@ -37,6 +37,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     decoded_json_object,
     int_of,
     lax_bool,
@@ -1181,20 +1182,25 @@ class ModelResponseIterator:
         return self.model_response
 
 
-def get_bedrock_tool_name(response_tool_name: str) -> str:
+def get_bedrock_tool_name(
+    response_tool_name: str,
+    *,
+    tool_name_mapping: Mapping[str, str] | None = None,
+) -> str:
     """
     If litellm formatted the input tool name, we need to convert it back to the original name.
 
-    Args:
-        response_tool_name (str): The name of the tool as received from the response.
-
-    Returns:
-        str: The original name of the tool.
+    When ``tool_name_mapping`` is provided, only that request-scoped mapping is consulted.
+    When falling back to the legacy global cache, expired TTL entries are evicted before lookup.
     """
 
-    if response_tool_name in litellm.bedrock_tool_name_mappings.cache_dict:
-        response_tool_name = litellm.bedrock_tool_name_mappings.cache_dict[response_tool_name]
-    return response_tool_name
+    if tool_name_mapping is not None:
+        return tool_name_mapping.get(response_tool_name, response_tool_name)
+    if litellm.bedrock_tool_name_mappings.evict_element_if_expired(response_tool_name):
+        return response_tool_name
+    cached_mappings: Final = as_str_mapping(litellm.bedrock_tool_name_mappings.cache_dict)
+    raw_name: Final = cached_mappings.get(response_tool_name) if cached_mappings is not None else None
+    return raw_name if isinstance(raw_name, str) else response_tool_name
 
 
 # Cache the global regions list at module level

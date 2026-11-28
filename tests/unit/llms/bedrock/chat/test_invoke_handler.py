@@ -2385,3 +2385,35 @@ async def test_aws_event_stream_decoder_aiter_bytes_closes_its_source_on_aclose(
     await anext(stream)
     await aclose_if_supported(stream)
     assert source_closed.is_set()
+
+
+def test_aws_event_stream_decoder_uses_request_scoped_tool_name_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.types.utils import ChatCompletionToolCallChunk
+
+    cache: Final = InMemoryCache(max_size_in_memory=50, default_ttl=600)
+    monkeypatch.setattr(litellm, "bedrock_tool_name_mappings", cache)
+    cache.set_cache(key="mcp__srv__get-items", value="mcp__srv::get-items")
+
+    unpolluted_decoder: Final = AWSEventStreamDecoder(
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-5-v1:0",
+        tool_name_mapping={},
+    )
+    valid_tool_use, _, _ = unpolluted_decoder._handle_converse_start_event(
+        {"toolUse": {"toolUseId": "tooluse_1", "name": "mcp__srv__get-items"}}
+    )
+    assert isinstance(valid_tool_use, dict)
+    assert valid_tool_use["function"]["name"] == "mcp__srv__get-items"
+
+    mapped_decoder: Final = AWSEventStreamDecoder(
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-5-v1:0",
+        tool_name_mapping={"foo_bar": "foo:bar"},
+    )
+    mapped_tool_use: ChatCompletionToolCallChunk | None
+    mapped_tool_use, _, _ = mapped_decoder._handle_converse_start_event(
+        {"toolUse": {"toolUseId": "tooluse_2", "name": "foo_bar"}}
+    )
+    assert isinstance(mapped_tool_use, dict)
+    assert mapped_tool_use["function"]["name"] == "foo:bar"

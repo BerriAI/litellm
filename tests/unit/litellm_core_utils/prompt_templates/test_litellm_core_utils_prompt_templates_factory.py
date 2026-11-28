@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _rename_duplicate_bedrock_document_names,
     anthropic_messages_pt,
     anthropic_pt,
+    build_bedrock_tool_name_mapping,
     claude_2_1_pt,
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
@@ -11093,3 +11094,41 @@ def test_a_tool_message_whose_tool_call_id_is_not_a_string_is_refused_whether_or
             llm_provider="anthropic",
             rewrites_tool_use_ids=rewrites_tool_use_ids,
         )
+
+
+def test_build_bedrock_tool_name_mapping_respects_declared_tools_and_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+
+    cache: Final = InMemoryCache(max_size_in_memory=50, default_ttl=600)
+    monkeypatch.setattr(litellm, "bedrock_tool_name_mappings", cache)
+
+    mapping: Final = build_bedrock_tool_name_mapping(
+        tools=[
+            {"type": "function", "function": {"name": "mcp__srv::get-items", "parameters": {"type": "object"}}},
+            {"name": "123_anthropic_tool", "input_schema": {"type": "object"}},
+            {"type": "function", "function": {"name": "valid_tool", "parameters": {"type": "object"}}},
+            {"toolSpec": {"name": "preformatted_tool", "inputSchema": {"json": {"type": "object"}}}},
+        ],
+        messages=[
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "mcp__srv//get-items", "arguments": "{}"}},
+                    {"id": "c2", "type": "function", "function": {"name": "valid:tool", "arguments": "{}"}},
+                    {"id": "c3", "type": "function", "function": {"name": "preformatted:tool", "arguments": "{}"}},
+                    {"id": "c4", "type": "function", "function": {"name": "hist::only", "arguments": "{}"}},
+                ],
+            },
+        ],
+    )
+
+    assert dict(mapping) == {
+        "mcp__srv__get-items": "mcp__srv::get-items",
+        "a123_anthropic_tool": "123_anthropic_tool",
+        "hist__only": "hist::only",
+    }
+    assert cache.cache_dict == {}

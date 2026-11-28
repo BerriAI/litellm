@@ -13293,3 +13293,94 @@ def test_converse_never_blames_thinking_blocks_for_another_fields_type_error(
 ):
     with pytest.raises(TypeError):
         _thinking_blocks_request(messages, optional_params={"tools": [_CONVERSE_WEATHER_TOOL]})
+
+
+def test_converse_transform_response_scopes_tool_name_mappings_per_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+
+    cache: Final = InMemoryCache(max_size_in_memory=50, default_ttl=600)
+    monkeypatch.setattr(litellm, "bedrock_tool_name_mappings", cache)
+    config: Final = AmazonConverseConfig()
+    model: Final = "anthropic.claude-sonnet-4-5-v1:0"
+
+    def _response_for_tool(name: str) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "output": {
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"toolUse": {"toolUseId": "tooluse_1", "name": name, "input": {}}}],
+                    }
+                },
+                "stopReason": "tool_use",
+                "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+            },
+        )
+
+    config.transform_request(
+        model=model,
+        messages=[
+            {"role": "user", "content": "call prior tool"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "mcp__srv::get-items", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert cache.cache_dict == {}
+
+    client_b_tool: Final = {
+        "type": "function",
+        "function": {"name": "mcp__srv__get-items", "parameters": {"type": "object", "properties": {}}},
+    }
+    response_b: Final = config._transform_response(
+        model=model,
+        response=_response_for_tool("mcp__srv__get-items"),
+        model_response=litellm.ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={"tools": [client_b_tool]},
+        api_key="",
+        data={},
+        messages=[{"role": "user", "content": "list items"}],
+        encoding=None,
+    )
+    tool_calls_b: Final = response_b.choices[0].message.tool_calls
+    assert tool_calls_b is not None
+    assert tool_calls_b[0].function.name == "mcp__srv__get-items"
+
+    colliding_response: Final = config._transform_response(
+        model=model,
+        response=_response_for_tool("mcp__srv__get-items"),
+        model_response=litellm.ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={"tools": [client_b_tool]},
+        api_key="",
+        data={},
+        messages=[
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "mcp__srv::get-items", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+        ],
+        encoding=None,
+    )
+    colliding_calls: Final = colliding_response.choices[0].message.tool_calls
+    assert colliding_calls is not None
+    assert colliding_calls[0].function.name == "mcp__srv__get-items"

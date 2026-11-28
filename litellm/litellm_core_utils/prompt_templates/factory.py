@@ -4906,6 +4906,8 @@ def _convert_to_bedrock_tool_call_invoke(
     deployment_model: str | None = None,
     model_info: Mapping[str, object] | None = None,
     split_tool_use_ids: Mapping[str, tuple[str, ...]] = _NO_SPLIT_TOOL_USE_IDS,
+    *,
+    record_global_cache: bool = True,
 ) -> list[BedrockContentBlock]:
     """
     OpenAI tool invokes:
@@ -4952,7 +4954,10 @@ def _convert_to_bedrock_tool_call_invoke(
         for tool in tool_calls:
             if "function" in tool:
                 tool_id = tool["id"]
-                name = make_valid_bedrock_tool_name(tool["function"].get("name", ""))
+                name = make_valid_bedrock_tool_name(
+                    tool["function"].get("name", ""),
+                    record_global_cache=record_global_cache,
+                )
                 arguments = tool["function"].get("arguments", "")
 
                 if not arguments or not arguments.strip():
@@ -5843,6 +5848,8 @@ class BedrockConverseMessagesProcessor:
         base_model: str | None = None,
         drop_params: bool = False,
         model_info: Mapping[str, object] | None = None,
+        *,
+        record_global_cache: bool = True,
     ) -> list[BedrockMessageBlock]:
         from litellm.llms.bedrock.common_utils import (
             bedrock_converse_accepts_redacted_thinking,
@@ -6101,6 +6108,7 @@ class BedrockConverseMessagesProcessor:
                             deployment_model=deployment_model,
                             model_info=model_info,
                             split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
+                            record_global_cache=record_global_cache,
                         )
                     )
 
@@ -6322,6 +6330,8 @@ def _bedrock_converse_messages_pt(
     base_model: str | None = None,
     drop_params: bool = False,
     model_info: Mapping[str, object] | None = None,
+    *,
+    record_global_cache: bool = True,
 ) -> list[BedrockMessageBlock]:
     """
     Converts given messages from OpenAI format to Bedrock format
@@ -6586,6 +6596,7 @@ def _bedrock_converse_messages_pt(
                         deployment_model=deployment_model,
                         model_info=model_info,
                         split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
+                        record_global_cache=record_global_cache,
                     )
                 )
 
@@ -6614,7 +6625,11 @@ def _bedrock_converse_messages_pt(
     return [*converse_messages[:-1], _assistant_turn_rstripped(converse_messages[-1])]
 
 
-def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
+def make_valid_bedrock_tool_name(
+    input_tool_name: str,
+    *,
+    record_global_cache: bool = True,
+) -> str:
     """Normalize tool names to Bedrock pattern [a-zA-Z][a-zA-Z0-9_-]*."""
 
     def replace_invalid(char: str) -> str:
@@ -6633,12 +6648,113 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     # Replace any invalid characters with underscores
     valid_string: Final = "".join(replace_invalid(char) for char in bedrock_tool_name)
 
-    if input_tool_name != valid_string:
-        # passed tool name was formatted to become valid
-        # store it internally so we can use for the response
+    if input_tool_name != valid_string and record_global_cache:
         litellm.bedrock_tool_name_mappings.set_cache(key=valid_string, value=input_tool_name)
 
     return valid_string
+
+
+_BEDROCK_TOOL_OBJECT_SEQUENCE: Final = TypeAdapter(list[object])
+
+
+def _as_bedrock_object_sequence(value: object) -> Sequence[object]:
+    list_value: Final = as_object_list(value)
+    if list_value is not None:
+        return list_value
+    if isinstance(value, tuple):
+        return _BEDROCK_TOOL_OBJECT_SEQUENCE.validate_python(value)
+    return ()
+
+
+def _bedrock_tool_definition_name(tool: object) -> tuple[str, bool] | None:
+    """Return ``(name, is_bedrock_spec)`` for a tool definition in a Converse request."""
+    tool_map: Final = as_str_mapping(tool)
+    if tool_map is None:
+        return None
+    tool_spec: Final = as_str_mapping(tool_map.get("toolSpec"))
+    if tool_spec is not None:
+        spec_name: Final = tool_spec.get("name")
+        return (spec_name, True) if isinstance(spec_name, str) and bool(spec_name.strip()) else None
+    if "systemTool" in tool_map or "cachePoint" in tool_map:
+        return None
+    if "input_schema" in tool_map and "function" not in tool_map:
+        anthropic_name: Final = tool_map.get("name")
+        return (anthropic_name, False) if isinstance(anthropic_name, str) and bool(anthropic_name.strip()) else None
+    if "function" in tool_map:
+        fn_map: Final = as_str_mapping(tool_map.get("function"))
+        fn_name: Final = fn_map.get("name") if fn_map is not None else None
+        return (fn_name, False) if isinstance(fn_name, str) and bool(fn_name.strip()) else None
+    return None
+
+
+def _tool_call_function_name(tool_call: object) -> str | None:
+    tool_map: Final = as_str_mapping(tool_call)
+    fn: Final = tool_map.get("function") if tool_map is not None else attribute_or_none(tool_call, "function")
+    fn_map: Final = as_str_mapping(fn)
+    raw_name: Final = fn_map.get("name") if fn_map is not None else attribute_or_none(fn, "name")
+    return raw_name if isinstance(raw_name, str) and raw_name else None
+
+
+def _history_tool_call_names(messages: Sequence[object]) -> Iterator[str]:
+    for message in messages:
+        if message_field(message, "role") != "assistant":
+            continue
+        for tool_call in _as_bedrock_object_sequence(message_field(message, "tool_calls")):
+            raw_name = _tool_call_function_name(tool_call)
+            if raw_name is not None:
+                yield raw_name
+
+
+def _declared_bedrock_tool_entries(tools: object) -> tuple[frozenset[str], Mapping[str, str]]:
+    raw_entries: Final = tuple(
+        entry
+        for tool in _as_bedrock_object_sequence(tools)
+        if (entry := _bedrock_tool_definition_name(tool)) is not None
+    )
+    sanitized_pairs: Final = tuple(
+        (
+            raw_name,
+            is_bedrock_spec,
+            raw_name if is_bedrock_spec else make_valid_bedrock_tool_name(raw_name, record_global_cache=False),
+        )
+        for raw_name, is_bedrock_spec in raw_entries
+    )
+    unmodified_declared_names: Final = frozenset(
+        raw_name for raw_name, is_bedrock_spec, sanitized in sanitized_pairs if is_bedrock_spec or sanitized == raw_name
+    )
+    tools_mapping: Final[Mapping[str, str]] = MappingProxyType(
+        {
+            sanitized: raw_name
+            for raw_name, is_bedrock_spec, sanitized in sanitized_pairs
+            if not is_bedrock_spec and sanitized != raw_name and sanitized not in unmodified_declared_names
+        }
+    )
+    return unmodified_declared_names, tools_mapping
+
+
+def build_bedrock_tool_name_mapping(
+    tools: object = None,
+    messages: object = None,
+) -> Mapping[str, str]:
+    """Build a request-scoped ``sanitized -> original`` tool name mapping for Bedrock Converse.
+
+    Tool names explicitly declared as already-valid Bedrock identifiers in ``tools``
+    are never shadowed by sanitized collisions from other tools or message history.
+    """
+    unmodified_declared_names, tools_mapping = _declared_bedrock_tool_entries(tools)
+    history_pairs: Final = tuple(
+        (sanitized, raw_name)
+        for raw_name in _history_tool_call_names(_as_bedrock_object_sequence(messages))
+        if (sanitized := make_valid_bedrock_tool_name(raw_name, record_global_cache=False)) != raw_name
+    )
+    history_mapping: Final[Mapping[str, str]] = MappingProxyType(
+        {
+            sanitized: raw_name
+            for sanitized, raw_name in history_pairs
+            if sanitized not in unmodified_declared_names and sanitized not in tools_mapping
+        }
+    )
+    return MappingProxyType({**history_mapping, **tools_mapping})
 
 
 def add_cache_point_tool_block(
@@ -6694,6 +6810,8 @@ def _bedrock_tools_pt(
     model: str | None = None,
     deployment_model: str | None = None,
     model_info: Mapping[str, object] | None = None,
+    *,
+    record_global_cache: bool = True,
 ) -> list[BedrockToolBlock]:
     """
     OpenAI tools looks like:
@@ -6787,7 +6905,10 @@ def _bedrock_tools_pt(
 
         # related issue: https://github.com/BerriAI/litellm/issues/5007
         # Bedrock tool names must satisfy pattern: [a-zA-Z][a-zA-Z0-9_-]*
-        name = make_valid_bedrock_tool_name(input_tool_name=raw_name)
+        name = make_valid_bedrock_tool_name(
+            input_tool_name=raw_name,
+            record_global_cache=record_global_cache,
+        )
         if _tool_description:  # bedrock doesn't accept empty "" or None descriptions
             description = _tool_description
         else:
@@ -6840,7 +6961,7 @@ def _bedrock_tools_pt(
 
 def bedrock_tool_blocks(tools: Sequence[Mapping[str, object]], model: str | None) -> tuple[BedrockToolBlock, ...]:
     """Bedrock Converse ``toolConfig.tools`` entries for OpenAI or Anthropic tool definitions."""
-    return tuple(_bedrock_tools_pt([dict(tool) for tool in tools], model=model))
+    return tuple(_bedrock_tools_pt([dict(tool) for tool in tools], model=model, record_global_cache=False))
 
 
 def _is_system_message(message: Mapping[str, object]) -> bool:
