@@ -307,7 +307,7 @@ CASES: Final = (
             Refused(
                 "401",
                 "auth_error",
-                "Exception",
+                "ProxyException",
                 "Authentication Error, Team=team-blocked is blocked. Update via `/team/unblock` if you're an admin.",
             ),
             created=("new-oid",),
