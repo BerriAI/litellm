@@ -103,6 +103,13 @@ requests:
     expect: python
     reason: body
 
+  - name: web search
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], tools: [{type: web_search_20250305, name: web_search}]}
+    expect: python
+    reason: body
+    over: web_search
+
   - name: not json
     headers: {authorization: Bearer gateway-key}
     raw: '{"model":"claude"'

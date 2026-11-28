@@ -8,7 +8,11 @@ use serde_json::{Map, Value};
 use super::{Admit, Reason, Refused};
 
 const REQUIRED: [&str; 2] = ["model", "messages"];
+/// The proxy's MCP gateway and the advisor are tools the proxy answers itself.
 const HOSTED_TOOLS: [&str; 2] = ["mcp", "advisor_20260301"];
+/// Anthropic's server web search tool in any version, as `web_search_20250305`. The native route
+/// does not price a search yet, so a call that ran one would write no spend row.
+const WEB_SEARCH: &str = "web_search_";
 
 /// A key the Messages request type does not name is sent on to the provider by the native route,
 /// and the proxy reads its own (`user`, `tags`, `timeout`, `fallbacks`). The native route reads
@@ -38,22 +42,27 @@ pub(super) fn fields(_: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
             "metadata",
             sent("metadata").is_some_and(|metadata| !is_a_user_id(metadata)),
         ),
-        ("hosted_tool", names_a_hosted_tool(fields)),
+        (
+            "hosted_tool",
+            tool_types(fields).any(|kind| HOSTED_TOOLS.contains(&kind)),
+        ),
+        (
+            "web_search",
+            tool_types(fields).any(|kind| kind.starts_with(WEB_SEARCH)),
+        ),
     ]
     .into_iter()
     .find(|(_, found)| *found)
     .map(|(over, _)| Reason::new(Refused::Body, over))
 }
 
-/// The proxy's MCP gateway and the advisor are tools the proxy answers itself.
-fn names_a_hosted_tool(fields: &Map<String, Value>) -> bool {
+fn tool_types(fields: &Map<String, Value>) -> impl Iterator<Item = &str> {
     fields
         .get("tools")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|tool| tool.get("type")?.as_str())
-        .any(|kind| HOSTED_TOOLS.contains(&kind))
 }
 
 /// The end user a body's `metadata.user_id` names (`get_end_user_id_from_request_body`), trimmed
@@ -94,7 +103,7 @@ mod tests {
     #[case::a_user_id(r#","metadata":{"user_id":"user_1_account__session_2"}"#)]
     #[case::empty_metadata(r#","metadata":{}"#)]
     #[case::a_tool_the_provider_runs(
-        r#","tools":[{"name":"get_weather","input_schema":{"type":"object"}},{"type":"web_search_20250305","name":"web_search"}]"#
+        r#","tools":[{"name":"get_weather","input_schema":{"type":"object"}},{"type":"web_fetch_20250910","name":"web_fetch"}]"#
     )]
     #[case::a_container_by_id(r#","container":"container_1""#)]
     #[case::a_param_sent_as_null(r#","thread":null,"metadata":null"#)]
@@ -123,6 +132,10 @@ mod tests {
     #[case::the_advisor(
         r#","tools":[{"type":"advisor_20260301","name":"advisor","model":"claude-opus-5-5"}]"#,
         "hosted_tool"
+    )]
+    #[case::a_web_search(
+        r#","tools":[{"type":"web_search_20250305","name":"web_search","max_uses":1}]"#,
+        "web_search"
     )]
     fn a_body_with_something_the_proxy_reads_is_named(#[case] rest: &str, #[case] over: &str) {
         assert_eq!(asking(rest).as_deref(), Some(over));
