@@ -15,3 +15,11 @@ def test_latency_buckets_include_seven_and_ten_minutes():
     idx_420 = LATENCY_BUCKETS.index(420.0)
     idx_600 = LATENCY_BUCKETS.index(600.0)
     assert idx_300 < idx_420 < idx_600
+
+
+def test_latency_buckets_resolve_overhead_slo_band():
+    """histogram_quantile interpolates linearly inside a bucket, so a bucket wider
+    than the SLO it serves lets a p95 read far above every observed sample (#54682)."""
+    band = [b for b in LATENCY_BUCKETS if 0.1 <= b <= 0.25]
+    for lower, upper in zip(band, band[1:]):
+        assert round(upper - lower, 6) <= 0.05, (lower, upper)
