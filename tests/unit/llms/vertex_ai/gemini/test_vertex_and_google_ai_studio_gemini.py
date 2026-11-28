@@ -1960,6 +1960,39 @@ def test_vertex_ai_map_tools_keeps_repeated_chat_tools_when_no_namespace_is_sent
     assert [declaration["name"] for declaration in mapped[0]["function_declarations"]] == ["get_weather", "get_weather"]
 
 
+def test_vertex_ai_map_function_sanitizes_legacy_functions_list_parameters_like_tools_list() -> None:
+    parameters = {
+        "type": "object",
+        "properties": {
+            "itemIds": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
+            "patterned": {"type": "string", "pattern": "^a+$"},
+            "limited": {"type": "integer", "exclusiveMinimum": 0},
+        },
+        "required": ["itemIds"],
+    }
+    expected_parameters = {
+        "type": "object",
+        "properties": {
+            "itemIds": {"type": "array", "items": {"type": "string"}},
+            "patterned": {"type": "string", "pattern": "^a+$"},
+            "limited": {"type": "integer"},
+        },
+        "required": ["itemIds"],
+    }
+
+    from_tools = VertexGeminiConfig().map_function(
+        value=[{"type": "function", "function": {"name": "process_items", "parameters": parameters}}],
+        optional_params={},
+    )
+    from_functions = VertexGeminiConfig().map_function(
+        value=[{"name": "process_items", "parameters": parameters}],
+        optional_params={},
+    )
+
+    assert from_tools[0]["function_declarations"][0]["parameters"] == expected_parameters
+    assert from_functions[0]["function_declarations"][0]["parameters"] == expected_parameters
+
+
 @pytest.mark.parametrize(
     ("forced_name", "other_tools", "allowed_function_names"),
     [

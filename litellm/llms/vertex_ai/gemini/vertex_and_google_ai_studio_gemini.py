@@ -890,6 +890,23 @@ def _parameters_json_schemas(
     )
 
 
+def _sanitize_function_parameters(
+    function_object: ChatCompletionToolParamFunctionChunk,
+    parameters_json_schema: Mapping[str, JsonValue] | None,
+    send_integer_enums: bool,
+    pin_consts: bool = True,
+) -> None:
+    if (
+        parameters_json_schema is None
+        and "parameters" in function_object
+        and function_object["parameters"] is not None
+        and isinstance(function_object["parameters"], dict)
+    ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
+        function_object["parameters"] = build_vertex_schema(
+            function_object["parameters"], send_integer_enums=send_integer_enums, pin_consts=pin_consts
+        )
+
+
 def _as_chat_tool(member: JsonValue) -> JsonValue:
     if not isinstance(member, dict) or "function" in member or "name" not in member:
         return member
@@ -1717,22 +1734,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
 
-                if (
-                    parameters_json_schema is None
-                    and "parameters" in _openai_function_object
-                    and _openai_function_object["parameters"] is not None
-                    and isinstance(_openai_function_object["parameters"], dict)
-                ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
-                    _openai_function_object["parameters"] = build_vertex_schema(
-                        _openai_function_object["parameters"],
-                        send_integer_enums=send_integer_enums,
-                        pin_consts=pin_consts,
-                    )
+                _sanitize_function_parameters(
+                    _openai_function_object, parameters_json_schema, send_integer_enums, pin_consts
+                )
 
                 openai_function_object = _openai_function_object
 
             elif "name" in tool:  # functions list
                 openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)
+
+                _sanitize_function_parameters(
+                    openai_function_object, parameters_json_schema, send_integer_enums, pin_consts
+                )
 
             if "type" in tool and tool["type"] == "computer_use":
                 computer_use_config = {k: v for k, v in tool.items() if k != "type"}
