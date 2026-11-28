@@ -8,11 +8,14 @@ runs every write through ``encrypt_value_helper`` (nacl SecretBox) and
 keeps a plain-base64 fallback on read so existing rows continue to work.
 """
 
+import asyncio
 import base64
+import itertools
 import json
-from datetime import datetime, timedelta, timezone
+from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone, tzinfo
 from types import SimpleNamespace
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -27,6 +30,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.mcp_server.db import (
+    OAuthCredentialPayload,
     _decode_user_credential,
     _prepare_mcp_server_data,
     create_mcp_server,
@@ -39,6 +43,8 @@ from litellm.proxy.mcp_server.db import (
     get_user_oauth_credential,
     is_oauth_credential_expired,
     list_user_oauth_credentials,
+    record_oauth_scope_refusal,
+    refresh_user_oauth_token,
     resolve_valid_user_oauth_token,
     rotate_mcp_server_credentials_master_key,
     rotate_mcp_user_credentials_master_key,
@@ -48,6 +54,9 @@ from litellm.proxy.mcp_server.db import (
     update_mcp_server,
 )
 from litellm.types.mcp import MCPAuth, MCPTransport
+
+if TYPE_CHECKING:
+    from respx import MockRouter
 
 SALT_KEY = "test-salt-key-for-byok-credential-tests-1234"
 
@@ -62,8 +71,10 @@ def _make_prisma_with_existing(row):
     """Build a MagicMock prisma_client whose user-credentials table returns ``row``
     for find_unique and behaves async-correctly for upsert/find_many."""
     prisma = MagicMock()
+    prisma.writer_db = prisma.db
     prisma.db.litellm_mcpusercredentials.find_unique = AsyncMock(return_value=row)
     prisma.db.litellm_mcpusercredentials.upsert = AsyncMock()
+    prisma.db.litellm_mcpusercredentials.update_many = AsyncMock(return_value=1)
     prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[])
     return prisma
 
@@ -455,9 +466,7 @@ def test_client_private_key_encrypted_at_rest():
     credentials blob, never persisted in plaintext, and must round-trip back. The
     pre-fix code left client_private_key out of encrypt_credentials, so it was stored
     verbatim."""
-    private_key = (
-        "-----BEGIN PRIVATE KEY-----\nsensitive-rsa-material\n-----END PRIVATE KEY-----"
-    )
+    private_key = "-----BEGIN PRIVATE KEY-----\nsensitive-rsa-material\n-----END PRIVATE KEY-----"
     resource_client_secret: Final = "resource-client-secret"
     credentials = {
         "client_secret": "shh",
@@ -485,13 +494,24 @@ def map_algorithm(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
 
 
 def _prisma_map_row(data: dict[str, object], quoted: bool = False) -> PrismaMCPServer:
-    return PrismaMCPServer.model_validate({
-        "transport": "http", "mcp_access_groups": [], "allowed_tools": [], "extra_headers": [], "args": [],
-        "allow_all_keys": False, "available_on_public_internet": True, "delegate_auth_to_upstream": False,
-        "oauth_passthrough": False, "per_server_oauth_discovery": False, "is_byok": False, "byok_description": [],
-        **data,
-        **{field: json.dumps(data[field]) for field in ("static_headers", "env") if quoted and data.get(field)},
-    })
+    return PrismaMCPServer.model_validate(
+        {
+            "transport": "http",
+            "mcp_access_groups": [],
+            "allowed_tools": [],
+            "extra_headers": [],
+            "args": [],
+            "allow_all_keys": False,
+            "available_on_public_internet": True,
+            "delegate_auth_to_upstream": False,
+            "oauth_passthrough": False,
+            "per_server_oauth_discovery": False,
+            "is_byok": False,
+            "byok_description": [],
+            **data,
+            **{field: json.dumps(data[field]) for field in ("static_headers", "env") if quoted and data.get(field)},
+        }
+    )
 
 
 class _MapTable:
@@ -515,11 +535,20 @@ class _MapTable:
 @pytest.mark.parametrize("quoted", [False, True])
 async def test_secret_maps_create_update_round_trip(map_algorithm: str, field: str, quoted: bool) -> None:
     table: Final = _MapTable(quoted=quoted)
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))))
+    prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))
+        )
+    )
     original: Final = {"TOKEN": "  sensitive-secret\n", "PREFIX": "v2:gcm:literal", "TEMPLATE": "Bearer ${TOKEN}"}
-    create: Final = NewMCPServerRequest.model_validate({
-        "server_id": "srv-map", "transport": "http", "url": "https://up.example.com/mcp", field: original,
-    })
+    create: Final = NewMCPServerRequest.model_validate(
+        {
+            "server_id": "srv-map",
+            "transport": "http",
+            "url": "https://up.example.com/mcp",
+            field: original,
+        }
+    )
     created: Final = await create_mcp_server(prisma, create, touched_by="test")
     first: Final = table.rows["srv-map"][field]
     assert isinstance(first, str) and isinstance(json.loads(first), str)
@@ -548,7 +577,9 @@ async def test_secret_maps_create_update_round_trip(map_algorithm: str, field: s
 def test_secret_map_legacy_model_read_preserves_exact_values(field: str, as_json: bool) -> None:
     original: Final = {"PREFIX": "v2:gcm:literal", "SPACE": "  secret\n", "TEMPLATE": "${TOKEN}", "B64": "YWJjZA=="}
     incoming: Final = {
-        "server_id": "srv-map", "transport": "http", field: json.dumps(original) if as_json else original,
+        "server_id": "srv-map",
+        "transport": "http",
+        field: json.dumps(original) if as_json else original,
     }
     snapshot: Final = json.dumps(incoming)
     parsed: Final = LiteLLM_MCPServerTable.model_validate(incoming)
@@ -562,8 +593,11 @@ def test_secret_map_legacy_model_read_preserves_exact_values(field: str, as_json
 @pytest.mark.parametrize("field", ["static_headers", "env"])
 @pytest.mark.parametrize("failure", ["wrong-key", "corrupt", "invalid-values", "invalid-shape", "invalid-json"])
 def test_secret_map_model_read_fails_closed(map_algorithm: str, field: str, failure: str) -> None:
-    plaintext: Final = {"invalid-values": '{"TOKEN": ["sensitive-secret"]}', "invalid-shape": '["sensitive-secret"]',
-                       "invalid-json": "sensitive-secret"}.get(failure, '{"TOKEN": "sensitive-secret"}')
+    plaintext: Final = {
+        "invalid-values": '{"TOKEN": ["sensitive-secret"]}',
+        "invalid-shape": '["sensitive-secret"]',
+        "invalid-json": "sensitive-secret",
+    }.get(failure, '{"TOKEN": "sensitive-secret"}')
     ciphertext: Final = encrypt_value_helper(
         plaintext, new_encryption_key="wrong-map-key" if failure == "wrong-key" else None
     )
@@ -587,9 +621,13 @@ async def test_secret_map_rotation_migrates_rekeys_and_preserves_corrupt(
         {"server_id": "legacy", field: json.dumps(values), other: "{}"},
         {"server_id": "encrypted", field: old, other: None},
     )
-    prisma: Final = SimpleNamespace(db=SimpleNamespace(
-        litellm_mcpservertable=table, litellm_mcpserveroauthclient=SimpleNamespace(find_many=AsyncMock(return_value=[])), litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))
-    ))
+    prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_mcpservertable=table,
+            litellm_mcpserveroauthclient=SimpleNamespace(find_many=AsyncMock(return_value=[])),
+            litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
+        )
+    )
     await rotate_mcp_server_credentials_master_key(prisma, touched_by="test", new_master_key="rotated-map-key")
     assert table.rows["broken"][field] == corrupt
     assert table.rows["legacy"][other] == "{}" and table.rows["encrypted"][other] is None
@@ -616,7 +654,11 @@ async def test_bulk_reads_isolate_corrupt_secret_maps(reader, field, map_algorit
     ]
     snapshot = [row.model_dump() for row in rows]
     table = SimpleNamespace(find_many=AsyncMock(return_value=rows))
-    prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))))
+    prisma = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))
+        )
+    )
     result = await reader(prisma, ["broken", "healthy"]) if reader is get_mcp_servers else await reader(prisma)
     items = result.items if reader is get_mcp_submissions else result
     assert [row.server_id for row in items] == ["healthy"]
@@ -635,7 +677,11 @@ async def test_bulk_reads_do_not_swallow_unrelated_validation_errors(reader):
 
     row = _prisma_map_row({"server_id": "invalid", "transport": "unsupported"})
     table = SimpleNamespace(find_many=AsyncMock(return_value=[row]))
-    prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))))
+    prisma = SimpleNamespace(
+        db=SimpleNamespace(
+            litellm_mcpservertable=table, litellm_config=SimpleNamespace(find_unique=AsyncMock(return_value=None))
+        )
+    )
     request = reader(prisma, ["invalid"]) if reader is get_mcp_servers else reader(prisma)
     with pytest.raises(ValidationError, match="transport"):
         await request
@@ -816,6 +862,166 @@ async def test_byok_guard_allows_overwriting_existing_oauth():
 # ── Recovery from an unplanned LITELLM_SALT_KEY change ────────────────────────
 
 PREVIOUS_SALT_KEY = "the-salt-key-this-deployment-used-before-9999"
+
+
+async def _saved_grant(prisma: SimpleNamespace) -> OAuthCredentialPayload:
+    grant: Final = await get_user_oauth_credential(prisma, "alice", "srv-1")
+    assert grant is not None
+    return grant
+
+
+@pytest.mark.asyncio
+async def test_refusal_notes_each_refused_scope_once_on_the_saved_grant(credentials_prisma: SimpleNamespace) -> None:
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", scopes=["repo"]
+    )
+    saved_at: Final = rows.rows[("alice", "srv-1")].updated_at
+    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
+    writes: Final = rows.writes
+    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
+    assert rows.writes == writes
+    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist notifications notifications")
+    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "")
+    grant: Final = await _saved_grant(credentials_prisma)
+    assert grant["needs_scopes"] == ["gist", "notifications", ""]
+    assert (grant["access_token"], grant["refresh_token"], grant["scopes"]) == ("at-1", "rt-1", ["repo"])
+    assert rows.rows[("alice", "srv-1")].updated_at == saved_at
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("byok_secret", [None, "byok-api-key"])
+async def test_refusal_without_a_saved_oauth_grant_writes_nothing(
+    credentials_prisma: SimpleNamespace, byok_secret: str | None
+) -> None:
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    if byok_secret is not None:
+        await store_user_credential(credentials_prisma, "alice", "srv-1", byok_secret)
+    writes: Final = rows.writes
+    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
+    assert rows.writes == writes
+    assert await get_user_credential(credentials_prisma, "alice", "srv-1") == byok_secret
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scopes", [("gist", "notifications"), ("gist", "gist"), ("gist", "notifications", "repo")])
+async def test_concurrent_refusals_preserve_each_missing_permission(
+    credentials_prisma: SimpleNamespace, scopes: tuple[str, ...]
+) -> None:
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
+    original: Final = rows.rows[("alice", "srv-1")]
+    arrivals: Final = itertools.count(1)
+    all_waiting: Final = asyncio.Event()
+    update: Final = rows.update_many
+
+    async def simultaneous_update(data: Mapping[str, object], where: Mapping[str, str]) -> int:
+        if where["credential_b64"] == original.credential_b64:
+            if next(arrivals) == len(scopes):
+                all_waiting.set()
+            await all_waiting.wait()
+        return await update(data=data, where=where)
+
+    rows.update_many = simultaneous_update
+    await asyncio.wait_for(
+        asyncio.gather(*(record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", scope) for scope in scopes)),
+        timeout=5,
+    )
+    grant: Final = await _saved_grant(credentials_prisma)
+    assert set(grant["needs_scopes"]) == set(scopes)
+    assert len(grant["needs_scopes"]) == len(set(scopes))
+    assert (grant["access_token"], grant["refresh_token"]) == ("at-1", "rt-1")
+
+
+@pytest.mark.asyncio
+async def test_refusal_never_overwrites_a_grant_saved_after_it_was_read(credentials_prisma: SimpleNamespace) -> None:
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old")
+    read_before_the_save: Final = rows.rows[("alice", "srv-1")]
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-new")
+    rows.find_unique = AsyncMock(side_effect=[read_before_the_save, rows.rows[("alice", "srv-1")]])
+    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
+    del rows.find_unique
+    grant: Final = await _saved_grant(credentials_prisma)
+    assert (grant["access_token"], grant.get("needs_scopes")) == ("at-new", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("skip_byok_guard", [False, True])
+async def test_saving_a_grant_drops_the_refusal_note(
+    credentials_prisma: SimpleNamespace, skip_byok_guard: bool
+) -> None:
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1")
+    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-2", skip_byok_guard=skip_byok_guard)
+    assert "needs_scopes" not in await _saved_grant(credentials_prisma)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interleaving", ["none", "refusal", "signin", "expired_signin", "delete"])
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_refresh_preserves_refusals_without_replacing_a_new_signin(
+    credentials_prisma: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    interleaving: str,
+    legacy: bool,
+) -> None:
+    fixed_now: Final = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    clock_ticks: Final = itertools.count()
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            current_time: Final = fixed_now + timedelta(seconds=next(clock_ticks))
+            return current_time.replace(tzinfo=None) if tz is None else current_time.astimezone(tz)
+
+    monkeypatch.setattr("litellm.proxy.mcp_server.db.datetime", FrozenDateTime)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
+    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
+    before: Final = await _saved_grant(credentials_prisma)
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    update: Final = rows.update_many
+
+    async def interleaved_update(data: Mapping[str, object], where: Mapping[str, str]) -> int:
+        rows.update_many = update
+        if interleaving == "refusal":
+            await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "notifications")
+        elif interleaving in ("signin", "expired_signin"):
+            await store_user_oauth_credential(
+                credentials_prisma,
+                "alice",
+                "srv-1",
+                "at-new",
+                refresh_token="rt-new",
+                expires_in=-3600 if interleaving == "expired_signin" else None,
+            )
+        elif interleaving == "delete":
+            rows.rows = {}
+        return await update(data=data, where=where)
+
+    rows.update_many = interleaved_update
+    if legacy:
+        respx_mock.post("https://idp.example.com/token").respond(200, json={"access_token": "at-2"})
+        refreshed: Final = await refresh_user_oauth_token(credentials_prisma, "alice", _refresh_server(), before)
+        current: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+        assert refreshed == (None if interleaving in ("expired_signin", "delete") else current)
+    else:
+        await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-2", refreshed_from="rt-1")
+    saved: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    expected: Final = {
+        "delete": None,
+        "signin": ("at-new", "rt-new", None),
+        "expired_signin": ("at-new", "rt-new", None),
+        "none": ("at-2", "rt-1", ["gist"]),
+        "refusal": ("at-2", "rt-1", ["gist", "notifications"]),
+    }
+    assert (
+        None if saved is None else (saved["access_token"], saved["refresh_token"], saved.get("needs_scopes"))
+    ) == expected[interleaving]
+    same_consent: Final = saved is not None and saved.get("connected_at") == before["connected_at"]
+    assert same_consent == (interleaving in ("none", "refusal"))
 
 
 def _row_written_under_previous_salt_key(monkeypatch, payload: str):
@@ -1721,13 +1927,20 @@ async def test_enforcement_rejects_preexisting_unverified_credential():
     from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
 
     server = MCPServer(
-        server_id="srv-1", name="srv-1", url="https://mcp.example.com", transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
+        server_id="srv-1",
+        name="srv-1",
+        url="https://mcp.example.com",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
         oauth_identity_binding=MCPOAuthIdentityBinding(
-            mode="enforce", issuer="https://idp.example.com", audiences=["client"],
+            mode="enforce",
+            issuer="https://idp.example.com",
+            audiences=["client"],
         ),
     )
     result = await resolve_valid_user_oauth_token(
-        user_id="alice", server=server,
+        user_id="alice",
+        server=server,
         cred={"access_token": "belongs-to-bob", "refresh_token": "bobs-refresh-token"},
     )
     assert result is None
@@ -1812,7 +2025,9 @@ async def test_unverified_legacy_cache_cannot_bypass_enforcement(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("owner", ["native", "legacy"])
 @pytest.mark.parametrize("capability", [None, False])
-async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_replica(monkeypatch, respx_mock, owner, capability):
+async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_replica(
+    monkeypatch, respx_mock, owner, capability
+):
     from urllib.parse import parse_qs
 
     from litellm.proxy import proxy_server
@@ -1829,18 +2044,31 @@ async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_repl
     prisma = _make_prisma_with_existing(row=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     server = MCPServer(
-        server_id="saved-cimd", name="saved_cimd", transport="http", auth_type="oauth2",
+        server_id="saved-cimd",
+        name="saved_cimd",
+        transport="http",
+        auth_type="oauth2",
         client_id_metadata_document_supported=capability,
-        oauth2_flow="authorization_code", authorization_url="https://idp.example.com/authorize",
+        oauth2_flow="authorization_code",
+        authorization_url="https://idp.example.com/authorize",
         token_url="https://idp.example.com/token",
     )
     await _store_per_user_token_server_side(
-        server, "alice", {"access_token": "old", "refresh_token": "old-refresh", "expires_in": -10},
+        server,
+        "alice",
+        {"access_token": "old", "refresh_token": "old-refresh", "expires_in": -10},
         cimd_client_id=identity,
     )
 
+    update_many: Final = prisma.db.litellm_mcpusercredentials.update_many
+
     async def read_row(**kwargs):
-        return SimpleNamespace(credential_b64=_stored_value(prisma), user_id="alice", server_id=server.server_id)
+        credential_b64: Final[str] = (
+            update_many.await_args.kwargs["data"]["credential_b64"]
+            if update_many.await_count
+            else _stored_value(prisma)
+        )
+        return SimpleNamespace(credential_b64=credential_b64, user_id="alice", server_id=server.server_id)
 
     prisma.db.litellm_mcpusercredentials.find_unique.side_effect = read_row
     saved = await get_user_oauth_credential(prisma, "alice", server.server_id)
@@ -1872,8 +2100,12 @@ async def test_saved_cimd_grant_refreshes_from_encrypted_storage_on_a_fresh_repl
 async def test_silent_refresh_preserves_omitted_scope_but_accepts_explicit_grant(monkeypatch, provider_scope, expected):
     import litellm.proxy.mcp_server.db as db_mod
 
-    await _run_refresh(monkeypatch, _refresh_server(), {
-        "access_token": "new-access",
-        **({"scope": provider_scope} if provider_scope is not None else {}),
-    })
+    await _run_refresh(
+        monkeypatch,
+        _refresh_server(),
+        {
+            "access_token": "new-access",
+            **({"scope": provider_scope} if provider_scope is not None else {}),
+        },
+    )
     assert db_mod.store_user_oauth_credential.await_args.kwargs["scopes"] == expected

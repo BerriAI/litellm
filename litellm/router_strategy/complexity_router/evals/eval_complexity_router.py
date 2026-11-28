@@ -231,7 +231,7 @@ EVAL_CASES: Final[list[EvalCase]] = [
 ]
 
 
-def run_eval() -> tuple[int, int, list[dict]]:
+def run_eval() -> tuple[int, int, list[dict[str, object]]]:
     """
     Run the evaluation suite.
 
@@ -247,7 +247,7 @@ def run_eval() -> tuple[int, int, list[dict]]:
 
     passed = 0
     total: Final = len(EVAL_CASES)
-    failures: Final = []
+    failures: Final = list[dict[str, object]]()
 
     print("=" * 70)
     print("COMPLEXITY ROUTER EVALUATION")

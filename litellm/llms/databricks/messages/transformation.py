@@ -1,13 +1,13 @@
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, loads_json_object
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.common_utils import without_unsupported_server_side_fallback_beta
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
@@ -26,7 +26,6 @@ DROP_CONTAINER_WARNING: Final = (
     "and the chat completions bridge it replaces never forwarded it."
 )
 BEDROCK_INVOCATION_METRICS_FIELD: Final = "amazon-bedrock-invocationMetrics"
-_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _is_unsupported_server_tool(tool: object) -> bool:
@@ -59,11 +58,24 @@ def _without_unsupported_server_tools(params: Mapping[str, object]) -> dict[str,
 def _without_invocation_metrics(sse_line: bytes) -> bytes:
     if not sse_line.startswith(b"data:") or BEDROCK_INVOCATION_METRICS_FIELD.encode() not in sse_line:
         return sse_line
-    event: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(sse_line.removeprefix(b"data:"))))
+    event: Final = loads_json_object(sse_line.removeprefix(b"data:"))
     if event is None:
         return sse_line
     kept_fields: Final = {key: value for key, value in event.items() if key != BEDROCK_INVOCATION_METRICS_FIELD}
     return b"data: " + json.dumps(kept_fields, separators=(",", ":")).encode()
+
+
+def _kept_anthropic_beta(sent: str | None, model: str, litellm_params: Mapping[str, object]) -> str | None:
+    if sent is None:
+        return None
+    kept_betas: Final = without_unsupported_server_side_fallback_beta(
+        tuple(beta.strip() for beta in sent.split(",") if beta.strip()),
+        model=model,
+        custom_llm_provider="databricks",
+        model_info=as_str_mapping(litellm_params.get("model_info")),
+        drop_params=litellm_params.get("drop_params"),
+    )
+    return ",".join(kept_betas) or None
 
 
 async def _strip_invocation_metrics(sse_stream: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
@@ -122,7 +134,7 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         self,
         headers: dict[str, str],  # mutable-ok: mirrors the base signature
         model: str,
-        messages: list[object],  # mutable-ok: mirrors the base signature
+        messages: Sequence[object],
         optional_params: dict[str, object],  # mutable-ok: mirrors the base signature
         litellm_params: dict[str, object],  # mutable-ok: mirrors the base signature
         api_key: str | None = None,
@@ -149,7 +161,11 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             optional_params=optional_params,
             messages=messages,
         )
-        return finalized_headers, workspace_api_base
+        kept_beta: Final = _kept_anthropic_beta(finalized_headers.get("anthropic-beta"), model, litellm_params)
+        return {
+            **{key: value for key, value in finalized_headers.items() if key != "anthropic-beta"},
+            **({} if kept_beta is None else {"anthropic-beta": kept_beta}),
+        }, workspace_api_base
 
     def get_complete_url(
         self,
@@ -192,7 +208,7 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             headers=headers,
         )
         self._normalize_system_role_messages(  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
-            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+            anthropic_messages_request, model=model, drop_params=litellm_params.drop_params
         )
         self._remove_scope_from_cache_control(anthropic_messages_request)  # pyright: ignore[reportUnknownMemberType]  # the shared helper takes a bare dict
         return anthropic_messages_request

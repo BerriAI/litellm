@@ -288,9 +288,7 @@ class GatewayRequestRedisBuffer:
 
     @with_service_target(_GATEWAY_REQUEST_QUEUE_TARGET)
     async def _pop_batch(self, key: str) -> tuple[str | bytes, ...]:
-        popped: Final[object] = await self._redis_cache.async_lpop(  # pyright: ignore[reportAny]  # redis returns Any
-            key=key, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT
-        )
+        popped: Final[object] = await self._redis_cache.async_lpop(key=key, count=MAX_REDIS_BUFFER_DEQUEUE_COUNT)
         if not popped:
             return ()
         return _BUFFERED_ENTRIES.validate_python(popped if isinstance(popped, list) else (popped,))

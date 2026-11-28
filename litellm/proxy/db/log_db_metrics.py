@@ -5,21 +5,28 @@ ServiceLogger() then sends DB logs to Prometheus, OTEL, Datadog etc
 """
 
 import asyncio
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
 from functools import wraps
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeVar
+
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
-from litellm._service_logger import ServiceTypes
+from litellm._service_logger import ServiceTypes, Span
 
 _PRISMA_CLIENT_CRUD: Final = frozenset({"get_data", "update_data", "delete_data"})
 _DEFAULT_TABLE_BY_KWARG: Final[Mapping[str, str]] = MappingProxyType(
     {"token": "key", "tokens": "key", "user_id": "user", "team_id": "team"}
 )
+_T = TypeVar("_T")
+
+
+class _DbCallKwargs(TypedDict, total=False, extra_items=object):
+    parent_otel_span: ReadOnly[Span | None]
 
 
 def _table_metadata_reader(infers_table: bool) -> Callable[[Mapping[str, object]], dict[str, str] | None]:
@@ -109,7 +116,7 @@ def claim_db_io() -> Generator[_DbIoWitness]:
         _db_io_witness.reset(token)
 
 
-def log_db_metrics(func):
+def log_db_metrics(func: Callable[..., Awaitable[_T]]):
     """
     Decorator to log the duration of a DB related function to ServiceLogger()
 
@@ -130,7 +137,7 @@ def log_db_metrics(func):
     metadata_of: Final = _table_metadata_reader(func.__name__ in _PRISMA_CLIENT_CRUD)
 
     @wraps(func)
-    async def wrapper(*args, **kwargs: object):
+    async def wrapper(*args: object, **kwargs: Unpack[_DbCallKwargs]) -> _T:
         start_time: Final[datetime] = datetime.now()
         witness: Final = _DbIoWitness(parent=_db_io_witness.get())
         witness_token: Final = _db_io_witness.set(witness)
@@ -191,9 +198,9 @@ _is_exception_related_to_db: Final = is_exception_related_to_db
 
 async def _handle_logging_db_exception(
     e: Exception,
-    func: Callable,
-    kwargs: Mapping[str, object],
-    args: tuple,
+    func: Callable[..., object],
+    kwargs: _DbCallKwargs,
+    args: tuple[object, ...],
     start_time: datetime,
     end_time: datetime,
     metadata_of: Callable[[Mapping[str, object]], dict[str, str] | None],

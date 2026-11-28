@@ -20,7 +20,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows, scratch_database
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import owned_proxy, owned_proxy_process
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 pytestmark: Final = pytest.mark.shares_worker_state
@@ -1122,7 +1122,7 @@ def test_credential_value_update_and_model_reload_reach_provider(gateway: Gatewa
 
 
 _ENVIRONMENT_VARIABLES_REVISION_MIGRATION: Final = (
-    "litellm-proxy-extras/litellm_proxy_extras/migrations/"
+    "litellm/proxy-extras/litellm_proxy_extras/migrations/"
     "20261015120000_add_environment_variables_revision_trigger/migration.sql"
 )
 
@@ -1133,6 +1133,67 @@ def _prisma(*arguments: str) -> None:
 
 def _push_schema() -> None:
     _prisma("db", "push", "--schema", "litellm/proxy/schema.prisma", "--skip-generate")
+
+
+def test_default_team_settings_preserve_member_caps_on_save_and_restart(gateway: Gateway, tmp_path: Path) -> None:
+    config: Final = tmp_path / "default-team-settings.yaml"
+    config.write_text(
+        json.dumps(
+            {
+                "model_list": [],
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "coordination_redis": {"host": "os.environ/REDIS_HOST", "port": "os.environ/REDIS_PORT"},
+                },
+                "router_settings": {"redis_host": "os.environ/REDIS_HOST", "redis_port": "os.environ/REDIS_PORT"},
+            }
+        )
+    )
+    caps: Final = {"omitted": 100.0, "null": 200.0, "zero": 300.0}
+    expected: Final = {"omitted": 100.0, "null": 200.0, "zero": 0.0}
+    teams: Final[list[JsonValue]] = [
+        {"team_id": "omitted", "user_role": "user"},
+        {"team_id": "null", "user_role": "admin", "max_budget_in_team": None},
+        {"team_id": "zero", "user_role": "user", "max_budget_in_team": 0.0},
+    ]
+
+    def member_caps(proxy: Gateway) -> dict[str, JsonValue]:
+        def member_cap(team_id: str) -> JsonValue:
+            info: Final = object_value(proxy.get("/team/info", params={"team_id": team_id})["team_info"])
+            budget: Final = info.get("team_member_budget_table")
+            return None if budget is None else object_value(budget)["max_budget"]
+
+        return {team_id: member_cap(team_id) for team_id in caps}
+
+    with scratch_database("default_team_settings") as database_url:
+        environment: Final = {"DATABASE_URL": database_url}
+        with owned_proxy(gateway, tmp_path / "before-restart", environment, config=config, workers=2) as proxy:
+            for team_id, cap in caps.items():
+                proxy.post("/team/new", {"team_id": team_id, "team_alias": team_id, "team_member_budget": cap})
+            assert member_caps(proxy) == caps
+
+            saved: Final = proxy.request(
+                "PATCH", "/update/internal_user_settings", {"user_role": "internal_user_viewer", "teams": teams}
+            )
+            assert saved.status_code == 200, saved.text
+            after_save: Final = member_caps(proxy)
+            proxy.post("/team/update", {"team_id": "omitted", "team_member_budget": caps["omitted"]})
+            proxy.post("/team/update", {"team_id": "null", "team_member_budget": caps["null"]})
+            assert member_caps(proxy) == expected
+
+        with owned_proxy(gateway, tmp_path / "after-restart", environment, config=config, workers=2) as restarted:
+            defaults: Final = object_value(restarted.get("/get/internal_user_settings")["values"])
+            assert defaults["teams"] == [
+                {"team_id": "omitted", "user_role": "user", "max_budget_in_team": None},
+                {"team_id": "null", "user_role": "admin", "max_budget_in_team": None},
+                {"team_id": "zero", "user_role": "user", "max_budget_in_team": 0.0},
+            ]
+            after_restart: Final = member_caps(restarted)
+
+    assert {"after save": after_save, "after restart": after_restart} == {
+        "after save": expected,
+        "after restart": expected,
+    }
 
 
 def _push_schema_with_environment_variables_revision_trigger() -> None:
@@ -1528,7 +1589,10 @@ def _sign_in_client_id(proxy: Gateway) -> str | None:
     if not response.is_redirect:
         assert response.status_code == 200, response.text
         return None
-    return parse_qs(urlsplit(response.headers["location"]).query)["client_id"][0]
+    location: Final = urlsplit(response.headers["location"])
+    if location.path.endswith("/ui/login"):
+        return None
+    return parse_qs(location.query)["client_id"][0]
 
 
 def test_an_sso_client_removed_from_db_environment_variables_stops_sign_in_on_every_proxy(
@@ -1701,3 +1765,57 @@ def test_db_environment_variables_saved_from_a_session_outside_the_tables_schema
 
         assert isinstance(first, int) and isinstance(second, int)
         assert 0 < first < second
+
+
+def test_a_stored_general_setting_no_settings_api_manages_stays_off_and_the_rest_of_the_row_applies(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    alias: Final = "stale-database-setting-" + uuid.uuid4().hex
+    with scratch_database() as database_url, wire_server(lambda _request: _completion_reply("pong")) as provider:
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        _push_schema()
+        with psycopg.connect(database_url, autocommit=True) as writer:
+            writer.execute(
+                'INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES (%s, %s)',
+                ("general_settings", Jsonb({"enforce_user_param": True, "store_prompts_in_spend_logs": True})),
+            )
+        config: Final = tmp_path / "stale-database-setting.yaml"
+        config.write_text(
+            json.dumps(
+                {
+                    "model_list": [
+                        {
+                            "model_name": alias,
+                            "litellm_params": {
+                                "model": "openai/gpt-4o-mini",
+                                "api_base": provider.url + "/v1",
+                                "api_key": "integration-provider-key",
+                            },
+                        }
+                    ],
+                    "general_settings": {"master_key": gateway.key, "store_model_in_db": True},
+                }
+            )
+        )
+        with owned_proxy_process(
+            gateway,
+            tmp_path / "stale-database-setting",
+            {"DATABASE_URL": database_url, "DISABLE_SCHEMA_UPDATE": "true"},
+            config=config,
+            database_setup=(),
+        ) as owned:
+            answer: Final = owned.gateway.request(
+                "POST", "/v1/chat/completions", {"model": alias, "messages": [{"role": "user", "content": "ping"}]}
+            )
+            listed: Final = owned.gateway.request("GET", "/config/list", params={"config_type": "general_settings"})
+            log: Final = owned.log.read_text()
+
+    assert answer.status_code == 200, answer.text
+    assert listed.status_code == 200, listed.text
+    stored_prompts: Final = next(
+        entry
+        for entry in TypeAdapter(list[dict[str, JsonValue]]).validate_json(listed.content)
+        if entry["field_name"] == "store_prompts_in_spend_logs"
+    )
+    assert (stored_prompts["field_value"], stored_prompts["source"]) == (True, "db")
+    assert "general_settings.enforce_user_param is stored in the database, but the proxy does not apply" in log

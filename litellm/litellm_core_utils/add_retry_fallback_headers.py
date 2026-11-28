@@ -6,6 +6,7 @@ from typing import Final, Protocol, TypedDict, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR as _HIDDEN_PARAMS_ATTR,
 )
@@ -43,6 +44,10 @@ def _routing_header_mapping(value: object) -> Mapping[str, object]:
         return mapping
     except ValidationError:
         return _EMPTY_OBJECT_MAPPING
+
+
+def _dict_or_none(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
 
 
 def _header_string(value: object) -> str | None:
@@ -132,7 +137,7 @@ class HiddenParamsAsyncIteratorWrapper:
 def prepare_response_for_header_attachment(response: object) -> object | None:
     if response is None:
         return None
-    if isinstance(response, dict) or hasattr(response, "_hidden_params"):
+    if _dict_or_none(response) is not None or hasattr(response, "_hidden_params"):
         return response
     if hasattr(response, "__anext__"):
         return HiddenParamsAsyncIteratorWrapper(response)
@@ -172,9 +177,10 @@ def apply_quality_router_decision_headers(
     additional_headers: dict[str, object],
     request_kwargs: object,
 ) -> None:
-    metadata: Final = (request_kwargs.get("metadata") or {}) if isinstance(request_kwargs, dict) else {}
-    decision: Final = metadata.get("quality_router_decision") if isinstance(metadata, dict) else None
-    if not isinstance(decision, dict):
+    kwargs_dict: Final = _dict_or_none(request_kwargs)
+    metadata: Final = _dict_or_none((kwargs_dict.get("metadata") or {}) if kwargs_dict is not None else {})
+    decision: Final = _dict_or_none(metadata.get("quality_router_decision") if metadata is not None else None)
+    if decision is None:
         return
     quality_header_fields: Final = (
         ("routed_model", "x-litellm-quality-router-model"),
@@ -189,7 +195,8 @@ def apply_quality_router_decision_headers(
 
 
 def response_total_token_count(response: object) -> int:
-    usage: Final = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
+    response_dict: Final = _dict_or_none(response)
+    usage: Final = response_dict.get("usage") if response_dict is not None else getattr(response, "usage", None)
     if usage is None:
         return 0
     if isinstance(usage, dict):
@@ -202,7 +209,7 @@ def response_total_token_count(response: object) -> int:
 
 def apply_remaining_usage_headers(
     additional_headers: dict[str, object],
-    remaining_usage: dict[str, int],
+    remaining_usage: Mapping[str, object],
 ) -> None:
     for header, value in remaining_usage.items():
         if value is not None and header not in additional_headers:
@@ -234,7 +241,7 @@ def get_hidden_params_dict(
 
 
 def _write_hidden_params(response: object, hidden_params: dict[str, object]) -> None:
-    if isinstance(response, dict) or hasattr(response, _HIDDEN_PARAMS_ATTR):
+    if _dict_or_none(response) is not None or hasattr(response, _HIDDEN_PARAMS_ATTR):
         set_hidden_params(response, hidden_params)
 
 
@@ -249,7 +256,11 @@ def _ensure_additional_headers_dict(
 
 def get_fallback_error_info(error: Exception) -> FallbackErrorInfo:
     message: Final = cast(object, getattr(error, "message", str(error)))
-    error_type: Final = cast(object, getattr(error, "type", error.__class__.__name__))
+    error_type: Final = (
+        error.__class__.__name__
+        if isinstance(error, UnsupportedParamsError)
+        else cast(object, getattr(error, "type", error.__class__.__name__))
+    )
     param: Final = cast(object, getattr(error, "param", None))
     code: Final = cast(object, getattr(error, "status_code", getattr(error, "code", None)))
     return FallbackErrorInfo(
@@ -289,7 +300,7 @@ def _add_headers_to_response(response: object, headers: dict[str, object]) -> ob
 
     if (
         not isinstance(response, BaseModel)
-        and not isinstance(response, dict)
+        and _dict_or_none(response) is None
         and not hasattr(response, "_hidden_params")
     ):
         return response

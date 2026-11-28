@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from typing import Final, cast
 
 import pytest
@@ -377,6 +378,32 @@ def test_extract_cacheable_prefix_mixed_string_and_list_content():
     assert isinstance(result[2]["content"], list)
 
 
+def test_prompt_cache_breakpoint_marks_the_same_cacheable_prefix_as_cache_control():
+    def _messages(marker: Mapping[str, Mapping[str, str]]) -> list[AllMessageValues]:
+        return cast(  # cast-ok: the text part type does not declare the prompt_cache_breakpoint key
+            list[AllMessageValues],
+            [
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "Here is the full text of a complex legal agreement" * 400, **marker}
+                    ],
+                },
+                {"role": "user", "content": "what are the key terms?"},
+            ],
+        )
+
+    marked_key: Final = PromptCachingCache.get_prompt_caching_cache_key(
+        _messages({"prompt_cache_breakpoint": {"mode": "explicit"}}), None
+    )
+
+    assert marked_key is not None
+    assert marked_key == PromptCachingCache.get_prompt_caching_cache_key(
+        _messages({"cache_control": {"type": "ephemeral"}}), None
+    )
+    assert PromptCachingCache.get_prompt_caching_cache_key(_messages({}), None) is None
+
+
 @pytest.mark.asyncio
 async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
     from litellm import Router
@@ -635,3 +662,33 @@ def test_empty_and_missing_tools_seed_the_same_key():
     key_none: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, None)
     key_empty: Final = PromptCachingCache.get_prompt_caching_cache_key(messages, [])
     assert key_none == key_empty
+
+
+def _base64_document_turn(data: str) -> list[AllMessageValues]:
+    return cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": data}},
+                    {"type": "text", "text": "Summarize the document.", "cache_control": {"type": "ephemeral"}},
+                ],
+            }
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_same_size_base64_documents_keep_separate_pins() -> None:
+    prompt_cache: Final = PromptCachingCache(cache=DualCache())
+    pinned_document: Final = "QUJD" * 1024
+    other_document: Final = "WFla" * 1024
+    await prompt_cache.async_add_model_id(
+        model_id="deployment-1", messages=_base64_document_turn(pinned_document), tools=None
+    )
+
+    assert await prompt_cache.async_get_model_id(messages=_base64_document_turn(other_document), tools=None) is None
+    assert await prompt_cache.async_get_model_id(messages=_base64_document_turn(pinned_document), tools=None) == {
+        "model_id": "deployment-1"
+    }

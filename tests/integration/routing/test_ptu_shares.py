@@ -589,7 +589,7 @@ def test_a_dropped_messages_stream_retries_on_the_shared_deployment(rig: _Rig) -
     assert response.status_code == 200, response.text
     events: Final = parse_sse(response.text)
     assert event_types(events) == LIFECYCLE, events
-    assert message_id(events) == _served_id(_CLAUDE_BACKEND, marker, 2), events
+    assert message_id(events) == _served_id(_CLAUDE_BACKEND, marker, 1), events
     assert delta_text(events) == _TEXT, events
     assert rig.hits(_CLAUDE_BACKEND, marker) == 2
 

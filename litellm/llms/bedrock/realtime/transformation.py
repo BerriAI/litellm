@@ -18,6 +18,7 @@ from pydantic import ConfigDict, JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, require_get, subscript
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeSessionUpdateRejection
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -277,7 +278,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
-    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
+    def validate_environment(self, headers: dict[str, str], model: str, api_key: str | None = None) -> dict[str, str]:
         """Validate environment - no special validation needed for Bedrock."""
         return headers
 
@@ -562,7 +563,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             )
         return None
 
-    def transform_input_audio_buffer_append_event(self, json_message: dict) -> list[str]:
+    def transform_input_audio_buffer_append_event(self, json_message: Mapping[str, object]) -> list[str]:
         """
         Transform input_audio_buffer.append event to Bedrock audio input.
 
@@ -629,7 +630,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         return messages
 
-    def transform_input_audio_buffer_commit_event(self, json_message: dict) -> list[str]:
+    def transform_input_audio_buffer_commit_event(self, json_message: Mapping[str, object]) -> list[str]:
         """
         Transform input_audio_buffer.commit event to Bedrock audio content end.
 
@@ -656,7 +657,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         return messages
 
-    def transform_conversation_item_create_event(self, json_message: dict) -> list[str]:
+    def transform_conversation_item_create_event(self, json_message: Mapping[str, object]) -> list[str]:
         """
         Transform conversation.item.create event to Bedrock text input or tool result.
 
@@ -668,7 +669,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         """
         verbose_logger.debug("Handling conversation.item.create")
 
-        item: Final = json_message.get("item", {})
+        item: Final = require_get(json_message.get("item", {}))
         item_type: Final = item.get("type")
 
         # Handle tool result
@@ -680,7 +681,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         # Handle regular message
         if item_type == "message":
             content: Final = item.get("content", [])
-            for content_part in content:
+            for raw_content_part in iter_items(content):
+                content_part = require_get(raw_content_part)
                 if content_part.get("type") == "input_text":
                     text_content_name = str(uuid_lib.uuid4())
 
@@ -724,7 +726,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         return messages
 
-    def transform_response_create_event(self, json_message: dict) -> list[str]:
+    def transform_response_create_event(self, json_message: Mapping[str, object]) -> list[str]:
         """
         Transform response.create event to Bedrock format.
 
@@ -789,7 +791,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             for offset in range(0, len(pcm), TRIGGER_AUDIO_CHUNK_SIZE)
         ]
 
-    def transform_response_cancel_event(self, json_message: dict) -> list[str]:
+    def transform_response_cancel_event(self, json_message: Mapping[str, object]) -> list[str]:
         """
         Transform response.cancel event to Bedrock format.
 
@@ -918,7 +920,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
     def transform_content_start_event(
         self,
-        event: dict,
+        event: object,
         current_response_id: str | None,
         current_output_item_id: str | None,
         current_conversation_id: str | None,
@@ -942,7 +944,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         Returns:
             Tuple of (events, response_id, output_item_id, conversation_id, delta_type)
         """
-        content_start: Final = event["contentStart"]
+        content_start: Final = decoded_json_object(subscript(event, "contentStart"))
         role: Final = content_start.get("role")
 
         if role != "ASSISTANT":
@@ -1228,7 +1230,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
     def transform_content_end_event(
         self,
-        event: dict,
+        event: object,
         current_output_item_id: str | None,
         current_response_id: str | None,
         current_delta_type: str | None,
@@ -1247,7 +1249,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         Returns:
             Tuple of (events, reset_delta_chunks)
         """
-        content_end: Final = event["contentEnd"]
+        content_end: Final = subscript(event, "contentEnd")
         verbose_logger.debug("Handling contentEnd: %s", content_end)
 
         if self._assistant_final_text_active:
@@ -1338,7 +1340,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
     def transform_prompt_end_event(
         self,
-        event: dict,
+        event: object,
         current_response_id: str | None,
         current_conversation_id: str | None,
     ) -> tuple[
@@ -1400,7 +1402,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
     def transform_tool_use_event(
         self,
-        event: dict,
+        event: object,
         current_response_id: str | None,
         current_conversation_id: str | None,
     ) -> tuple[list[OpenAIRealtimeEvents], str, str]:
@@ -1416,7 +1418,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             Tuple of (events, response_id, conversation_id)
         """
         verbose_logger.debug("Handling toolUse")
-        tool_use: Final = BedrockToolUse.model_validate(event["toolUse"])
+        tool_use: Final = BedrockToolUse.model_validate(subscript(event, "toolUse"))
         verbose_logger.debug("Tool use event: %s (ID: %s)", tool_use.toolName, tool_use.toolUseId)
 
         response_id: Final = current_response_id or f"resp_{uuid.uuid4()}"
@@ -1543,7 +1545,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
     def _should_close_response(self, stop_reason: str | None) -> bool:
         return stop_reason == "END_TURN" or self._response_done_pending
 
-    def transform_conversation_item_create_tool_result_event(self, json_message: dict) -> list[str]:
+    def transform_conversation_item_create_tool_result_event(self, json_message: Mapping[str, object]) -> list[str]:
         """
         Transform conversation.item.create with tool result to Bedrock format.
 
@@ -1556,7 +1558,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug("Handling conversation.item.create for tool result")
         messages: Final[list[str]] = []
 
-        item: Final = json_message.get("item", {})
+        item: Final = require_get(json_message.get("item", {}))
         if item.get("type") == "function_call_output":
             tool_content_name: Final = str(uuid_lib.uuid4())
             call_id: Final = item.get("call_id", "")
@@ -1668,7 +1670,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 current_conversation_id,
                 current_delta_type,
             ) = self.transform_content_start_event(
-                event,
+                _JSON_VALUE.validate_python(event),
                 current_response_id,
                 current_output_item_id,
                 current_conversation_id,
@@ -1710,7 +1712,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         elif "contentEnd" in event:
             events, current_delta_chunks = self.transform_content_end_event(
-                event,
+                _JSON_VALUE.validate_python(event),
                 current_output_item_id,
                 current_response_id,
                 current_delta_type,
@@ -1735,7 +1737,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         elif "toolUse" in event:
             events, current_response_id, current_conversation_id = self.transform_tool_use_event(
-                event, current_response_id, current_conversation_id
+                _JSON_VALUE.validate_python(event), current_response_id, current_conversation_id
             )
             returned_messages.extend(events)
 
@@ -1745,7 +1747,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 current_output_item_id,
                 current_response_id,
                 current_delta_type,
-            ) = self.transform_prompt_end_event(event, current_response_id, current_conversation_id)
+            ) = self.transform_prompt_end_event(
+                _JSON_VALUE.validate_python(event), current_response_id, current_conversation_id
+            )
             returned_messages.extend(events)
 
         return {

@@ -9,7 +9,7 @@ uses BaseAWSLLM to obtain AWS credentials and wraps them in a custom
 AwsSecurityCredentialsSupplier for google-auth.
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 GOOGLE_IMPORT_ERROR_MESSAGE: Final = (
@@ -51,7 +51,7 @@ class VertexAIAwsWifAuth:
         return {key: value for key, value in json_obj.items() if key in _AWS_CREDENTIAL_KEYS}
 
     @staticmethod
-    def credentials_from_explicit_aws(json_obj, aws_params, scopes):
+    def credentials_from_explicit_aws(json_obj: Mapping[str, object], aws_params, scopes: Sequence[str]):
         """
         Create GCP credentials using explicit AWS credentials for WIF.
 
@@ -92,7 +92,7 @@ class VertexAIAwsWifAuth:
         aws_params_copy: Final = dict(aws_params)  # avoid mutating caller's dict
 
         def _get_aws_credentials():
-            return base_aws.get_credentials(**aws_params_copy)
+            return base_aws.get_credentials(litellm_params=None, **aws_params_copy)
 
         # Create the custom supplier with a lazy credentials provider
         supplier: Final = AwsCredentialsSupplier(

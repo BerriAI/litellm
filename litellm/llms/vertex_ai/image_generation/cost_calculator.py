@@ -5,6 +5,7 @@ Vertex AI Image Generation Cost Calculator
 from typing import Final
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    ImageTokenCostReporter,
     calculate_image_response_cost_from_usage,
     calculate_image_response_web_search_cost,
     get_vertex_regional_endpoint_uplift,
@@ -18,6 +19,9 @@ def cost_calculator(
     image_response: ImageResponse,
     model_info: ModelInfo | None = None,
     vertex_location: str | None = None,
+    service_tier: str | None = None,
+    *,
+    report_token_cost: ImageTokenCostReporter | None = None,
 ) -> float:
     """
     Vertex AI Image Generation Cost Calculator
@@ -40,6 +44,8 @@ def cost_calculator(
         custom_llm_provider="vertex_ai",
         model_info=_model_info,
         vertex_location=vertex_location,
+        service_tier=service_tier,
+        report_token_cost=report_token_cost,
     )
     if token_based_cost is not None:
         return token_based_cost + web_search_cost

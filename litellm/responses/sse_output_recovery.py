@@ -93,7 +93,7 @@ def record_output_text_chunk(
             "id": parsed_chunk.get("item_id") or f"msg_{output_index}",
             "role": "assistant",
             "status": "completed",
-            "content": [],
+            "content": list[object](),
         }
         text_only_items[output_index] = item
 

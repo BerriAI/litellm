@@ -16,7 +16,7 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 from typing_extensions import ReadOnly, Required, Self, TypedDict
 
-from litellm.types.llms.base import LiteLLMPydanticObjectBase
+from litellm.types.llms.base import LiteLLMPydanticObjectBase, StrAsGiven
 
 ExtractionFieldType: TypeAlias = Literal[
     "text", "number", "date", "time", "datetime", "duration", "list", "estimate", "forecast"
@@ -156,7 +156,7 @@ class ExtractionCallParams(TypedDict, total=False):
     fields: Required[ReadOnly[Mapping[str, Mapping[str, object]]]]
     images: ReadOnly[Sequence[str | Mapping[str, object]] | None]
     reference_date: ReadOnly[str | None]
-    api_key: ReadOnly[str | None]
+    api_key: ReadOnly[StrAsGiven | None]
     api_base: ReadOnly[str | None]
     timeout: ReadOnly[float | None]
     custom_llm_provider: ReadOnly[str | None]

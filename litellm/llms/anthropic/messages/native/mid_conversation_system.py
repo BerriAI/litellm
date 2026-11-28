@@ -26,7 +26,7 @@ def system_role_message_as_user(message: Mapping[str, object]) -> Mapping[str, o
     }
 
 
-def opens_with_tool_results(message: object) -> bool:
+def opens_with_tool_results(message: Mapping[str, object]) -> bool:
     if not isinstance(message, dict) or message.get("role") != "user":
         return False
     content: Final = message.get("content")

@@ -1,9 +1,11 @@
 """Unit tests for the AdaptiveRouterPostCallHook."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm.llms.anthropic.messages.utils import proxy_sub_call_metadata
 from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
     SIGNAL_GATE_MIN_MESSAGES,
@@ -15,6 +17,7 @@ from litellm.router_strategy.adaptive_router.hooks import (
     _resolve_session_key,
 )
 from litellm.router_strategy.adaptive_router.signals import Turn
+from litellm.types.utils import ModelResponse
 
 
 def _make_hook() -> AdaptiveRouterPostCallHook:
@@ -225,6 +228,20 @@ async def test_hook_uses_explicit_session_id_when_provided():
 
 
 @pytest.mark.asyncio
+async def test_hook_never_records_a_sub_call_as_a_turn_of_the_parent_session_it_inherited():
+    hook = _make_hook()
+    kwargs = _kwargs(
+        messages=[{"role": "user", "content": "Summarize the conversation so far"}],
+        extra_litellm_params={
+            "litellm_session_id": "parent-session",
+            "litellm_metadata": proxy_sub_call_metadata({"user_api_key_hash": "key-hash"}),
+        },
+    )
+    await hook.async_log_success_event(kwargs, _resp_with_content("summary"), 0.0, 1.0)
+    hook.adaptive_router.record_turn.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_hook_passes_tool_calls_through():
     hook = _make_hook()
     tc = {"name": "search", "arguments": '{"q":"x"}'}
@@ -234,6 +251,45 @@ async def test_hook_passes_tool_calls_through():
     )
     turn: Turn = hook.adaptive_router.record_turn.await_args.kwargs["turn"]
     assert turn.tool_calls == [tc]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "expected_tool_calls"),
+    [
+        (
+            ModelResponse(
+                choices=[
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "calling tool",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "search", "arguments": '{"q":"x"}'},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            ),
+            [{"id": "call_1", "type": "function", "function": {"name": "search", "arguments": '{"q":"x"}'}}],
+        ),
+        (
+            _resp_with_content("calling tool", tool_calls=[SimpleNamespace(name="search")]),
+            [{"name": "search", "arguments": ""}],
+        ),
+    ],
+    ids=["model_response_tool_call", "tool_call_without_model_dump"],
+)
+async def test_hook_records_tool_call_objects_as_dicts(response: object, expected_tool_calls: list[dict[str, object]]):
+    hook = _make_hook()
+    await hook.async_log_success_event(_kwargs(chosen="fast"), response, 0.0, 1.0)
+    turn: Turn = hook.adaptive_router.record_turn.await_args.kwargs["turn"]
+    assert turn.assistant_content == "calling tool"
+    assert turn.tool_calls == expected_tool_calls
 
 
 # ---- _recent_tool_results ------------------------------------------------

@@ -5,7 +5,7 @@ this is OpenAI compatible - no translation needed / occurs
 """
 
 import os
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Literal, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -22,6 +22,9 @@ class HerokuError(Exception):
 
 
 class HerokuChatConfig(OpenAIGPTConfig):
+    def _flattens_content_lists(self) -> bool:
+        return True
+
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
@@ -68,8 +71,8 @@ class HerokuChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         resolved_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)

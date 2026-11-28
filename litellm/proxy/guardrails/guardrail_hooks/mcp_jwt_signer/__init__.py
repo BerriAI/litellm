@@ -24,9 +24,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             "mode='pre_mcp_call'. JWT injection only fires for MCP tool calls."
         )
 
-    optional_params: Final = getattr(litellm_params, "optional_params", None)
+    optional_params: Final[object] = getattr(litellm_params, "optional_params", None)
 
-    def _get(key):
+    def _get(key: str):
         if optional_params is not None:
             v: Final = getattr(optional_params, key, None)
             if v is not None:

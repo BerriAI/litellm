@@ -419,22 +419,26 @@ BRIDGES: Final[Mapping[str, Callable[..., Answer]]] = {
 
 
 @pytest.mark.parametrize(
-    ("bridge", "stream"),
-    [("messages", False), ("messages", True), ("responses", False), ("responses", True), ("completions", False)],
+    ("bridge", "endpoint", "stream"),
+    [
+        ("messages", "/v1/messages", False),
+        ("messages", "/v1/messages", True),
+        ("responses", "/v1/responses", False),
+        ("responses", "/v1/responses", True),
+        ("completions", "/v1/completions", False),
+    ],
     ids=["messages", "messages-stream", "responses", "responses-stream", "completions"],
 )
-def test_bridged_endpoints_carry_the_deployment_voice(gateway: Gateway, bridge: str, stream: bool) -> None:
+def test_bridged_endpoints_refuse_a_gemini_tts_deployment_before_the_provider_call(
+    gateway: Gateway, bridge: str, endpoint: str, stream: bool
+) -> None:
     with wire_server(gemini_peer) as wire, gateway.scenario() as scenario:
         model: Final = gemini_deployment(scenario, wire.url, audio=audio_param("alloy"), modalities=["audio"])
-        text: Final = marker()
-        answer: Final = BRIDGES[bridge](gateway, model, text, stream=stream)
-        assert answer.status == 200, answer.text
-        request: Final = _received(wire, text)
-        _assert_target(request, "gemini", stream=stream)
-        assert received_voice(request) == "Kore", request.body
-        assert answer.content == text, answer.text
-        row: Final = spend_row_by_call(answer.call_id)
-        assert row["completion_tokens"] == AUDIO_TOKENS, row
+        answer: Final = BRIDGES[bridge](gateway, model, marker(), stream=stream)
+        assert answer.status == 400, answer.text
+        assert f"which {endpoint} cannot carry" in answer.text, answer.text
+        assert "/v1/chat/completions" in answer.text, answer.text
+        assert wire.drain() == ()
 
 
 def _gcs_peer(request: Request) -> Reply:

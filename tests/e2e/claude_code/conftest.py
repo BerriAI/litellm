@@ -551,8 +551,8 @@ def pytest_sessionfinish(session, exitstatus):
 # ---------------------------------------------------------------------------
 # Session-scoped compat model registration.
 #
-# The compat cells probe hardcoded virtual names like ``claude-sonnet-4-5``
-# and ``claude-sonnet-4-5-bedrock-invoke``. On stage those live in the
+# The compat cells probe hardcoded virtual names like ``claude-sonnet-5-5``
+# and ``claude-sonnet-5-5-bedrock-invoke``. On stage those live in the
 # gateway's model_list at deploy time; locally the docker-config.yaml
 # under tests/e2e/ only declares one of them, so every non-haiku cell
 # 400s with ``Invalid model name``. The fixture here reconciles the two:
@@ -597,14 +597,21 @@ def _build_control_plane_client(proxy_config: ProxyConfig):
     )
 
 
-def _register_deployment(proxy, deployment: CompatDeployment) -> str:
-    """Register one deployment and return its proxy-assigned model_id
-    once it is servable on the data plane. The aliases are shared by every
-    cell and, under xdist, by every worker, so no call to them belongs to
-    one test and none is cached: the matrix exists to reach real providers."""
-    return proxy.create_model(
-        deployment.model_name,
-        deployment.litellm_params,
+def _register_deployments(proxy, deployments: tuple[CompatDeployment, ...]):
+    """The aliases are shared by every cell and, under xdist, by every worker,
+    so no call to them belongs to one test and none is cached: the matrix
+    exists to reach real providers."""
+    from models import ModelInfoBody, ModelNewBody
+
+    return proxy.register_models(
+        tuple(
+            ModelNewBody(
+                model_name=deployment.model_name,
+                litellm_params=deployment.litellm_params,
+                model_info=ModelInfoBody(),
+            )
+            for deployment in deployments
+        ),
         provider_live=True,
     )
 
@@ -618,7 +625,7 @@ def _compat_models_registered() -> Any:
     ``LITELLM_PROXY_URL``/``LITELLM_MASTER_KEY``) so unit-test runs
     stay hermetic.
 
-    Design note: we always attempt to register all 15 deployments,
+    Design note: we always attempt to register every deployment,
     regardless of what credentials are exported in the test-runner's
     shell. The credentials live in the proxy container's environment
     (via docker-compose ``env_file``), not the shell running pytest -
@@ -632,18 +639,14 @@ def _compat_models_registered() -> Any:
         yield
         return
 
+    from proxy_client import ModelNotRegistered, ModelRegistered
     from requests import RequestException
 
     proxy = _build_control_plane_client(proxy_config)
-    registered_ids: list[str] = []
-    failures: list[tuple[str, str]] = []
+    registrations = _register_deployments(proxy, load_all_deployments())
+    registered_ids = tuple(r.model_id for r in registrations if isinstance(r, ModelRegistered))
+    failures = tuple((r.model_name, r.reason) for r in registrations if isinstance(r, ModelNotRegistered))
     try:
-        for deployment in load_all_deployments():
-            try:
-                model_id = _register_deployment(proxy, deployment)
-                registered_ids.append(model_id)
-            except (AssertionError, RequestException) as exc:
-                failures.append((deployment.model_name, str(exc)))
         if failures:
             summary = "\n".join(
                 f"  - {name}: {reason}" for name, reason in failures

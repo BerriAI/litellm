@@ -1,5 +1,5 @@
 import types
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import litellm
@@ -31,7 +31,7 @@ class AmazonAnthropicConfig(AmazonInvokeConfig):
     def __init__(
         self,
         max_tokens_to_sample: int | None = None,
-        stop_sequences: list | None = None,
+        stop_sequences: Sequence[str] | None = None,
         temperature: float | None = None,
         top_k: int | None = None,
         top_p: int | None = None,
@@ -81,11 +81,11 @@ class AmazonAnthropicConfig(AmazonInvokeConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ):
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens_to_sample"] = value

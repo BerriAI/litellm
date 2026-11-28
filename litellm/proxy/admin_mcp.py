@@ -57,7 +57,9 @@ _RESERVED_KEY_HEADERS: Final = (
     | frozenset(name.decode("ascii") for name in _REQUEST_HEADERS - {b"authorization"})
 )
 _SETTINGS: Final = TypeAdapter(Mapping[str, object])
-_IDENTITY_MAPPINGS: Final = TypeAdapter(tuple[dict[str, object], ...] | dict[str, object] | None)
+_IDENTITY_MAPPINGS: Final[TypeAdapter[tuple[dict[str, object], ...] | dict[str, object] | None]] = TypeAdapter(
+    tuple[dict[str, object], ...] | dict[str, object] | None
+)
 _OAUTH_MAPPINGS: Final = TypeAdapter(dict[str, str])
 _ROUTE_GRANTS: Final = TypeAdapter(tuple[str, ...])
 
@@ -71,8 +73,12 @@ def _admin_route_allowed(auth: UserAPIKeyAuth, request: Request, method: str, pa
     return True
 
 
+def _scope_app(scope: Mapping[str, object]) -> object:
+    return scope["app"]
+
+
 def _admin_routes(request: Request) -> Iterator[tuple[tuple[str, str], APIRoute]]:
-    app: Final = request.app
+    app: Final = _scope_app(request.scope)
     if not isinstance(app, FastAPI):
         return
     for route in app.routes:

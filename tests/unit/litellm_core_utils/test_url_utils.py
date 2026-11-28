@@ -16,9 +16,48 @@ from litellm.litellm_core_utils.url_utils import (
     encode_url_path_segment,
     encode_url_path_segments,
     ensure_api_route,
+    is_https_url_with_host,
+    is_local_host,
+    is_loopback_host,
     join_api_base,
     validate_url,
 )
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    (
+        ("https://example.com/path", True),
+        ("http://example.com/path", False),
+        ("https:///path", False),
+        ("https://[", False),
+    ),
+)
+def test_is_https_url_with_host(url: str, expected: bool) -> None:
+    assert is_https_url_with_host(url) is expected
+
+
+@pytest.mark.parametrize(
+    ("host", "local", "loopback"),
+    (
+        ("localhost", True, True),
+        ("LOCALHOST.", True, True),
+        ("app.localhost", True, False),
+        ("127.0.0.1", True, True),
+        ("127.8.9.10", True, True),
+        ("[::1]", True, True),
+        ("::ffff:127.0.0.1", True, True),
+        ("0.0.0.0", True, True),
+        ("::", True, True),
+        ("10.20.30.40", False, False),
+        ("::ffff:10.20.30.40", False, False),
+        ("localhost.example.com", False, False),
+        ("proxy.example.com", False, False),
+        ("", False, False),
+    ),
+)
+def test_is_local_host_and_is_loopback_host(host: str, local: bool, loopback: bool) -> None:
+    assert (is_local_host(host), is_loopback_host(host)) == (local, loopback)
 
 
 @pytest.fixture

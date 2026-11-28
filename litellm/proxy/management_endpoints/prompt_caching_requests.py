@@ -14,9 +14,7 @@ from litellm.proxy.spend_tracking.savings import (
     marks_gateway_injection,
     prompt_caching_savings_for_request,
 )
-from litellm.proxy.spend_tracking.spend_tracking_utils import (
-    _query_raw_rows,  # pyright: ignore[reportPrivateUsage]  # existing typed spend-query adapter; rows validated below
-)
+from litellm.proxy.utils import query_raw_within_statement_timeout
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.prompt_caching_requests import (
@@ -158,7 +156,7 @@ async def get_prompt_caching_requests(
         else cursor_start_time
     )
     rows: Final = _REQUEST_ROWS.validate_python(
-        await _query_raw_rows(
+        await query_raw_within_statement_timeout(
             prisma_client,
             prompt_caching_requests_sql(filter),
             start.isoformat(),
@@ -166,8 +164,8 @@ async def get_prompt_caching_requests(
             page_size + 1,
             cursor_time.isoformat() if cursor_time is not None else None,
             cursor_request_id,
+            what="Prompt caching requests",
         )
-        or ()
     )
 
     def current_router() -> "Router | None":

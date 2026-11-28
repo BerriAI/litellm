@@ -23,6 +23,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     delta_event,
     duration_usage,
     error_event,
+    ignored_session_settings,
     json_object,
     parse_transcription_session_update,
     speech_event,
@@ -156,24 +157,22 @@ def _uses_endpoint_detection(update: TranscriptionSessionUpdate, drop_params: bo
     return uses_server_vad(update, "Soniox realtime", drop_params, SonioxProtocolError)
 
 
-def _ignored_settings(update: TranscriptionSessionUpdate) -> tuple[str, ...]:
-    vad_tuning: Final = (f"turn_detection.{key}" for key in sorted(update.turn_detection or {}) if key != "type")
-    return (*update.unsupported_transcription_keys, *vad_tuning)
-
-
 def build_start_request(
     model: str, update: TranscriptionSessionUpdate | None, options: SonioxRealtimeOptions, drop_params: bool = False
 ) -> SonioxStartRequest:
-    return SonioxStartRequest(
-        **options.model_dump(exclude={"language_hints"}),
-        language_hints=_language_hints(
-            None if update is None else update.language, options.language_hints, options.language_hints_strict
-        ),
-        model=model,
-        audio_format="pcm_s16le",
-        sample_rate=_sample_rate(update),
-        num_channels=1,
-        enable_endpoint_detection=update is None or _uses_endpoint_detection(update, drop_params),
+    configured_options: Final[Mapping[str, object]] = options.model_dump(exclude={"language_hints"})
+    return SonioxStartRequest.model_validate(
+        {
+            **configured_options,
+            "language_hints": _language_hints(
+                None if update is None else update.language, options.language_hints, options.language_hints_strict
+            ),
+            "model": model,
+            "audio_format": "pcm_s16le",
+            "sample_rate": _sample_rate(update),
+            "num_channels": 1,
+            "enable_endpoint_detection": update is None or _uses_endpoint_detection(update, drop_params),
+        }
     )
 
 
@@ -507,7 +506,7 @@ class SonioxRealtimeConfig(BaseRealtimeConfig):
             raise SonioxProtocolError("Soniox realtime takes OpenAI realtime events, and this message has no type")
         if event_type in SESSION_UPDATE_EVENT_TYPES:
             update: Final = parse_transcription_session_update(message, SonioxProtocolError)
-            ignored: Final = _ignored_settings(update)
+            ignored: Final = ignored_session_settings(update)
             if ignored:
                 verbose_logger.warning("Soniox realtime: ignoring unsupported session settings %s", ignored)
             return self._start(model, update)

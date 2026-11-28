@@ -36,6 +36,7 @@ from litellm.harness.errors import CapabilityUnsupported, HarnessError, OptionsM
 from litellm.harness.options import PiOptions, PiThinkingLevel
 from litellm.harness.types import (
     Capabilities,
+    Compaction,
     Event,
     Harness,
     PermissionMode,
@@ -225,6 +226,11 @@ class _MessageUpdate(_Frozen):
     delta: str = ""
 
 
+class _CompactionResult(_Frozen):
+    tokens_before: int | None = Field(default=None, alias="tokensBefore")
+    tokens_after: int | None = Field(default=None, alias="estimatedTokensAfter")
+
+
 @dataclass
 class PiStreamState:
     """What the parser has learned from one `pi --mode json` run."""
@@ -381,7 +387,7 @@ def build_models_json(model: str, base_url: str, thinking: PiThinkingLevel | Non
     # pi clamps --thinking to "off" unless the model declares reasoning, and offers xhigh/max only when
     # thinkingLevelMap names them. Declaring reasoning without a requested level would make pi send its
     # default reasoning_effort on every call, so it is declared only when a level is asked for
-    reasoning: Final = (
+    reasoning: Final[Mapping[str, object]] = (
         MappingProxyType({"reasoning": True, "thinkingLevelMap": PI_THINKING_LEVEL_MAP})
         if thinking is not None and thinking != "off"
         else MappingProxyType({})
@@ -542,6 +548,11 @@ class PiHarnessConfig(BaseCLIHarnessConfig[PiOptions, PiStreamState]):
             return _tool_start_events(line)
         if event_type == "tool_execution_end":
             return _tool_end_events(line)
+        if event_type in {"compaction_end", "auto_compaction_end"}:
+            if line.get("aborted") is True or line.get("result") is None:
+                return event_list()
+            compacted: Final = _CompactionResult.model_validate(line["result"])
+            return event_list(Compaction(tokens_before=compacted.tokens_before, tokens_after=compacted.tokens_after))
         if event_type == "agent_settled" and line.get("aborted") is True:
             state.mark_aborted()
         return event_list()

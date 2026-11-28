@@ -1,9 +1,9 @@
 class SnowflakeBase:
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         JWT: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Return headers to use for Snowflake completion request
 

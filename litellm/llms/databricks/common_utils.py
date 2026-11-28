@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -56,6 +57,7 @@ DATABRICKS_WORKSPACE_ROUTE_PREFIXES: Final = (
     DATABRICKS_AI_GATEWAY_MESSAGES_PATH,
 )
 DATABRICKS_NATIVE_MESSAGES_MODEL_PREFIXES: Final = ("databricks-claude-", "system.ai.claude-")
+DATABRICKS_HOSTED_MODEL_PREFIXES: Final = ("databricks-", "system.ai.")
 DATABRICKS_ENDPOINT_PATHS: Final = MappingProxyType(
     {
         "chat_completions": "/chat/completions",
@@ -142,8 +144,9 @@ class DatabricksBase:
                     redacted[key] = cls.redact_sensitive_data(value)
             return redacted
 
-        if isinstance(data, list):
-            return [cls.redact_sensitive_data(item) for item in data]
+        listed: Final = as_object_list(data)
+        if listed is not None:
+            return [cls.redact_sensitive_data(item) for item in listed]
 
         return data
 
@@ -164,7 +167,7 @@ class DatabricksBase:
         if not headers:
             return {}
 
-        redacted: Final = {}
+        redacted: Final[dict[str, str]] = {}
         sensitive_headers: Final = {
             "authorization",
             "x-api-key",
@@ -380,8 +383,8 @@ class DatabricksBase:
         return OAuthM2MToken.model_validate(response.json())
 
     def _get_databricks_credentials(
-        self, api_key: str | None, api_base: str | None, headers: dict | None
-    ) -> tuple[str, dict]:
+        self, api_key: str | None, api_base: str | None, headers: dict[str, str] | None
+    ) -> tuple[str, dict[str, str]]:
         """
         Get Databricks credentials using the Databricks SDK.
 
@@ -429,7 +432,7 @@ class DatabricksBase:
         api_base: str | None,
         endpoint_type: Literal["chat_completions", "embeddings", "anthropic_messages"],
         custom_endpoint: bool | None,
-        headers: dict | None,
+        headers: dict[str, str] | None,
         custom_user_agent: str | None = None,
     ) -> tuple[str, dict[str, str]]:  # mutable-ok: becomes the outbound headers
         """

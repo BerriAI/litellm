@@ -2,7 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to Amazon Nova's `/v1/chat/completions`
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -37,8 +37,8 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         max_tokens: int | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        tools: list | None = None,
-        reasoning_effort: list | None = None,
+        tools: Sequence[object] | None = None,
+        reasoning_effort: Sequence[object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = MappingProxyType(locals().copy())
         for key, value in locals_.items():
@@ -63,7 +63,7 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         key: Final = api_key or litellm.amazon_nova_api_key or get_secret_str("AMAZON_NOVA_API_KEY") or litellm.api_key
         return api_base, key
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "top_p",
             "temperature",
@@ -84,10 +84,10 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

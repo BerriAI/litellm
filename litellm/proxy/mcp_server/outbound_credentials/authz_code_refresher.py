@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Final, Protocol
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from fastapi import HTTPException
 
@@ -34,7 +35,32 @@ if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 ServerLookup = Callable[[str], "MCPServer | None"]
-TokenEndpointPost = Callable[[str, dict[str, str], dict[str, str]], Awaitable["dict[str, object] | None"]]
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizationCodeTokenSuccess:
+    body: dict[str, object] | None = None
+    tag: Literal["success"] = "success"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizationCodeTokenDenied:
+    status_code: int
+    body: dict[str, object]
+    detail: str
+    tag: Literal["denied"] = "denied"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizationCodeTokenUnreachable:
+    detail: str
+    tag: Literal["unreachable"] = "unreachable"
+
+
+AuthorizationCodeTokenOutcome: TypeAlias = (
+    AuthorizationCodeTokenSuccess | AuthorizationCodeTokenDenied | AuthorizationCodeTokenUnreachable
+)
+TokenEndpointPost: TypeAlias = Callable[[str, dict[str, str], dict[str, str]], Awaitable[AuthorizationCodeTokenOutcome]]
 
 
 class CredentialPersist(Protocol):
@@ -48,7 +74,8 @@ class CredentialPersist(Protocol):
         scopes: tuple[str, ...] | None,
         identity_binding_proof: str | None = None,
         cimd_client_id: str | None = None,
-    ) -> None: ...
+        refreshed_from: str | None = None,
+    ) -> bool | None: ...
 
 
 def _parse_expires_in(raw: object) -> int | None:
@@ -139,9 +166,14 @@ class AuthorizationCodeRefresher:
             "refresh_token": token.refresh_token,
             **token_request.body,
         }
-        body: Final = await self._token_endpoint(token_url, form, token_request.headers)
-        if body is None:
-            return None
+        outcome: Final = await self._token_endpoint(token_url, form, token_request.headers)
+        match outcome:
+            case AuthorizationCodeTokenUnreachable():
+                return None
+            case AuthorizationCodeTokenDenied():
+                return None
+            case AuthorizationCodeTokenSuccess():
+                body: Final = outcome.body or {}
         access_token: Final = body.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             return None
@@ -159,7 +191,7 @@ class AuthorizationCodeRefresher:
         granted_scopes: Final = _parse_scopes(body.get("scope"))
         scopes: Final = granted_scopes if granted_scopes is not None else token.scopes
 
-        await self._persist(
+        stored: Final = await self._persist(
             user_id,
             server_id,
             access_token,
@@ -168,7 +200,10 @@ class AuthorizationCodeRefresher:
             scopes,
             **({"identity_binding_proof": binding_proof} if binding_proof is not None else {}),
             **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
+            refreshed_from=token.refresh_token,
         )
+        if stored is False:
+            return None
         return OAuthToken(
             access_token=access_token,
             expires_at=self._clock() + expires_in if expires_in is not None else None,

@@ -1,0 +1,82 @@
+# A virtual key that names a user has that owner read natively. An owner whose row holds only
+# what describes it, or that has no row, still sends its key to Python, since the native spend log
+# charges no user yet. An owner that holds a limit or a budget goes to Python over that column,
+# and one whose metadata holds anything but SCIM's flag is not native, and so is an owner in the
+# key's team, whose membership budget the native app does not read.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+
+users:
+  plain: {user_alias: Ada, spend: 2}
+  capped: {max_budget: 10}
+  limited: {rpm_limit: 10}
+  tagged: {metadata: {tags: [a]}}
+  deactivated: {metadata: {scim_active: false}}
+
+teams:
+  squad: {}
+
+keys:
+  sk-plain: {user_id: plain}
+  sk-capped: {user_id: capped}
+  sk-limited: {user_id: limited}
+  sk-tagged: {user_id: tagged}
+  sk-deactivated: {user_id: deactivated}
+  sk-gone: {user_id: gone}
+  sk-member: {user_id: plain, team_id: squad}
+
+requests:
+  - name: a key whose owner holds nothing else
+    headers: {authorization: Bearer sk-plain}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: user
+
+  - name: a key whose owner has a budget
+    headers: {authorization: Bearer sk-capped}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: max_budget
+
+  - name: a key whose owner has a rate limit
+    headers: {authorization: Bearer sk-limited}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: rpm_limit
+
+  - name: a key whose owner holds metadata
+    headers: {authorization: Bearer sk-tagged}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a key whose owner SCIM deactivated
+    headers: {authorization: Bearer sk-deactivated}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: forbidden
+
+  - name: a key whose owner has no row
+    headers: {authorization: Bearer sk-gone}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: user
+
+  - name: a key in a team with an owner
+    headers: {authorization: Bearer sk-member}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native

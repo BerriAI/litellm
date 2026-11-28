@@ -2,13 +2,20 @@
 Azure Anthropic transformation config - extends AnthropicConfig with Azure authentication
 """
 
+from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, admitted_extra_body, request_extra_body
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
+
+_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def azure_anthropic_messages_url(api_base: str) -> str:
@@ -21,7 +28,9 @@ def azure_anthropic_messages_url(api_base: str) -> str:
     return join_api_base(anthropic_root, "anthropic/v1/messages")
 
 
-def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
+def _promote_extra_body_to_optional_params(
+    optional_params: dict[str, object], drop_params: object
+) -> AnthropicError | None:
     """Promote anthropic-native passthrough keys out of ``extra_body``.
 
     ``azure_ai`` is an OpenAI-compatible provider, so non-OpenAI kwargs like
@@ -29,14 +38,27 @@ def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
     ``add_provider_specific_params_to_optional_params``. For the Azure→Anthropic
     route those keys must reach the request body and be validated, so promote
     them. The caller's values overwrite mapped top-level duplicates, matching
-    the native ``anthropic`` provider, where the same passthrough lands on
-    top-level ``optional_params`` after mapping.
+    the native ``anthropic`` provider, and like it never replace the model,
+    messages, system prompt, tools, or stream flag litellm builds, or raise its max_tokens.
+    A ``system`` kwarg lands in ``extra_body`` the same way, so it is promoted as the
+    request field the native provider takes, which a system message still replaces.
     """
-    extra_body: Final = optional_params.get("extra_body")
-    if not isinstance(extra_body, dict) or not extra_body:
-        return
-    optional_params.update(extra_body)
+    params: Final = _PARAMS_ADAPTER.validate_python(optional_params)
+    extra_body: Final = request_extra_body(params.get("extra_body"))
+    if isinstance(extra_body, AnthropicError):
+        return extra_body
+    if not extra_body:
+        return None
+    admitted: Final = admitted_extra_body(
+        {key: value for key, value in extra_body.items() if key != "system"},
+        params,
+        drops_unsupported_params(drop_params),
+    )
+    if isinstance(admitted, AnthropicError):
+        return admitted
+    optional_params.update({**{key: value for key, value in extra_body.items() if key == "system"}, **admitted})
     optional_params.pop("extra_body", None)
+    return None
 
 
 class AzureAnthropicConfig(AnthropicConfig):
@@ -69,8 +91,6 @@ class AzureAnthropicConfig(AnthropicConfig):
         1. API key via 'api-key' header
         2. Azure AD token via 'Authorization: Bearer <token>' header
         """
-        _promote_extra_body_to_optional_params(optional_params)
-
         # Convert dict to GenericLiteLLMParams if needed
         if isinstance(litellm_params, dict):
             # Ensure api_key is included if provided
@@ -82,6 +102,10 @@ class AzureAnthropicConfig(AnthropicConfig):
             # Set api_key if provided and not already set
             if api_key and not litellm_params_obj.api_key:
                 litellm_params_obj.api_key = api_key
+
+        promotion_error: Final = _promote_extra_body_to_optional_params(optional_params, litellm_params_obj.drop_params)
+        if promotion_error is not None:
+            raise promotion_error
 
         # Use Azure authentication logic
         headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
@@ -98,13 +122,13 @@ class AzureAnthropicConfig(AnthropicConfig):
         )
 
         # Get anthropic headers (but we'll replace x-api-key with Azure auth)
-        anthropic_headers: Final = self.get_anthropic_headers(
+        anthropic_headers: Final[dict[str, str]] = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
             api_key=api_key or "",  # Azure auth is already in headers
             file_id_used=file_id_used,
-            is_vertex_request=optional_params.get("is_vertex_request", False),
+            is_vertex_request=optional_params.get("is_vertex_request", False) is True,
             user_anthropic_beta_headers=user_anthropic_beta_headers,
             mcp_server_used=mcp_server_used,
             thinking=optional_params.get("thinking"),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # optional_params is the base config's bare dict
@@ -123,17 +147,21 @@ class AzureAnthropicConfig(AnthropicConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform request using parent AnthropicConfig, then remove unsupported params.
         Azure Anthropic doesn't support extra_body, max_retries, or stream_options parameters.
         """
-        _promote_extra_body_to_optional_params(optional_params)
+        promotion_error: Final = _promote_extra_body_to_optional_params(
+            optional_params, _PARAMS_ADAPTER.validate_python(litellm_params).get("drop_params")
+        )
+        if promotion_error is not None:
+            raise promotion_error
 
-        data: Final = super().transform_request(
+        data: Final[dict[str, object]] = super().transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,

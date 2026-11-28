@@ -1,4 +1,5 @@
 import json
+import logging
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -9,7 +10,11 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.ollama.completion.handler import ollama_aembeddings, ollama_embeddings
+from litellm.llms.ollama.completion.handler import (
+    _process_ollama_embedding_response,
+    ollama_aembeddings,
+    ollama_embeddings,
+)
 from litellm.types.utils import EmbeddingResponse
 
 
@@ -119,6 +124,53 @@ def test_prompt_eval_fallback_when_missing(mock_embedding_response, mock_encodin
         assert response.usage.total_tokens == 5
         assert response.usage.completion_tokens == 0
         assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+@pytest.mark.parametrize(
+    ("use_encoding", "prompt_tokens", "level", "message"),
+    [
+        (True, 5, logging.DEBUG, "Ollama response missing prompt_eval_count; estimated with encoding."),
+        (False, 0, logging.WARNING, "Missing prompt_eval_count and no encoding provided; defaulted to 0."),
+    ],
+)
+def test_missing_prompt_eval_count_is_logged(
+    mock_encoding: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+    use_encoding: bool,
+    prompt_tokens: int,
+    level: int,
+    message: str,
+) -> None:
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        response: Final = _process_ollama_embedding_response(
+            response_json={"embeddings": [[0.1, 0.2]]},
+            prompts=["hello"],
+            model="nomic-embed-text",
+            model_response=EmbeddingResponse(),
+            encoding=mock_encoding if use_encoding else None,
+        )
+
+    assert response.usage.prompt_tokens == prompt_tokens
+    assert (level, message) in [(record.levelno, record.getMessage()) for record in caplog.records]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_sdk_embedding_without_prompt_eval_count_estimates_prompt_tokens(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    respx_mock.post("http://ollama.test/api/embed").respond(200, json={"embeddings": [[0.1, 0.2]]})
+
+    response: Final = (
+        await litellm.aembedding(model="ollama/nomic-embed-text", input=["hello"], api_base="http://ollama.test")
+        if asynchronous
+        else litellm.embedding(model="ollama/nomic-embed-text", input=["hello"], api_base="http://ollama.test")
+    )
+
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+    assert response.usage.prompt_tokens > 0
+    assert response.usage.total_tokens == response.usage.prompt_tokens
 
 
 @pytest.mark.parametrize(
@@ -310,3 +362,55 @@ async def test_sdk_embedding_rejects_non_string_batch(embedding_route: respx.Rou
             litellm.embedding(model="ollama/nomic-embed-text", input=[123], api_base="http://ollama.test")
 
     assert not embedding_route.called
+
+
+def test_ollama_embeddings_sends_extra_body_fields_at_the_documented_places(embedding_route: respx.Route) -> None:
+    response: Final = litellm.embedding(
+        model="ollama/nomic-embed-text",
+        input=["hello", "world"],
+        api_base="http://ollama.test",
+        extra_body={"truncate": False, "keep_alive": "5m", "options": {"num_ctx": 2048}},
+    )
+
+    assert json.loads(embedding_route.calls.last.request.content) == {
+        "model": "nomic-embed-text",
+        "input": ["hello", "world"],
+        "truncate": False,
+        "keep_alive": "5m",
+        "options": {"num_ctx": 2048},
+    }
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
+@pytest.mark.respx(assert_all_called=False)
+def test_sdk_embedding_looks_up_the_model_at_the_call_api_base_with_its_key(
+    embedding_route: respx.Route, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from litellm.utils import cached_get_model_info_helper
+
+    monkeypatch.setenv("OLLAMA_API_BASE", "http://ollama-default.test:11434")
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    default_lookups: Final = respx_mock.post("http://ollama-default.test:11434/api/show").respond(
+        200, json={"template": "", "model_info": {}}
+    )
+    call_lookups: Final = respx_mock.post("http://ollama.test/api/show", json={"name": "embed-probe"}).respond(
+        200, json={"template": "", "model_info": {}}
+    )
+    litellm.get_model_info.cache_clear()
+    cached_get_model_info_helper.cache_clear()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as success_logging:
+            monkeypatch.setattr("litellm.utils.executor", success_logging)
+            litellm.embedding(
+                model="ollama/embed-probe", input="hello", api_base="http://ollama.test", api_key="call-key"
+            )
+    finally:
+        litellm.get_model_info.cache_clear()
+        cached_get_model_info_helper.cache_clear()
+
+    assert embedding_route.called
+    assert call_lookups.called
+    assert {call.request.headers.get("authorization") for call in call_lookups.calls} == {"Bearer call-key"}
+    assert not default_lookups.called

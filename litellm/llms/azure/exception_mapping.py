@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -27,6 +28,7 @@ class AzureOpenAIExceptionMapping:
         provider_message: Final = (azure_error.get("message") if isinstance(azure_error, dict) else None) or message
         provider_type: Final = azure_error.get("type") if isinstance(azure_error, dict) else None
         provider_code: Final = azure_error.get("code") if isinstance(azure_error, dict) else None
+        provider_param: Final = azure_error.get("param")
 
         # Keep the OpenAI-style body fields populated so downstream (proxy + SDK)
         # can surface `type` / `code` correctly.
@@ -34,7 +36,7 @@ class AzureOpenAIExceptionMapping:
             "message": provider_message,
             "type": provider_type or "invalid_request_error",
             "code": provider_code or "content_policy_violation",
-            "param": None,
+            "param": provider_param,
         }
 
         raise ContentPolicyViolationError(
@@ -57,7 +59,7 @@ class AzureOpenAIExceptionMapping:
     @staticmethod
     def _extract_azure_error(
         original_exception: Exception,
-    ) -> tuple[dict[str, object], object]:
+    ) -> tuple[Mapping[str, object], object]:
         """Extract Azure OpenAI error payload and inner error details.
 
         Azure error formats can vary by endpoint/version. Common shapes:
@@ -70,7 +72,7 @@ class AzureOpenAIExceptionMapping:
             return {}, None
 
         # Some SDKs place the payload under "error".
-        azure_error: dict[str, object]
+        azure_error: Mapping[str, object]
         if isinstance(body_dict.get("error"), dict):
             azure_error = body_dict.get("error", {})
         else:

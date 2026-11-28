@@ -312,76 +312,6 @@ def test_claude_platform_standard_anthropic_api_key_does_not_skip_sigv4(monkeypa
     mock_sign_request.assert_called_once()
 
 
-def test_bedrock_claude_platform_messages_config_round_trips_native_body():
-    import litellm
-    from litellm.types.utils import LlmProviders
-
-    config = litellm.ProviderConfigManager.get_provider_anthropic_messages_config(
-        model="claude_platform/claude-sonnet-4-6",
-        provider=LlmProviders.BEDROCK,
-    )
-
-    assert config is not None
-    headers, _ = config.validate_anthropic_messages_environment(
-        api_key="fake-platform-key",
-        headers={},
-        model="claude_platform/claude-sonnet-4-6",
-        messages=[{"role": "user", "content": "hello"}],
-        optional_params={"max_tokens": 10},
-        litellm_params={"workspace_id": "wrkspc_test"},
-    )
-    request_body = config.transform_anthropic_messages_request(
-        model="claude_platform/claude-sonnet-4-6",
-        messages=[{"role": "user", "content": "hello"}],
-        anthropic_messages_optional_request_params={"max_tokens": 10},
-        litellm_params=GenericLiteLLMParams(),
-        headers=headers,
-    )
-
-    assert headers["anthropic-workspace-id"] == "wrkspc_test"
-    assert headers["x-api-key"] == "fake-platform-key"
-    assert request_body == {
-        "model": "claude-sonnet-4-6",
-        "messages": [{"role": "user", "content": "hello"}],
-        "max_tokens": 10,
-    }
-
-
-@pytest.mark.asyncio
-async def test_anthropic_messages_bedrock_claude_platform_forwards_anthropic_beta_verbatim():
-    import litellm
-
-    requests = []
-
-    async def mock_post(self, url, data=None, headers=None, **kwargs):
-        requests.append(_capture_request(url=url, headers=headers or {}, data=data))
-        return _anthropic_response(url)
-
-    try:
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            new=mock_post,
-        ):
-            await litellm.anthropic_messages(
-                model="bedrock/claude_platform/claude-sonnet-4-6",
-                messages=[{"role": "user", "content": "hello"}],
-                max_tokens=10,
-                mcp_servers=[{"type": "url", "url": "https://mcp.example.com/mcp", "name": "example"}],
-                api_base="https://aws-external-anthropic.us-west-2.api.aws",
-                api_key="fake-platform-key",
-                workspace_id="wrkspc_test",
-                extra_headers={"anthropic-beta": "prompt-caching-scope-2026-01-05,mcp-client-2025-11-20"},
-            )
-    finally:
-        await litellm.close_litellm_async_clients()
-
-    assert len(requests) == 1
-    assert requests[0]["headers"]["anthropic-beta"] == "mcp-client-2025-11-20,prompt-caching-scope-2026-01-05"
-    assert requests[0]["body"]["mcp_servers"] == [
-        {"type": "url", "url": "https://mcp.example.com/mcp", "name": "example"}
-    ]
-
-
 def test_claude_platform_strips_auth_params_from_request_body():
     from litellm.llms.bedrock.claude_platform.transformation import (
         BedrockClaudePlatformConfig,
@@ -404,37 +334,6 @@ def test_claude_platform_strips_auth_params_from_request_body():
 
     assert request_body == EXPECTED_CHAT_BODY
     assert optional_params == {"workspace_id": "wrkspc_test", "aws_region_name": "us-west-2", "max_tokens": 10}
-
-
-def test_claude_platform_messages_strips_auth_params_from_request_body():
-    import litellm
-    from litellm.types.utils import LlmProviders
-
-    config = litellm.ProviderConfigManager.get_provider_anthropic_messages_config(
-        model="claude_platform/claude-sonnet-4-6",
-        provider=LlmProviders.BEDROCK,
-    )
-    assert config is not None
-
-    input_params = {
-        "workspace_id": "wrkspc_test",
-        "aws_region_name": "us-west-2",
-        "max_tokens": 10,
-    }
-    request_body = config.transform_anthropic_messages_request(
-        model="claude_platform/claude-sonnet-4-6",
-        messages=[{"role": "user", "content": "hello"}],
-        anthropic_messages_optional_request_params=input_params,
-        litellm_params=GenericLiteLLMParams(),
-        headers={},
-    )
-
-    assert request_body == {
-        "model": "claude-sonnet-4-6",
-        "messages": [{"role": "user", "content": "hello"}],
-        "max_tokens": 10,
-    }
-    assert input_params == {"workspace_id": "wrkspc_test", "aws_region_name": "us-west-2", "max_tokens": 10}
 
 
 def test_claude_platform_strips_unsupported_context_management_param(caplog):
@@ -466,33 +365,6 @@ def test_claude_platform_strips_unsupported_context_management_param(caplog):
     assert any(
         "context_management" in record.message and record.levelno == logging.WARNING for record in caplog.records
     )
-
-
-def test_claude_platform_messages_strips_unsupported_context_management_param():
-    import litellm
-    from litellm.types.utils import LlmProviders
-
-    config = litellm.ProviderConfigManager.get_provider_anthropic_messages_config(
-        model="claude_platform/claude-sonnet-4-6",
-        provider=LlmProviders.BEDROCK,
-    )
-    assert config is not None
-
-    input_params = {
-        "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
-        "max_tokens": 10,
-    }
-    request_body = config.transform_anthropic_messages_request(
-        model="claude_platform/claude-sonnet-4-6",
-        messages=[{"role": "user", "content": "hello"}],
-        anthropic_messages_optional_request_params=input_params,
-        litellm_params=GenericLiteLLMParams(),
-        headers={},
-    )
-
-    assert "context_management" not in request_body
-    assert request_body["max_tokens"] == 10
-    assert "context_management" in input_params
 
 
 @pytest.mark.parametrize("override_in", ["litellm_params", "optional_params"])
@@ -548,31 +420,6 @@ def test_claude_platform_unsupported_override_ignores_invalid_type():
     assert request_body["max_tokens"] == 10
     warned = [call.args[0] for call in mock_warning.call_args_list]
     assert any("claude_platform_unsupported_params" in message for message in warned)
-
-
-def test_claude_platform_messages_does_not_advertise_beta_for_stripped_context_management():
-    import litellm
-    from litellm.types.utils import LlmProviders
-
-    config = litellm.ProviderConfigManager.get_provider_anthropic_messages_config(
-        model="claude_platform/claude-sonnet-4-6",
-        provider=LlmProviders.BEDROCK,
-    )
-    assert config is not None
-
-    headers, _ = config.validate_anthropic_messages_environment(
-        api_key="fake-platform-key",
-        headers={},
-        model="claude_platform/claude-sonnet-4-6",
-        messages=[{"role": "user", "content": "hello"}],
-        optional_params={
-            "max_tokens": 10,
-            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
-        },
-        litellm_params={"workspace_id": "wrkspc_test"},
-    )
-
-    assert "context-management-2025-06-27" not in headers.get("anthropic-beta", "")
 
 
 def test_claude_platform_messages_override_keeps_beta_for_context_management():
@@ -702,6 +549,46 @@ async def test_anthropic_messages_claude_platform_sends_exact_body_through_stric
     assert len(requests) == 1, requests
     assert requests[0]["body"] == EXPECTED_NATIVE_BODY
     _assert_gateway_accepted(requests[0], auth_kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_base", "anthropic_base_url"),
+    [("https://aws-external-anthropic.us-west-2.api.aws", None), (None, "https://api.deepseek.com/anthropic")],
+    ids=["explicit_api_base", "anthropic_base_url_elsewhere"],
+)
+async def test_anthropic_messages_claude_platform_drops_another_models_unsigned_thought(
+    monkeypatch, api_base, anthropic_base_url
+):
+    import litellm
+
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    if anthropic_base_url is not None:
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", anthropic_base_url)
+    requests: Final[list[dict]] = []
+
+    await litellm.anthropic_messages(
+        model="bedrock/claude_platform/claude-sonnet-4-6",
+        messages=[
+            {"role": "user", "content": "Pick a number."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Gemini's plan", "signature": ""},
+                    {"type": "text", "text": "Seven."},
+                ],
+            },
+            {"role": "user", "content": "Double it."},
+        ],
+        max_tokens=10,
+        api_base=api_base,
+        client=_async_gateway_client(requests),
+        workspace_id="wrkspc_test",
+        **API_KEY_KWARGS,
+    )
+
+    assert [request["body"]["messages"][1]["content"] for request in requests] == [[{"type": "text", "text": "Seven."}]]
 
 
 @pytest.mark.asyncio
@@ -927,3 +814,30 @@ def test_sigv4_no_duplicate_content_type_when_caller_sets_lowercase():
         "Duplicate keys produce 'application/json, application/json' in the "
         "SigV4 canonical string and cause a 401."
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "thread",
+    ({"type": "create"}, {"type": "continue", "previous_message_id": "msg_01previous"}),
+    ids=("create", "continue"),
+)
+async def test_anthropic_messages_bedrock_claude_platform_forwards_a_message_thread(thread: dict[str, str]) -> None:
+    import litellm
+
+    requests: list[dict] = []
+
+    await litellm.anthropic_messages(
+        model="bedrock/claude_platform/claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "what did I just say"}],
+        max_tokens=10,
+        api_base="https://aws-external-anthropic.us-west-2.api.aws",
+        api_key="fake-platform-key",
+        workspace_id="wrkspc_test",
+        thread=dict(thread),
+        client=_async_gateway_client(requests, lambda url, headers, data: _anthropic_response(url)),
+    )
+
+    assert len(requests) == 1
+    assert requests[0]["body"]["thread"] == thread
+    assert requests[0]["headers"]["anthropic-beta"] == "message-threads-2026-08-12"

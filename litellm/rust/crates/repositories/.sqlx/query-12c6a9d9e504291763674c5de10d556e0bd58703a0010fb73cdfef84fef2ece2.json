@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_AccessGroupTable\"\nSET assigned_team_ids = array_append(COALESCE(assigned_team_ids, ARRAY[]::text[]), $1)\nWHERE access_group_id = ANY ($2::text[])\n  AND NOT ($1 = ANY (COALESCE(assigned_team_ids, ARRAY[]::text[])))\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "12c6a9d9e504291763674c5de10d556e0bd58703a0010fb73cdfef84fef2ece2"
+}

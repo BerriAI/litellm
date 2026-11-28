@@ -75,6 +75,7 @@ class SpanRole(str, Enum):
     GUARDRAIL = "guardrail"
     DB_CALL = "db_call"
     SERVICE = "service"
+    BACKGROUND_JOB = "background_job"
 
 
 class LiteLLMSpanKind(str, Enum):
@@ -106,6 +107,7 @@ SPAN_REGISTRY: Final[dict[SpanRole, SpanSpec]] = {
     SpanRole.GUARDRAIL: SpanSpec(SpanRole.GUARDRAIL, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
     SpanRole.DB_CALL: SpanSpec(SpanRole.DB_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
     SpanRole.SERVICE: SpanSpec(SpanRole.SERVICE, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
+    SpanRole.BACKGROUND_JOB: SpanSpec(SpanRole.BACKGROUND_JOB, LiteLLMSpanKind.INTERNAL, parent=None),
 }
 
 
@@ -260,7 +262,18 @@ _PRISMA_VIEWS: Final[frozenset[str]] = frozenset(
 )
 _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
     (
+        "LiteLLM_Alert",
+        "LiteLLM_PerformanceAlertState",
         "LiteLLM_BudgetTable",
+        "LiteLLM_CustomerOrganizationTable",
+        "LiteLLM_CustomerTeamTable",
+        "LiteLLM_CustomerMemberTable",
+        "LiteLLM_CustomerBudgetIncreaseRequest",
+        "LiteLLM_AppTable",
+        "LiteLLM_AppGroupTable",
+        "LiteLLM_AppGroupCustomerOrgTable",
+        "LiteLLM_AppCustomerOrgTable",
+        "LiteLLM_AppCustomerMemberTable",
         "LiteLLM_CredentialsTable",
         "LiteLLM_ProxyModelTable",
         "LiteLLM_AgentsTable",
@@ -292,6 +305,8 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_SpendLogs",
         "LiteLLM_BudgetWindowSpend",
         "LiteLLM_BackgroundInteractionSettlement",
+        "LiteLLM_BackgroundResponseSettlement",
+        "LiteLLM_BackgroundResponseCreator",
         "LiteLLM_ErrorLogs",
         "LiteLLM_UserNotifications",
         "LiteLLM_UserProviderCredentials",
@@ -302,9 +317,11 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_DailyUserSpend",
         "LiteLLM_DailyGlobalSpend",
         "LiteLLM_DailyOrganizationSpend",
+        "LiteLLM_DailyCustomerMemberSpend",
         "LiteLLM_DailyEndUserSpend",
         "LiteLLM_DailyAgentSpend",
         "LiteLLM_DailyTeamSpend",
+        "LiteLLM_DailyCustomerMemberSpend",
         "LiteLLM_DailyTagSpend",
         "LiteLLM_ProxyWorkerHeartbeat",
         "LiteLLM_CronJob",
@@ -327,6 +344,7 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_PromptTable",
         "LiteLLM_HealthCheckTable",
         "LiteLLM_SearchToolsTable",
+        "LiteLLM_ScheduledJobRun",
         "LiteLLM_SSOConfig",
         "LiteLLM_ManagedVectorStoreIndexTable",
         "LiteLLM_CacheConfig",
@@ -338,9 +356,12 @@ _PRISMA_MODELS: Final[frozenset[str]] = frozenset(
         "LiteLLM_ToolTable",
         "LiteLLM_TelemetryReport",
         "LiteLLM_AccessGroupTable",
-        "LiteLLM_AccountingDelivery",
-        "LiteLLM_AccountingEvent",
+        "LiteLLM_SpendLogDelivery",
         "LiteLLM_ClaudeCodePluginTable",
+        "LiteLLM_ClaudeCodePluginUpload",
+        "LiteLLM_ClaudeCodePluginVersion",
+        "LiteLLM_SkillSubmission",
+        "LiteLLM_ClaudeCodePluginDownload",
         "LiteLLM_MemoryTable",
         "LiteLLM_AdaptiveRouterState",
         "LiteLLM_AdaptiveRouterSession",

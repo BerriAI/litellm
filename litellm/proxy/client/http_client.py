@@ -1,10 +1,13 @@
 """HTTP client for making requests to the LiteLLM proxy server."""
 
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Final
 
 import requests
+from pydantic import TypeAdapter
 from typing_extensions import TypedDict, Unpack
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _RequestOptions(TypedDict, total=False, extra_items=object):
@@ -32,10 +35,10 @@ class HTTPClient:
         uri: str,
         *,
         data: Mapping[str, object] | list | bytes | None = None,
-        json: Mapping[str, object] | list | None = None,
+        json: object = None,
         headers: dict[str, str] | None = None,
         **kwargs: Unpack[_RequestOptions],
-    ) -> Any:
+    ) -> object:
         """Make an HTTP request to the LiteLLM proxy server.
 
         This method is used to make generic requests to the LiteLLM proxy
@@ -79,7 +82,7 @@ class HTTPClient:
         url: Final = f"{self._base_url}/{uri.lstrip('/')}"
 
         # Prepare headers
-        request_headers: Final = {}
+        request_headers: Final[dict[str, str]] = {}
         if headers:
             request_headers.update(headers)
         if self._api_key:
@@ -99,4 +102,4 @@ class HTTPClient:
         response.raise_for_status()
 
         # Parse and return JSON response
-        return response.json()
+        return _DECODED_JSON.validate_python(response.json())

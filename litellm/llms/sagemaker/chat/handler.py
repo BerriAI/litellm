@@ -1,21 +1,30 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from copy import deepcopy
-from typing import Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 import httpx
 
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
+from litellm.llms.bedrock.web_identity_session_policy import SAGEMAKER_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import ModelResponse, get_secret
 
 from ..common_utils import AWSEventStreamDecoder
 from .transformation import SagemakerChatConfig
 
+if TYPE_CHECKING:
+    from botocore.credentials import Credentials
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
 
 class SagemakerChatHandler(BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = SAGEMAKER_SESSION_POLICY
+
     def _load_credentials(
         self,
         optional_params: dict,
@@ -47,12 +56,12 @@ class SagemakerChatHandler(BaseAWSLLM):
 
     def _prepare_request(
         self,
-        credentials,
+        credentials: "Credentials",
         model: str,
-        data: dict,
+        data: Mapping[str, object],
         optional_params: dict,
         aws_region_name: str,
-        extra_headers: dict | None = None,
+        extra_headers: Mapping[str, str] | None = None,
     ):
         ensure_optional_import("botocore")
         from botocore.auth import SigV4Auth
@@ -87,16 +96,16 @@ class SagemakerChatHandler(BaseAWSLLM):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        logging_obj,
-        optional_params: dict,
-        litellm_params: dict,
+        print_verbose: Callable[..., object],
+        encoding: object,
+        logging_obj: "LiteLLMLoggingObj",
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         timeout: float | httpx.Timeout | None = None,
         custom_prompt_dict={},
-        logger_fn=None,
+        logger_fn: object = None,
         acompletion: bool = False,
         headers: dict = {},
         client: HTTPHandler | AsyncHTTPHandler | None = None,

@@ -128,6 +128,22 @@ async def test_a_replayed_stream_keeps_the_cached_completion_tokens_details(repl
     assert rebuilt.usage.completion_tokens_details.text_tokens == 3
 
 
+@pytest.mark.parametrize("content", ["", "Hello world! How are you?"], ids=["single_frame", "sliced"])
+@pytest.mark.parametrize("replay", ["async", "sync"])
+@pytest.mark.asyncio
+async def test_a_replayed_stream_carries_the_cached_vllm_prompt_fields_on_its_first_chunk_only(replay, content):
+    prompt_fields: Final = {"prompt_token_ids": [151644, 872, 198], "prompt_text": "<|im_start|>user\nhi"}
+    cached: Final = {**_async_payload(content=content), **prompt_fields}
+
+    chunks = await _collect_async(cached) if replay == "async" else list(convert_to_streaming_response(cached))
+    rebuilt = litellm.stream_chunk_builder(chunks=chunks)
+
+    assert [chunk.model_dump(include=set(prompt_fields)) for chunk in chunks] == [prompt_fields] + [{}] * (
+        len(chunks) - 1
+    )
+    assert rebuilt.model_dump(include=set(prompt_fields)) == prompt_fields
+
+
 @pytest.mark.parametrize("cached_fields", [7, [1, 2], "", "x" * 5000], ids=["int", "list", "empty", "long"])
 @pytest.mark.asyncio
 async def test_the_async_replay_ignores_cached_provider_fields_that_are_not_an_object(cached_fields):
@@ -563,7 +579,7 @@ async def test_a_cached_answer_streams_its_tool_call_after_the_reasoning_and_the
     assert reasoning and max(reasoning) < min(text)
     assert called == [max(text) + 1]
     assert deltas[called[0]]["tool_calls"] == [tool_call]
-    assert deltas[-1]["finish"] == "stop"
+    assert [delta["finish"] for delta in deltas if delta["finish"]] == ["tool_calls"]
 
 
 @pytest.mark.asyncio
@@ -586,7 +602,7 @@ async def test_a_cached_tool_turn_without_text_streams_the_reasoning_before_the_
     assert "".join(str(deltas[i]["reasoning_content"]) for i in reasoning) == "I need the basket totals"
     assert reasoning and called and max(reasoning) < min(called)
     assert [deltas[i]["tool_calls"] for i in called] == [[tool_call]]
-    assert deltas[-1]["finish"] == "stop"
+    assert [delta["finish"] for delta in deltas if delta["finish"]] == ["tool_calls"]
 
 
 @pytest.mark.asyncio
@@ -610,4 +626,4 @@ async def test_a_cached_tool_turn_keeps_its_whitespace_only_text_between_the_rea
     assert "".join(str(deltas[i]["content"]) for i in text) == whitespace
     assert reasoning and text and called and max(reasoning) < min(text) and max(text) < min(called)
     assert [deltas[i]["tool_calls"] for i in called] == [[tool_call]]
-    assert deltas[-1]["finish"] == "stop"
+    assert [delta["finish"] for delta in deltas if delta["finish"]] == ["tool_calls"]

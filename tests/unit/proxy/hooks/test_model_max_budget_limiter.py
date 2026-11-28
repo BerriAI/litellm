@@ -12,6 +12,8 @@ import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
 from litellm.proxy.hooks.model_budget_shared_windows import DatabaseSharedWindows, SharedWindows
@@ -26,7 +28,9 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.router import Router
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.utils import LiteLLMBatch, Usage
+from litellm.types.utils import LiteLLMBatch, LiteLLMRealtimeStreamLoggingObject, ModelResponse, Usage
+from litellm.types.videos.main import VideoObject
+from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 
 KEY_HASH: Final = "key-hash-batch"
 USER_ID: Final = "user-batch"
@@ -47,6 +51,7 @@ def _batch(batch_id: str, status: str) -> LiteLLMBatch:
         input_file_id="file-batch",
         object="batch",
         status=status,
+        output_file_id="file-output",
         usage=Usage(prompt_tokens=20, completion_tokens=18, total_tokens=38),
     )
 
@@ -57,12 +62,14 @@ def _event(
     team_member_model_max_budget: Mapping[str, object] | None = None,
     user_id: str = USER_ID,
     team_id: str = TEAM_ID,
+    guardrail_information: tuple[Mapping[str, object], ...] = (),
 ) -> dict[str, object]:
     return {
         "call_type": call_type,
         "standard_logging_object": {
             "call_type": call_type,
             "response_cost": response_cost,
+            "guardrail_information": guardrail_information,
             "model": "openai/gpt-5.4-mini",
             "model_group": MODEL_GROUP,
             "metadata": {
@@ -144,6 +151,64 @@ async def test_team_member_budget_is_charged_and_enforced_after_success():
             team_member_model_max_budget=budget,
             model=MODEL_GROUP,
         )
+
+
+@pytest.mark.asyncio
+async def test_a_failure_the_provider_billed_uses_up_the_key_model_budget():
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await limiter.async_log_failure_event(
+        _event("anthropic_messages", CHAT_COST), response_obj=None, start_time=None, end_time=None
+    )
+
+    with pytest.raises(litellm.BudgetExceededError, match=f"exceeded budget for model={MODEL_GROUP}"):
+        await limiter.is_key_within_model_budget(
+            _key({MODEL_GROUP: {"max_budget": 0.0001, "budget_duration": "1d"}}), MODEL_GROUP
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_retry_counts_the_follow_up_its_failure_already_billed_once_toward_the_key_model_budget():
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="key-model-retry",
+        function_id="key-model-retry",
+        dynamic_async_success_callbacks=[limiter],
+        dynamic_async_failure_callbacks=[limiter],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o-mini",
+        user="",
+        optional_params={},
+        litellm_params={
+            "metadata": {
+                "model_group": MODEL_GROUP,
+                "user_api_key_hash": KEY_HASH,
+                "user_api_key_model_max_budget": {MODEL_GROUP: {"budget_limit": 10.0, "time_period": "1d"}},
+            }
+        },
+        custom_llm_provider="openai",
+    )
+    earlier_attempt: Final = (Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500), 0.5)
+    served: Final = ModelResponse(model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    now: Final = datetime.now()
+
+    logging_obj.record_served_rounds_for_failure((earlier_attempt,))
+    await logging_obj.async_failure_handler(Exception("the agentic follow-up failed"), "", now, now)
+    logging_obj.carry_failed_attempt_usage()
+    await logging_obj.async_success_handler(served, now, now)
+
+    spend_key: Final = model_budget_spend_cache_key(
+        entity_type=Litellm_EntityType.KEY, entity_id=KEY_HASH, budget_model=MODEL_GROUP, budget_duration="1d"
+    )
+    assert await _spend(limiter, spend_key) == pytest.approx(
+        earlier_attempt[1] + litellm.completion_cost(served, model="gpt-4o-mini")
+    )
 
 
 def test_team_member_budget_entity_id_is_unambiguous():
@@ -326,6 +391,57 @@ async def test_a_batch_polled_within_every_budget_window_is_never_charged_again(
     assert _local_spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST)
 
 
+async def _poll_video(
+    limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, video_id: str, status: str, response_cost: float
+) -> None:
+    await _log_success(
+        limiter,
+        {**_event("avideo_status", response_cost), POLLED_VIDEO_STATUS_KWARG: status},
+        response_obj=VideoObject(id=video_id, object="video", status=status),
+    )
+
+
+@pytest.mark.asyncio
+async def test_polls_of_a_finished_video_charge_each_per_model_budget_once():
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _poll_video(limiter, "video_first", "in_progress", response_cost=0)
+    for _ in range(3):
+        await _poll_video(limiter, "video_first", "completed", response_cost=BATCH_COST)
+    await _poll_video(limiter, "video_second", "completed", response_cost=BATCH_COST)
+    await _poll(limiter, _batch("video_first", "completed"), response_cost=BATCH_COST)
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(3 * BATCH_COST)
+    assert await _spend(limiter, USER_SPEND_KEY) == pytest.approx(3 * BATCH_COST)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "polled", "guardrail_charges"),
+    (
+        ("avideo_status", lambda status: VideoObject(id="job_first", object="video", status=status), 4),
+        ("aretrieve_batch", lambda status: _batch("job_first", status), 1),
+    ),
+)
+async def test_only_the_finished_poll_pays_the_job_and_only_a_video_repoll_pays_its_guardrail(
+    call_type, polled, guardrail_charges
+):
+    """A running video poll pays its guardrail like any request, while a batch retrieve before its cost is final
+    charges nothing, as key spend defers it, so the retrieve that settles the batch pays the only guardrail."""
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    guardrail_cost: Final = 0.01
+    priced: Final = ({"guardrail_name": "priced", "guardrail_cost": guardrail_cost},)
+
+    def poll(status: str, response_cost: float) -> dict[str, object]:
+        return {**_event(call_type, response_cost, guardrail_information=priced), POLLED_VIDEO_STATUS_KWARG: status}
+
+    await _log_success(limiter, poll("in_progress", guardrail_cost), polled("in_progress"))
+    for _ in range(3):
+        await _log_success(limiter, poll("completed", BATCH_COST + guardrail_cost), polled("completed"))
+
+    assert await _spend(limiter, KEY_SPEND_KEY) == pytest.approx(BATCH_COST + guardrail_charges * guardrail_cost)
+
+
 OPUS_GROUP: Final = "claude-opus"
 OPUS_GROUP_MEMBERS: Final = MappingProxyType(
     {"claude-opus-4-8": frozenset({OPUS_GROUP}), "claude-opus-5-5": frozenset({OPUS_GROUP})}
@@ -431,6 +547,91 @@ def _key(model_max_budget: Mapping[str, object]) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(token=KEY_HASH, key_alias="opus-family", model_max_budget=dict(model_max_budget))
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("key", "team"))
+@pytest.mark.parametrize("prefix", ("", "anthropic/"))
+@pytest.mark.parametrize("budget_alias", (False, True))
+async def test_latest_alias_is_blocked_by_either_model_budget(scope: str, prefix: str, budget_alias: bool) -> None:
+    target: Final = get_model_latest_aliases()["anthropic"]["claude-opus-latest"]
+    name: Final = "claude-opus-latest" if budget_alias else target
+    budget: Final = {f"{prefix}{name}": {"max_budget": 0, "budget_duration": "1d"}}
+    limiter: Final = _family_limiter()
+    admission: Final = (
+        limiter.is_key_within_model_budget(_key(budget), "anthropic/claude-opus-latest")
+        if scope == "key"
+        else limiter.is_team_within_model_budget(TEAM_ID, budget, None, "anthropic/claude-opus-latest")
+    )
+    with pytest.raises(litellm.BudgetExceededError, match="exceeded budget"):
+        await admission
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ("anthropic/claude-opus-5-5", "anthropic/unknown-model"))
+async def test_latest_alias_budget_does_not_govern_other_requests(model: str) -> None:
+    limiter: Final = _family_limiter()
+    budget: Final = {"anthropic/claude-opus-latest": {"max_budget": 0, "budget_duration": "1d"}}
+    assert await limiter.is_key_within_model_budget(_key(budget), model)
+    assert await limiter.is_team_within_model_budget(TEAM_ID, budget, None, model)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", (Litellm_EntityType.KEY, Litellm_EntityType.TEAM))
+@pytest.mark.parametrize(
+    "entries",
+    (
+        ("anthropic/claude-opus-latest", "claude-opus-5-5"),
+        ("claude-opus*",),
+        ("anthropic/claude-opus-5-5",),
+        ("claude-opus-5-5",),
+    ),
+)
+@pytest.mark.parametrize("requested", ("anthropic/claude-opus-latest", "anthropic/claude-opus-5-5"))
+async def test_latest_alias_spend_charges_each_governing_counter_once(
+    scope: Litellm_EntityType, entries: tuple[str, ...], requested: str
+) -> None:
+    budget: Final = {entry: FAMILY_CAP for entry in entries}
+    cache: Final = DualCache()
+    limiter: Final = _family_limiter(dual_cache=cache)
+    await _log_success(
+        limiter,
+        {
+            "call_type": "acompletion",
+            "standard_logging_object": {
+                "model": "claude-opus-5-5",
+                "model_group": requested,
+                "response_cost": CHAT_COST,
+                "metadata": {"user_api_key_hash": KEY_HASH, "user_api_key_team_id": TEAM_ID},
+            },
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_model_max_budget": budget if scope == Litellm_EntityType.KEY else {},
+                    "user_api_key_team_model_max_budget": budget if scope == Litellm_EntityType.TEAM else {},
+                }
+            },
+        },
+    )
+    for entry in entries:
+        spend_key: Final = model_budget_spend_cache_key(
+            entity_type=scope,
+            entity_id=KEY_HASH if scope == Litellm_EntityType.KEY else TEAM_ID,
+            budget_model=entry,
+            budget_duration="1d",
+        )
+        expected: Final = (
+            CHAT_COST
+            if requested == "anthropic/claude-opus-latest" or entry != "anthropic/claude-opus-latest"
+            else None
+        )
+        assert await cache.async_get_cache(spend_key, local_only=True) == expected
+    admission: Final = (
+        limiter.is_key_within_model_budget(_key(budget), requested)
+        if scope == Litellm_EntityType.KEY
+        else limiter.is_team_within_model_budget(TEAM_ID, budget, None, requested)
+    )
+    with pytest.raises(litellm.BudgetExceededError, match="exceeded budget"):
+        await admission
+
+
 async def _spend_on(
     limiter: PROXY_VirtualKeyModelMaxBudgetLimiter, model: str, model_max_budget: Mapping[str, object]
 ) -> None:
@@ -464,6 +665,51 @@ async def test_every_opus_version_draws_from_one_family_entry(family_entry: str)
     ):
         await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-5-5")
     assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-sonnet-5")
+
+
+ALIASED_GROUP: Final = "claude-bedrock-opus-4-8"
+GROUP_ALIASES: Final = ("opus", "claude-opus-4-8")
+
+
+def _router_with_global_aliases() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": ALIASED_GROUP,
+                "litellm_params": {"model": "anthropic/claude-opus-4-8", "api_key": "sk-test"},
+            }
+        ],
+        model_group_alias={alias: ALIASED_GROUP for alias in GROUP_ALIASES},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spent_under", [ALIASED_GROUP, *GROUP_ALIASES])
+async def test_a_model_group_entry_gates_and_charges_its_global_aliases(
+    monkeypatch: pytest.MonkeyPatch, spent_under: str
+):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _router_with_global_aliases())
+    budget: Final = {ALIASED_GROUP: FAMILY_CAP}
+    limiter: Final = _family_limiter()
+
+    await _spend_on(limiter, model=spent_under, model_max_budget=budget)
+
+    for requested in (ALIASED_GROUP, *GROUP_ALIASES):
+        with pytest.raises(litellm.BudgetExceededError, match=rf"model={re.escape(requested)}$"):
+            await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model=requested)
+
+
+@pytest.mark.asyncio
+async def test_an_entry_named_after_a_global_alias_still_governs_that_alias(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _router_with_global_aliases())
+    budget: Final = {ALIASED_GROUP: FAMILY_CAP, "opus": ROOMY_CAP}
+    limiter: Final = _family_limiter()
+
+    await _spend_on(limiter, model=ALIASED_GROUP, model_max_budget=budget)
+
+    assert await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="opus")
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_key_within_model_budget(user_api_key_dict=_key(budget), model="claude-opus-4-8")
 
 
 @pytest.mark.asyncio
@@ -660,9 +906,10 @@ async def test_spend_charged_while_the_database_is_unreachable_reaches_the_share
         shared_windows=database.replica(),
     )
     assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 3, 4)
-    assert usage["claude-opus*"]["budget_reset_at"] == datetime.fromtimestamp(
-        WINDOW_EPOCH + 24 * 3600, tz=timezone.utc
-    ).isoformat()
+    assert (
+        usage["claude-opus*"]["budget_reset_at"]
+        == datetime.fromtimestamp(WINDOW_EPOCH + 24 * 3600, tz=timezone.utc).isoformat()
+    )
 
 
 @pytest.mark.asyncio
@@ -715,7 +962,9 @@ def test_an_access_group_named_after_a_served_model_never_widens_that_models_ent
         resolved: Final = resolve_model_budget(
             model="gpt-4o-mini",
             model_max_budget=model_max_budget,
-            model_access_groups=lambda model, team_id: model_access_groups_of(router=router, model=model, team_id=team_id),
+            model_access_groups=lambda model, team_id: model_access_groups_of(
+                router=router, model=model, team_id=team_id
+            ),
         )
         return None if resolved is None else resolved.budget_model
 
@@ -889,3 +1138,233 @@ async def test_concurrent_first_charges_on_one_replica_both_count():
         shared_windows=_WindowSpendDatabase().replica(),
     )
     assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 2, 4)
+
+
+@pytest.mark.asyncio
+async def test_a_live_session_charges_a_delegated_response_to_the_delegated_models_budget():
+    delegated: Final = {
+        "type": "response.event",
+        "event": {
+            "type": "response.completed",
+            "response": {
+                "id": "resp-1",
+                "model": "gpt-4o-mini",
+                "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+            },
+        },
+    }
+    delegated_cost: Final = (
+        1000 * litellm.model_cost["gpt-4o-mini"]["input_cost_per_token"]
+        + 500 * litellm.model_cost["gpt-4o-mini"]["output_cost_per_token"]
+    )
+    voice_cost: Final = 0.02
+    budget: Final = {"budget_limit": 1.0, "time_period": "1d"}
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "_arealtime",
+            "custom_llm_provider": "openai",
+            "standard_logging_object": {
+                "call_type": "_arealtime",
+                "response_cost": voice_cost + delegated_cost,
+                "model": "gpt-live-1",
+                "model_group": "gpt-live-1",
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {
+                "metadata": {"user_api_key_model_max_budget": {"gpt-live-1": budget, "gpt-4o-mini": budget}}
+            },
+        },
+        response_obj=LiteLLMRealtimeStreamLoggingObject(
+            usage=Usage(), results=[{"type": "session.closed", "usage": {"seconds": 12}}, delegated]
+        ),
+    )
+
+    assert {
+        model: await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{model}:1d")
+        for model in ("gpt-live-1", "gpt-4o-mini")
+    } == {"gpt-live-1": pytest.approx(voice_cost), "gpt-4o-mini": pytest.approx(delegated_cost)}
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_response_is_charged_to_every_budgeted_group_that_calls_its_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    groups: Final = ("a-shared", "z-capped", "team-capped")
+    calls_the_model: Final = {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {"model_name": "a-shared", "litellm_params": calls_the_model},
+                {"model_name": "z-capped", "litellm_params": calls_the_model},
+                {"model_name": "flagship", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"}},
+                {
+                    "model_name": f"model_name_{TEAM_ID}_capped",
+                    "litellm_params": calls_the_model,
+                    "model_info": {"team_id": TEAM_ID, "team_public_model_name": "team-capped"},
+                },
+            ]
+        ),
+    )
+    delegated_cost: Final = (
+        1000 * litellm.model_cost["gpt-4o-mini"]["input_cost_per_token"]
+        + 500 * litellm.model_cost["gpt-4o-mini"]["output_cost_per_token"]
+    )
+    budget: Final = {"budget_limit": 1.0, "time_period": "1d"}
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "_arealtime",
+            "custom_llm_provider": "openai",
+            "standard_logging_object": {
+                "call_type": "_arealtime",
+                "response_cost": delegated_cost,
+                "model": "gpt-live-1",
+                "model_group": "gpt-live-1",
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {
+                "metadata": {"user_api_key_model_max_budget": dict.fromkeys((*groups, "flagship"), budget)}
+            },
+        },
+        response_obj=LiteLLMRealtimeStreamLoggingObject(
+            usage=Usage(),
+            results=[
+                {
+                    "type": "response.event",
+                    "event": {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp-1",
+                            "model": "gpt-4o-mini",
+                            "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+                        },
+                    },
+                }
+            ],
+        ),
+    )
+
+    assert {
+        group: await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{group}:1d") for group in (*groups, "flagship")
+    } == {**{group: pytest.approx(delegated_cost) for group in groups}, "flagship": 0.0}
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_response_is_charged_once_to_a_budget_that_covers_several_of_its_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    groups: Final = ("a-shared", "z-capped", "team-capped")
+    calls_the_model: Final = {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {"model_name": "a-shared", "litellm_params": calls_the_model},
+                {"model_name": "z-capped", "litellm_params": calls_the_model},
+                {
+                    "model_name": f"model_name_{TEAM_ID}_capped",
+                    "litellm_params": calls_the_model,
+                    "model_info": {"team_id": TEAM_ID, "team_public_model_name": "team-capped"},
+                },
+            ]
+        ),
+    )
+    delegated_cost: Final = (
+        1000 * litellm.model_cost["gpt-4o-mini"]["input_cost_per_token"]
+        + 500 * litellm.model_cost["gpt-4o-mini"]["output_cost_per_token"]
+    )
+    budget: Final = {"budget_limit": 1.0, "time_period": "1d"}
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "_arealtime",
+            "custom_llm_provider": "openai",
+            "standard_logging_object": {
+                "call_type": "_arealtime",
+                "response_cost": delegated_cost,
+                "model": "gpt-live-1",
+                "model_group": "gpt-live-1",
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {"metadata": {"user_api_key_model_max_budget": {"*": budget}}},
+        },
+        response_obj=LiteLLMRealtimeStreamLoggingObject(
+            usage=Usage(),
+            results=[
+                {
+                    "type": "response.event",
+                    "event": {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp-1",
+                            "model": "gpt-4o-mini",
+                            "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+                        },
+                    },
+                }
+            ],
+        ),
+    )
+
+    assert await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:*:1d") == pytest.approx(delegated_cost)
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_response_is_charged_at_the_regional_price_of_its_session():
+    model: Final = next(
+        name
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == "openai"
+        and info.get("mode") == "chat"
+        and info.get("regional_processing_uplift_multiplier_eu", 1.0) > 1.0
+    )
+    regional_cost: Final = litellm.model_cost[model]["regional_processing_uplift_multiplier_eu"] * (
+        1000 * litellm.model_cost[model]["input_cost_per_token"]
+        + 500 * litellm.model_cost[model]["output_cost_per_token"]
+    )
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "_arealtime",
+            "custom_llm_provider": "openai",
+            "standard_logging_object": {
+                "call_type": "_arealtime",
+                "response_cost": regional_cost,
+                "model": "gpt-live-1",
+                "model_group": "gpt-live-1",
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {
+                "data_residency": "eu",
+                "metadata": {"user_api_key_model_max_budget": {model: {"budget_limit": 1.0, "time_period": "1d"}}},
+            },
+        },
+        response_obj=LiteLLMRealtimeStreamLoggingObject(
+            usage=Usage(),
+            results=[
+                {
+                    "type": "response.event",
+                    "event": {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp-1",
+                            "model": model,
+                            "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+                        },
+                    },
+                }
+            ],
+        ),
+    )
+
+    assert await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{model}:1d") == pytest.approx(regional_cost), model

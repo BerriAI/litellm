@@ -1,6 +1,6 @@
 import asyncio
 from unittest.mock import Mock
-from litellm.proxy.utils import get_redoc_url, get_docs_url
+from typing import Final
 
 import pytest
 from fastapi import Request
@@ -12,7 +12,10 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import httpx
 import math
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_ROWS
-from litellm.proxy.utils import update_spend
+from litellm.proxy.db import baseline_accounting
+from litellm.proxy.spend_tracking.baseline_accounting import BaselineObservation
+from litellm.proxy.spend_tracking.savings import BaselineCostSnapshot
+from litellm.proxy.utils import update_spend, update_spend_logs_job
 
 # The flush chunks the queue by BATCH_SIZE and then splits each chunk by the row
 # budget, so statement counts below are derived from both rather than hardcoded.
@@ -40,6 +43,7 @@ class MockPrismaClient:
         self.autorouter_turn_transactions = []
         self.baseline_accounting_transactions = []
         self.baseline_accounting_lock = asyncio.Lock()
+        self.baseline_accounting_recovery_due_at = 0.0
         self.spend_log_flush_requested = None
         self.db.tx = MagicMock()
         self.db.tx.return_value.__aenter__ = AsyncMock(return_value=self.db)
@@ -71,6 +75,95 @@ def create_mock_proxy_logging():
     )
     print("returning proxy logging obj")
     return proxy_logging_obj
+
+
+@pytest.mark.asyncio
+async def test_empty_flush_coalesces_baseline_recovery_claims(monkeypatch: pytest.MonkeyPatch) -> None:
+    times: Final = iter((10.0, 11.0, 16.0))
+    monkeypatch.setattr(baseline_accounting, "monotonic", lambda: next(times))
+    client: Final = MockPrismaClient()
+    logging: Final = create_mock_proxy_logging()
+
+    await update_spend_logs_job(client, None, logging)
+    await update_spend_logs_job(client, None, logging)
+    assert client.db.query_raw.await_count == 1
+
+    await update_spend_logs_job(client, None, logging)
+    assert client.db.query_raw.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_queued_baseline_observation_is_persisted_during_recovery_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    times: Final = iter((10.0, 11.0))
+    monkeypatch.setattr(baseline_accounting, "monotonic", lambda: next(times))
+    client: Final = MockPrismaClient()
+    logging: Final = create_mock_proxy_logging()
+    record: Final = baseline_accounting.BaselineAccountingRecord(
+        scope="autorouter-baseline:v3:" + "a" * 64,
+        api_key="key",
+        session_id="session",
+        router_name="router",
+        baseline_model="baseline",
+        observation=BaselineObservation(
+            request_id="late-observation",
+            started_at=1.0,
+            available_at=2.0,
+            outcome="uncertain",
+            baseline_equivalent=False,
+        ),
+        pricing=BaselineCostSnapshot(model="routed", provider="anthropic", prices=None, actual_spend=0.0),
+        turn=None,
+        daily=None,
+    )
+
+    async def query(_statement: str, *args: object) -> list[dict[str, object]]:
+        if args == (record.scope,):
+            return [
+                {"revision": 0, "published_revision": 0, "initial_equivalent": True, "retired": False, "history": None}
+            ]
+        return []
+
+    client.db.query_raw.side_effect = query
+    client.db.execute_raw.return_value = 1
+    await update_spend_logs_job(client, None, logging)
+    client.baseline_accounting_transactions = [record]
+    await update_spend_logs_job(client, None, logging)
+
+    writes: Final = [
+        (call.args[1], call.args[2])
+        for call in client.db.execute_raw.await_args_list
+        if 'INSERT INTO "LiteLLM_AutoRouterBaselineObservation"' in call.args[0]
+    ]
+    assert writes == [("late-observation", record.scope)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("claim_size", "expected_claims"), [(32, 2), (31, 1)])
+async def test_baseline_recovery_immediately_retries_a_full_claim(
+    monkeypatch: pytest.MonkeyPatch, claim_size: int, expected_claims: int
+) -> None:
+    monkeypatch.setattr(baseline_accounting, "monotonic", lambda: 10.0)
+    client: Final = MockPrismaClient()
+    client.spend_log_flush_requested = asyncio.Event()
+    claims: Final = iter(([{"scope": f"scope-{index}"} for index in range(claim_size)], [{"scope": "next"}]))
+
+    async def query(statement: str, *args: object) -> list[dict[str, object]]:
+        if not args:
+            return next(claims)
+        if "FOR UPDATE" in statement:
+            return [
+                {"revision": 1, "published_revision": 0, "initial_equivalent": True, "retired": False, "history": None}
+            ]
+        return []
+
+    client.db.query_raw.side_effect = query
+
+    await baseline_accounting.flush_baseline_accounting(client)
+    assert client.spend_log_flush_requested.is_set() == (expected_claims == 2)
+    await baseline_accounting.flush_baseline_accounting(client)
+    assert sum(len(call.args) == 1 for call in client.db.query_raw.await_args_list) == expected_claims
 
 
 @pytest.mark.asyncio
@@ -351,3 +444,125 @@ async def test_update_spend_logs_drops_row_prisma_cannot_encode_and_keeps_the_re
     assert sorted(written) == ["good-1", "good-2"]
     assert prisma_client.spend_log_transactions == []
     proxy_logging_obj.failure_handler.assert_not_called()
+
+
+def _raw_query_error(sqlstate: str):
+    from prisma.errors import RawQueryError
+
+    return RawQueryError(
+        {
+            "user_facing_error": {
+                "error_code": "P2010",
+                "meta": {"code": sqlstate, "message": f"ERROR: sqlstate {sqlstate}"},
+            }
+        }
+    )
+
+
+class _RawInsertRepository:
+    def __init__(self, sqlstate: str):
+        self.sqlstate = sqlstate
+        self.written: list[str] = []
+
+    async def insert_with_deliveries(self, rows):
+        if any(row["request_id"] == "rejected" for row in rows):
+            raise _raw_query_error(self.sqlstate)
+        self.written.extend(str(row["request_id"]) for row in rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sqlstate", ["22P02", "23502", "54000"])
+async def test_raw_insert_rejecting_one_row_drops_only_that_row(sqlstate):
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    repo = _RawInsertRepository(sqlstate)
+    rows = [{"request_id": "good-1"}, {"request_id": "rejected"}, {"request_id": "good-2"}]
+
+    await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10)
+
+    assert sorted(repo.written) == ["good-1", "good-2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sqlstate", ["42P01", "40P01"])
+async def test_systemic_raw_insert_failure_is_retried_not_dropped(sqlstate):
+    from prisma.errors import RawQueryError
+
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    repo = _RawInsertRepository(sqlstate)
+    rows = [{"request_id": "good-1"}, {"request_id": "rejected"}]
+
+    with pytest.raises(RawQueryError):
+        await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10)
+
+    assert repo.written == []
+
+
+class _RescueFailsRepository:
+    def __init__(self, rescue_error: Exception):
+        self.rescue_error = rescue_error
+
+    async def insert_with_deliveries(self, rows):
+        if any(row.get("accounting_log_disabled") for row in rows):
+            raise self.rescue_error
+        if any(row["request_id"] == "rejected" for row in rows):
+            raise _raw_query_error("22P02")
+
+
+@pytest.mark.asyncio
+async def test_a_transient_failure_while_keeping_a_dropped_rows_charge_is_retried_not_lost():
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    outage = _raw_query_error("40P01")
+    repo = _RescueFailsRepository(outage)
+    rows = [{"request_id": "rejected", "accounting_payload": {"spend": 1.0}}]
+
+    with pytest.raises(type(outage)):
+        await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_charge_rescue_is_logged_and_the_flush_continues():
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    repo = _RescueFailsRepository(_raw_query_error("22P02"))
+    rows = [{"request_id": "rejected", "accounting_payload": {"spend": 1.0}}]
+
+    assert await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10) == 9
+
+
+class _StatementValidatingRepository:
+    def __init__(self):
+        self.written = []
+        self.charges_kept = []
+
+    async def insert_with_deliveries(self, rows):
+        from litellm.repositories.spend_log_insert import spend_log_insert_statement
+
+        if all(row.get("accounting_log_disabled") for row in rows):
+            self.charges_kept.extend(row["request_id"] for row in rows)
+            return len(rows)
+        spend_log_insert_statement(rows)
+        self.written.extend(row["request_id"] for row in rows)
+        return len(rows)
+
+
+@pytest.mark.asyncio
+async def test_a_row_the_insert_statement_rejects_is_dropped_alone_and_keeps_its_charge():
+    from litellm.proxy.utils import _create_spend_logs_with_poison_isolation
+
+    repo = _StatementValidatingRepository()
+    rows = [
+        {"request_id": "good", "call_type": "acompletion", "messages": "[]"},
+        {
+            "request_id": "unparseable",
+            "call_type": "acompletion",
+            "messages": "not json",
+            "accounting_payload": {"spend": 1.0},
+        },
+    ]
+
+    assert await _create_spend_logs_with_poison_isolation(repo, rows, failure_budget=10) < 10
+    assert repo.written == ["good"]
+    assert repo.charges_kept == ["unparseable"]

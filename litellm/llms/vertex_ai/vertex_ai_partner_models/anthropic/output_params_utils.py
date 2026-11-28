@@ -18,7 +18,7 @@ from pydantic import TypeAdapter, ValidationError
 # Keys inside ``output_config`` that Vertex AI Claude rejects regardless of
 # the target model. Add an entry only when a 400 "Extra inputs are not
 # permitted" is reproducible against the live Vertex endpoint for every model.
-VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS: Final[frozenset] = frozenset()
+VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS: Final[frozenset[str]] = frozenset()
 
 
 def _model_accepts_output_config_effort(model: str) -> bool:
@@ -63,7 +63,7 @@ def _fold_output_format_into_output_config(
     )
 
 
-def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
+def sanitize_vertex_anthropic_output_params(data: dict[str, object], model: str) -> None:
     """
     Strip Vertex-unsupported keys from ``output_config`` /
     ``output_format`` in-place; forward whatever remains.

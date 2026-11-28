@@ -258,9 +258,20 @@ def _observed(upstream: httpx.Client) -> list[JsonValue]:
     return requests
 
 
-def _denial_error(denied: httpx.Response) -> dict[str, JsonValue]:
+def _denial_error(denied: httpx.Response, route: str) -> dict[str, JsonValue]:
     assert denied.status_code == 422, denied.text
-    return object_value(object_value(denied.json())["error"])
+    if route == "/v1/messages":
+        body: Final = object_value(denied.json())
+        assert body["type"] == "error", denied.text
+        anthropic_error: Final = object_value(body["error"])
+        assert anthropic_error["type"] == "invalid_request_error", denied.text
+        assert "param" not in anthropic_error and "code" not in anthropic_error, denied.text
+        return anthropic_error
+    openai_error: Final = object_value(object_value(denied.json())["error"])
+    assert openai_error["type"] == "budget_exceeded", denied.text
+    assert openai_error["param"] is None
+    assert openai_error["code"] == "422"
+    return openai_error
 
 
 def _prove_end_user_budget_lockout(
@@ -304,8 +315,7 @@ def _prove_end_user_budget_lockout(
     upstream.delete("/__observations").raise_for_status()
     denied: Final = _send(gateway, spelling, deployment, key, end_user_id, f"denied {end_user_id}")
     assert _observed(upstream) == [], denied.text
-    error: Final = _denial_error(denied)
-    assert error["type"] == "budget_exceeded", denied.text
+    error: Final = _denial_error(denied, spelling.route)
     matched: Final = re.fullmatch(
         rf"ExceededBudget: End User={re.escape(end_user_id)} over budget\. "
         rf"Spend=([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?), Budget=0\.05",
@@ -639,3 +649,35 @@ def test_streamed_call_is_refused_as_json_once_over_budget(gateway: Gateway) -> 
         assert "data:" not in denied.text, denied.text
         _assert_budget_refusal(denied, end_user, 0.05)
         assert _observed_requests(upstream) == []
+
+
+def test_metadata_user_dot_id_is_not_an_end_user(gateway: Gateway) -> None:
+    labeled: Final = f"end-user-label-{uuid.uuid4().hex}"
+    limited: Final = f"end-user-limited-{uuid.uuid4().hex}"
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        key: Final = scenario.key(key_alias=f"end-user-label-{uuid.uuid4().hex}")
+        for customer in (labeled, limited):
+            gateway.post("/customer/new", {"user_id": customer, "rpm_limit": 1})
+            scenario.cleanups.callback(gateway.request, "POST", "/customer/delete", {"user_ids": [customer]})
+
+        def sent(metadata: Mapping[str, JsonValue]) -> httpx.Response:
+            return gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": "hi"}], "metadata": dict(metadata)},
+                key=key,
+            )
+
+        labeled_replies: Final = tuple(sent({"user.id": labeled}) for _ in range(4))
+        assert [reply.status_code for reply in labeled_replies] == [200, 200, 200, 200], labeled_replies[-1].text
+        response_id: Final = string_value(object_value(labeled_replies[-1].json())["id"])
+        rows: Final = eventually(
+            lambda: read_rows('SELECT end_user FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (response_id,)),
+            lambda found: len(found) == 1,
+            seconds=70,
+        )
+        assert rows == [{"end_user": ""}]
+        limited_statuses: Final = [sent({"user_id": limited}).status_code for _ in range(4)]
+
+    assert 429 in limited_statuses, limited_statuses

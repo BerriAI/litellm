@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock
 
@@ -13,6 +15,8 @@ from pydantic import TypeAdapter
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.openai.common_utils import create_may_already_exist
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.router import AllowedFailsPolicy, RetryPolicy
 import os
 
@@ -169,9 +173,7 @@ async def test_router_retries_errors(sync_mode: bool, error_type: str, monkeypat
 async def test_router_retry_policy(error_type):
     from litellm.router import AllowedFailsPolicy, RetryPolicy
 
-    retry_policy = RetryPolicy(
-        ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0
-    )
+    retry_policy = RetryPolicy(ContentPolicyViolationErrorRetries=3, AuthenticationErrorRetries=0)
 
     allowed_fails_policy = AllowedFailsPolicy(
         ContentPolicyViolationErrorAllowedFails=1000,
@@ -361,9 +363,7 @@ def test_retry_rate_limit_error_with_healthy_deployments():
 
     # Act & Assert
     try:
-        response = router.should_retry_this_error(
-            error=rate_limit_error, healthy_deployments=healthy_deployments
-        )
+        response = router.should_retry_this_error(error=rate_limit_error, healthy_deployments=healthy_deployments)
         print("response from should_retry_this_error: ", response)
     except Exception as e:
         pytest.fail(
@@ -394,9 +394,7 @@ def test_do_retry_rate_limit_error_with_no_fallbacks_and_no_healthy_deployments(
 
     # Act & Assert
     try:
-        response = router.should_retry_this_error(
-            error=rate_limit_error, healthy_deployments=healthy_deployments
-        )
+        response = router.should_retry_this_error(error=rate_limit_error, healthy_deployments=healthy_deployments)
         pytest.fail("Should have raised an error")
     except Exception as e:
         print("got an exception", e)
@@ -438,9 +436,7 @@ def test_raise_context_window_exceeded_error():
             healthy_deployments=None,
             context_window_fallbacks=context_window_fallbacks,
         )
-        pytest.fail(
-            "Expected to raise context window exceeded error -> trigger fallback"
-        )
+        pytest.fail("Expected to raise context window exceeded error -> trigger fallback")
     except Exception as e:
         pass
 
@@ -474,120 +470,12 @@ def test_raise_context_window_exceeded_error_no_retry():
         ]
     )
 
-    try:
-        response = router.should_retry_this_error(
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router.should_retry_this_error(
             error=context_window_error,
             healthy_deployments=None,
             context_window_fallbacks=context_window_fallbacks,
         )
-        assert (
-            response == True
-        ), "Should not have raised exception since we do not have context window fallbacks"
-    except litellm.ContextWindowExceededError:
-        pass
-
-
-@pytest.mark.parametrize("num_deployments, expected_timeout", [(1, 60), (2, 0.0)])
-def test_timeout_for_rate_limit_error_with_healthy_deployments(
-    num_deployments, expected_timeout
-):
-    """
-    Test 1. Timeout is 0.0 when RateLimit Error and healthy deployments are > 0
-    """
-    cooldown_time = 60
-    rate_limit_error = litellm.RateLimitError(
-        message="{RouterErrors.no_deployments_available.value}. 12345 Passed model={model_group}. Deployments={deployment_dict}",
-        llm_provider="",
-        model="gpt-3.5-turbo",
-        response=httpx.Response(
-            status_code=429,
-            content="",
-            headers={"retry-after": str(cooldown_time)},  # type: ignore
-            request=httpx.Request(method="tpm_rpm_limits", url="https://github.com/BerriAI/litellm"),  # type: ignore
-        ),
-    )
-    model_list = [
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {
-                "model": "azure/gpt-4.1-mini",
-                "api_key": os.getenv("AZURE_API_KEY"),
-                "api_version": os.getenv("AZURE_API_VERSION"),
-                "api_base": os.getenv("AZURE_API_BASE"),
-            },
-        }
-    ]
-    if num_deployments == 2:
-        model_list.append(
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {"model": "gpt-3.5-turbo"},
-            }
-        )
-
-    router = litellm.Router(model_list=model_list)
-
-    _timeout = router._time_to_sleep_before_retry(
-        e=rate_limit_error,
-        remaining_retries=2,
-        num_retries=2,
-        healthy_deployments=[
-            {
-                "model_name": "gpt-4",
-                "litellm_params": {
-                    "api_key": "my-key",
-                    "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
-                    "model": "azure/gpt-4.1-mini",
-                },
-                "model_info": {
-                    "id": "0e30bc8a63fa91ae4415d4234e231b3f9e6dd900cac57d118ce13a720d95e9d6",
-                    "db_model": False,
-                },
-            }
-        ],
-        all_deployments=model_list,
-    )
-
-    if expected_timeout == 0.0:
-        assert _timeout == expected_timeout
-    else:
-        assert _timeout > 0.0
-
-
-def test_timeout_for_rate_limit_error_with_no_healthy_deployments():
-    """
-    Test 2. Timeout is > 0.0 when RateLimit Error and healthy deployments == 0
-    """
-    healthy_deployments = []
-    model_list = [
-        {
-            "model_name": "gpt-3.5-turbo",
-            "litellm_params": {
-                "model": "azure/gpt-4.1-mini",
-                "api_key": os.getenv("AZURE_API_KEY"),
-                "api_version": os.getenv("AZURE_API_VERSION"),
-                "api_base": os.getenv("AZURE_API_BASE"),
-            },
-        }
-    ]
-
-    router = litellm.Router(model_list=model_list)
-
-    _timeout = router._time_to_sleep_before_retry(
-        e=rate_limit_error,
-        remaining_retries=4,
-        num_retries=4,
-        healthy_deployments=healthy_deployments,
-        all_deployments=model_list,
-    )
-
-    print(
-        "timeout=",
-        _timeout,
-        "error is rate_limit_error and there are no healthy deployments",
-    )
-
-    assert _timeout > 0.0
 
 
 def test_no_retry_for_not_found_error_404():
@@ -614,9 +502,7 @@ def test_no_retry_for_not_found_error_404():
         llm_provider="azure",
     )
     try:
-        response = router.should_retry_this_error(
-            error=error, healthy_deployments=healthy_deployments
-        )
+        response = router.should_retry_this_error(error=error, healthy_deployments=healthy_deployments)
         pytest.fail(
             "Should have raised an exception 404 NotFoundError should never be retried, it's typically model_not_found error"
         )
@@ -652,12 +538,8 @@ def test_no_retry_for_bad_request_error_400():
         llm_provider="azure",
     )
     try:
-        response = router.should_retry_this_error(
-            error=error, healthy_deployments=healthy_deployments
-        )
-        pytest.fail(
-            "Should have raised BadRequestError - 400 errors should never be retried"
-        )
+        response = router.should_retry_this_error(error=error, healthy_deployments=healthy_deployments)
+        pytest.fail("Should have raised BadRequestError - 400 errors should never be retried")
     except litellm.BadRequestError as e:
         print("Correctly raised BadRequestError without retry:", e)
 
@@ -693,12 +575,8 @@ def test_no_retry_for_unprocessable_entity_error_422():
         ),
     )
     try:
-        response = router.should_retry_this_error(
-            error=error, healthy_deployments=healthy_deployments
-        )
-        pytest.fail(
-            "Should have raised UnprocessableEntityError - 422 errors should never be retried"
-        )
+        response = router.should_retry_this_error(error=error, healthy_deployments=healthy_deployments)
+        pytest.fail("Should have raised UnprocessableEntityError - 422 errors should never be retried")
     except litellm.UnprocessableEntityError as e:
         print("Correctly raised UnprocessableEntityError without retry:", e)
 
@@ -727,9 +605,7 @@ def test_no_retry_when_no_healthy_deployments():
         timeout_error,
     ]:
         try:
-            response = router.should_retry_this_error(
-                error=error, healthy_deployments=healthy_deployments
-            )
+            response = router.should_retry_this_error(error=error, healthy_deployments=healthy_deployments)
             pytest.fail(
                 "Should have raised an exception,  there's no point retrying an error when there are 0 healthy deployments"
             )
@@ -739,8 +615,6 @@ def test_no_retry_when_no_healthy_deployments():
 
 @pytest.mark.asyncio
 async def test_router_retries_model_specific_and_global():
-    from unittest.mock import MagicMock, patch
-
     litellm.num_retries = 0
     router = Router(
         model_list=[
@@ -748,28 +622,21 @@ async def test_router_retries_model_specific_and_global():
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "api_key": "sk-test",
                     "num_retries": 1,
                 },
             }
         ]
     )
 
-    with patch.object(
-        router, "_time_to_sleep_before_retry"
-    ) as mock_async_function_with_retries:
-        try:
-            await router.acompletion(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": "Hello, how are you?"}],
-                mock_response="litellm.RateLimitError",
-            )
-        except Exception as e:
-            print("got exception", e)
+    with pytest.raises(litellm.RateLimitError) as exc_info:
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            mock_response="litellm.RateLimitError",
+        )
 
-        mock_async_function_with_retries.assert_called_once()
-
-        assert mock_async_function_with_retries.call_args.kwargs["num_retries"] == 1
+    assert exc_info.value.num_retries == 1
 
 
 @pytest.mark.usefixtures("fake_provider_credentials")
@@ -817,68 +684,28 @@ async def test_router_retry_num_retries_tracking():
     This verifies the fix for the bug where num_retries was incorrectly set to current_attempt
     (0-indexed) instead of the actual number of retries attempted.
     """
-    from unittest.mock import AsyncMock, patch
-
     router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                },
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
             }
         ],
-        num_retries=3,  # Set at router level to ensure it's used
+        num_retries=2,
     )
 
-    # Mock make_call to always raise a RateLimitError
-    async def mock_make_call(*args, **kwargs):
-        raise litellm.RateLimitError(
-            message="Rate limit exceeded",
+    with pytest.raises(litellm.RateLimitError) as exc_info:
+        await router.acompletion(
             model="gpt-3.5-turbo",
-            llm_provider="openai",
+            messages=[{"role": "user", "content": "Hello"}],
+            mock_response="litellm.RateLimitError",
         )
 
-    with patch.object(router, "make_call", side_effect=mock_make_call):
-        with patch.object(
-            router,
-            "_async_get_healthy_deployments",
-            return_value=(
-                [{"model_info": {"id": "test-id"}}],
-                [{"model_info": {"id": "test-id"}}],
-            ),
-        ):
-            with patch.object(
-                router, "_time_to_sleep_before_retry", return_value=0.01
-            ):  # Fast retries for testing
-                with pytest.raises(litellm.RateLimitError) as exc_info:
-                    await router.acompletion(
-                        model="gpt-3.5-turbo",
-                        messages=[{"role": "user", "content": "Hello"}],
-                    )
-                e = exc_info.value
-                assert hasattr(
-                    e, "num_retries"
-                ), "Exception should have num_retries attribute"
-                assert hasattr(
-                    e, "max_retries"
-                ), "Exception should have max_retries attribute"
-                assert (
-                    e.num_retries == 3
-                ), f"Expected num_retries to be 3, got {e.num_retries}"
-                assert (
-                    e.max_retries == 3
-                ), f"Expected max_retries to be 3, got {e.max_retries}"
-
-                # Verify the error message includes correct retry information
-                error_str = str(e)
-                assert (
-                    "LiteLLM Retried: 3 times" in error_str
-                ), f"Error message should indicate 3 retries: {error_str}"
-                assert (
-                    "LiteLLM Max Retries: 3" in error_str
-                ), f"Error message should show max retries: {error_str}"
+    e = exc_info.value
+    assert e.num_retries == 2
+    assert e.max_retries == 2
+    assert "LiteLLM Retried: 2 times" in str(e)
+    assert "LiteLLM Max Retries: 2" in str(e)
 
 
 @pytest.mark.asyncio
@@ -886,51 +713,25 @@ async def test_router_retry_num_retries_single_retry():
     """
     Test num_retries tracking with a single retry to verify edge case handling.
     """
-    from unittest.mock import patch
-
     router = Router(
         model_list=[
             {
                 "model_name": "gpt-3.5-turbo",
-                "litellm_params": {
-                    "model": "gpt-3.5-turbo",
-                    "api_key": os.getenv("OPENAI_API_KEY"),
-                },
+                "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
             }
         ],
-        num_retries=1,  # Set at router level - single retry
+        num_retries=1,
     )
 
-    # Mock make_call to always raise a Timeout error
-    async def mock_make_call(*args, **kwargs):
-        raise litellm.Timeout(
-            message="Request timed out",
+    with pytest.raises(litellm.InternalServerError) as exc_info:
+        await router.acompletion(
             model="gpt-3.5-turbo",
-            llm_provider="openai",
+            messages=[{"role": "user", "content": "Hello"}],
+            mock_response="litellm.InternalServerError",
         )
 
-    with patch.object(router, "make_call", side_effect=mock_make_call):
-        with patch.object(
-            router,
-            "_async_get_healthy_deployments",
-            return_value=(
-                [{"model_info": {"id": "test-id"}}],
-                [{"model_info": {"id": "test-id"}}],
-            ),
-        ):
-            with patch.object(router, "_time_to_sleep_before_retry", return_value=0.01):
-                with pytest.raises(litellm.Timeout) as exc_info:
-                    await router.acompletion(
-                        model="gpt-3.5-turbo",
-                        messages=[{"role": "user", "content": "Hello"}],
-                    )
-                e = exc_info.value
-                assert (
-                    e.num_retries == 1
-                ), f"Expected num_retries to be 1, got {e.num_retries}"
-                assert (
-                    e.max_retries == 1
-                ), f"Expected max_retries to be 1, got {e.max_retries}"
+    assert exc_info.value.num_retries == 1
+    assert exc_info.value.max_retries == 1
 
 
 class MyCustomHandler(CustomLogger):
@@ -940,18 +741,14 @@ class MyCustomHandler(CustomLogger):
 
     def log_pre_api_call(self, model, messages, kwargs):
         print(f"Pre-API Call")
-        print(
-            f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}"
-        )
+        print(f"previous_models: {kwargs['litellm_params']['metadata'].get('previous_models', None)}")
         self.previous_models = len(
             kwargs["litellm_params"]["metadata"].get("previous_models", [])
         )  # {"previous_models": [{"model": litellm_model_name, "exception_type": AuthenticationError, "exception_string": <complete_traceback>}]}
         print(f"self.previous_models: {self.previous_models}")
 
     def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
-        print(
-            f"Post-API Call - response object: {response_obj}; model: {kwargs['model']}"
-        )
+        print(f"Post-API Call - response object: {response_obj}; model: {kwargs['model']}")
 
     def log_stream_event(self, kwargs, response_obj, start_time, end_time):
         print(f"On Stream")
@@ -988,3 +785,536 @@ timeout_error = litellm.Timeout(
     model="gpt-12",
     llm_provider="azure",
 )
+
+
+_CREATED_OBJECTS: Final = {
+    "batch": {
+        "id": "batch_abc123",
+        "object": "batch",
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": "file-abc123",
+        "completion_window": "24h",
+        "status": "validating",
+        "created_at": 1,
+    },
+    "file": {
+        "id": "file-abc123",
+        "object": "file",
+        "bytes": 52,
+        "created_at": 1,
+        "filename": "batch.jsonl",
+        "purpose": "batch",
+        "status": "processed",
+    },
+}
+
+
+def _batch_router(api_bases: tuple[str, ...], num_retries: int, orders: tuple[int, ...] | None = None) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "batch-primary",
+                "litellm_params": {
+                    "model": f"azure/gpt-batch-{order}",
+                    "api_base": api_base,
+                    "api_key": "sk-test",
+                    "api_version": "2025-04-01-preview",
+                    "order": order,
+                },
+            }
+            for order, api_base in zip(orders or range(1, len(api_bases) + 1), api_bases)
+        ],
+        num_retries=num_retries,
+    )
+
+
+_NO_FALLBACK_NOTE: Final = (
+    "\n\nLiteLLM: model group 'batch-primary' failed with the error above. No fallback was attempted."
+)
+
+
+async def _create(router: Router, create: str) -> object:
+    if create == "batch":
+        return await router.acreate_batch(
+            model="batch-primary",
+            completion_window="24h",
+            endpoint="/v1/chat/completions",
+            input_file_id="file-abc123",
+        )
+    return await router.acreate_file(
+        model="batch-primary",
+        file=("batch.jsonl", b'{"custom_id": "1", "body": {"model": "gpt-batch"}}\n', "application/jsonl"),
+        purpose="batch",
+    )
+
+
+@pytest.mark.parametrize(
+    "num_retries, orders",
+    [(2, 1), (0, 2)],
+    ids=["retries", "order-fallback"],
+)
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_that_times_out_is_neither_retried_nor_sent_to_a_fallback(
+    create: str,
+    num_retries: int,
+    orders: int,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = f"https://router-{create}-{orders}-create.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        side_effect=httpx.ReadTimeout("the provider answered after the caller's timeout")
+    )
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Router"), pytest.raises(openai.APITimeoutError) as raised:
+        await _create(_batch_router((api_base,) * orders, num_retries), create)
+
+    assert create_route.call_count == 1
+    assert raised.value.message.endswith(_NO_FALLBACK_NOTE)
+    assert raised.value.message.count(_NO_FALLBACK_NOTE) == 1
+    assert [record.getMessage() for record in caplog.records if "does not resend" in record.getMessage()] == [
+        "Model group 'batch-primary' does not resend a failed create, because the provider may already have created it"
+    ]
+
+
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_that_times_out_on_a_retry_is_not_retried_again(
+    create: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = f"https://router-{create}-retry-timeout.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        side_effect=[
+            httpx.Response(500, json={"error": {"message": "try again"}}, headers={"retry-after": "0"}),
+            httpx.ReadTimeout("the provider answered after the caller's timeout"),
+            httpx.Response(200, json=_CREATED_OBJECTS[create]),
+        ]
+    )
+
+    with pytest.raises(openai.APITimeoutError):
+        await _create(_batch_router((api_base,), num_retries=2), create)
+
+    assert create_route.call_count == 2
+
+
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_that_times_out_on_a_fallback_is_not_sent_to_the_next_fallback(
+    create: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_bases: Final = tuple(f"https://router-{create}-order-{order}.test" for order in (1, 2, 3))
+    routes: Final = tuple(
+        respx_mock.post(url__startswith=api_base).mock(side_effect=side_effect)
+        for api_base, side_effect in zip(
+            api_bases,
+            (
+                httpx.ConnectError("connection refused"),
+                httpx.ReadTimeout("the provider answered after the caller's timeout"),
+                httpx.Response(200, json=_CREATED_OBJECTS[create]),
+            ),
+        )
+    )
+
+    with pytest.raises(openai.APITimeoutError) as raised:
+        await _create(_batch_router(api_bases, num_retries=0), create)
+
+    assert [route.call_count for route in routes] == [1, 1, 0]
+    assert "No fallback was attempted" not in raised.value.message
+
+
+async def test_a_batch_create_that_times_out_on_a_fallback_raises_the_fallbacks_timeout(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    primary_base: Final = "https://router-batch-dict-primary.test"
+    backup_base: Final = "https://router-batch-dict-backup.test"
+    primary_route: Final = respx_mock.post(url__startswith=primary_base).mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+    backup_route: Final = respx_mock.post(url__startswith=backup_base).mock(
+        side_effect=httpx.ReadTimeout("the provider answered after the caller's timeout")
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "batch-primary",
+                "litellm_params": {
+                    "model": "azure/gpt-batch",
+                    "api_base": primary_base,
+                    "api_key": "sk-test",
+                    "api_version": "2025-04-01-preview",
+                },
+            }
+        ],
+        num_retries=0,
+        fallbacks=[{"batch-primary": [{"model": "batch-primary", "api_base": backup_base}]}],
+    )
+
+    with pytest.raises(openai.APITimeoutError) as raised:
+        await _create(router, "batch")
+
+    assert (primary_route.call_count, backup_route.call_count) == (1, 1)
+    assert create_may_already_exist(raised.value)
+    assert "No fallback was attempted" not in raised.value.message
+
+
+@pytest.mark.parametrize("unsent_timeout", [httpx.ConnectTimeout, httpx.PoolTimeout])
+@pytest.mark.parametrize(
+    "num_retries, orders",
+    [(1, 1), (0, 2)],
+    ids=["retries", "order-fallback"],
+)
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_that_timed_out_before_it_was_sent_is_still_retried_and_sent_to_a_fallback(
+    create: str,
+    num_retries: int,
+    orders: int,
+    unsent_timeout: type[httpx.TimeoutException],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_base: Final = f"https://router-{create}-{orders}-unsent.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(
+        side_effect=[
+            unsent_timeout("no connection to the provider before the caller's timeout"),
+            httpx.Response(200, json=_CREATED_OBJECTS[create]),
+        ]
+    )
+
+    created: Final = await _create(_batch_router((api_base,) * orders, num_retries), create)
+
+    assert getattr(created, "id") == _CREATED_OBJECTS[create]["id"]
+    assert create_route.call_count == 2
+
+
+def _one_deployment_router(model: str, api_base: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "batch-primary",
+                "litellm_params": {"model": model, "api_base": api_base, "api_key": "sk-test"},
+            }
+        ],
+        num_retries=2,
+    )
+
+
+@pytest.mark.parametrize(
+    "outcome, expected_posts",
+    [
+        pytest.param(httpx.ReadTimeout("no answer in time"), 1, id="read-timeout"),
+        pytest.param(httpx.ConnectTimeout("no connection in time"), 3, id="connect-timeout"),
+        pytest.param(httpx.WriteTimeout("the body was not written in time"), 3, id="write-timeout"),
+        pytest.param(httpx.Response(408, json={"message": "the request did not arrive in time"}), 3, id="http-408"),
+    ],
+)
+async def test_a_mistral_batch_create_is_retried_only_when_the_failed_post_cannot_have_created_it(
+    outcome: httpx.TimeoutException | httpx.Response,
+    expected_posts: int,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _patch_asyncio_sleep(monkeypatch)
+    api_base: Final = f"https://router-mistral-{request.node.callspec.id}.test/v1"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(side_effect=outcome)
+
+    with pytest.raises(BaseLLMException):
+        await _create(_one_deployment_router("mistral/mistral-small-latest", api_base), "batch")
+
+    assert create_route.call_count == expected_posts
+
+
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_whose_connection_dropped_after_it_was_sent_is_neither_retried_nor_sent_to_a_fallback(
+    create: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    api_bases: Final = tuple(f"https://router-{create}-dropped-order-{order}.test" for order in (1, 2))
+    dropped_route: Final = respx_mock.post(url__startswith=api_bases[0]).mock(
+        side_effect=httpx.RemoteProtocolError("the server closed the connection before it answered")
+    )
+    fallback_route: Final = respx_mock.post(url__startswith=api_bases[1]).mock(
+        return_value=httpx.Response(200, json=_CREATED_OBJECTS[create])
+    )
+
+    with pytest.raises(openai.APIConnectionError):
+        await _create(_batch_router(api_bases, num_retries=2), create)
+
+    assert (dropped_route.call_count, fallback_route.call_count) == (1, 0)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(
+            httpx.Response(500, headers={"x-should-retry": "false"}, json={"error": {"message": "do not resend"}}),
+            id="500-should-not-retry",
+        ),
+        pytest.param(
+            httpx.Response(408, headers={"x-should-retry": "false"}, json={"error": {"message": "do not resend"}}),
+            id="408-should-not-retry",
+        ),
+        pytest.param(httpx.Response(504, json={"error": {"message": "the gateway gave up waiting"}}), id="504"),
+    ],
+)
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_whose_answer_says_it_may_exist_is_sent_once(
+    create: str,
+    answer: httpx.Response,
+    request: pytest.FixtureRequest,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _patch_asyncio_sleep(monkeypatch)
+    api_base: Final = f"https://router-{request.node.callspec.id}.test"
+    create_route: Final = respx_mock.post(url__startswith=api_base).mock(return_value=answer)
+
+    with pytest.raises(openai.APIStatusError):
+        await _create(_one_deployment_router("litellm_proxy/gpt-batch", api_base), create)
+
+    assert create_route.call_count == 1
+
+
+@pytest.mark.parametrize("create", ["batch", "file"])
+async def test_a_create_the_provider_rejected_with_should_retry_false_still_falls_back(
+    create: str,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _patch_asyncio_sleep(monkeypatch)
+    api_bases: Final = tuple(f"https://router-{create}-rejected-order-{order}.test" for order in (1, 2))
+    respx_mock.post(url__startswith=api_bases[0]).mock(
+        return_value=httpx.Response(401, headers={"x-should-retry": "false"}, json={"error": {"message": "invalid x-api-key"}})
+    )
+    fallback_route: Final = respx_mock.post(url__startswith=api_bases[1]).mock(
+        return_value=httpx.Response(200, json=_CREATED_OBJECTS[create])
+    )
+
+    created: Final = await _create(_batch_router(api_bases, num_retries=2), create)
+
+    assert getattr(created, "id") == _CREATED_OBJECTS[create]["id"]
+    assert fallback_route.call_count == 1
+
+
+_ANTHROPIC_FILE: Final = {
+    "id": "file_011CNha8iCJcU1wXNR6q4V8w",
+    "type": "file",
+    "filename": "batch.jsonl",
+    "mime_type": "application/jsonl",
+    "size_bytes": 52,
+    "created_at": "2026-11-02T00:00:00Z",
+}
+
+
+def _anthropic_files_router(*placements: Mapping[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "files-anthropic",
+                "litellm_params": {"model": "anthropic/claude-opus-5-5", "api_key": "sk-ant-test", **placement},
+            }
+            for placement in placements or ({},)
+        ],
+        num_retries=2,
+    )
+
+
+async def test_an_anthropic_upload_that_could_not_connect_in_time_is_retried_on_every_attempt(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _patch_asyncio_sleep(monkeypatch)
+    upload_route: Final = respx_mock.post("https://api.anthropic.com/v1/files").mock(
+        side_effect=[httpx.ConnectTimeout, httpx.ConnectTimeout, httpx.Response(200, json=_ANTHROPIC_FILE)]
+    )
+
+    created: Final = await _anthropic_files_router().acreate_file(
+        model="files-anthropic", file=("batch.jsonl", b'{"custom_id": "1"}\n', "application/jsonl"), purpose="batch"
+    )
+
+    assert upload_route.call_count == 3
+    assert created.id == _ANTHROPIC_FILE["id"]
+
+
+async def test_an_anthropic_upload_whose_first_deployment_never_connects_reaches_the_next_order(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _patch_asyncio_sleep(monkeypatch)
+    unreachable_base: Final = "https://router-anthropic-unreachable.test"
+    healthy_base: Final = "https://router-anthropic-healthy.test"
+    respx_mock.post(url__startswith=unreachable_base).mock(side_effect=httpx.ConnectTimeout)
+    healthy_route: Final = respx_mock.post(url__startswith=healthy_base).mock(
+        return_value=httpx.Response(200, json=_ANTHROPIC_FILE)
+    )
+    router: Final = _anthropic_files_router(
+        {"api_base": unreachable_base, "order": 1}, {"api_base": healthy_base, "order": 2}
+    )
+
+    created: Final = await router.acreate_file(
+        model="files-anthropic", file=("batch.jsonl", b'{"custom_id": "1"}\n', "application/jsonl"), purpose="batch"
+    )
+
+    assert healthy_route.call_count == 1
+    assert created.id == _ANTHROPIC_FILE["id"]
+
+
+async def test_an_anthropic_upload_that_timed_out_after_it_was_sent_is_not_retried(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _patch_asyncio_sleep(monkeypatch)
+    upload_route: Final = respx_mock.post("https://api.anthropic.com/v1/files").mock(
+        side_effect=[httpx.ReadTimeout, httpx.Response(200, json=_ANTHROPIC_FILE)]
+    )
+
+    with pytest.raises(openai.APITimeoutError):
+        await _anthropic_files_router().acreate_file(
+            model="files-anthropic", file=("batch.jsonl", b'{"custom_id": "1"}\n', "application/jsonl"), purpose="batch"
+        )
+
+    assert upload_route.call_count == 1
+
+
+async def test_an_upload_that_times_out_on_one_deployment_is_not_hidden_by_a_faster_error_on_another(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    rate_limited_base: Final = "https://router-file-rate-limited.test"
+    slow_base: Final = "https://router-file-slow.test"
+
+    async def time_out_after_a_moment(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(0.2)
+        raise httpx.ReadTimeout("the provider answered after the caller's timeout", request=request)
+
+    respx_mock.post(url__startswith=rate_limited_base).mock(
+        return_value=httpx.Response(429, json={"error": {"message": "slow down"}})
+    )
+    slow_route: Final = respx_mock.post(url__startswith=slow_base).mock(side_effect=time_out_after_a_moment)
+
+    with pytest.raises(openai.APITimeoutError):
+        await _create(_batch_router((rate_limited_base, slow_base), num_retries=2, orders=(1, 1)), "file")
+
+    assert slow_route.call_count == 1
+
+
+async def test_an_upload_that_one_deployment_refused_is_not_resent_to_a_deployment_that_created_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "calculate_retry_after", lambda **_: 0.0)
+    refused_base: Final = "https://router-file-refused.test"
+    healthy_base: Final = "https://router-file-healthy.test"
+    respx_mock.post(url__startswith=refused_base).mock(side_effect=httpx.ConnectError("connection refused"))
+    healthy_route: Final = respx_mock.post(url__startswith=healthy_base).mock(
+        return_value=httpx.Response(200, json=_CREATED_OBJECTS["file"])
+    )
+
+    with pytest.raises(openai.APIConnectionError, match="Connection error") as raised:
+        await _create(_batch_router((refused_base, healthy_base), num_retries=2, orders=(1, 1)), "file")
+
+    assert healthy_route.call_count == 1
+    assert create_may_already_exist(raised.value)
+
+
+async def test_an_upload_that_one_deployment_rejected_answers_with_the_provider_error_and_is_not_resent(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "calculate_retry_after", lambda **_: 0.0)
+    rejecting_base: Final = "https://router-file-rejecting.test"
+    healthy_base: Final = "https://router-file-healthy.test"
+    respx_mock.post(url__startswith=rejecting_base).mock(
+        return_value=httpx.Response(
+            401, json={"error": {"message": "invalid api key for this resource", "code": "401"}}
+        )
+    )
+    healthy_route: Final = respx_mock.post(url__startswith=healthy_base).mock(
+        return_value=httpx.Response(200, json=_CREATED_OBJECTS["file"])
+    )
+
+    with pytest.raises(openai.AuthenticationError, match="invalid api key for this resource") as raised:
+        await _create(_batch_router((rejecting_base, healthy_base), num_retries=2, orders=(1, 1)), "file")
+
+    assert healthy_route.call_count == 1
+    assert raised.value.status_code == 401
+    assert create_may_already_exist(raised.value)
+
+
+async def _upload_to_anthropic_group(failing_base: str, healthy_base: str) -> object:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "anthropic-files",
+                "litellm_params": {"model": "anthropic/claude-files", "api_base": api_base, "api_key": "sk-ant-test"},
+            }
+            for api_base in (failing_base, healthy_base)
+        ],
+        num_retries=2,
+    )
+    return await router.acreate_file(
+        model="anthropic-files",
+        file=("batch.jsonl", b'{"custom_id": "1", "params": {}}\n', "application/jsonl"),
+        purpose="batch",
+    )
+
+
+async def test_an_anthropic_upload_that_one_deployment_rejected_keeps_the_router_note(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "calculate_retry_after", lambda **_: 0.0)
+    rejecting_base: Final = "https://router-anthropic-file-rejecting.test"
+    healthy_base: Final = "https://router-anthropic-file-healthy.test"
+    respx_mock.post(url__startswith=rejecting_base).mock(
+        return_value=httpx.Response(
+            401, json={"type": "error", "error": {"type": "authentication_error", "message": "invalid x-api-key"}}
+        )
+    )
+    healthy_route: Final = respx_mock.post(url__startswith=healthy_base).mock(
+        return_value=httpx.Response(200, json=_ANTHROPIC_FILE)
+    )
+
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        await _upload_to_anthropic_group(rejecting_base, healthy_base)
+
+    message: Final = str(getattr(raised.value, "message", ""))
+    assert healthy_route.call_count == 1
+    assert create_may_already_exist(raised.value)
+    assert "invalid x-api-key" in message
+    assert message.endswith(
+        "\n\nLiteLLM: model group 'anthropic-files' failed with the error above. No fallback was attempted."
+    ), message
+
+
+async def test_an_anthropic_upload_that_one_deployment_refused_is_raised_as_is_and_not_resent(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "calculate_retry_after", lambda **_: 0.0)
+    refused_base: Final = "https://router-anthropic-file-refused.test"
+    healthy_base: Final = "https://router-anthropic-file-healthy.test"
+    respx_mock.post(url__startswith=refused_base).mock(side_effect=httpx.ConnectError("connection refused"))
+    healthy_route: Final = respx_mock.post(url__startswith=healthy_base).mock(
+        return_value=httpx.Response(200, json=_ANTHROPIC_FILE)
+    )
+
+    with pytest.raises(httpx.ConnectError, match=r"^connection refused$") as raised:
+        await _upload_to_anthropic_group(refused_base, healthy_base)
+
+    assert healthy_route.call_count == 1
+    assert create_may_already_exist(raised.value)

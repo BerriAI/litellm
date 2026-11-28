@@ -5,10 +5,22 @@ OpenAI-like chat completion transformation
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
-from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    iter_items,
+    json_contains,
+    keyword_arguments,
+    length_of,
+    require_get,
+    set_provider_response_headers_in_hidden_params,
+    subscript,
+    unpackable_mapping,
+)
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantMessage
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -20,6 +32,12 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _ModelResponseFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class OpenAILikeChatConfig(OpenAIGPTConfig):
@@ -40,9 +58,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         return self._get_openai_compatible_provider_info(api_base, api_key)
 
     @staticmethod
-    def _json_mode_convert_tool_response_to_message(
-        message: ChatCompletionAssistantMessage, json_mode: bool
-    ) -> ChatCompletionAssistantMessage:
+    def _json_mode_convert_tool_response_to_message(message: object, json_mode: bool) -> object:
         """
         if json_mode is true, convert the returned tool call response to a content with json str
 
@@ -57,32 +73,50 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         if not json_mode:
             return message
 
-        _tool_calls: Final = message.get("tool_calls")
+        message_fields: Final = require_get(message)
+        _tool_calls: Final = message_fields.get("tool_calls")
 
-        if _tool_calls is None or len(_tool_calls) != 1:
+        if _tool_calls is None or length_of(_tool_calls) != 1:
             return message
 
-        message["content"] = _tool_calls[0]["function"].get("arguments") or ""
-        message["tool_calls"] = None
-
-        return message
+        arguments: Final = require_get(subscript(subscript(_tool_calls, 0), "function")).get("arguments")
+        return {**unpackable_mapping(message), "content": arguments or "", "tool_calls": None}
 
     @staticmethod
-    def _sanitize_usage_obj(response_json: dict) -> dict:
+    def _json_mode_convert_choice(choice: object, json_mode: bool) -> object:
+        message: Final = OpenAILikeChatConfig._json_mode_convert_tool_response_to_message(
+            require_get(choice).get("message"), json_mode
+        )
+        return {**unpackable_mapping(choice), "message": message}
+
+    @staticmethod
+    def _json_mode_convert_choices(response_json: object, json_mode: bool) -> object:
+        choices: Final = subscript(response_json, "choices")
+        converted: Final = [
+            OpenAILikeChatConfig._json_mode_convert_choice(choice, json_mode) for choice in iter_items(choices)
+        ]
+        return {**keyword_arguments(response_json, ModelResponse), "choices": converted or choices}
+
+    @staticmethod
+    def _sanitize_usage_obj(response_json: object) -> object:
         """
         Checks for a 'usage' object in the response and replaces any None token values with 0.
         This enforces OpenAI compatibility for providers that might return null.
 
         This method is future-proof and sanitizes any key ending in '_tokens'.
         """
-        if "usage" in response_json and isinstance(response_json.get("usage"), dict):
-            usage: Final = response_json["usage"]
-            # Iterate through all keys in the usage dictionary
-            for key, value in usage.items():
-                # Sanitize if the key ends with '_tokens' and its value is None
-                if key.endswith("_tokens") and value is None:
-                    usage[key] = 0
-        return response_json
+        if not json_contains(response_json, "usage"):
+            return response_json
+        usage: Final = require_get(response_json).get("usage")
+        usage_fields: Final = as_str_mapping(usage)
+        if not isinstance(usage_fields, dict):
+            return response_json
+        return {
+            **keyword_arguments(response_json, ModelResponse),
+            "usage": {
+                key: 0 if key.endswith("_tokens") and value is None else value for key, value in usage_fields.items()
+            },
+        }
 
     @staticmethod
     def _transform_response(
@@ -91,17 +125,17 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         model_response: ModelResponse,
         stream: bool,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
+        optional_params: dict[str, object],
         api_key: str | None,
         data: dict | str,
-        messages: list,
-        print_verbose,
-        encoding,
+        messages: list[AllMessageValues],
+        print_verbose: object,
+        encoding: object,
         json_mode: bool | None,
         custom_llm_provider: str | None,
         base_model: str | None,
     ) -> ModelResponse:
-        response_json = response.json()
+        response_json: Final = _DECODED_JSON.validate_python(response.json())
         logging_obj.post_call(
             input=messages,
             api_key="",
@@ -110,16 +144,14 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         )
 
         # Sanitize the usage object at the source
-        response_json = OpenAILikeChatConfig._sanitize_usage_obj(response_json)
+        sanitized_json: Final = OpenAILikeChatConfig._sanitize_usage_obj(response_json)
+        converted_json: Final = (
+            OpenAILikeChatConfig._json_mode_convert_choices(sanitized_json, json_mode) if json_mode else sanitized_json
+        )
 
-        if json_mode:
-            for choice in response_json["choices"]:
-                message = OpenAILikeChatConfig._json_mode_convert_tool_response_to_message(
-                    choice.get("message"), json_mode
-                )
-                choice["message"] = message
-
-        returned_response: Final = ModelResponse(**response_json)
+        returned_response: Final = ModelResponse(
+            **_ModelResponseFields(**keyword_arguments(converted_json, ModelResponse))
+        )
         set_provider_response_headers_in_hidden_params(returned_response, response.headers)
 
         if custom_llm_provider is not None:
@@ -135,7 +167,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
@@ -162,8 +194,8 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,

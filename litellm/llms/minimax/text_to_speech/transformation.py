@@ -76,7 +76,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         "flac": "flac",
     }
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         MiniMax TTS supports these OpenAI parameters
         """
@@ -126,10 +126,10 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         optional_params: dict,
-        voice: str | dict | None = None,
+        voice: str | Mapping[str, object] | None = None,
         drop_params: bool = False,
         kwargs: Mapping[str, object] | None = None,
-    ) -> tuple[str | None, dict]:
+    ) -> tuple[str | None, dict[str, object]]:
         """
         Map OpenAI parameters to MiniMax TTS parameters
         """
@@ -184,11 +184,11 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate MiniMax environment and set up authentication headers
         """
@@ -216,9 +216,9 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         model: str,
         input: str,
         voice: str | None,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
     ) -> TextToSpeechRequestData:
         """
         Build the MiniMax TTS request payload.
@@ -400,7 +400,7 @@ class MinimaxTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Construct the MiniMax endpoint URL.

@@ -22,7 +22,7 @@ from litellm.constants import (
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
 )
-from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_metadata_variable_name_from_kwargs
 from litellm.router_deprecated import renamed_router_param
 from litellm.types.router import BaggageMappedTagsStamp, ConsumedRequestTagsStamp, DeploymentTypedDict, RouterErrors
 
@@ -392,9 +392,11 @@ def _resolve_constraint_only_pool(
 
 def _all_deployments_or_fallback(
     ctx: "RoutingContext",
-    model: str,
+    model: str | None,
     fallback: _DeploymentPool,
 ) -> Sequence[_DeploymentLike | DeploymentTypedDict] | Mapping[_DeploymentLike, object]:
+    if model is None:  # a group of no name has no deployments, it is not a failed lookup
+        return ()
     try:
         return ctx.registry().deployments(model, source="all")
     except Exception:  # noqa: BLE001  # fail safe toward today's healthy-only behavior on lookup errors
@@ -478,9 +480,9 @@ def _request_tags_after_router_consumption(metadata: object, model: str) -> Sequ
     # inside the routed group. The request's other tags still apply there, on top of the
     # inherited_tags snapshot that keeps key/team policy applying. Every other model
     # group keeps the full list.
-    if not isinstance(metadata, Mapping):
+    typed_metadata: Final = as_str_mapping(metadata)
+    if typed_metadata is None:
         return None
-    typed_metadata: Final[Mapping[str, object]] = metadata
     request_tags: Final = _tags_in_metadata(
         typed_metadata,
         key=ROUTING_REQUEST_TAGS_METADATA_KEY if ROUTING_REQUEST_TAGS_METADATA_KEY in typed_metadata else "tags",
@@ -500,9 +502,9 @@ def without_baggage_mapped_tags(
     request_tags: Sequence[str] | None, metadata: object, *, keep_serving_deployment_tags: bool = False
 ) -> Sequence[str] | None:
     """Drop baggage-mapped tags that neither key, team or project policy nor the caller itself asked for."""
-    if request_tags is None or not isinstance(metadata, Mapping):
+    typed_metadata: Final = as_str_mapping(metadata)
+    if request_tags is None or typed_metadata is None:
         return request_tags
-    typed_metadata: Final[Mapping[str, object]] = metadata
     stamp: Final = typed_metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
     if not isinstance(stamp, BaggageMappedTagsStamp):
         return request_tags
@@ -515,9 +517,9 @@ def without_baggage_mapped_tags(
 
 
 def baggage_stamp_for_serving_deployment(metadata: object, deployment_tags: object) -> BaggageMappedTagsStamp | None:
-    if not isinstance(metadata, Mapping):
+    typed_metadata: Final = as_str_mapping(metadata)
+    if typed_metadata is None:
         return None
-    typed_metadata: Final[Mapping[str, object]] = metadata
     stamp: Final = typed_metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
     if not isinstance(stamp, BaggageMappedTagsStamp):
         return None
@@ -529,9 +531,9 @@ def baggage_stamp_for_serving_deployment(metadata: object, deployment_tags: obje
 def tags_with_serving_deployment_tags(metadata: object, deployment_tags: object) -> tuple[object, ...] | None:
     """Merge the serving deployment's tags ahead of baggage-mapped tags, so baggage never changes tag precedence."""
     serving_tags: Final = _tag_sequence(deployment_tags)
-    if not isinstance(metadata, Mapping) or not serving_tags:
+    typed_metadata: Final = as_str_mapping(metadata)
+    if typed_metadata is None or not serving_tags:
         return None
-    typed_metadata: Final[Mapping[str, object]] = metadata
     existing_tags: Final = _metadata_tags(typed_metadata, "tags")
     stamp: Final = typed_metadata.get(BAGGAGE_MAPPED_TAGS_METADATA_KEY)
     mapped_tags: Final = stamp.tags if isinstance(stamp, BaggageMappedTagsStamp) else ()
@@ -742,9 +744,9 @@ def _tags_in_metadata(metadata: object, key: str = "tags") -> list[str]:
     allowed, an unparsed string or null included, so any shape that is not a list
     of string tags carries no tags rather than raising.
     """
-    if not isinstance(metadata, Mapping):
+    typed_metadata: Final = as_str_mapping(metadata)
+    if typed_metadata is None:
         return []
-    typed_metadata: Final[Mapping[str, object]] = metadata
     tags: Final = typed_metadata.get(key)
     if isinstance(tags, str) or not isinstance(tags, Sequence):
         return []
@@ -770,14 +772,13 @@ def get_tags_from_request_kwargs(
     """
     if request_kwargs is None:
         return []
-    resolved_variable_name: Final = metadata_variable_name or get_metadata_variable_name_from_kwargs(request_kwargs)
+    resolved_variable_name: Final = metadata_variable_name or get_tag_metadata_variable_name_from_kwargs(request_kwargs)
     if resolved_variable_name in request_kwargs:
         return _tags_in_metadata(request_kwargs[resolved_variable_name])
     if "litellm_params" in request_kwargs:
-        litellm_params: Final = request_kwargs["litellm_params"]
-        if not isinstance(litellm_params, Mapping):
+        typed_litellm_params: Final = as_str_mapping(request_kwargs["litellm_params"])
+        if typed_litellm_params is None:
             return []
-        typed_litellm_params: Final[Mapping[str, object]] = litellm_params
         return _tags_in_metadata(typed_litellm_params.get(resolved_variable_name))
     return []
 
@@ -785,14 +786,31 @@ def get_tags_from_request_kwargs(
 _get_tags_from_request_kwargs = get_tags_from_request_kwargs
 
 
-def _request_metadata(request_kwargs: Mapping[str, object]) -> object:
+def get_tag_metadata_variable_name_from_kwargs(
+    request_kwargs: Mapping[str, object],
+) -> Literal["metadata", "litellm_metadata"]:
     metadata_variable_name: Final = get_metadata_variable_name_from_kwargs(request_kwargs)
+    metadata: Final = request_kwargs.get("litellm_metadata")
+    legacy_metadata: Final = request_kwargs.get("metadata")
+    if (
+        metadata_variable_name == "litellm_metadata"
+        and isinstance(metadata, Mapping)
+        and "tags" not in metadata
+        and "inherited_tags" not in metadata
+        and isinstance(legacy_metadata, Mapping)
+        and "inherited_tags" in legacy_metadata
+    ):
+        return "metadata"
+    return metadata_variable_name
+
+
+def _request_metadata(request_kwargs: Mapping[str, object]) -> object:
+    metadata_variable_name: Final = get_tag_metadata_variable_name_from_kwargs(request_kwargs)
     if metadata_variable_name in request_kwargs:
         return request_kwargs[metadata_variable_name]
-    litellm_params: Final = request_kwargs.get("litellm_params")
-    if not isinstance(litellm_params, Mapping):
+    typed_litellm_params: Final = as_str_mapping(request_kwargs.get("litellm_params"))
+    if typed_litellm_params is None:
         return None
-    typed_litellm_params: Final[Mapping[str, object]] = litellm_params
     return typed_litellm_params.get(metadata_variable_name)
 
 

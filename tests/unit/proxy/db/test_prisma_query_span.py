@@ -19,6 +19,7 @@ from litellm.proxy.db.prisma_query_span import UNKNOWN_PRISMA_QUERY, parse_prism
 _REPO: Final = Path(__file__).resolve().parents[4]
 _SOURCE_ROOTS: Final = ("litellm", "enterprise", "litellm-proxy-extras")
 _RAW_METHODS: Final = frozenset({"query_first", "query_raw", "execute_raw"})
+_CROSS_MODULE_FORWARDERS: Final = frozenset({"query_raw_within_statement_timeout"})
 _MODEL_METHODS: Final = frozenset(
     {
         "find_unique",
@@ -38,6 +39,7 @@ _MODEL_METHODS: Final = frozenset(
     }
 )
 _MODEL_BY_ACCESSOR: Final[Mapping[str, str]] = {relation.lower(): relation for relation in PRISMA_RELATIONS}
+_CALL_SITE_ATTRIBUTES: Final = _RAW_METHODS | frozenset(_MODEL_BY_ACCESSOR)
 _GENERIC_CRUD_HELPERS: Final = frozenset({"get_data", "get_generic_data", "insert_data", "update_data", "delete_data"})
 _TRANSACTION_BODIES: Final[Mapping[str, str]] = {"litellm/proxy/db/baseline_accounting.py": "baseline_accounting"}
 _RENDERED_NAME: Final = re.compile(
@@ -163,7 +165,10 @@ def _modules() -> Iterator[_Module]:
         for path in sorted((_REPO / root).rglob("*.py")):
             if "tests" in path.parts or "node_modules" in path.parts:
                 continue
-            tree: Final = ast.parse(path.read_text(encoding="utf-8"))
+            source: Final = path.read_text(encoding="utf-8")
+            if not any(name in source for name in _CALL_SITE_ATTRIBUTES):
+                continue
+            tree: Final = ast.parse(source)
             yield _Module(path, tree, _assignments(tree.body))
 
 
@@ -297,7 +302,7 @@ def _parameter_site(
     """A statement that arrives as a parameter: a ``query_raw`` forwarder adds no round trip of its
     own, any other helper is named by what its callers in the module hand it."""
     function: Final = next(p for p in parents if isinstance(p, (ast.AsyncFunctionDef, ast.FunctionDef)))
-    if function.name in _RAW_METHODS:
+    if function.name in _RAW_METHODS or function.name in _CROSS_MODULE_FORWARDERS:
         return _PrismaCallSite(location, method, "forwarder", f"(callers of {function.name})")
     callers: Final = tuple(
         node
@@ -467,7 +472,7 @@ def test_every_prisma_call_site_in_the_proxy_renders_a_bounded_postgres_span_nam
 
 
 def test_every_model_in_the_prisma_schema_is_a_renderable_span_table() -> None:
-    schema: Final = (_REPO / "schema.prisma").read_text()
+    schema: Final = (_REPO / "litellm/schema.prisma").read_text()
     declared: Final = frozenset(re.findall(r"^model (\w+) \{", schema, re.MULTILINE))
 
     assert declared == spans_mod._PRISMA_MODELS

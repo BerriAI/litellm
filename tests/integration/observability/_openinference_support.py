@@ -275,6 +275,7 @@ def _chat_cache_hit_caller_stream(
                         "role": "assistant",
                         "tool_calls": [{"index": index, **call} for index, call in enumerate(calls)],
                     },
+                    "finish_reason": None,
                 }
             ],
         },
@@ -320,7 +321,6 @@ def _chat_caller_stream_usage_event(event: dict[str, JsonValue], model: str) -> 
 def _chat_caller_stream_choice(choice: dict[str, JsonValue]) -> dict[str, JsonValue]:
     delta: Final = _json_object_value(choice["delta"])
     tool_calls: Final = JSON_MESSAGES.validate_python(delta["tool_calls"]) if "tool_calls" in delta else None
-    finish_reason: Final = choice.get("finish_reason")
     return {
         **{
             key: value
@@ -336,7 +336,7 @@ def _chat_caller_stream_choice(choice: dict[str, JsonValue]) -> dict[str, JsonVa
                 else {}
             ),
         },
-        **({"finish_reason": finish_reason} if finish_reason is not None else {}),
+        "finish_reason": choice.get("finish_reason"),
     }
 
 
@@ -672,10 +672,12 @@ def _write_config(
     callback_settings: Mapping[str, JsonValue] | None = None,
     litellm_settings: Mapping[str, JsonValue] | None = None,
     general_settings: Mapping[str, JsonValue] | None = None,
+    extra_config: Mapping[str, JsonValue] | None = None,
 ) -> Path:
     loaded: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config: Final = {
         **loaded,
+        **(extra_config or {}),
         "litellm_settings": {
             **loaded["litellm_settings"],
             "callbacks": list(callbacks),
@@ -752,6 +754,7 @@ def _rig(
     callback_settings: Mapping[str, JsonValue] | None = None,
     litellm_settings: Mapping[str, JsonValue] | None = None,
     general_settings: Mapping[str, JsonValue] | None = None,
+    extra_config: Mapping[str, JsonValue] | None = None,
     environment: Mapping[str, str] | None = None,
     remove_environment: tuple[str, ...] = (),
     disabled_environment: tuple[str, ...] = (),
@@ -782,6 +785,7 @@ def _rig(
             callback_settings=resolved_settings,
             litellm_settings=litellm_settings,
             general_settings=general_settings,
+            extra_config=extra_config,
         )
         preset_environment: Final = {
             **({"PHOENIX_COLLECTOR_ENDPOINT": destination.url + "/v1/traces"} if "arize_phoenix" in callbacks else {}),

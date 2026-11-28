@@ -45,10 +45,19 @@ _FALLBACK_GROUP: Final = "audit-fallback"
 _CW_FALLBACK_GROUP: Final = "audit-cw-fallback"
 _LONELY: Final = "audit-lonely"
 _POLICY: Final = "audit-policy"
+_SERVICE_UNAVAILABLE_RETRY_POLICY: Final = "audit-service-unavailable-retry-policy"
+_INTERNAL_RETRY_POLICY: Final = "audit-internal-retry-policy"
 _UPSTREAM_URL_PLACEHOLDER: Final = "upstream-url"
 
 Behavior = Literal[
-    "drop-once", "drop-always", "hold-ping", "drop-then-too-long", "drop-then-401", "overloaded-frames-fallback-503"
+    "drop-once",
+    "drop-always",
+    "hold-ping",
+    "drop-then-too-long",
+    "drop-then-401",
+    "overloaded-frames-fallback-529",
+    "overloaded-frames",
+    "overloaded-once",
 ]
 
 pytestmark = pytest.mark.timeout(240)
@@ -81,13 +90,15 @@ def _primary_reply(
             return Reply(status=400, body=error_body(400, "prompt is too long: 250000 tokens > 200000 maximum"))
         case "drop-then-401":
             return dropped if attempt == 1 else status_reply(401)
-        case "overloaded-frames-fallback-503":
+        case "overloaded-frames-fallback-529" | "overloaded-frames":
             return stream_reply((error_frame(529, "scripted overloaded"),))
+        case "overloaded-once":
+            return status_reply(529) if attempt == 1 else stream_reply(full)
     raise AssertionError(behavior)
 
 
 def _fallback_reply(behavior: str, full: tuple[bytes, bytes, bytes, bytes]) -> Reply:
-    if behavior == "overloaded-frames-fallback-503":
+    if behavior == "overloaded-frames-fallback-529":
         return status_reply(503)
     return stream_reply(full)
 
@@ -141,13 +152,19 @@ def _config(wire: Wire, directory: Path) -> Path:
         _deployment(_CW_FALLBACK_GROUP, _CONTEXT_WINDOW),
         _deployment(_LONELY, _PRIMARY, num_retries=1),
         _deployment(_POLICY, _PRIMARY),
+        _deployment(_SERVICE_UNAVAILABLE_RETRY_POLICY, _PRIMARY),
+        _deployment(_INTERNAL_RETRY_POLICY, _PRIMARY),
     ]
     config["router_settings"] = {
         "num_retries": 1,
         "disable_cooldowns": True,
         "fallbacks": [{_WITH_FALLBACKS: [_FALLBACK_GROUP]}],
         "context_window_fallbacks": [{_WITH_FALLBACKS: [_CW_FALLBACK_GROUP]}],
-        "model_group_retry_policy": {_POLICY: {"DefaultRetries": 2}},
+        "model_group_retry_policy": {
+            _POLICY: {"DefaultRetries": 2},
+            _SERVICE_UNAVAILABLE_RETRY_POLICY: {"ServiceUnavailableErrorRetries": 1, "InternalServerErrorRetries": 0},
+            _INTERNAL_RETRY_POLICY: {"InternalServerErrorRetries": 1, "ServiceUnavailableErrorRetries": 0},
+        },
     }
     path: Final = directory / "messages-retry-budget-sources.yaml"
     path.write_text(yaml.safe_dump(config).replace(_UPSTREAM_URL_PLACEHOLDER, wire.url))
@@ -200,14 +217,14 @@ def _assert_failed_after_message_start(response: httpx.Response, served_id: str)
 
 def test_router_num_retries_governs_a_group_without_its_own_budget(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
-    _assert_completed(rig.stream(_ROUTER_BUDGET, "drop-once", marker), _served_id(_PRIMARY, marker, 2))
+    _assert_completed(rig.stream(_ROUTER_BUDGET, "drop-once", marker), _served_id(_PRIMARY, marker, 1))
     assert rig.attempts_on(_PRIMARY, marker) == 2
 
 
 def test_a_digit_string_deployment_budget_is_honored_as_a_number(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
     response: Final = rig.stream(_STRING_BUDGET, "drop-always", marker)
-    _assert_failed_after_message_start(response, _served_id(_PRIMARY, marker, 3))
+    _assert_failed_after_message_start(response, _served_id(_PRIMARY, marker, 1))
     assert rig.attempts_on(_PRIMARY, marker) == 3
 
 
@@ -224,7 +241,7 @@ def _live_events(lines: Iterator[str]) -> Iterator[SseEvent]:
             yield from parse_sse("\n".join(block))
 
 
-def test_lifecycle_frames_are_held_until_content_while_pings_go_out_live(rig: _Rig) -> None:
+def test_message_start_and_pings_go_out_live_while_block_starts_wait_for_content(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
     rig.content_gate.clear()
     try:
@@ -241,7 +258,7 @@ def test_lifecycle_frames_are_held_until_content_while_pings_go_out_live(rig: _R
             after_content: Final = tuple(arriving)
     finally:
         rig.content_gate.set()
-    assert event_types(before_content) == ("ping", "ping"), before_content
+    assert event_types(before_content) == ("message_start", "ping"), before_content
     events: Final = before_content + after_content
     assert tuple(kind for kind in event_types(events) if kind != "ping") == LIFECYCLE, events
     assert message_id(events) == _served_id(_PRIMARY, marker, 1), events
@@ -252,7 +269,7 @@ def test_lifecycle_frames_are_held_until_content_while_pings_go_out_live(rig: _R
 def test_a_retry_policy_default_retries_sets_the_budget_for_a_pre_content_drop(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
     response: Final = rig.stream(_POLICY, "drop-always", marker)
-    _assert_failed_after_message_start(response, _served_id(_PRIMARY, marker, 3))
+    _assert_failed_after_message_start(response, _served_id(_PRIMARY, marker, 1))
     assert rig.attempts_on(_PRIMARY, marker) == 3
 
 
@@ -281,19 +298,42 @@ def test_a_retry_raising_a_context_window_error_reaches_the_context_window_fallb
     assert rig.attempts_on(_CONTEXT_WINDOW, marker) == 1
 
 
-def test_a_retry_rejected_with_401_ends_the_retries_and_reaches_the_client_unchanged(rig: _Rig) -> None:
+def test_a_retry_rejected_with_401_ends_the_retries_and_reaches_the_client_as_an_error_frame(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
     response: Final = rig.stream(_LONELY, "drop-then-401", marker)
-    assert response.status_code == 401, response.text
+    _assert_failed_after_message_start(response, _served_id(_PRIMARY, marker, 1))
     assert "authentication_error" in response.text, response.text
-    assert "content_block_delta" not in response.text, response.text
     assert rig.attempts_on(_PRIMARY, marker) == 2
 
 
-def test_overloaded_frames_whose_fallback_fails_answer_the_mapped_internal_server_error(rig: _Rig) -> None:
+def test_overloaded_frames_whose_fallback_fails_answer_529_overloaded_error(rig: _Rig) -> None:
     marker: Final = uuid.uuid4().hex
-    response: Final = rig.stream(_WITH_FALLBACKS, "overloaded-frames-fallback-503", marker)
-    assert response.status_code == 500, response.text
+    response: Final = rig.stream(_WITH_FALLBACKS, "overloaded-frames-fallback-529", marker)
+    assert response.status_code == 529, response.text
+    assert "overloaded_error" in response.text, response.text
     assert "content_block_delta" not in response.text, response.text
     assert rig.attempts_on(_PRIMARY, marker) == 2
     assert rig.attempts_on(_FALLBACK, marker) == 2
+
+
+def test_overloaded_frames_that_spend_the_budget_without_a_fallback_relay_the_last_attempts_frame(rig: _Rig) -> None:
+    marker: Final = uuid.uuid4().hex
+    response: Final = rig.stream(_LONELY, "overloaded-frames", marker)
+    assert response.status_code == 200, response.text
+    assert response.text == error_frame(529, "scripted overloaded").decode(), response.text
+    assert rig.attempts_on(_PRIMARY, marker) == 2
+
+
+def test_a_529_is_retried_under_the_internal_server_error_retry_policy(rig: _Rig) -> None:
+    marker: Final = uuid.uuid4().hex
+    _assert_completed(rig.stream(_INTERNAL_RETRY_POLICY, "overloaded-once", marker), _served_id(_PRIMARY, marker, 2))
+    assert rig.attempts_on(_PRIMARY, marker) == 2
+
+
+def test_a_529_is_not_retried_under_the_service_unavailable_error_retry_policy(rig: _Rig) -> None:
+    marker: Final = uuid.uuid4().hex
+    response: Final = rig.stream(_SERVICE_UNAVAILABLE_RETRY_POLICY, "overloaded-once", marker)
+    assert response.status_code == 529, response.text
+    assert "overloaded_error" in response.text, response.text
+    assert "content_block_delta" not in response.text, response.text
+    assert rig.attempts_on(_PRIMARY, marker) == 1

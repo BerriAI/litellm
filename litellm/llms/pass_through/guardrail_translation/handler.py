@@ -60,7 +60,7 @@ class PassThroughEndpointHandler(BaseTranslation):
 
     def _extract_text_for_guardrail(
         self,
-        data: dict,
+        data: dict[str, object],
         field_expressions: list[str] | None,
     ) -> str:
         """
@@ -142,7 +142,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> object:
         """
         Process output response by applying guardrails to targeted fields.
@@ -352,6 +352,12 @@ class LlmPassthroughRouteHandler(BaseTranslation):
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         translation: Final = self._event_stream_translation(responses_so_far)
         return translation.get_streaming_scan_key(responses_so_far) if translation is not None else None
+
+    def starts_client_tool_call(self, item: object) -> bool:
+        """The answer of the provider translation that reads this event stream. A stream no translation reads is
+        not scanned at all, so there is no verdict to hold it for."""
+        translation: Final = self._event_stream_translation((item,))
+        return translation is not None and translation.starts_client_tool_call(item)
 
     def needs_ended_stream_scan(self, guardrail: "CustomGuardrail", responses_so_far: Sequence[object]) -> bool:
         translation: Final = self._event_stream_translation(responses_so_far)

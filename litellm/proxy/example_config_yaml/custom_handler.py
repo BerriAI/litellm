@@ -6,14 +6,14 @@ from litellm.types.utils import ModelResponse
 
 
 class MyCustomLLM(CustomLLM):
-    def completion(self, *args, **kwargs) -> ModelResponse:
+    def completion(self, *args: object, **kwargs: object) -> ModelResponse:
         return litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello world"}],
             mock_response="Hi!",
         )
 
-    async def acompletion(self, *args, **kwargs) -> litellm.ModelResponse:
+    async def acompletion(self, *args: object, **kwargs: object) -> litellm.ModelResponse:
         return litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello world"}],

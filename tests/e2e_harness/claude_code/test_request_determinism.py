@@ -34,7 +34,7 @@ from typing import List, Tuple
 import pytest
 
 from claude_code.cli_driver import _FIXED_CLI_USER_ID, _seed_cli_identity, _stable_cli_state, run_claude
-from claude_code.rate_limiter import RateLimiter
+from cli_harness.rate_limiter import RateLimiter
 
 pytestmark = pytest.mark.cli_determinism
 
@@ -42,7 +42,7 @@ _STUB_REPLY = {
     "id": "msg_stub",
     "type": "message",
     "role": "assistant",
-    "model": "claude-haiku-4-5",
+    "model": "claude-haiku-5-5",
     "content": [{"type": "text", "text": "ok"}],
     "stop_reason": "end_turn",
     "usage": {"input_tokens": 10, "output_tokens": 2},
@@ -107,7 +107,7 @@ def test_two_builds_send_the_same_request_bytes(captured: Tuple[str, List[bytes]
             before = len(bodies)
             run_claude(
                 prompt="say ok",
-                model="claude-haiku-4-5",
+                model="claude-haiku-5-5",
                 base_url=base_url,
                 api_key="stub",
                 extra_env={"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"},
@@ -130,7 +130,7 @@ def test_concurrent_cells_do_not_collide_on_the_pinned_session(
     def one(_index: int) -> int:
         return run_claude(
             prompt="say ok",
-            model="claude-haiku-4-5",
+            model="claude-haiku-5-5",
             base_url=base_url,
             api_key="stub",
             extra_env={"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"},
