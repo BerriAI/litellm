@@ -2773,6 +2773,18 @@ def _logged_user_messages(client_frame: object) -> tuple[Mapping[str, object], .
     return tuple({"role": "user", "content": text} for text in texts)
 
 
+def _is_output_delta(event: Mapping[str, object]) -> bool:
+    event_type: Final = event.get("type")
+    return isinstance(event_type, str) and event_type.endswith(".delta")
+
+
+def _record_first_output_time(turn_logging_obj: LiteLLMLoggingObj) -> None:
+    if turn_logging_obj.completion_start_time is None:
+        turn_logging_obj.update_completion_start_time(
+            completion_start_time=datetime.now()  # noqa: DTZ005  # naive to match the turn's start_time
+        )
+
+
 def _record_usage_for_failure(turn_logging_obj: LiteLLMLoggingObj, events: Sequence[Mapping[str, object]]) -> None:
     from litellm.cost_calculator import ResponsesWebSocketTokenUsageProcessor
 
@@ -2985,7 +2997,11 @@ class ResponsesWebSocketStreaming:
 
     async def _record_backend_event(self, event: str) -> None:
         event_obj: Final = _json_object_or_none(event)
-        if event_obj is None or event_obj.get("type") not in RESPONSES_WS_LOGGED_EVENT_TYPES:
+        if event_obj is None:
+            return
+        if _is_output_delta(event_obj) and self._open_turns:
+            _record_first_output_time(self._open_turns[0].logging_obj)
+        if event_obj.get("type") not in RESPONSES_WS_LOGGED_EVENT_TYPES:
             return
         if not self._open_turns:
             self._start_turn(None)
