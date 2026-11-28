@@ -134,7 +134,7 @@ def test_flux2_image_edit_uses_all_reference_fields(model: str, max_reference_im
     ],
 )
 def test_flux2_image_edit_rejects_too_many_references(model: str, reference_images: int):
-    with pytest.raises(ValueError, match=f"at most {reference_images - 1} reference images"):
+    with pytest.raises(litellm.BadRequestError, match=f"at most {reference_images - 1} reference images") as exc_info:
         AzureFoundryFlux2ImageEditConfig().transform_image_edit_request(
             model=model,
             prompt="Blend every reference",
@@ -143,6 +143,37 @@ def test_flux2_image_edit_rejects_too_many_references(model: str, reference_imag
             litellm_params={},
             headers={},
         )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.llm_provider == "azure_ai"
+
+
+def test_flux2_image_edit_rejects_missing_prompt():
+    with pytest.raises(litellm.BadRequestError, match="requires a prompt") as exc_info:
+        AzureFoundryFlux2ImageEditConfig().transform_image_edit_request(
+            model="FLUX.2-pro",
+            prompt=None,
+            image=b"image",
+            image_edit_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.llm_provider == "azure_ai"
+
+
+@pytest.mark.parametrize("image", [None, []])
+def test_flux2_image_edit_rejects_missing_image(image):
+    with pytest.raises(litellm.BadRequestError, match="requires an? image") as exc_info:
+        AzureFoundryFlux2ImageEditConfig().transform_image_edit_request(
+            model="FLUX.2-pro",
+            prompt="A prompt",
+            image=image,
+            image_edit_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.llm_provider == "azure_ai"
 
 
 def _flux2_reference_request(image: object) -> dict[str, object]:
