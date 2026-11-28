@@ -132,3 +132,11 @@ def test_mapped_pass_through_route_authenticates_the_litellm_user_api_key_header
     request: Final = Request({"type": "http", "headers": [(b"litellm_user_api_key", b"sk-proxy")]})
 
     assert pass_through_key(request, route, None, "provider-key") == "sk-proxy"
+
+
+def test_mapped_pass_through_header_authenticates_on_root_stripped_route_under_server_root_path(monkeypatch) -> None:
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/9000")
+    route: Final = f"{LiteLLMRoutes.mapped_pass_through_routes.value[0]}/v1/x"
+    request: Final = Request({"type": "http", "headers": [(b"litellm_user_api_key", b"sk-proxy")]})
+
+    assert pass_through_key(request, route, None, "provider-key") == "sk-proxy"

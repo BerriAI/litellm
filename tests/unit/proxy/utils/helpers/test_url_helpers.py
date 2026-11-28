@@ -270,12 +270,13 @@ def test_normalize_route_for_root_path_returns_route_when_no_root(monkeypatch):
     }
 
 
-def test_normalize_route_for_root_path_error_path_when_route_not_under_root(
+def test_normalize_route_for_root_path_returns_route_unchanged_when_not_under_root(
     monkeypatch,
 ):
     _clear_url_env(monkeypatch)
     monkeypatch.setenv("SERVER_ROOT_PATH", "/proxy")
-    assert normalize_route_for_root_path("/other/v1/chat") is None
+    assert normalize_route_for_root_path("/other/v1/chat") == "/other/v1/chat"
+    assert normalize_route_for_root_path("/v1/chat") == "/v1/chat"
 
 
 # ---------------------------------------------------------------------------

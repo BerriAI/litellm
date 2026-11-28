@@ -20,6 +20,7 @@ from collections.abc import Callable, Sequence
 from enum import Enum
 from typing import Final, Literal, Protocol, runtime_checkable
 
+from starlette.routing import get_route_path
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
@@ -79,7 +80,7 @@ def _extract_model_id(headers: Sequence[tuple[bytes, bytes]]) -> str | None:
 
 
 class _RequestLineFields(Protocol):
-    def get(self, key: Literal["path", "method"], default: str, /) -> str: ...
+    def get(self, key: Literal["method"], default: str, /) -> str: ...
 
 
 class _ResponseStartFields(Protocol):
@@ -166,9 +167,7 @@ class BillableRequestMetricsMiddleware:
             return
 
         request_line: Final = _request_line_fields(scope)
-        classification: Final = classify_billable_request(
-            request_line.get("path", ""), request_line.get("method", "POST")
-        )
+        classification: Final = classify_billable_request(get_route_path(scope), request_line.get("method", "POST"))
         if classification is None:
             await self.app(scope, receive, send)
             return

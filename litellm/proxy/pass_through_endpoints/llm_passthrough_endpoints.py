@@ -4344,7 +4344,7 @@ async def openai_websocket_proxy_route(
         custom_headers=custom_headers,
         user_api_key_dict=user_api_key_dict,
         forward_headers=False,
-        endpoint=normalize_route_for_root_path(websocket.url.path) or websocket.url.path,
+        endpoint=normalize_route_for_root_path(websocket.url.path),
         accept_websocket=False,
         client_frame_model_gate=frame_model_gate,
         upstream_frame_kind=openai_websocket_frame_kind,

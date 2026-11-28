@@ -6,15 +6,21 @@ prefix becomes that request's ``root_path``, so Starlette route matching and
 discovery documents among them — resolve under the prefix the client called.
 """
 
+from pathlib import Path
+from typing import Final
+
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket
+from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 
 from litellm.proxy.middleware.per_request_root_path_middleware import (
     PerRequestRootPathMiddleware,
+    StrippedRootPathMiddleware,
     get_request_root_path,
     get_server_root_paths,
     normalize_root_paths,
+    normalize_server_root_path,
 )
 
 
@@ -300,3 +306,101 @@ class TestGetRequestRootPath:
         # After the request finishes, the scalar-env fallback owns the answer
         # again — nothing was left stashed from the last request's scope.
         assert get_request_root_path() == "/legacy"
+
+
+class TestNormalizeServerRootPath:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("9000", "/9000"),
+            ("/9000/", "/9000"),
+            (" /9000 ", "/9000"),
+            ("//9000", "/9000"),
+            ("/a/b/", "/a/b"),
+            ("", ""),
+            (" ", ""),
+            ("/", ""),
+        ],
+    )
+    def test_canonical_form(self, raw: str, expected: str):
+        assert normalize_server_root_path(raw) == expected
+
+
+def _static_app(tmp_path: Path, root_path: str) -> FastAPI:
+    ui: Final = tmp_path / "ui"
+    (ui / "login").mkdir(parents=True)
+    (ui / "index.html").write_text("<html>home</html>")
+    (ui / "login" / "index.html").write_text("<html>login</html>")
+    static: Final = tmp_path / "next" / "static"
+    static.mkdir(parents=True)
+    (static / "a.js").write_text("console.log(1)")
+    app: Final = FastAPI(root_path=root_path)
+
+    @app.get("/where")
+    def where(request: Request):
+        return {"path": request.scope["path"], "base_url": str(request.base_url)}
+
+    @app.websocket("/ws")
+    async def ws(websocket: WebSocket):
+        await websocket.accept()
+        await websocket.send_json({"path": websocket.scope["path"]})
+        await websocket.close()
+
+    app.mount("/_next", StaticFiles(directory=tmp_path / "next"), name="next")
+    app.mount("/ui", StaticFiles(directory=ui, html=True), name="ui")
+    app.add_middleware(StrippedRootPathMiddleware)
+    return app
+
+
+class TestStrippedRootPathMiddleware:
+    @pytest.mark.parametrize(
+        ("path", "body"),
+        [
+            ("/ui/", "home"),
+            ("/ui/login/", "login"),
+            ("/_next/static/a.js", "console.log(1)"),
+            ("/9000/ui/", "home"),
+            ("/9000/ui/login/", "login"),
+            ("/9000/_next/static/a.js", "console.log(1)"),
+        ],
+    )
+    def test_static_files_served_with_and_without_prefix(self, tmp_path: Path, path: str, body: str):
+        response = TestClient(_static_app(tmp_path, "/9000")).get(path)
+        assert response.status_code == 200
+        assert body in response.text
+
+    def test_stripped_ui_redirect_keeps_prefix(self, tmp_path: Path):
+        response = TestClient(_static_app(tmp_path, "/9000")).get("/ui", follow_redirects=False)
+        assert response.status_code == 307
+        assert response.headers["location"] == "http://testserver/9000/ui/"
+
+    @pytest.mark.parametrize("path", ["/where", "/9000/where"])
+    def test_scope_path_is_never_double_prefixed(self, tmp_path: Path, path: str):
+        response = TestClient(_static_app(tmp_path, "/9000")).get(path)
+        assert response.json() == {"path": "/9000/where", "base_url": "http://testserver/9000/"}
+
+    @pytest.mark.parametrize("raw", ["9000", "/9000/", "/9000"])
+    @pytest.mark.parametrize("path", ["/ui/", "/9000/ui/"])
+    def test_env_value_spellings_serve_ui(self, tmp_path: Path, monkeypatch, raw: str, path: str):
+        from litellm.proxy.utils import get_server_root_path
+
+        monkeypatch.setenv("SERVER_ROOT_PATH", raw)
+        response = TestClient(_static_app(tmp_path, get_server_root_path())).get(path)
+        assert response.status_code == 200
+        assert "home" in response.text
+
+    def test_without_root_path_requests_pass_through(self, tmp_path: Path):
+        response = TestClient(_static_app(tmp_path, "")).get("/where")
+        assert response.json() == {"path": "/where", "base_url": "http://testserver/"}
+
+    def test_matched_per_request_prefix_is_not_doubled(self, tmp_path: Path):
+        app: Final = _static_app(tmp_path, "/9000")
+        app.add_middleware(PerRequestRootPathMiddleware, root_paths=["/tenant-a"])
+        client: Final = TestClient(app)
+        assert client.get("/tenant-a/where").json()["base_url"] == "http://testserver/tenant-a/"
+        assert client.get("/where").json()["base_url"] == "http://testserver/9000/"
+        assert client.get("/9000/where").json()["base_url"] == "http://testserver/9000/"
+
+    def test_stripped_websocket_sees_prefixed_path(self, tmp_path: Path):
+        with TestClient(_static_app(tmp_path, "/9000")).websocket_connect("/ws") as websocket:
+            assert websocket.receive_json() == {"path": "/9000/ws"}
