@@ -13,7 +13,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.mcp_server import mcp_server_manager as mcp_server_manager_module
-from litellm.proxy.mcp_server import operations
+from litellm.proxy.mcp_server import operations, rest_endpoints
 from litellm.proxy.mcp_server.auth_profiles import parse_auth_profiles
 from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.proxy.mcp_server.outbound_credentials.client_credentials import (
@@ -196,6 +196,7 @@ def install_profile_manager(monkeypatch: pytest.MonkeyPatch, manager: MCPServerM
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
     monkeypatch.setattr(mcp_server_manager_module, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
 
 
 async def call_tickets_tool(

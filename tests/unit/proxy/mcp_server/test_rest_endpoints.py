@@ -13,11 +13,12 @@ if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
 
 import httpx
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from mcp.types import CallToolResult, TextContent, Tool
 from starlette.requests import Request
 
 from litellm.constants import MCP_TOOL_LISTING_TIMEOUT
+from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     NewMCPServerRequest,
     UpdateMCPServerRequest,
@@ -28,8 +29,23 @@ from litellm.proxy.mcp_server import rest_endpoints
 from litellm.proxy.mcp_server.auth import (
     user_api_key_auth_mcp as auth_mcp,
 )
+from litellm.proxy.mcp_server.auth_profile_selection import (
+    IncompleteProfile,
+    MissingProfile,
+    unusable_profile_detail,
+)
 from litellm.types.mcp import MCPAuth, MCPTransport, MCPUpstreamProtocol
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from tests._support.mcp_auth_profiles import (
+    DEFAULT_CREDENTIAL,
+    MINTED_PROFILE_TOKEN,
+    ProfileUpstream,
+    install_profile_manager,
+    plain_server,
+    profile_manager,
+    stored_caller_granted,
+    tickets_server,
+)
 
 _OK_TOOL_RESULT: Final = CallToolResult(content=[TextContent(type="text", text='{"result": "ok"}')], is_error=False)
 
@@ -1326,6 +1342,9 @@ class TestListToolsRestAPI:
             return ["server-1"]
 
         class StubServer:
+            uses_auth_profile = False
+            additional_auth = None
+            auth_profiles_unreadable = False
             alias = "server-1"
             server_name = "server-1"
             name = "stub"
@@ -1414,6 +1433,9 @@ class TestListToolsRestAPI:
             return ["server-1"]
 
         class StubServer:
+            uses_auth_profile = False
+            additional_auth = None
+            auth_profiles_unreadable = False
             alias = "server-1"
             server_name = "server-1"
             name = "stub"
@@ -1494,6 +1516,9 @@ class TestListToolsRestAPI:
             toolset_id = "toolset-1"
 
         class StubServer:
+            uses_auth_profile = False
+            additional_auth = None
+            auth_profiles_unreadable = False
             alias = "toolset-server-1"
             server_name = "toolset-server-1"
             name = "toolset-server-1"
@@ -1703,6 +1728,9 @@ class TestListToolsRestAPI:
             return ["server-1"]
 
         class StubServer:
+            uses_auth_profile = False
+            additional_auth = None
+            auth_profiles_unreadable = False
             alias = "server-1"
             server_name = "server-1"
             name = "stub"
@@ -1770,6 +1798,9 @@ class TestListToolsRestAPI:
         )
 
         class StubServer:
+            uses_auth_profile = False
+            additional_auth = None
+            auth_profiles_unreadable = False
             alias = "server-1"
             server_name = "server-1"
             name = "passthrough"
@@ -1842,6 +1873,9 @@ class TestListToolsRestAPI:
         )
 
         class StubServer:
+            uses_auth_profile = False
+            additional_auth = None
+            auth_profiles_unreadable = False
             alias = "server-1"
             server_name = "server-1"
             name = "flaky"
@@ -1901,6 +1935,10 @@ class TestListToolsRestAPI:
         )
 
         class StubServer:
+            uses_auth_profile = False
+            additional_auth = None
+            auth_profiles_unreadable = False
+
             def __init__(self, name):
                 self.alias = name
                 self.server_name = name
@@ -2287,6 +2325,9 @@ class TestListToolsRestAPI:
             toolset_id = "toolset-1"
 
         class StubServer:
+            uses_auth_profile = False
+            additional_auth = None
+            auth_profiles_unreadable = False
             alias = "toolset-server-1"
             server_name = "toolset-server-1"
             name = "toolset-server-1"
@@ -5104,3 +5145,105 @@ async def test_rest_guardrail_bearer_excludes_admission_key(
         assert observed.get_nowait() == expected
     finally:
         global_mcp_tool_registry.unregister_tools_with_prefix("guarded-")
+
+
+def _rest_client(caller: UserAPIKeyAuth) -> httpx.AsyncClient:
+    app: Final = FastAPI()
+    app.include_router(rest_endpoints.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: caller
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway.test")
+
+
+_REST_ROUTES: Final = pytest.mark.parametrize(
+    "route",
+    [
+        pytest.param(("GET", "/mcp-rest/tools/list", {"server_id": "tickets"}, None), id="single-server-list"),
+        pytest.param(("GET", "/mcp-rest/tools/list", None, None), id="inventory"),
+        pytest.param(
+            ("POST", "/mcp-rest/tools/call", None, {"server_id": "tickets", "name": "tickets-add", "arguments": {}}),
+            id="tool-call",
+        ),
+    ],
+)
+_Route = tuple[str, str, dict[str, str] | None, dict[str, object] | None]
+
+
+async def _rest(caller: UserAPIKeyAuth, route: _Route) -> httpx.Response:
+    method, path, params, body = route
+    async with _rest_client(caller) as client:
+        return await client.request(method, path, params=params, json=body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+@_REST_ROUTES
+@pytest.mark.parametrize(
+    ("granted", "token"),
+    [
+        pytest.param(None, DEFAULT_CREDENTIAL, id="no-grant-keeps-the-default-credential"),
+        pytest.param("bots", "bots-token", id="a-static-profile-sends-its-own-token"),
+        pytest.param("ops", MINTED_PROFILE_TOKEN, id="a-client-credentials-profile-sends-the-token-it-minted"),
+    ],
+)
+async def test_every_rest_route_dispatches_with_the_callers_selected_credential(
+    monkeypatch: pytest.MonkeyPatch, route: _Route, granted: str | None, token: str
+) -> None:
+    upstream: Final = ProfileUpstream()
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), upstream))
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+
+    response: Final = await _rest(stored_caller_granted(granted), route)
+
+    assert response.status_code == 200
+    assert {authorization for _, authorization in upstream.requests} == {f"Bearer {token}"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+@_REST_ROUTES
+@pytest.mark.parametrize("granted", ["ghost", "empty"])
+async def test_every_rest_route_refuses_an_unusable_profile_before_reaching_the_upstream(
+    monkeypatch: pytest.MonkeyPatch, route: _Route, granted: str
+) -> None:
+    upstream: Final = ProfileUpstream()
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), upstream))
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+
+    response: Final = await _rest(stored_caller_granted(granted), route)
+
+    is_inventory: Final = route[3] is None and route[2] is None
+    if is_inventory:
+        assert response.status_code == 200
+        body: Final = response.json()
+        assert body["tools"] == []
+        assert body["error"] == "partial_failure"
+        assert body["server_outcomes"] == {"tickets": {"status": "internal", "http_status": 500}}
+    else:
+        expected_unusable: Final = (
+            MissingProfile("tickets", granted) if granted == "ghost" else IncompleteProfile("tickets", granted)
+        )
+        assert response.status_code == 500
+        assert unusable_profile_detail(expected_unusable) in response.text
+    assert upstream.request_count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+async def test_the_rest_inventory_leaves_out_an_unusable_server_and_lists_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = ProfileUpstream()
+    manager: Final = profile_manager(tickets_server(), upstream)
+    manager.config_mcp_servers = {**manager.config_mcp_servers, "plain": plain_server()}
+    install_profile_manager(monkeypatch, manager)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+
+    response: Final = await _rest(stored_caller_granted("ghost"), ("GET", "/mcp-rest/tools/list", None, None))
+
+    body: Final = response.json()
+    assert [tool["name"] for tool in body["tools"]] == ["tool_anonymous"]
+    assert body["server_outcomes"] == {
+        "plain": {"status": "ok", "tool_count": 1},
+        "tickets": {"status": "internal", "http_status": 500},
+    }
+    assert {authorization for _, authorization in upstream.requests} == {None}
