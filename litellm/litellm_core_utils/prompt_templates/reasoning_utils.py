@@ -61,6 +61,18 @@ def reasoning_content_from_thinking_blocks(
 
 
 ENCRYPTED_REASONING_SIGNATURE_PREFIX: Final = "litellm_encrypted_reasoning:"
+GEMINI_THOUGHT_SIGNATURE_PREFIX: Final = "litellm_thought_signature:"
+DUMMY_GEMINI_THOUGHT_SIGNATURE: Final = base64.b64encode(b"skip_thought_signature_validator").decode("ascii")
+
+
+def _prefixed_payload(value: object, prefix: str) -> str | None:
+    if not isinstance(value, str) or not value.startswith(prefix):
+        return None
+    return value.removeprefix(prefix) or None
+
+
+def _carries_encrypted_reasoning(signature: object) -> bool:
+    return isinstance(signature, str) and signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
 
 
 def encrypted_reasoning_signature(encrypted_content: str) -> str:
@@ -73,14 +85,67 @@ def encrypted_reasoning_signature(encrypted_content: str) -> str:
     return f"{ENCRYPTED_REASONING_SIGNATURE_PREFIX}{encrypted_content}"
 
 
-def _carries_encrypted_reasoning(signature: object) -> bool:
-    return isinstance(signature, str) and signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
-
-
 def encrypted_content_from_signature(signature: object) -> str | None:
-    if not isinstance(signature, str) or not _carries_encrypted_reasoning(signature):
+    if not _carries_encrypted_reasoning(signature):
         return None
-    return signature.removeprefix(ENCRYPTED_REASONING_SIGNATURE_PREFIX) or None
+    return _prefixed_payload(signature, ENCRYPTED_REASONING_SIGNATURE_PREFIX)
+
+
+def is_real_gemini_thought_signature(signature: object) -> bool:
+    if not isinstance(signature, str):
+        return False
+    raw: Final = (
+        signature.removeprefix(GEMINI_THOUGHT_SIGNATURE_PREFIX)
+        if signature.startswith(GEMINI_THOUGHT_SIGNATURE_PREFIX)
+        else signature
+    )
+    return bool(raw) and raw != DUMMY_GEMINI_THOUGHT_SIGNATURE
+
+
+def gemini_thought_signature(thought_signature: str) -> str:
+    """The opaque value a Gemini `thoughtSignature` travels in on `/v1/messages`.
+
+    Anthropic clients echo a thinking block's `signature` and a redacted block's `data`
+    back verbatim, so either field can carry the Gemini signature across turns; the
+    prefix distinguishes it from Anthropic-minted and Responses-bridge signatures.
+    """
+    if thought_signature.startswith(GEMINI_THOUGHT_SIGNATURE_PREFIX):
+        return thought_signature
+    return f"{GEMINI_THOUGHT_SIGNATURE_PREFIX}{thought_signature}"
+
+
+def thought_signature_from_signature(signature: object) -> str | None:
+    raw: Final = _prefixed_payload(signature, GEMINI_THOUGHT_SIGNATURE_PREFIX)
+    return raw if raw is not None and is_real_gemini_thought_signature(raw) else None
+
+
+def _field(source: object, name: str) -> object:
+    mapping: Final = as_str_mapping(source)
+    return mapping.get(name) if mapping is not None else getattr(source, name, None)
+
+
+def tool_call_thought_signature(
+    tool_call: object,
+    *,
+    id_separator: str | None = None,
+    require_real: bool = True,
+) -> str | None:
+    """Extract a Gemini `thought_signature` from a tool call mapping or object."""
+    for holder in (tool_call, _field(tool_call, "function")):
+        if holder is None:
+            continue
+        fields = as_str_mapping(_field(holder, "provider_specific_fields"))
+        if fields is not None:
+            sig = fields.get("thought_signature")
+            if isinstance(sig, str) and (is_real_gemini_thought_signature(sig) if require_real else bool(sig)):
+                return sig
+    if id_separator:
+        call_id: Final = _field(tool_call, "id")
+        if isinstance(call_id, str) and id_separator in call_id:
+            embedded: Final = call_id.split(id_separator, 1)[1]
+            if is_real_gemini_thought_signature(embedded) if require_real else bool(embedded):
+                return embedded
+    return None
 
 
 def _encrypted_reasoning_field(block: Mapping[str, object]) -> object:
@@ -95,6 +160,10 @@ def _encrypted_reasoning_field(block: Mapping[str, object]) -> object:
 
 def encrypted_content_of_block(block: Mapping[str, object]) -> str | None:
     return encrypted_content_from_signature(_encrypted_reasoning_field(block))
+
+
+def thought_signature_of_block(block: Mapping[str, object]) -> str | None:
+    return thought_signature_from_signature(_encrypted_reasoning_field(block))
 
 
 _REASONING_SUMMARY_SEPARATOR: Final = "\n\n"
@@ -181,16 +250,35 @@ def thinking_blocks_with_encrypted_reasoning(
     return (*extra, *direct)
 
 
+def _block_carries_prefix(block: object, prefix: str) -> bool:
+    mapping: Final = as_str_mapping(block)
+    if mapping is None:
+        return False
+    field: Final = _encrypted_reasoning_field(mapping)
+    return isinstance(field, str) and field.startswith(prefix)
+
+
 def is_encrypted_reasoning_block(block: object) -> bool:
     """A thinking or redacted_thinking block carrying Responses API encrypted reasoning.
 
     Only the Responses API that minted the content can read it back, so an Anthropic
     backend has to drop such a block rather than fail signature verification on it.
     """
-    if not isinstance(block, Mapping):
-        return False
-    mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
-    return _carries_encrypted_reasoning(_encrypted_reasoning_field(mapping))
+    return _block_carries_prefix(block, ENCRYPTED_REASONING_SIGNATURE_PREFIX)
+
+
+def is_gemini_thought_signature_block(block: object) -> bool:
+    """A thinking or redacted_thinking block carrying a Gemini `thoughtSignature`.
+
+    Only Gemini can validate the signature back, so an Anthropic backend has to drop
+    such a block rather than fail signature verification on it.
+    """
+    return _block_carries_prefix(block, GEMINI_THOUGHT_SIGNATURE_PREFIX)
+
+
+def is_bridge_reasoning_block(block: object) -> bool:
+    """A thinking or redacted_thinking block carrying non-Anthropic bridge reasoning."""
+    return is_encrypted_reasoning_block(block) or is_gemini_thought_signature_block(block)
 
 
 def is_unsignable_thinking_block(block: object) -> bool:
@@ -203,7 +291,7 @@ def is_unsignable_thinking_block(block: object) -> bool:
     text, since ``display: omitted`` returns signed blocks with empty ``thinking``.
     `redacted_thinking` blocks carry no signature and are always kept.
     """
-    if is_encrypted_reasoning_block(block):
+    if is_bridge_reasoning_block(block):
         return True
     if not isinstance(block, Mapping):
         return False
