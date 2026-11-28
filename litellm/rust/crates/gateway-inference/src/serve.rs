@@ -10,6 +10,7 @@ use axum::{
     http::{HeaderMap, request::Parts},
     response::Response,
 };
+use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_gateway_auth::Authenticated;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_router_core::Op;
@@ -21,7 +22,7 @@ use crate::{
     headers::Routing,
     hooks::{self, CallType, ServedBy},
     model_restamp::ReportedModel,
-    record::{self, ErrorResponse},
+    record::{self, CallFailure, ErrorResponse},
     request,
     routing::{self, Host, RouteAttempt},
     stream_event::Counts,
@@ -155,16 +156,30 @@ where
             entries.call_id = Some(call_id.clone());
         }
     });
+    let record_failure = |ended: &mut Ended| record_failure::<H, E>(gateway, ended);
     let served = match body {
-        Ok(body) => hooks::around(gateway, identity, body, serve).await,
-        Err(error) => Err(Ended::from(error)),
+        Ok(body) => hooks::around(gateway, identity, body, serve, record_failure).await,
+        Err(error) => {
+            let mut ended = Ended::from(error);
+            record_failure(&mut ended);
+            Err(ended)
+        }
     };
-    served.unwrap_or_else(|mut ended| {
-        let routing = ended.routing.take();
-        let error = error_response::<H, E>(gateway, ended.raised_on.as_deref(), &ended.error);
-        record::write(|entries| entries.respond_with_error(routing, error));
-        ended.response(E::ERRORS, call.request_id.as_deref())
-    })
+    served.unwrap_or_else(|ended| ended.response(E::ERRORS, call.request_id.as_deref()))
+}
+
+/// Writes to the call's record how the call of route `E` that `ended` failed and how it is
+/// responded to, before the failure hooks read it.
+fn record_failure<H: Host, E: Endpoint>(gateway: &Gateway<H>, ended: &mut Ended) {
+    let routing = ended.routing.take();
+    let raised_on = ended.raised_on.as_deref();
+    let error = error_response::<H, E>(gateway, raised_on, &ended.error);
+    let provider = failed_provider(gateway, raised_on);
+    let failure = CallFailure::raised(&ended.error, provider.as_deref(), error.timeout);
+    record::write(|entries| {
+        entries.respond_with_error(routing, error);
+        entries.failure = Some(failure);
+    });
 }
 
 /// How a call of the route `E` that ended on `error` is responded to, `raised_on` naming the
@@ -190,5 +205,67 @@ fn error_response<H: Host, E: Endpoint>(
         in_handler: error.in_handler(),
         timeout,
         provider_headers: error.provider_headers(),
+    }
+}
+
+/// The provider the exception a failed call raised names: the provider of the deployment whose
+/// attempt raised it, else the one the call's model resolves to as [`rate_limited_provider`]
+/// resolves it.
+fn failed_provider<H: Host>(gateway: &Gateway<H>, raised_on: Option<&str>) -> Option<String> {
+    let registry = gateway.router.registry();
+    if let Some(deployment) = raised_on.and_then(|id| registry.deployment(id)) {
+        return Some(deployment.provider().to_owned());
+    }
+    let model = record::read(|entries| entries.model().map(str::to_owned)).flatten()?;
+    let cost_map = gateway.cost_map();
+    let is_provider = |name: &str| {
+        name.parse::<LlmProviders>().is_ok()
+            || cost_map.catalog().served().any(|(_, fields)| {
+                fields.get("litellm_provider").and_then(Value::as_str) == Some(name)
+            })
+    };
+    rate_limited_provider(&model, is_provider, |group| {
+        let group = registry.group(group)?;
+        group
+            .first()
+            .map(|deployment| deployment.provider().to_owned())
+    })
+}
+
+/// The provider `resolve_llm_provider_for_rate_limit` resolves `model` to for a limiter's
+/// refusal: the model's prefix when `get_llm_provider` knows it as a provider, else the provider
+/// of the first deployment of the model group it names.
+fn rate_limited_provider(
+    model: &str,
+    is_provider: impl Fn(&str) -> bool,
+    group_provider: impl FnOnce(&str) -> Option<String>,
+) -> Option<String> {
+    match model.split_once('/') {
+        Some((prefix, _)) if is_provider(prefix) => Some(prefix.to_owned()),
+        _ => group_provider(model),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::a_provider_prefix("anthropic/claude-sonnet-4-5", Some("anthropic"))]
+    #[case::a_group_whose_prefix_is_no_provider("team/claude", Some("bedrock"))]
+    #[case::a_bare_group("claude", Some("bedrock"))]
+    #[case::an_unknown_model("team/unknown", None)]
+    fn a_refused_model_names_its_prefix_only_when_it_is_a_provider(
+        #[case] model: &str,
+        #[case] provider: Option<&str>,
+    ) {
+        let resolved = rate_limited_provider(
+            model,
+            |name| name == "anthropic" || name == "bedrock",
+            |group| matches!(group, "team/claude" | "claude").then(|| "bedrock".to_owned()),
+        );
+        assert_eq!(resolved.as_deref(), provider);
     }
 }

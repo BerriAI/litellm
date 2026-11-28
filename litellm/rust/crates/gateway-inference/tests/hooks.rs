@@ -117,6 +117,14 @@ impl Callback for Recording {
                 Some((format!("{field:?}"), value))
             })
             .collect();
+        let mut read = read;
+        let failed_with = litellm_gateway_inference::record::read(|entries| {
+            let failure = entries.failure.as_ref()?;
+            failure.error_information(str::to_owned).error_class
+        });
+        if let Some(Some(class)) = failed_with {
+            read.insert("FailedWith".to_owned(), Value::from(class));
+        }
         self.seen.lock().push((input.hook, Value::Object(read)));
         Box::pin(async move { (self.answer)(input.hook) })
     }
@@ -284,7 +292,36 @@ async fn the_success_log_reads_the_price_of_what_the_call_used(
 
 #[rstest]
 #[tokio::test]
-async fn a_stream_the_client_drops_before_its_end_tells_neither_log() {
+async fn a_stream_the_client_drops_after_its_first_event_is_logged_once_with_what_it_counted() {
+    let upstream =
+        answering(ResponseTemplate::new(200).set_body_raw(STREAM, "text/event-stream")).await;
+    let recording = Recording::silent();
+
+    let mut body = ask(app(&upstream, &recording), true)
+        .await
+        .into_body()
+        .into_data_stream();
+    futures_util::StreamExt::next(&mut body)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(body);
+
+    let seen = recording.seen(4).await;
+    let mut disconnected = ended("success", 3, 1, 0);
+    disconnected["FailedWith"] = Value::from("ClientDisconnected");
+    assert_eq!(
+        (hooks(&seen), seen.last().map(|(_, read)| read.clone())),
+        (
+            vec![Hook::PreCall, Hook::ResponseHeaders, Hook::AttemptEnded],
+            Some(disconnected)
+        )
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_the_client_drops_before_its_first_event_tells_neither_log() {
     let upstream =
         answering(ResponseTemplate::new(200).set_body_raw(STREAM, "text/event-stream")).await;
     let recording = Recording::silent();
@@ -384,40 +421,69 @@ async fn a_call_a_pre_call_hook_ends_is_answered_for_it_and_never_reaches_the_pr
     );
 }
 
+/// How the provider fails a call in [`a_call_that_fails_tells_the_failure_hooks_how_it_failed`].
+#[derive(Clone, Copy, Debug)]
+enum Fails {
+    Refusing,
+    BreakingItsStream,
+    SendingAnErrorEvent,
+}
+
+const ERROR_EVENT_STREAM: &str = concat!(
+    "event: message_start\n",
+    "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"test-model\",\"content\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}}\n\n",
+    "event: content_block_delta\n",
+    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n",
+    "event: error\n",
+    "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n",
+);
+
 #[rstest]
-#[case::the_provider_refuses_it(false, 3)]
-#[case::its_stream_breaks(true, 4)]
+#[case::the_provider_refuses_it(Fails::Refusing, 3, "BadRequestError")]
+#[case::its_stream_breaks(Fails::BreakingItsStream, 4, "APIConnectionError")]
+#[case::its_stream_sends_an_error_event(Fails::SendingAnErrorEvent, 4, "InternalServerError")]
 #[tokio::test]
-async fn a_call_that_fails_tells_the_failure_hooks(#[case] stream: bool, #[case] told: usize) {
+async fn a_call_that_fails_tells_the_failure_hooks_how_it_failed(
+    #[case] fails: Fails,
+    #[case] told: usize,
+    #[case] class: &str,
+) {
     let recording = Recording::silent();
-    let response = match stream {
-        false => {
+    let response = match fails {
+        Fails::Refusing => {
             let upstream = answering(ResponseTemplate::new(400).set_body_json(
                 json!({"type": "error", "error": {"type": "invalid_request_error", "message": "no"}}),
             ))
             .await;
             ask(app(&upstream, &recording), false).await
         }
-        true => {
+        Fails::BreakingItsStream => {
             let base = support::truncating_upstream("event: message_start\ndata: {}\n\n").await;
             let callback: Arc<dyn ErasedCallback> = recording.clone();
             let app = support::app_with_callbacks("anthropic/test-model", &base, vec![callback]);
             ask(app, true).await
         }
+        Fails::SendingAnErrorEvent => {
+            let upstream = answering(
+                ResponseTemplate::new(200).set_body_raw(ERROR_EVENT_STREAM, "text/event-stream"),
+            )
+            .await;
+            ask(app(&upstream, &recording), true).await
+        }
     };
     let _ = to_bytes(response.into_body(), 4096).await;
 
     let seen = recording.seen(told).await;
-    let after_the_call: Vec<(Hook, Value)> = seen
+    let after_the_call: Vec<(Hook, Value, Value)> = seen
         .into_iter()
         .filter(|(hook, _)| !matches!(hook, Hook::PreCall | Hook::ResponseHeaders))
-        .map(|(hook, read)| (hook, read["Outcome"].clone()))
+        .map(|(hook, read)| (hook, read["Outcome"].clone(), read["FailedWith"].clone()))
         .collect();
     assert_eq!(
         after_the_call,
         vec![
-            (Hook::PostCallFailure, json!("failure")),
-            (Hook::AttemptEnded, json!("failure"))
+            (Hook::PostCallFailure, json!("failure"), json!(class)),
+            (Hook::AttemptEnded, json!("failure"), json!(class))
         ]
     );
 }
