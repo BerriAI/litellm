@@ -1,6 +1,7 @@
 import json
 import time
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from functools import cached_property
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
@@ -49,7 +50,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUsageBlock,
     OpenAIChatCompletionFinishReason,
 )
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import ModelResponse, ModelResponseStream, generate_id
 
 from ..common_utils import OllamaError, ollama_think
 
@@ -524,6 +525,10 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
     seen_tool_calls: bool = False
     _next_tool_call_index: int = 0
 
+    @cached_property
+    def response_id(self) -> str:
+        return generate_id()
+
     def _is_function_call_complete(self, function_args: str | dict[str, object]) -> bool:
         if isinstance(function_args, dict):
             return True
@@ -630,7 +635,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
                 ]
 
             return ModelResponseStream(
-                id=str(uuid.uuid4()),
+                id=self.response_id,
                 object="chat.completion.chunk",
                 created=int(time.time()),  # ollama created_at is in UTC
                 usage=_done_chunk_usage(chunk),
