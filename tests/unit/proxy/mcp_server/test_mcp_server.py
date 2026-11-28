@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager, nullcontext
 from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from mcp.types import CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
@@ -457,6 +458,47 @@ async def test_streamable_http_mcp_handler_mock():
         # Verify stateless session manager handle_request was called
         mock_session_manager_stateless.handle_request.assert_called_once()
         mock_session_manager_stateful.handle_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ({"jsonrpc": "2.0", "method": ["ping"], "id": 0}, "Invalid Request"),
+        ({"jsonrpc": "2.0", "method": "initialize"}, "Initialize requires a request ID"),
+        ({"jsonrpc": "2.0", "method": "initialize", "id": None}, "Initialize requires a request ID"),
+        ({"jsonrpc": "2.0", "padding": "x" * 5000, "method": "initialize"}, "Initialize requires a request ID"),
+    ],
+    ids=["malformed-envelope", "missing-id", "null-id", "method-after-routing-peek"],
+)
+async def test_mcp_invalid_requests_return_short_jsonrpc_errors(body: dict[str, object], message: str) -> None:
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    from litellm.proxy.mcp_server import server
+
+    stateless: Final = StreamableHTTPSessionManager(server.server, stateless=True)
+    stateful: Final = StreamableHTTPSessionManager(server.server, stateless=False)
+    with patch.multiple(  # test-quality-ok: fresh SDK managers isolate their lifespans from other tests
+        server,
+        session_manager_stateless=stateless,
+        session_manager_stateful=stateful,
+        _SESSION_MANAGERS_INITIALIZED=True,
+    ):
+        async with (
+            stateless.run(),
+            stateful.run(),
+            httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=server.handle_streamable_http_mcp), base_url="http://localhost"
+            ) as client,
+        ):
+            response: Final = await client.post(
+                "/mcp", json=body, headers={"Accept": "application/json, text/event-stream"}
+            )
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": message}}
+    assert int(response.headers["content-length"]) == len(response.content)
+    assert "mcp-session-id" not in response.headers
 
 
 @pytest.mark.asyncio
