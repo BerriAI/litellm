@@ -325,6 +325,61 @@ async def test_jev_uses_bounded_history_and_separates_operator_instructions(incl
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("context_window_size", [0, 3])
+@pytest.mark.parametrize("instructions", [None, "Use the operator's custom routing policy"])
+@pytest.mark.parametrize("reply", ["yes", "continue", "继续"])
+async def test_jev_short_reply_guidance_respects_history_and_custom_instructions(
+    context_window_size: int, instructions: str | None, reply: str
+) -> None:
+    upstream: Final = respx.Router(assert_all_called=True)
+    route: Final = upstream.post("https://typesafe.test/v1/systemone").respond(
+        json={"answers": {"tier": _answer("COMPLEX").model_dump()}}
+    )
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream.handler))
+    classifier: Final = ComplexityRouter(
+        "jev-short-reply",
+        RoutingContext(litellm.Router(model_list=[])),
+        {
+            "classifier_type": "jev",
+            "jev_classifier_config": {"instructions": instructions},
+            "tiers": {"SIMPLE": "cheap", "COMPLEX": "strong"},
+            "classifier_context_window_size": context_window_size,
+            "classifier_context_include_assistant_turns": True,
+        },
+        jev_client=HttpJevClassifierClient("test", "https://typesafe.test", handler),
+        derive_savings_baseline=False,
+    )
+    try:
+        outcome: Final = await classifier.aclassify(
+            reply,
+            messages=[
+                {"role": "user", "content": "Implement a bounded connection pool with cancellation and lease expiry"},
+                {"role": "assistant", "content": "I will implement its state machine and test the cancellation races"},
+                {"role": "user", "content": reply},
+            ],
+        )
+        await GLOBAL_LOGGING_WORKER.flush()
+    finally:
+        await handler.client.aclose()
+
+    assert outcome.cause == "jev_classifier"
+    assert len(route.calls) == 1
+    sent: Final = JevSystemOneRequest.model_validate_json(route.calls[0].request.content)
+    expected_instructions: Final = instructions or (
+        DEFAULT_JEV_INSTRUCTIONS
+        if context_window_size == 0
+        else f"{DEFAULT_JEV_INSTRUCTIONS} "
+        "Classify the current message, using the earlier turns quoted above it as context: when it is a short reply "
+        'such as "yes" or "continue", rate the work it approves rather than the reply itself.'
+    )
+    assert sent.questions["tier"].instructions == expected_instructions
+    assert reply in sent.state
+    assert ("bounded connection pool" in sent.state) is (context_window_size > 0)
+    assert ("cancellation races" in sent.state) is (context_window_size > 0)
+    assert expected_instructions not in sent.state
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("fallback", "expected_model", "expected_cause"),
     (
