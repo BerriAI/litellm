@@ -11,8 +11,9 @@ from itertools import takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NoReturn, Protocol, TypeAlias
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
+from litellm.exceptions import ModelNotMappedError
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     inherit_message_logging_privacy,
     initialize_standard_callback_dynamic_params,
@@ -248,13 +249,38 @@ async def _count(ctx: RoutingContext, payload: Mapping[str, object]) -> int:
     )
 
 
+def _section_mapping(value: object) -> Mapping[str, object]:
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, BaseModel):
+        return value.model_dump(exclude_none=True)
+    return _EMPTY
+
+
+def _deployment_section(deployment: object, section: str) -> Mapping[str, object]:
+    if isinstance(deployment, Mapping):
+        return _section_mapping(deployment.get(section))
+    if isinstance(deployment, BaseModel):
+        return _section_mapping(getattr(deployment, section, None))
+    return _EMPTY
+
+
+def _deployment_model_info(ctx: RoutingContext, deployment: Mapping[str, object], model: str) -> Mapping[str, object]:
+    deployment_dict: Final = _DICT.validate_python(deployment)
+    try:
+        raw_info: Final = ctx.registry().router_model_info(deployment=deployment_dict, received_model_name=model)
+    except ModelNotMappedError:
+        params: Final = _deployment_section(deployment_dict, "litellm_params")
+        model_info: Final = _deployment_section(deployment_dict, "model_info")
+        return {**params, **model_info}
+    return _MAPPING.validate_python(raw_info)
+
+
 def _budget(
     ctx: RoutingContext, deployment: Mapping[str, object], payload: Mapping[str, object], ratio: float
 ) -> InputBudget:
     model: Final = str(payload.get("model", ""))
-    info: Final = _MAPPING.validate_python(
-        ctx.registry().router_model_info(deployment=_DICT.validate_python(deployment), received_model_name=model)
-    )
+    info: Final = _deployment_model_info(ctx, deployment, model)
     raw_window: Final = info.get("max_input_tokens")
     window: Final = raw_window if isinstance(raw_window, int) and not isinstance(raw_window, bool) else None
     output: Final = next(
@@ -263,7 +289,9 @@ def _budget(
             for key in ("max_completion_tokens", "max_output_tokens", "max_tokens")
             if payload.get(key) is not None
         ),
-        info.get("max_output_tokens"),
+        info.get("max_output_tokens")
+        if info.get("max_output_tokens") is not None
+        else info.get("max_completion_tokens"),
     )
     if output is not None and (not isinstance(output, int) or isinstance(output, bool) or output <= 0):
         _reject(model, "The output allowance must be a positive integer")
