@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use litellm_config::LitellmRole;
+use litellm_gateway_auth_core::record::ModelRegion as AuthModelRegion;
 use litellm_python_compat::{Value, datetime::IsoDateTime};
 use litellm_redis_store::auth_cache::{
     Bag, BudgetEntry, Lists, ModelRegion, ModelTableEntry, ObjectPermissionEntry,
@@ -49,6 +50,7 @@ carried_when_held!(
     IsoDateTime,
     LitellmRole,
     ModelRegion,
+    AuthModelRegion,
     ObjectPermissionEntry,
     ModelTableEntry,
     BudgetEntry

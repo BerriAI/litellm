@@ -6,6 +6,7 @@ pub mod body;
 mod caller;
 pub mod client_address;
 mod commit;
+pub mod customer;
 mod error;
 mod host;
 pub mod identity;

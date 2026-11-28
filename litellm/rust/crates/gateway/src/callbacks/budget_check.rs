@@ -500,6 +500,7 @@ mod tests {
                     budget,
                     ..EndUserRecord::default()
                 }),
+            customer_hierarchy: None,
         })
     }
 

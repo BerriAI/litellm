@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT jsonb_build_object(\n    'customer_member_id', m.customer_member_id,\n    'alias', m.alias,\n    'spend', m.spend,\n    'budget', to_jsonb(mb),\n    'budget_override', to_jsonb(mo),\n    'budget_override_expires_at', m.budget_override_expires_at,\n    'parent_org', jsonb_build_object(\n        'customer_org_id', o.customer_org_id,\n        'alias', o.alias,\n        'spend', o.spend,\n        'budget', to_jsonb(ob)\n    ),\n    'teams', COALESCE((\n        SELECT jsonb_agg(jsonb_build_object(\n            'customer_team_id', t.customer_team_id,\n            'alias', t.alias,\n            'spend', t.spend,\n            'budget', to_jsonb(tb),\n            'budget_override', to_jsonb(tbo),\n            'budget_override_expires_at', t.budget_override_expires_at\n        ) ORDER BY parent.position)\n        FROM unnest(m.parent_team_ids) WITH ORDINALITY AS parent(id, position)\n        JOIN \"LiteLLM_CustomerTeamTable\" AS t ON t.customer_team_id = parent.id\n        LEFT JOIN \"LiteLLM_BudgetTable\" AS tb ON tb.budget_id = t.budget_id\n        LEFT JOIN \"LiteLLM_BudgetTable\" AS tbo ON tbo.budget_id = t.budget_override_id\n    ), '[]'::jsonb)\n) AS \"row!: Json<CustomerMemberRow>\"\nFROM \"LiteLLM_CustomerMemberTable\" AS m\nJOIN \"LiteLLM_CustomerOrganizationTable\" AS o ON o.customer_org_id = m.parent_org_id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS ob ON ob.budget_id = o.budget_id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS mb ON mb.budget_id = m.budget_id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS mo ON mo.budget_id = m.budget_override_id\nWHERE m.customer_member_id = $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "row!: Json<CustomerMemberRow>",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "413bddd7a42c2f9ca1f7fcda64e500d677a94a6decacb8ad8ed7ce30c53f0dee"
+}

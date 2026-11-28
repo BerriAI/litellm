@@ -283,6 +283,7 @@ pub(crate) enum Ask {
     LoadTeamMembership {
         user_id: String,
         team_id: String,
+        for_key: bool,
         reply: Reply<Option<PyRow>>,
     },
     TeamModelAccess {
@@ -318,6 +319,7 @@ pub(crate) enum Ask {
     },
     Org {
         org_id: String,
+        for_key: bool,
         reply: Reply<Option<Org<PyRow>>>,
     },
     OrgByAlias {
@@ -394,7 +396,7 @@ impl OperatorHooks for PythonAuthHost {
 }
 
 impl AuthHost for PythonAuthHost {
-    const READ_KEY_AFFILIATIONS: bool = false;
+    const READ_KEY_AFFILIATIONS_IN_PRINCIPAL: bool = false;
     type Rows = PyRows;
 
     async fn validated_end_user_id(&self, end_user_id: &str) -> Result<Option<String>, Error> {
@@ -625,12 +627,13 @@ impl AuthHost for PythonAuthHost {
         &self,
         user_id: &str,
         team_id: &str,
-        _: litellm_gateway_auth_core::AffiliationRead,
+        read: litellm_gateway_auth_core::AffiliationRead,
     ) -> Result<Option<PyRow>, Error> {
         let (user_id, team_id) = (user_id.to_owned(), team_id.to_owned());
         self.ask(|reply| Ask::LoadTeamMembership {
             user_id,
             team_id,
+            for_key: read == litellm_gateway_auth_core::AffiliationRead::Key,
             reply,
         })
         .await
@@ -685,10 +688,15 @@ impl AuthHost for PythonAuthHost {
     async fn org(
         &self,
         org_id: &str,
-        _: litellm_gateway_auth_core::AffiliationRead,
+        read: litellm_gateway_auth_core::AffiliationRead,
     ) -> Result<Option<Org<PyRow>>, Error> {
         let org_id = org_id.to_owned();
-        self.ask(|reply| Ask::Org { org_id, reply }).await
+        self.ask(|reply| Ask::Org {
+            org_id,
+            for_key: read == litellm_gateway_auth_core::AffiliationRead::Key,
+            reply,
+        })
+        .await
     }
     async fn org_by_alias(&self, alias: &str) -> Result<Option<Org<PyRow>>, Error> {
         let alias = alias.to_owned();

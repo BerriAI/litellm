@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT jsonb_build_object(\n    'customer_org_id', o.customer_org_id,\n    'alias', o.alias,\n    'spend', o.spend,\n    'budget', to_jsonb(b)\n) AS \"row!: Json<CustomerOrgRow>\"\nFROM \"LiteLLM_CustomerOrganizationTable\" AS o\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b USING (budget_id)\nWHERE o.alias = $1\nLIMIT 2\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "row!: Json<CustomerOrgRow>",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "50693ff02508211ee0d0d28c38625d0546b13211e1a41778693ba059e3e0711c"
+}

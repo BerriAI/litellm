@@ -14,7 +14,7 @@ use litellm_gateway_auth_core::{
             ManagedAgent, ModelAccess, Org, Provisioning, RegisteredAgent, Team, TeamRead, User,
             UserRead,
         },
-        key::{KeyContext, KeyIdentity, Owner},
+        key::{self as key_identity, KeyContext, KeyIdentity, Owner},
     },
     plan::Plan,
     routes::passthrough::{ForwardedRoutes, PassthroughGrants},
@@ -388,6 +388,7 @@ pub(crate) enum AuthStep {
     LoadTeamMembership {
         user_id: String,
         team_id: String,
+        for_key: bool,
     },
     TeamModelAccess {
         team: Py<PyAny>,
@@ -423,6 +424,7 @@ pub(crate) enum AuthStep {
     },
     Org {
         org_id: String,
+        for_key: bool,
     },
     OrgByAlias {
         alias: String,
@@ -494,6 +496,8 @@ pub(crate) enum AuthStep {
 /// How a call ended, by entry point.
 enum Ended {
     Outcome(Outcome<PyRows>),
+    KeyOrganization(Option<PyRow>),
+    KeyMembership(Option<PyRow>),
     Verified(Result<jwt::Claims, Error>),
     Authorized(Result<Box<JwtIdentity<PyRows>>, Error>),
     Resolved(Result<ClaimIdentity<PyRow>, Error>),
@@ -902,6 +906,22 @@ impl From<PublicDenial> for DenialView {
 #[pymethods]
 impl AuthOutcome {
     #[getter]
+    fn key_organization(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        match &self.0 {
+            Ended::KeyOrganization(organization) => rows(py, organization.as_ref()),
+            _ => None,
+        }
+    }
+
+    #[getter]
+    fn key_membership(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        match &self.0 {
+            Ended::KeyMembership(membership) => rows(py, membership.as_ref()),
+            _ => None,
+        }
+    }
+
+    #[getter]
     fn denied(&self) -> bool {
         self.public_denial().is_some()
     }
@@ -1139,10 +1159,14 @@ impl AuthStep {
                 user_id: user_id.clone(),
             },
             Ask::LoadTeamMembership {
-                user_id, team_id, ..
+                user_id,
+                team_id,
+                for_key,
+                ..
             } => Self::LoadTeamMembership {
                 user_id: user_id.clone(),
                 team_id: team_id.clone(),
+                for_key: *for_key,
             },
             Ask::TeamModelAccess { team, model, .. } => Self::TeamModelAccess {
                 team: row(py, team),
@@ -1194,8 +1218,11 @@ impl AuthStep {
                 user_id: user_id.clone(),
                 team_id: team_id.clone(),
             },
-            Ask::Org { org_id, .. } => Self::Org {
+            Ask::Org {
+                org_id, for_key, ..
+            } => Self::Org {
                 org_id: org_id.clone(),
+                for_key: *for_key,
             },
             Ask::OrgByAlias { alias, .. } => Self::OrgByAlias {
                 alias: alias.clone(),
@@ -1352,6 +1379,32 @@ fn agent_mode(mode: &str) -> PyResult<AgentMode> {
 
 #[pymethods]
 impl AuthCall {
+    #[staticmethod]
+    #[pyo3(signature = (key_org_id, team_org_id))]
+    fn key_organization_id(
+        key_org_id: Option<String>,
+        team_org_id: Option<String>,
+    ) -> Option<String> {
+        key_identity::organization_id(key_org_id, team_org_id)
+    }
+
+    #[staticmethod]
+    fn read_key_organization(org_id: String) -> AuthCall {
+        call(move |host| async move {
+            let organization = key_identity::organization(&host, &org_id).await?;
+            Ok(AuthOutcome(Ended::KeyOrganization(organization)))
+        })
+    }
+
+    #[staticmethod]
+    fn read_key_membership(user_id: String, team_id: String) -> AuthCall {
+        call(move |host| async move {
+            let membership =
+                key_identity::membership(&host, Some(&user_id), Some(&team_id)).await?;
+            Ok(AuthOutcome(Ended::KeyMembership(membership)))
+        })
+    }
+
     #[staticmethod]
     fn plan(request: RequestFacts, settings: &AuthSettings) -> Planned {
         match core::plan(&request.request(), &settings.0) {
@@ -1888,9 +1941,40 @@ impl AuthCall {
 #[cfg(test)]
 mod tests {
     use litellm_gateway_auth_core::authn::jwt::KeyOrigin;
+    use pyo3::{Python, prelude::PyAnyMethods, types::PyString};
     use rstest::rstest;
 
-    use super::minted_org_id;
+    use super::{AuthCall, AuthStep, minted_org_id};
+
+    #[rstest]
+    #[case::found(true)]
+    #[case::absent(false)]
+    fn key_affiliation_returns_the_host_row_or_its_absence(#[case] found: bool) {
+        Python::initialize();
+        Python::attach(|py| {
+            let call = AuthCall::read_key_organization("key-org".to_owned());
+            assert!(matches!(
+                call.resume(py).unwrap(),
+                AuthStep::Org { org_id, for_key: true } if org_id == "key-org"
+            ));
+            let row = PyString::new(py, "the stored organization");
+            call.org(
+                found.then(|| "key-org".to_owned()),
+                found.then(|| row.clone().into_any().unbind()),
+            )
+            .unwrap();
+            let AuthStep::Done { outcome } = call.resume(py).unwrap() else {
+                panic!("expected the organization outcome");
+            };
+            assert_eq!(
+                outcome
+                    .borrow(py)
+                    .key_organization(py)
+                    .map(|value| value.bind(py).is(&row)),
+                found.then_some(true)
+            );
+        });
+    }
 
     fn auto_registered(minted: bool) -> KeyOrigin {
         KeyOrigin::AutoRegistered {

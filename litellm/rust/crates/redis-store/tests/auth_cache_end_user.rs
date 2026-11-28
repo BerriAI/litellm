@@ -32,7 +32,7 @@ const FULL_ENTRY: &str = concat!(
     r#" "vector_stores": ["store"], "agents": ["agent"], "agent_access_groups": ["agents"],"#,
     r#" "models": ["claude"], "mcp_toolsets": ["toolset"], "blocked_tools": ["shell"],"#,
     r#" "search_tools": ["search"], "mcp_tool_search_enabled": true, "skills": ["skill"],"#,
-    r#" "apps": null}}"#,
+    r#" "apps": ["app"]}}"#,
 );
 const BARE_PERMISSION_ENTRY: &str = concat!(
     r#"{"user_id": "bare_permission", "blocked": false, "alias": null, "spend": 0.0,"#,

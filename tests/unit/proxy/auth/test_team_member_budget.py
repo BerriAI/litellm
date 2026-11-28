@@ -19,13 +19,15 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import (
+    KeyMembershipRead,
     common_checks,
     resolve_effective_team_member_budget,
 )
 
 
 @pytest.mark.asyncio
-async def test_team_member_budget_check_exceeds_budget():
+@pytest.mark.parametrize("already_read", [False, True], ids=["read-in-common-checks", "reuse-selected-membership"])
+async def test_team_member_budget_check_exceeds_budget(already_read: bool):
     """Test that common_checks raises BudgetExceededError when team member spend exceeds budget."""
     request_body = {
         "model": "gpt-3.5-turbo",
@@ -75,7 +77,7 @@ async def test_team_member_budget_check_exceeds_budget():
         patch(
             "litellm.proxy.auth.auth_checks.get_team_membership",
             new_callable=AsyncMock,
-            return_value=team_membership,
+            return_value=None if already_read else team_membership,
         ),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
         patch("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache),
@@ -94,6 +96,11 @@ async def test_team_member_budget_check_exceeds_budget():
                 proxy_logging_obj=mock_proxy_logging_obj,
                 valid_token=valid_token,
                 request=mock_request,
+                key_membership=(
+                    KeyMembershipRead(valid_token.user_id, team_object.team_id, team_membership)
+                    if already_read
+                    else None
+                ),
             )
 
         # Verify error message contains expected text

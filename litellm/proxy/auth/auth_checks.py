@@ -1317,6 +1317,13 @@ async def _check_opaque_team_member_budget(
     check_opaque_inference_controls(default_budget.model_copy(update={"max_budget": effective_budget}).model_dump())
 
 
+@dataclass(frozen=True, slots=True)
+class KeyMembershipRead:
+    user_id: str
+    team_id: str
+    row: LiteLLM_TeamMembership | None
+
+
 async def common_checks(
     request_body: dict[str, object],
     team_object: LiteLLM_TeamTable | None,
@@ -1331,6 +1338,7 @@ async def common_checks(
     request: Request,
     skip_budget_checks: bool | None = None,
     project_object: LiteLLM_ProjectTableCachedObj | None = None,
+    key_membership: KeyMembershipRead | None = None,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -1385,15 +1393,19 @@ async def common_checks(
     )
     team_membership_loaded: Final = team_object is not None and membership_user_id is not None
     loaded_team_membership: Final = (
-        await get_team_membership(
+        None
+        if team_object is None or membership_user_id is None
+        else key_membership.row
+        if key_membership is not None
+        and key_membership.user_id == membership_user_id
+        and key_membership.team_id == team_object.team_id
+        else await get_team_membership(
             user_id=membership_user_id,
             team_id=team_object.team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-        if team_object is not None and membership_user_id is not None
-        else None
     )
 
     if opaque_cursor and valid_token is not None:

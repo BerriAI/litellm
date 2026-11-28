@@ -35,6 +35,9 @@ pub struct ObjectPermission {
     pub mcp_tool_search_enabled: Option<bool>,
     #[serde_as(as = "serde_with::DefaultOnNull")]
     pub skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde_as(as = "serde_with::DefaultOnNull")]
+    pub apps: Vec<String>,
 }
 
 pub(super) async fn find_object_permission(
@@ -98,9 +101,9 @@ mod tests {
             INSERT INTO "LiteLLM_ObjectPermissionTable"
                 (object_permission_id, mcp_servers, mcp_access_groups, mcp_tool_permissions, vector_stores,
                  agents, agent_access_groups, models, blocked_tools, mcp_toolsets, search_tools,
-                 mcp_tool_search_enabled, skills)
+                 mcp_tool_search_enabled, skills, apps)
             VALUES ('perm-full', '{s1,s2}', '{g1}', '{"s1": ["t1"]}', '{v1}', '{a1}', '{ag1}', '{m1}', '{bt}',
-                    '{ts}', '{st}', true, '{sk}')
+                    '{ts}', '{st}', true, '{sk}', '{app}')
             "#,
         )
         .execute(&mut *tx)
@@ -126,6 +129,7 @@ mod tests {
                 "search_tools": ["st"],
                 "mcp_tool_search_enabled": true,
                 "skills": ["sk"],
+                "apps": ["app"],
             })
         );
         Ok(())

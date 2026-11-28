@@ -33,7 +33,7 @@ pub enum OptionalPreCallCheck {
 
 /// A proxy config's `router_settings`, as written. What each setting means, and its default when
 /// unset, is the router core's.
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RouterSettings {
     pub routing_strategy: Option<RoutingStrategy>,

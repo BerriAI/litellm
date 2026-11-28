@@ -59,7 +59,7 @@ requests:
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
-    over: not_native
+    over: model_max_budget
 
   - name: the database fails the membership query
     unavailable: membership

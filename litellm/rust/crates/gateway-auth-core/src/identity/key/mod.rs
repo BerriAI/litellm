@@ -1,7 +1,7 @@
 use crate::{
-    Affiliation, AuthHost, Holder, KeyHash, Named, Team, Token,
+    Affiliation, AuthHost, Error, Holder, KeyHash, Named, Team, Token,
     authn::key::Keyed,
-    host::{AffiliationRead, EndUserRow, KeyRow, Rows},
+    host::{AffiliationRead, EndUserRow, KeyRow, MembershipRow, OrgRow, Rows},
     outcome::Refused,
 };
 
@@ -49,6 +49,29 @@ pub enum KeyIdentity<R: Rows> {
     VirtualKey(Box<KeyContext<R>>),
 }
 
+pub fn organization_id(key_org_id: Option<String>, team_org_id: Option<String>) -> Option<String> {
+    key_org_id.or(team_org_id)
+}
+
+pub async fn organization<H: AuthHost>(host: &H, org_id: &str) -> Result<Option<OrgRow<H>>, Error> {
+    Ok(Box::pin(host.org(org_id, AffiliationRead::Key))
+        .await?
+        .map(|org| org.row))
+}
+
+pub async fn membership<H: AuthHost>(
+    host: &H,
+    user_id: Option<&str>,
+    team_id: Option<&str>,
+) -> Result<Option<MembershipRow<H>>, Error> {
+    match (user_id, team_id) {
+        (Some(user_id), Some(team_id)) => {
+            Box::pin(host.load_team_membership(user_id, team_id, AffiliationRead::Key)).await
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Who holds a verified virtual key: its owner, team, organization and project, read before any budget.
 pub(crate) async fn principal<H: AuthHost>(
     host: &H,
@@ -60,28 +83,33 @@ pub(crate) async fn principal<H: AuthHost>(
         .await
         .map_err(|denial| Refused::new(denial, Some(&key.row)))?;
     let team = team::read(host, &key.record).await?;
-    let org = if H::READ_KEY_AFFILIATIONS {
-        let org_id = key.record.org_id.clone().or_else(|| match &team {
+    let org = if H::READ_KEY_AFFILIATIONS_IN_PRINCIPAL {
+        let team_org_id = match &team {
             Some(team::Read::Stored(team)) => team.organization_id.clone(),
             _ => None,
-        });
-        match org_id {
+        };
+        match organization_id(key.record.org_id.clone(), team_org_id) {
             Some(id) => {
-                let org = Box::pin(host.org(&id, AffiliationRead::Key)).await?;
-                Named::of(Some(id), org.map(|org| org.row))
+                let org = Box::pin(organization(host, &id)).await?;
+                Named::of(Some(id), org)
             }
             None => None,
         }
     } else {
         None
     };
-    let membership = match (&owner, &team, &key.record.user_id, &key.record.team_id) {
-        (Some(_), Some(team::Read::Stored(_)), Some(user_id), Some(team_id))
-            if H::READ_KEY_AFFILIATIONS =>
-        {
-            Box::pin(host.load_team_membership(user_id, team_id, AffiliationRead::Key)).await?
-        }
-        _ => None,
+    let membership = if H::READ_KEY_AFFILIATIONS_IN_PRINCIPAL
+        && owner.is_some()
+        && matches!(&team, Some(team::Read::Stored(_)))
+    {
+        Box::pin(membership(
+            host,
+            key.record.user_id.as_deref(),
+            key.record.team_id.as_deref(),
+        ))
+        .await?
+    } else {
+        None
     };
     let team = team.map(|team| match team {
         team::Read::Stored(team) => Team::Row(team.row),

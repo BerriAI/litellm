@@ -9,6 +9,7 @@ use litellm_config::LitellmRole;
 use crate::{
     Affiliation, KeyHash, Rows,
     authn::key::KeyRecord,
+    customer::CustomerHierarchy,
     identity::key::{KeyContext, KeyIdentity},
     outcome::Identity,
 };
@@ -38,6 +39,7 @@ pub struct Caller<R: Rows> {
     pub credential: Credential<R>,
     pub affiliation: Affiliation<R>,
     pub end_user: R::EndUser,
+    pub customer_hierarchy: Option<Box<CustomerHierarchy>>,
 }
 
 /// What a caller presented and the core verified.
@@ -78,6 +80,7 @@ impl<R: Rows> TryFrom<Identity<R>> for Caller<R> {
                     credential: Credential::Key { key },
                     affiliation,
                     end_user,
+                    customer_hierarchy: None,
                 })
             }
             Identity::Key(KeyIdentity::NoMasterKey { .. }) => Err(NotACaller::NoMasterKey),
@@ -97,6 +100,7 @@ impl<R: Rows> Caller<R> {
             credential: Credential::MasterKey,
             affiliation: Affiliation::nobody(),
             end_user,
+            customer_hierarchy: None,
         }
     }
 }

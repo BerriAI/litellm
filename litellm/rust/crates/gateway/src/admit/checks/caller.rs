@@ -117,6 +117,7 @@ mod tests {
             },
             affiliation: Affiliation::nobody(),
             end_user: EndUserRecord::default(),
+            customer_hierarchy: None,
         })
     }
 

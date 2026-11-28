@@ -250,6 +250,7 @@ impl Caller {
                     project,
                 },
             end_user,
+            customer_hierarchy: _,
         } = &**identity;
         let user = holder.user();
         let team = holder.team();

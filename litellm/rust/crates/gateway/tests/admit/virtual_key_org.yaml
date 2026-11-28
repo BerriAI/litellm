@@ -12,19 +12,57 @@ allow_missing_organization: true
 rows:
   - LiteLLM_BudgetTable: {budget_id: default, created_by: test, updated_by: test}
   - LiteLLM_BudgetTable: {budget_id: limited, max_budget: 10, created_by: test, updated_by: test}
+  - LiteLLM_BudgetTable: {budget_id: per-model, model_max_budget: {claude: 10}, created_by: test, updated_by: test}
+  - LiteLLM_BudgetTable: {budget_id: malformed, model_max_budget: {claude: []}, created_by: test, updated_by: test}
+  - LiteLLM_BudgetTable: {budget_id: null-extras, model_max_budget: null, created_by: test, updated_by: test}
+  - LiteLLM_ObjectPermissionTable: {object_permission_id: permission, apps: [app]}
+  - LiteLLM_ObjectPermissionTable: {object_permission_id: malformed-permission, mcp_tool_permissions: {server: invalid}}
   - LiteLLM_OrganizationTable: {organization_id: plain, organization_alias: Plain, budget_id: default, created_by: test, updated_by: test}
   - LiteLLM_OrganizationTable: {organization_id: limited, organization_alias: Limited, budget_id: limited, created_by: test, updated_by: test}
+  - LiteLLM_OrganizationTable: {organization_id: per-model, organization_alias: Per Model, budget_id: per-model, created_by: test, updated_by: test}
+  - LiteLLM_OrganizationTable: {organization_id: malformed, organization_alias: Malformed, budget_id: malformed, created_by: test, updated_by: test}
+  - LiteLLM_OrganizationTable: {organization_id: null-extras, organization_alias: Null Extras, budget_id: null-extras, created_by: test, updated_by: test}
   - LiteLLM_OrganizationTable: {organization_id: tagged, organization_alias: Tagged, budget_id: default, metadata: {tags: [a]}, created_by: test, updated_by: test}
+  - LiteLLM_OrganizationTable: {organization_id: metadata-limit, organization_alias: Metadata Limit, budget_id: default, metadata: {model_rpm_limit: {claude: 5}}, created_by: test, updated_by: test}
   - LiteLLM_OrganizationTable: {organization_id: unread, organization_alias: Unread, budget_id: default, created_by: test, updated_by: test}
+  - LiteLLM_OrganizationTable: {organization_id: granted, organization_alias: Granted, budget_id: default, object_permission_id: permission, created_by: test, updated_by: test}
+  - LiteLLM_OrganizationTable: {organization_id: malformed-grant, organization_alias: Malformed Grant, budget_id: default, object_permission_id: malformed-permission, created_by: test, updated_by: test}
 
 keys:
   sk-plain: {organization_id: plain}
   sk-missing: {organization_id: missing}
   sk-limited: {organization_id: limited}
+  sk-per-model: {organization_id: per-model}
+  sk-malformed: {organization_id: malformed}
+  sk-null-extras: {organization_id: null-extras}
   sk-tagged: {organization_id: tagged}
+  sk-metadata-limit: {organization_id: metadata-limit}
   sk-unread: {organization_id: unread}
+  sk-granted: {organization_id: granted}
+  sk-malformed-grant: {organization_id: malformed-grant}
 
 requests:
+  - name: an organization with a typed metadata limit still goes to Python
+    headers: {authorization: Bearer sk-metadata-limit}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: metadata
+
+  - name: an organization reads its permission by id but does not serve its grants
+    headers: {authorization: Bearer sk-granted}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: object_permission
+
+  - name: an organization with an unreadable permission stays with Python
+    headers: {authorization: Bearer sk-malformed-grant}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
   - name: a key names an organization
     headers: {authorization: Bearer sk-plain}
     body: {model: claude, max_tokens: 16, messages: []}
@@ -52,6 +90,27 @@ requests:
     expect: python
     reason: credential
     over: not_native
+
+  - name: an organization has a per-model budget
+    headers: {authorization: Bearer sk-per-model}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: model_max_budget
+
+  - name: a malformed per-model budget declines the organization row
+    headers: {authorization: Bearer sk-malformed}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a null per-model budget does not set a policy
+    headers: {authorization: Bearer sk-null-extras}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: organization
 
   - name: the database fails the organization query
     unavailable: organization

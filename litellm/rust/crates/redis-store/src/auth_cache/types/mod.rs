@@ -1,6 +1,7 @@
 mod bag;
 mod budget;
 mod budget_limit;
+mod customer_hierarchy;
 mod end_user;
 mod key;
 mod member;
@@ -19,6 +20,9 @@ pub use self::{
     bag::{Bag, Dict, Ints, Lists},
     budget::{BudgetEntry, BudgetFullEntry},
     budget_limit::BudgetLimitEntry,
+    customer_hierarchy::{
+        CustomerCapPolicy, CustomerHierarchyEntry, CustomerScopeEntry, CustomerScopeKey,
+    },
     end_user::{EndUserEntry, ModelRegion, RestrictedEndUsers},
     key::KeyEntry,
     member::{MemberEntry, MemberRole},

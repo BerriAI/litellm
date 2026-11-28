@@ -58,6 +58,7 @@ pub(crate) fn counters(
                 project,
             },
         end_user,
+        customer_hierarchy: _,
     } = &**identity;
     let key = match credential {
         Credential::MasterKey => None,
@@ -237,6 +238,7 @@ mod tests {
                 })),
             },
             end_user,
+            customer_hierarchy: None,
         })
     }
 

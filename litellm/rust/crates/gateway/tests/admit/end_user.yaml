@@ -27,26 +27,39 @@ rows:
       updated_at: "2026-11-27T00:00:00Z"
       updated_by: admin
   - LiteLLM_EndUserTable: {user_id: eu-broke, spend: 10, budget_id: b-low, models: [], blocked: false}
+  - LiteLLM_BudgetTable: {budget_id: b-rpm, rpm_limit: 5, created_by: admin, updated_by: admin}
+  - LiteLLM_BudgetTable: {budget_id: b-per-model, model_max_budget: {claude: 1}, created_by: admin, updated_by: admin}
+  - LiteLLM_EndUserTable: {user_id: eu-limited, spend: 0, budget_id: b-rpm, models: [], blocked: false}
+  - LiteLLM_EndUserTable: {user_id: eu-per-model, spend: 0, budget_id: b-per-model, models: [], blocked: false}
   - LiteLLM_EndUserTable: {user_id: eu-models, spend: 0, models: [other-model], blocked: false}
   - LiteLLM_EndUserTable: {user_id: eu-blocked, spend: 0, models: [], blocked: true}
   - LiteLLM_EndUserTable: {user_id: eu-defaulted, spend: 0, models: [], blocked: false, default_model: claude}
   - LiteLLM_EndUserTable: {user_id: eu-region, spend: 0, models: [], blocked: false, allowed_model_region: eu}
   - LiteLLM_EndUserTable: {user_id: eu-spent, spend: 3, models: [], blocked: false, alias: acme}
+  - LiteLLM_ObjectPermissionTable: {object_permission_id: permission, apps: [app]}
+  - LiteLLM_EndUserTable: {user_id: eu-permission, object_permission_id: permission}
 
 requests:
+  - name: a key naming an end user whose object permission is not served
+    headers: {authorization: Bearer sk-bare}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-permission}}
+    expect: python
+    reason: body
+    over: object_permission
+
   - name: the master key naming an end user over its budget
     headers: {authorization: Bearer gateway-key}
     body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-broke}}
     expect: python
     reason: body
-    over: end_user
+    over: max_budget
 
   - name: a key naming an end user over its budget
     headers: {authorization: Bearer sk-bare}
     body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-broke}}
     expect: python
     reason: body
-    over: end_user
+    over: max_budget
 
   - name: a key naming an end user whose model list leaves the model out
     headers: {authorization: Bearer sk-bare}
@@ -74,14 +87,28 @@ requests:
     body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-region}}
     expect: python
     reason: body
-    over: end_user
+    over: allowed_model_region
 
   - name: an end user over its budget named with space the proxy strips
     headers: {authorization: Bearer sk-bare}
     body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: "\x1c eu-broke\t"}}
     expect: python
     reason: body
-    over: end_user
+    over: max_budget
+
+  - name: a key naming an end user whose budget sets a rate limit
+    headers: {authorization: Bearer sk-bare}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-limited}}
+    expect: python
+    reason: body
+    over: rpm_limit
+
+  - name: a key naming an end user whose budget holds per-model budgets
+    headers: {authorization: Bearer sk-bare}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-per-model}}
+    expect: python
+    reason: body
+    over: model_max_budget
 
   - name: a key naming an end user with no row
     headers: {authorization: Bearer sk-bare}
@@ -158,6 +185,27 @@ requests:
   - name: an end user in metadata and in the customer header
     headers: {authorization: Bearer sk-bare, x-litellm-customer-id: eu-broke}
     body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-new}}
+    expect: python
+    reason: headers
+    over: proxy_header
+
+  - name: a default customer member header still goes to Python
+    headers: {authorization: Bearer sk-bare, x-litellm-customer-member-id: member}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: headers
+    over: proxy_header
+
+  - name: a default customer organization alias header still goes to Python
+    headers: {authorization: Bearer sk-bare, x-litellm-customer-org-alias: alias}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: headers
+    over: proxy_header
+
+  - name: a default customer team header still goes to Python
+    headers: {authorization: Bearer sk-bare, x-litellm-customer-team-id: team}
+    body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: headers
     over: proxy_header

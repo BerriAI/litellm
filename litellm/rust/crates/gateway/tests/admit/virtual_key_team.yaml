@@ -3,7 +3,8 @@
 # spend log charges no team yet. A team that holds a limit, a budget or the per-model limits or
 # priority in its metadata goes to Python over that column. A team whose metadata holds anything
 # else, or a model entry the model rule does not read, is not native, and neither is the UI team
-# or a team with no row.
+# or a team with no row. A team's default member budget is read from the budget row its metadata
+# names, and its budget reset time is read for nothing, as the proxy's checks never read it.
 config:
   model_list:
     - model_name: claude
@@ -19,10 +20,24 @@ teams:
   capped: {max_budget: 10}
   limited: {rpm_limit: 10}
   tagged: {metadata: {tags: [a]}}
+  guarded: {metadata: {guardrails: [pii]}}
   rpm_by_model: {metadata: {model_rpm_limit: {claude: 2}}}
   tpm_by_model: {metadata: {model_tpm_limit: {claude: 100}}}
   prioritized: {metadata: {priority: prod}}
   patterned: {models: ["anthropic/*"]}
+  member_default: {metadata: {team_member_budget_id: member-default}}
+  member_default_gone: {metadata: {team_member_budget_id: gone}}
+  member_default_per_model: {metadata: {team_member_budget_id: member-per-model}}
+  reset_scheduled: {budget_duration: 30d, budget_reset_at: "2100-01-01T00:00:00"}
+  windowed: {budget_limits: [{budget_duration: 30d, max_budget: 5}]}
+  per_model: {model_max_budget: {claude: 2}, model_spend: {claude: 1}}
+  router_override: {router_settings: {timeout: 3}}
+
+rows:
+  - LiteLLM_BudgetTable: {budget_id: member-default, max_budget: 5, created_by: test, updated_by: test}
+  - LiteLLM_BudgetTable: {budget_id: member-per-model, max_budget: 5, model_max_budget: {claude: 1}, created_by: test, updated_by: test}
+  - LiteLLM_ModelTable: {id: 7, aliases: {friendly: claude}, created_by: test, updated_by: test}
+  - LiteLLM_TeamTable: {team_id: aliased, model_id: 7, created_at: "2026-11-01T00:00:00Z", updated_at: "2026-11-01T00:00:00Z"}
 
 keys:
   sk-plain: {team_id: plain}
@@ -30,6 +45,7 @@ keys:
   sk-capped: {team_id: capped}
   sk-limited: {team_id: limited}
   sk-tagged: {team_id: tagged}
+  sk-guarded: {team_id: guarded}
   sk-rpm-by-model: {team_id: rpm_by_model}
   sk-tpm-by-model: {team_id: tpm_by_model}
   sk-prioritized: {team_id: prioritized}
@@ -37,8 +53,51 @@ keys:
   sk-gone: {team_id: gone}
   sk-ui: {team_id: litellm-dashboard}
   sk-teamless: {}
+  sk-member-default: {team_id: member_default}
+  sk-member-default-gone: {team_id: member_default_gone}
+  sk-member-default-per-model: {team_id: member_default_per_model}
+  sk-reset-scheduled: {team_id: reset_scheduled}
+  sk-windowed: {team_id: windowed}
+  sk-per-model: {team_id: per_model}
+  sk-router-override: {team_id: router_override}
+  sk-aliased: {team_id: aliased}
 
 requests:
+  - name: a team with typed guardrails still goes to Python
+    headers: {authorization: Bearer sk-guarded}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: metadata
+
+  - name: a key in a team with a budget window
+    headers: {authorization: Bearer sk-windowed}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: budget_limits
+
+  - name: a key in a team with a per-model budget
+    headers: {authorization: Bearer sk-per-model}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: model_max_budget
+
+  - name: a key in a team with router overrides
+    headers: {authorization: Bearer sk-router-override}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: router_settings
+
+  - name: a key in a team that names a model alias table
+    headers: {authorization: Bearer sk-aliased}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: model_id
+
   - name: a key in a team that holds nothing else
     headers: {authorization: Bearer sk-plain}
     body: {model: claude, max_tokens: 16, messages: []}
@@ -120,3 +179,31 @@ requests:
     headers: {authorization: Bearer sk-teamless}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: rust
+
+  - name: a key in a team with a default member budget
+    headers: {authorization: Bearer sk-member-default}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: member_max_budget
+
+  - name: a key in a team whose default member budget has no row
+    headers: {authorization: Bearer sk-member-default-gone}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a key in a team whose default member budget holds per-model budgets
+    headers: {authorization: Bearer sk-member-default-per-model}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: model_max_budget
+
+  - name: a key in a team with a budget reset time
+    headers: {authorization: Bearer sk-reset-scheduled}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: budget_duration

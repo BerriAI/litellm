@@ -10,10 +10,12 @@
 
 mod affiliation;
 mod carried;
+mod customer;
 mod end_user;
 mod key;
 mod metadata;
 mod models;
+mod object_permission;
 mod store;
 
 use std::{convert::Infallible, sync::Arc, time::Duration};
@@ -35,11 +37,15 @@ use litellm_gateway_auth_core::{
         },
         key::{KeyTeam, Owner},
     },
-    record::{EndUserRecord, MembershipRecord, OrgRecord, ProjectRecord, TeamRecord, UserRecord},
+    record::{
+        EndUserRecord, MembershipRecord, ObjectPermissionRecord, OrgRecord, ProjectRecord,
+        TeamRecord, UserRecord,
+    },
 };
 use litellm_redis_store::auth_cache::KeyEntry;
 use serde_json::Value;
 
+use affiliation::ReadTeam;
 pub(crate) use affiliation::{
     unserved, unserved_membership, unserved_org, unserved_project, unserved_user,
 };
@@ -62,7 +68,7 @@ impl Rows for NativeRows {
     type User = UserRecord;
     type Team = TeamRecord;
     type EndUser = EndUserRecord;
-    type ObjectPermission = Infallible;
+    type ObjectPermission = Box<ObjectPermissionRecord>;
     type Project = ProjectRecord;
     type Membership = MembershipRecord;
     type Org = OrgRecord;
@@ -119,6 +125,15 @@ fn unless_failed<T>(
         );
         declined(step)
     })
+}
+
+async fn member_default_budget(
+    store: &AuthStore,
+    budget_id: &str,
+) -> Result<affiliation::BudgetRow, Error> {
+    let read = store.team_member_default_budget(budget_id).await;
+    let budget = unless_failed(read, "team_member_default_budget")?;
+    affiliation::budget_row_or_spend(budget.as_ref(), 0.0).or_else(declined)
 }
 
 fn keyed(key: &KeyEntry) -> Result<Option<Keyed<Key>>, Error> {
@@ -296,10 +311,17 @@ impl AuthHost for NativeAuthHost {
     /// A user id with no row is no owner, like the key path's `get_user_object`, which swallows
     /// `UserNotFoundError`.
     async fn key_owner(&self, user_id: &str) -> Result<Option<Owner<UserRecord>>, Error> {
-        let read = self.store("key_owner")?.user(user_id).await;
-        let Some(user) = unless_failed(read, "key_owner")? else {
+        let store = self.store("key_owner")?;
+        let read = store.user(user_id).await;
+        let Some(mut user) = unless_failed(read, "key_owner")? else {
             return Ok(None);
         };
+        let read = Box::pin(store.fill_object_permission(
+            user.object_permission_id.as_deref(),
+            &mut user.object_permission,
+        ))
+        .await;
+        unless_failed(read, "object_permission")?;
         affiliation::user(&user)
             .map(|user| {
                 Some(Owner {
@@ -330,20 +352,30 @@ impl AuthHost for NativeAuthHost {
     }
 
     /// A team with no row declines, since the key is then judged by its own copy of the team's
-    /// values, which this host does not read.
+    /// values, which this host does not read. A team that names a default member budget has it
+    /// read here, whether or not the key's owner has a membership that sets its own.
     async fn key_team(&self, team_id: &str) -> Result<Option<KeyTeam<TeamRecord>>, Error> {
-        let read = self.store("key_team")?.team(team_id).await;
-        match unless_failed(read, "key_team")? {
-            Some(team) => affiliation::team(&team)
-                .map(|team| {
-                    Some(KeyTeam {
-                        organization_id: team.row.organization_id.clone(),
-                        row: team.row,
-                    })
-                })
-                .or_else(declined),
-            None => declined("team_id"),
-        }
+        let store = self.store("key_team")?;
+        let read = store.team(team_id).await;
+        let Some(team) = unless_failed(read, "key_team")? else {
+            return declined("team_id");
+        };
+        let ReadTeam {
+            team,
+            member_budget_id,
+        } = affiliation::team(&team).or_else(declined)?;
+        let default_budget = match member_budget_id {
+            Some(budget_id) => Box::pin(member_default_budget(store, &budget_id)).await?,
+            None => affiliation::BudgetRow::default(),
+        };
+        Ok(Some(KeyTeam {
+            organization_id: team.row.organization_id.clone(),
+            row: TeamRecord {
+                member_max_budget: default_budget.budget.max,
+                member_budget_extras: default_budget.budget_extras,
+                ..team.row
+            },
+        }))
     }
 
     async fn team(&self, _: &str, _: bool) -> Result<TeamRead<TeamRecord>, Error> {
@@ -378,10 +410,18 @@ impl AuthHost for NativeAuthHost {
         if read == AffiliationRead::Jwt {
             return declined("org");
         }
-        let read = Box::pin(self.store("org")?.org(id)).await;
-        unless_failed(read, "org")?
-            .map(|row| affiliation::org(&row).or_else(declined))
-            .transpose()
+        let store = self.store("org")?;
+        let read = Box::pin(store.org(id)).await;
+        let Some(mut org) = unless_failed(read, "org")? else {
+            return Ok(None);
+        };
+        let read = Box::pin(store.fill_object_permission(
+            org.object_permission_id.as_deref(),
+            &mut org.object_permission,
+        ))
+        .await;
+        unless_failed(read, "object_permission")?;
+        affiliation::org(&org).map(Some).or_else(declined)
     }
 
     async fn org_by_alias(&self, _: &str) -> Result<Option<Org<OrgRecord>>, Error> {
@@ -406,18 +446,33 @@ impl AuthHost for NativeAuthHost {
         declined("validated_end_user_id")
     }
 
-    async fn object_permission(&self, _: &str) -> Result<Option<Infallible>, Error> {
-        declined("object_permission")
+    async fn object_permission(
+        &self,
+        id: &str,
+    ) -> Result<Option<Box<ObjectPermissionRecord>>, Error> {
+        let read = Box::pin(self.store("object_permission")?.object_permission(id)).await;
+        unless_failed(read, "object_permission")?
+            .as_ref()
+            .map_or(Ok(None), |row| {
+                object_permission::record(Some(id), Some(row)).or_else(declined)
+            })
     }
 
     /// A project with no row declines, since a key can name one only once its row is deleted,
     /// which this host does not judge the key after.
     async fn project(&self, project_id: &str) -> Result<Option<ProjectRecord>, Error> {
-        let read = self.store("project")?.project(project_id).await;
-        match unless_failed(read, "project")? {
-            Some(project) => affiliation::project(&project).map(Some).or_else(declined),
-            None => declined("project_id"),
-        }
+        let store = self.store("project")?;
+        let read = store.project(project_id).await;
+        let Some(mut project) = unless_failed(read, "project")? else {
+            return declined("project_id");
+        };
+        let read = Box::pin(store.fill_object_permission(
+            project.object_permission_id.as_deref(),
+            &mut project.object_permission,
+        ))
+        .await;
+        unless_failed(read, "object_permission")?;
+        affiliation::project(&project).map(Some).or_else(declined)
     }
 
     /// The gateway reads each object when the core asks for it, with nothing to warm.
@@ -1022,15 +1077,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::object_permission_id(json!({"object_permission_id": "permission"}))]
-    #[case::model_aliases(json!({"model_id": 7}))]
-    #[case::metadata(json!({"metadata": {"guardrails": ["pii"]}}))]
     #[case::metadata_beside_a_model_limit(json!({"metadata": {"model_rpm_limit": {"claude": 2}, "tags": ["a"]}}))]
     #[case::a_priority_that_is_no_text(json!({"metadata": {"priority": 5}}))]
-    #[case::budget_reset_at(json!({"budget_reset_at": "1970-01-01T00:00:09"}))]
+    #[case::a_member_budget_that_is_no_text(json!({"metadata": {"team_member_budget_id": 5}}))]
     #[case::budget_limits(json!({"budget_limits": [{"a": 1}]}))]
-    #[case::model_max_budget(json!({"model_max_budget": {"claude": 1}}))]
-    #[case::router_settings(json!({"router_settings": {"a": 1}}))]
     #[case::a_model_pattern(json!({"models": ["claude", "anthropic/*"]}))]
     #[case::the_team_models(json!({"models": ["all-team-models"]}))]
     #[tokio::test(flavor = "multi_thread")]
@@ -1049,9 +1099,13 @@ mod tests {
     }
 
     #[rstest]
+    #[case::object_permission_id(json!({"object_permission_id": "permission"}), "object_permission")]
     #[case::max_budget(json!({"max_budget": 5.0}), "max_budget")]
     #[case::soft_budget(json!({"soft_budget": 1.0}), "soft_budget")]
     #[case::budget_duration(json!({"budget_duration": "30d"}), "budget_duration")]
+    #[case::model_max_budget(json!({"model_max_budget": {"claude": 1}}), "model_max_budget")]
+    #[case::model_aliases(json!({"model_id": 7}), "model_id")]
+    #[case::router_settings(json!({"router_settings": {"a": 1}}), "router_settings")]
     #[case::tpm_limit(json!({"tpm_limit": 100}), "tpm_limit")]
     #[case::rpm_limit(json!({"rpm_limit": 10}), "rpm_limit")]
     #[case::a_limit_of_zero(json!({"rpm_limit": 0}), "rpm_limit")]
@@ -1071,6 +1125,7 @@ mod tests {
     #[case::model_rpm_limit(json!({"metadata": {"model_rpm_limit": {"claude": 2}}}), "model_rpm_limit")]
     #[case::model_tpm_limit(json!({"metadata": {"model_tpm_limit": {"claude": 100}}}), "model_tpm_limit")]
     #[case::priority(json!({"metadata": {"priority": "prod"}}), "priority")]
+    #[case::guardrails(json!({"metadata": {"guardrails": ["pii"]}}), "metadata")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_key_in_a_team_copies_each_plain_column_its_team_holds_and_names_it_unserved(
         #[case] team: Columns,
@@ -1102,6 +1157,7 @@ mod tests {
     #[rstest]
     #[case::team_id(json!({"team_id": "squad"}), "team_id")]
     #[case::organization_id(json!({"organization_id": "org"}), "organization_id")]
+    #[case::object_permission_id(json!({"object_permission_id": "permission"}), "object_permission")]
     #[case::models(json!({"models": ["claude"]}), "models")]
     #[case::tpm_limit(json!({"tpm_limit": 100}), "tpm_limit")]
     #[case::rpm_limit(json!({"rpm_limit": 10}), "rpm_limit")]
@@ -1216,9 +1272,12 @@ mod tests {
     }
 
     #[rstest]
+    #[case::object_permission_id(json!({"object_permission_id": "permission"}), "object_permission")]
     #[case::team_id(json!({"team_id": "team"}), "team_id")]
     #[case::models(json!({"models": ["claude"]}), "models")]
     #[case::blocked(json!({"blocked": true}), "blocked")]
+    #[case::model_rpm_limit(json!({"model_rpm_limit": {"claude": 1}}), "model_rpm_limit")]
+    #[case::model_tpm_limit(json!({"model_tpm_limit": {"claude": 1}}), "model_tpm_limit")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_key_in_a_project_copies_each_plain_column_its_project_holds_and_names_it_unserved(
         #[case] project: Columns,
@@ -1235,11 +1294,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::budget_id(json!({"budget_id": "budget"}))]
     #[case::metadata(json!({"metadata": {"tags": ["a"]}}))]
-    #[case::model_rpm_limit(json!({"model_rpm_limit": {"claude": 1}}))]
-    #[case::model_tpm_limit(json!({"model_tpm_limit": {"claude": 1}}))]
-    #[case::object_permission_id(json!({"object_permission_id": "permission"}))]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_key_whose_project_holds_what_no_record_field_has_a_type_for_is_not_native(
         #[case] project: Columns,
