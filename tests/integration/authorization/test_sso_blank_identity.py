@@ -863,6 +863,73 @@ def test_saml_sign_in_with_an_email_signs_in_as_a_real_account(
     assert _blank_accounts() == (), _blank_accounts()
 
 
+def _saml_round_trip(
+    proxy: Gateway,
+    idp: SamlIdp,
+    browser: httpx.Client,
+    params: Mapping[str, str],
+    email: str,
+    entry: str = "/sso/key/generate",
+) -> tuple[str, httpx.Response]:
+    acs: Final = f"{_proxy_url(proxy)}/sso/saml/callback"
+    login: Final = browser.get(f"{_proxy_url(proxy)}{entry}", params=params)
+    assert login.is_redirect, f"{login.status_code} {login.text}"
+    relay_state: Final = parse_qs(urlparse(login.headers["location"]).query)["RelayState"][0]
+    saml_response: Final = idp.response(acs, login.cookies[SAML_STATE_COOKIE], email, email)
+    return relay_state, browser.post(acs, data={"SAMLResponse": saml_response, "RelayState": relay_state})
+
+
+def test_saml_cli_sign_in_completes_and_the_poll_returns_the_session(
+    saml: OwnedProxy, saml_idp: SamlIdp, gateway_module: Gateway
+) -> None:
+    proxy: Final = saml.gateway
+    email: Final = f"saml-cli-{uuid.uuid4().hex[:12]}@example.com"
+    session: Final = _start_cli_login(proxy)
+    with gateway_module.scenario() as scenario, _browser() as browser:
+        _forget_sign_in(scenario, email)
+        _, callback = _saml_round_trip(
+            proxy, saml_idp, browser, {"source": CLI_SOURCE, "key": session.login_id}, email
+        )
+        done: Final = _complete_cli(browser, callback, session)
+        assert done.status_code == 200 and CLI_SUCCESS_PAGE_TITLE in done.text, f"{done.status_code} {done.text}"
+        ready: Final = _poll(proxy, session)
+        assert ready["status"] == "ready" and ready["user_id"] == email, ready
+
+
+@pytest.mark.parametrize(
+    "return_to", ["{base}/ui/login", "/ui/?page=models"], ids=["dashboard-login-page", "relative-path"]
+)
+def test_saml_sign_in_carrying_return_to_ends_up_on_the_dashboard(
+    saml: OwnedProxy, saml_idp: SamlIdp, gateway_module: Gateway, return_to: str
+) -> None:
+    proxy: Final = saml.gateway
+    email: Final = f"saml-return-{uuid.uuid4().hex[:12]}@example.com"
+    target: Final = return_to.format(base=_proxy_url(proxy))
+    with gateway_module.scenario() as scenario, _browser() as browser:
+        _forget_sign_in(scenario, email)
+        relay_state, callback = _saml_round_trip(proxy, saml_idp, browser, {"return_to": target}, email)
+    assert relay_state == target
+    assert callback.status_code == 303 and _session(callback) is not None, f"{callback.status_code} {callback.text}"
+    assert urlparse(callback.headers["location"]).path.startswith("/ui"), callback.headers["location"]
+
+
+@pytest.mark.parametrize("entry", ["/sso/key/generate", "/sso/saml/login"])
+def test_saml_return_to_shaped_like_a_cli_login_never_completes_it(
+    saml: OwnedProxy, saml_idp: SamlIdp, gateway_module: Gateway, entry: str
+) -> None:
+    proxy: Final = saml.gateway
+    email: Final = f"saml-cli-relay-{uuid.uuid4().hex[:12]}@example.com"
+    session: Final = _start_cli_login(proxy)
+    with gateway_module.scenario() as scenario, _browser() as browser:
+        _forget_sign_in(scenario, email)
+        relay_state, callback = _saml_round_trip(
+            proxy, saml_idp, browser, {"return_to": f"litellm-session-token:{session.login_id}"}, email, entry
+        )
+    assert not relay_state.startswith("litellm-session-token:"), relay_state
+    assert CLI_LOGIN_PAGE_TITLE not in callback.text, f"{callback.status_code} {callback.text}"
+    assert _poll(proxy, session) == {"status": "pending"}
+
+
 def test_saml_sign_in_started_on_one_proxy_completes_on_another(
     saml_pair: SamlPair, saml_idp: SamlIdp, gateway_module: Gateway
 ) -> None:
