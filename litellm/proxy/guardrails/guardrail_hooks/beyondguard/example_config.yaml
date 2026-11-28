@@ -1,0 +1,15 @@
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: beyondguard
+    litellm_params:
+      guardrail: beyondguard
+      mode: [pre_call, post_call]
+      api_base: os.environ/BEYONDGUARD_API_BASE
+      api_key: os.environ/BEYONDGUARD_API_KEY
+      beyondguard_endpoint_id: os.environ/BEYONDGUARD_ENDPOINT_ID
+      default_on: true

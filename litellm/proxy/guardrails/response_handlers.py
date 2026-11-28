@@ -27,9 +27,17 @@ class StandardGuardrailResponseHandler:
     """Preserve the endpoint's existing text response and hook behavior."""
 
     def prepare_request_data(self, request: ApplyGuardrailRequest) -> Mapping[str, object]:
+        """Caller metadata minus the keys only the proxy may set, as on the LLM routes.
+
+        Guardrails trust `user_api_key_*` values (e.g. the caller's email for per-user
+        policies), so a caller must not be able to supply them here.
+        """
+        from litellm.proxy.litellm_pre_call_utils import is_proxy_owned_metadata_key
+
+        owned: Final = {key for key in request.metadata or {} if is_proxy_owned_metadata_key(key)}
         return request.model_dump(
             include={"messages", "metadata"},
-            exclude={"metadata": {"standard_logging_guardrail_information"}},
+            exclude={"metadata": {"standard_logging_guardrail_information", *owned}},
             exclude_none=True,
         )
 
