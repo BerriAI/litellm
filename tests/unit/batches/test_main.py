@@ -364,6 +364,18 @@ def test_list__unsupported_provider_raises_badrequest(seams):
         m.assert_not_called()
 
 
+def test_list__unsupported_provider_error_uses_correct_operation_name_and_http_method(seams):
+    """Regression: the error handler must say 'list_batches' (not 'list_batch')
+    and the dummy httpx.Request must use 'GET' (not 'create_thread')."""
+    with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+        bm.list_batches(custom_llm_provider="anthropic")  # type: ignore[arg-type]
+
+    error = exc_info.value
+    assert "list_batches" in error.message
+    assert "list_batch'" not in error.message  # no singular form
+    assert error.response.request.method == "GET"
+
+
 # =========================================================================== #
 # cancel_batch  (supported: openai, hosted_vllm, azure, vertex_ai; no @client)
 # =========================================================================== #
