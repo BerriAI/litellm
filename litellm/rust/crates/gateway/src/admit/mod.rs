@@ -101,9 +101,7 @@ fn token_estimate(
     path: &str,
     fields: &mut Fields,
 ) -> Option<Reason> {
-    let counts_tokens = parallel_request_limiter::Caller::of(caller)
-        .limits
-        .counts_tokens();
+    let counts_tokens = parallel_request_limiter::Caller::of(caller).counts_tokens();
     (counts_tokens && parallel_request_limiter::python_estimates(fields, path))
         .then(|| Reason::new(Refused::Body, "media_under_a_token_limit"))
 }
@@ -149,7 +147,7 @@ impl Admit {
         Self {
             router,
             allowlists: Allowlists::new(&config.general_settings),
-            auth: host::auth::auth(config, None),
+            auth: host::auth::auth(config, None, false),
             config: config.clone(),
             environment: Environment::default(),
             stored: StoredConfig::Unused,
@@ -169,6 +167,18 @@ impl Admit {
             None => host::auth::layers(caller).all(|layer| layer.list() == ModelList::Every),
         };
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
+    }
+
+    /// A key whose model list names a model access group goes to Python, which checks the
+    /// budget the proxy's database may hold for that group (`_model_access_group_max_budget_check`).
+    /// The gateway reads no group budget, so every group the router knows is taken as budgeted,
+    /// even one that does not serve the model asked for.
+    fn access_group_budget(&self, caller: &Authenticated<NativeRows>) -> Option<Reason> {
+        let groups = self.router.registry().access_groups();
+        host::auth::allowed_models(caller)
+            .iter()
+            .any(|name| groups.contains_key(name))
+            .then(|| Reason::new(Refused::Credential, "model_access_group_budget"))
     }
 
     /// The body is read only for a request that passes every other check, and parsed once: an
@@ -216,6 +226,7 @@ impl Admit {
         }
         let over_its_caller = authenticated.as_ref().ok().and_then(|caller| {
             self.model_access(caller, &fields)
+                .or_else(|| self.access_group_budget(caller))
                 .or_else(|| token_estimate(caller, parts.uri.path(), &mut fields))
         });
         if let Some(reason) = over_its_caller {
@@ -281,6 +292,7 @@ mod tests {
             auth: host::auth::auth(
                 &config,
                 Some(Arc::new(AuthStore::new(keys::memory_cache(), database))),
+                false,
             ),
             ..Admit::over(
                 &config,

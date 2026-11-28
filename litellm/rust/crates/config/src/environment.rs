@@ -59,6 +59,10 @@ pub struct Environment {
     #[serde_as(as = "FloatOrUnset")]
     pub model_cost_map_max_shrink_ratio: Option<f64>,
     pub aws_region_name: Option<String>,
+    #[serde_as(as = "FloatOrUnset")]
+    pub anthropic_messages_detached_stream_drain_timeout_seconds: Option<f64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub anthropic_messages_max_detached_stream_drains: Option<u64>,
 }
 
 impl Environment {

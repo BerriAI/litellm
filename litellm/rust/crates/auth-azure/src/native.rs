@@ -10,8 +10,8 @@ use azure_identity::{
     ManagedIdentityCredential, ManagedIdentityCredentialOptions, UserAssignedId,
     WorkloadIdentityCredential, WorkloadIdentityCredentialOptions,
 };
-use sha2::{Digest, Sha256};
 
+use aws_lc_rs::digest::{SHA256, digest};
 use litellm_auth_types::{Error, ErrorDetail};
 use litellm_auth_types::{InputSource, ResolvedCredential, Sourced};
 use litellm_secret_value::SecretValue;
@@ -665,7 +665,7 @@ fn client_options(
 }
 
 fn secret_digest(secret: &str) -> String {
-    format!("{:x}", Sha256::digest(secret.as_bytes()))
+    hex::encode(digest(&SHA256, secret.as_bytes()))
 }
 
 #[derive(Debug)]
@@ -698,9 +698,20 @@ mod tests {
 
     use super::{
         AzureTokenRetry, NativeAzureRequest, NativeAzureTokenAcquirer, ValidatedAzureRequest,
+        secret_digest,
     };
     use litellm_auth_types::{InputSource, Sourced};
     use litellm_secret_value::SecretValue;
+
+    #[rstest::rstest]
+    #[case::ascii(
+        "abc",
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    )]
+    #[case::empty("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")]
+    fn secret_digest_is_the_lowercase_hex_sha256(#[case] secret: &str, #[case] expected: &str) {
+        assert_eq!(secret_digest(secret), expected);
+    }
 
     fn deployment<T>(value: T) -> Sourced<T> {
         Sourced::new(value, InputSource::Deployment)

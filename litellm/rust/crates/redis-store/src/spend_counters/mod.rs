@@ -35,6 +35,11 @@ const SET_MAX: &str = concat!(
     "return cur"
 );
 
+/// `SPEND_DB_FLOOR_CACHE_TTL_SECONDS`: how long a process answers a counter's floor from the row
+/// spend it last read, so a counter that stays stale costs at most one row read per counter per
+/// window.
+pub const FLOOR_TTL: Duration = Duration::from_secs(5);
+
 /// How many locks [`SpendCounters::lock_seeds`] spreads the counters over. Two counters share one
 /// only when their keys hash to it, so a seed rarely waits on an unrelated counter, and the memory
 /// stays fixed however many counters the process sees.
@@ -443,6 +448,25 @@ impl SpendCounters {
                 self.ttl(counter, remote.default_ttl),
             ))
             .await?)
+    }
+
+    /// The row spend this process last read for `counter`, or a spend reset announced for it, kept
+    /// in memory beside the counter for `ttl` as `spend_db_floor:{key}`.
+    pub fn floor(&self, counter: &SpendCounter) -> Result<Option<Number>, Error> {
+        Ok(self.cache.memory().get(&counter.floor_key())?)
+    }
+
+    pub fn set_floor(
+        &self,
+        counter: &SpendCounter,
+        spend: Number,
+        ttl: Option<Duration>,
+    ) -> Result<(), Error> {
+        Ok(self.cache.memory().set(&counter.floor_key(), spend, ttl)?)
+    }
+
+    pub fn delete_floor(&self, counter: &SpendCounter) -> Result<(), Error> {
+        Ok(self.cache.memory().delete(&counter.floor_key())?)
     }
 
     pub fn get_local(&self, counter: &SpendCounter) -> Result<Option<Number>, Error> {

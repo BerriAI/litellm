@@ -3,6 +3,7 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use litellm_gateway_auth_core::record::Label;
 use serde_json::{Map, Value};
 
 use super::{AttemptRecord, ServedDeployment};
@@ -86,6 +87,10 @@ pub struct Charged {
     pub key_hash: Option<String>,
     pub key_alias: Option<String>,
     pub user_id: Option<String>,
+    pub team: Option<Label>,
+    pub org: Option<Label>,
+    pub project: Option<Label>,
+    pub end_user_id: Option<String>,
 }
 
 /// One call as it stands.

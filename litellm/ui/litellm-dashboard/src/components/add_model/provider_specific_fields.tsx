@@ -9,11 +9,8 @@ import React from "react";
 import { useFormContext } from "react-hook-form";
 import { Trans, useTranslation } from "react-i18next";
 import { requiredRule } from "../common_components/formRules";
-import {
-  MountedFormField,
-  type MountedFieldControlProps,
-  type MountedFormValues,
-} from "../common_components/MountedFormField";
+import type { MountedFieldControlProps, MountedFormValues } from "../common_components/MountedFormField";
+import { DeploymentMountedField as MountedFormField } from "./deployment-form/DeploymentMountedField";
 import { authTypesFor, hiddenAuthFieldKeys, inferAuthTypeId } from "./provider_auth_types";
 import { ProviderCredentialFieldMetadata } from "../networking";
 import { Providers } from "../provider_info_helpers";
