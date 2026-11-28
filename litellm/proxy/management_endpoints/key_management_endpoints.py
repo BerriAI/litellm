@@ -124,7 +124,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     keeps_budget_reset,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
-from litellm.proxy.db.master_key_migration import reencrypt_stored_values
+from litellm.proxy.db.master_key_migration import reencrypt_auth_profile_secrets, reencrypt_stored_values
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
@@ -6362,6 +6362,7 @@ async def reencrypt_credentials_for_aes_migration(
     from litellm.proxy.proxy_server import proxy_config
 
     encryption_key: Final = os.environ.get(SALT_KEY_ENV_VAR, new_master_key)
+    stored_key: Final = os.environ.get(SALT_KEY_ENV_VAR, current_master_key)
     try:
         models: list[object] | None = (
             cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
@@ -6443,6 +6444,17 @@ async def reencrypt_credentials_for_aes_migration(
         )
     except Exception as e:
         verbose_proxy_logger.warning("Failed to rotate MCP server credentials: %s", str(e))
+
+    try:
+        async with prisma_client.writer_db.tx(timeout=timedelta(minutes=2)) as tx:
+            rotation: Final = await reencrypt_auth_profile_secrets(tx, from_key=stored_key, to_key=encryption_key)
+        verbose_proxy_logger.info("Re-encrypted %s MCP auth profile secrets", rotation.rotated)
+        if rotation.conflicts:
+            verbose_proxy_logger.warning(
+                "Skipped %s MCP servers whose auth profiles were edited during re-encryption", rotation.conflicts
+            )
+    except Exception as e:  # noqa: BLE001  # one store's failure must not abort the re-encryption
+        verbose_proxy_logger.warning("Failed to rotate MCP auth profile credentials: %s", str(e))
 
     # 4b. process MCP user-scoped credentials table (BYOK + OAuth2 tokens)
     try:

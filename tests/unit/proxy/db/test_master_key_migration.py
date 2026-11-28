@@ -6,7 +6,7 @@ from functools import reduce
 from typing import Final
 
 import pytest
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy import proxy_server
@@ -14,6 +14,7 @@ from litellm.proxy.auth.master_key_boot_check import MIGRATE_FROM_MASTER_KEY_ENV
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     ALGO_AES_GCM,
     ENCRYPTION_ALGORITHM_SETTING,
+    V2_GCM_PREFIX,
     decrypt_if_encrypted_with,
     encrypt_secret_map,
     encrypt_value_helper,
@@ -27,8 +28,11 @@ from litellm.proxy.db.master_key_migration import (
     describe_outcome,
     migrate_from_previous_master_key,
     migrate_if_requested,
+    ProfileRotation,
+    reencrypt_auth_profile_secrets,
     reencrypt_stored_values,
     replace_ciphertexts,
+    stored_auth_profile_sets,
 )
 from tests._master_key import MASTER_KEY
 
@@ -63,16 +67,19 @@ class _FakeDatabase:
                 for secret_column in _SECRET_COLUMNS
                 if secret_column.table not in self.tables_missing_from_the_schema
             ]
-        select = re.fullmatch(r'SELECT "(\w+)", "(\w+)" FROM "(\w+)" WHERE "\2" IS NOT NULL(.*)', query)
+        select = re.fullmatch(
+            r'SELECT "(\w+)", "(\w+)" FROM "(\w+)" WHERE "\2" IS NOT NULL(.*?)( ORDER BY "\1" COLLATE "C")?', query
+        )
         assert select is not None, query
-        primary_key, column, table, row_filter = select.groups()
+        primary_key, column, table, row_filter, ordered = select.groups()
         assert row_filter in ("", f" AND \"{column}\"::text LIKE '%litellm_enc::%'")
         assert table not in self.tables_missing_from_the_schema, f'relation "{table}" does not exist'
-        return [
+        rows = [
             {primary_key: row[primary_key], column: json.loads(json.dumps(row[column]))}
             for row in self.tables.get(table, [])
             if row.get(column) is not None and (not row_filter or "litellm_enc::" in json.dumps(row[column]))
         ]
+        return sorted(rows, key=lambda row: str(row[primary_key])) if ordered else rows
 
     async def execute_raw(self, query: str, *args: object) -> int:
         update = re.fullmatch(r'UPDATE "(\w+)" SET "(\w+)" = \$1(::jsonb|) WHERE "(\w+)" = \$2 AND "\2" = \$3\3', query)
@@ -120,13 +127,29 @@ def _seeded_tables() -> Tables:
             {
                 "server_id": "mcp-1",
                 "credentials": {"auth_value": _encrypted("mcp-token"), "aws_region_name": "us-east-1"},
+                "additional_auth": [
+                    {
+                        "id": "Build",
+                        "auth_type": "oauth2",
+                        "oauth2_flow": "client_credentials",
+                        "token_url": "https://issuer.invalid/token",
+                        "client_id": _encrypted("build-client"),
+                        "client_secret": _encrypted("build-secret"),
+                    },
+                    {
+                        "id": "Foreign",
+                        "auth_type": "bearer_token",
+                        "authentication_token": _encrypted("foreign", UNRELATED_KEY),
+                    },
+                ],
                 "static_headers": _encrypted('{"X-Api-Key": "header-secret"}'),
                 "env_vars": [
                     {"name": "GLOBAL", "scope": "global", "value": _encrypted("global-env")},
                     {"name": "PER_USER", "scope": "user", "value": ""},
                 ],
                 "env": {},
-            }
+            },
+            {"server_id": "malformed", "additional_auth": "{invalid"},
         ],
         "LiteLLM_MCPUserCredentials": [{"id": "cred-row-1", "credential_b64": _encrypted("byok-secret")}],
         "LiteLLM_TeamTable": [
@@ -149,7 +172,7 @@ def _seeded_tables() -> Tables:
     }
 
 
-_VALUES_UNDER_THE_PREVIOUS_KEY = 8
+_VALUES_UNDER_THE_PREVIOUS_KEY = 10
 
 
 @pytest.mark.asyncio
@@ -158,6 +181,7 @@ async def test_reencryption_moves_every_stored_shape_to_the_new_key_and_nothing_
     untouched_before = json.dumps(
         [tables["LiteLLM_ProxyModelTable"][1], tables["LiteLLM_Config"][1:], tables["LiteLLM_TeamTable"][1]]
     )
+    foreign_profile_before = json.loads(json.dumps(tables["LiteLLM_MCPServerTable"][0]["additional_auth"]))[1]
 
     migrated = await reencrypt_stored_values(_FakeDatabase(tables), from_key=PREVIOUS_KEY, to_key=NEW_KEY)
 
@@ -169,6 +193,21 @@ async def test_reencryption_moves_every_stored_shape_to_the_new_key_and_nothing_
     assert decrypt_if_encrypted_with(model_params["api_key"], PREVIOUS_KEY) is None
     assert (model_params["rpm"], model_params["use_in_pass_through"], model_params["api_base"]) == (10, False, None)
     mcp_server = tables["LiteLLM_MCPServerTable"][0]
+    build, foreign = TypeAdapter(tuple[dict[str, str], ...]).validate_python(mcp_server["additional_auth"])
+    assert tables["LiteLLM_MCPServerTable"][1]["additional_auth"] == "{invalid"
+    assert {
+        **build,
+        "client_id": decrypt_if_encrypted_with(build["client_id"], NEW_KEY),
+        "client_secret": decrypt_if_encrypted_with(build["client_secret"], NEW_KEY),
+    } == {
+        "id": "Build",
+        "auth_type": "oauth2",
+        "oauth2_flow": "client_credentials",
+        "token_url": "https://issuer.invalid/token",
+        "client_id": "build-client",
+        "client_secret": "build-secret",
+    }
+    assert foreign == foreign_profile_before
     assert decrypt_if_encrypted_with(mcp_server["static_headers"], NEW_KEY) == '{"X-Api-Key": "header-secret"}'
     assert mcp_server["credentials"]["aws_region_name"] == "us-east-1"
     assert decrypt_if_encrypted_with(mcp_server["env_vars"][0]["value"], NEW_KEY) == "global-env"
@@ -216,7 +255,7 @@ async def test_count_follows_the_values_from_the_previous_key_to_the_new_one():
 
     assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 0
     assert await count_values_encrypted_with(database, NEW_KEY) == _VALUES_UNDER_THE_PREVIOUS_KEY
-    assert await count_values_encrypted_with(database, UNRELATED_KEY) == 1
+    assert await count_values_encrypted_with(database, UNRELATED_KEY) == 2
 
 
 @pytest.mark.asyncio
@@ -227,6 +266,7 @@ async def test_only_rows_holding_values_under_the_previous_key_are_written():
 
     assert sorted(database.writes) == [
         ("LiteLLM_Config", "param_value", "environment_variables"),
+        ("LiteLLM_MCPServerTable", "additional_auth", "mcp-1"),
         ("LiteLLM_MCPServerTable", "credentials", "mcp-1"),
         ("LiteLLM_MCPServerTable", "env_vars", "mcp-1"),
         ("LiteLLM_MCPServerTable", "static_headers", "mcp-1"),
@@ -275,6 +315,9 @@ class _SomeoneEditsEachRowAfterItIsRead(_FakeDatabase):
         if 'FROM "LiteLLM_MCPUserCredentials"' in query:
             for row in self.tables.get("LiteLLM_MCPUserCredentials", []):
                 row["credential_b64"] = "edited-by-an-admin"
+        if 'SELECT "server_id", "additional_auth" FROM "LiteLLM_MCPServerTable"' in query:
+            for row in self.tables.get("LiteLLM_MCPServerTable", []):
+                row["additional_auth"] = []
         return rows
 
 
@@ -302,6 +345,22 @@ async def test_rotation_reports_a_concurrent_edit_without_overwriting_it() -> No
 
     assert result is None
     assert tables["LiteLLM_MCPUserCredentials"][0]["credential_b64"] == "edited-by-an-admin"
+
+
+@pytest.mark.asyncio
+async def test_rotation_refuses_to_restore_a_profile_removed_after_its_secrets_were_read() -> None:
+    tables: Final[Tables] = {
+        "LiteLLM_MCPServerTable": [
+            {"server_id": "server", "additional_auth": [{"id": "Build", "authentication_token": _encrypted("token")}]}
+        ]
+    }
+
+    result: Final = await reencrypt_stored_values(
+        _SomeoneEditsEachRowAfterItIsRead(tables), from_key=PREVIOUS_KEY, to_key=NEW_KEY, require_unchanged=True
+    )
+
+    assert result is None
+    assert tables["LiteLLM_MCPServerTable"][0]["additional_auth"] == []
 
 
 @pytest.mark.asyncio
@@ -708,3 +767,98 @@ async def test_guardrail_params_move_to_the_new_key_and_legacy_plaintext_rows_ar
     assert decrypt_if_encrypted_with(migrated_key.removeprefix("litellm_enc::"), NEW_KEY) == "guardrail-vendor-key"
     assert tables["LiteLLM_GuardrailsTable"][1]["litellm_params"] == legacy_params
     assert database.writes == [("LiteLLM_GuardrailsTable", "litellm_params", "guardrail-1")]
+
+
+def _profiles_of(tables: Tables, server: int = 0) -> tuple[dict[str, str], ...]:
+    return TypeAdapter(tuple[dict[str, str], ...]).validate_python(
+        tables["LiteLLM_MCPServerTable"][server]["additional_auth"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_aes_migration_moves_profile_secrets_to_the_new_algorithm_and_nothing_else(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tables: Final = _seeded_tables()
+    before: Final = _profiles_of(json.loads(json.dumps(tables)))
+    monkeypatch.setattr(proxy_server, "general_settings", {ENCRYPTION_ALGORITHM_SETTING: ALGO_AES_GCM})
+    database: Final = _FakeDatabase(tables)
+
+    assert await reencrypt_auth_profile_secrets(
+        database, from_key=PREVIOUS_KEY, to_key=PREVIOUS_KEY
+    ) == ProfileRotation(rotated=2, conflicts=0)
+
+    build, foreign = _profiles_of(tables)
+    assert build["client_id"].startswith(V2_GCM_PREFIX) and build["client_secret"].startswith(V2_GCM_PREFIX)
+    assert {
+        **build,
+        "client_id": decrypt_if_encrypted_with(build["client_id"], PREVIOUS_KEY),
+        "client_secret": decrypt_if_encrypted_with(build["client_secret"], PREVIOUS_KEY),
+    } == {**before[0], "client_id": "build-client", "client_secret": "build-secret"}
+    assert foreign == before[1]
+    assert database.writes == [("LiteLLM_MCPServerTable", "additional_auth", "mcp-1")]
+
+
+@pytest.mark.asyncio
+async def test_aes_migration_writes_nothing_when_run_a_second_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {ENCRYPTION_ALGORITHM_SETTING: ALGO_AES_GCM})
+    database: Final = _FakeDatabase(_seeded_tables())
+    await reencrypt_auth_profile_secrets(database, from_key=PREVIOUS_KEY, to_key=PREVIOUS_KEY)
+    writes_after_the_first_run: Final = list(database.writes)
+
+    assert await reencrypt_auth_profile_secrets(
+        database, from_key=PREVIOUS_KEY, to_key=PREVIOUS_KEY
+    ) == ProfileRotation(rotated=0, conflicts=0)
+    assert database.writes == writes_after_the_first_run
+
+
+@pytest.mark.asyncio
+async def test_aes_migration_counts_a_profile_edited_after_it_was_read_as_a_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tables: Final = _seeded_tables()
+    monkeypatch.setattr(proxy_server, "general_settings", {ENCRYPTION_ALGORITHM_SETTING: ALGO_AES_GCM})
+
+    result: Final = await reencrypt_auth_profile_secrets(
+        _SomeoneEditsEachRowAfterItIsRead(tables), from_key=PREVIOUS_KEY, to_key=PREVIOUS_KEY
+    )
+
+    assert result == ProfileRotation(rotated=0, conflicts=1)
+    assert tables["LiteLLM_MCPServerTable"][0]["additional_auth"] == []
+
+
+@pytest.mark.asyncio
+async def test_profile_sets_are_read_as_stored_and_malformed_values_are_kept() -> None:
+    tables: Final = _seeded_tables()
+
+    assert await stored_auth_profile_sets(_FakeDatabase(tables)) == (
+        "{invalid",
+        tables["LiteLLM_MCPServerTable"][0]["additional_auth"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_profiles_are_skipped_when_the_column_does_not_exist() -> None:
+    tables: Final = _seeded_tables()
+    database: Final = _FakeDatabase(tables, tables_missing_from_the_schema=frozenset({"LiteLLM_MCPServerTable"}))
+
+    assert await stored_auth_profile_sets(database) == ()
+    assert await reencrypt_auth_profile_secrets(database, from_key=PREVIOUS_KEY, to_key=NEW_KEY) == ProfileRotation(
+        rotated=0, conflicts=0
+    )
+
+
+@pytest.mark.asyncio
+async def test_aes_migration_locks_the_profile_rows_in_server_id_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile = {"id": "Build", "auth_type": "bearer_token", "authentication_token": _encrypted("secret")}
+    monkeypatch.setattr(proxy_server, "general_settings", {ENCRYPTION_ALGORITHM_SETTING: ALGO_AES_GCM})
+    tables: Final[Tables] = {
+        "LiteLLM_MCPServerTable": [
+            {"server_id": server_id, "additional_auth": [dict(profile)]} for server_id in ("tickets", "Alpha", "build")
+        ]
+    }
+    database: Final = _FakeDatabase(tables)
+
+    await reencrypt_auth_profile_secrets(database, from_key=PREVIOUS_KEY, to_key=PREVIOUS_KEY)
+
+    assert [server_id for _, _, server_id in database.writes] == ["Alpha", "build", "tickets"]

@@ -30,17 +30,19 @@ config rows, and the SSO config table.
 """
 
 import json
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, Literal, cast
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.master_key_migration import stored_auth_profile_sets
+from litellm.types.mcp_server.auth_profile import AUTH_PROFILE_SECRET_FIELDS
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
-
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import PrismaClient
     from litellm.repositories.prisma_protocols import TableActions
@@ -576,13 +578,45 @@ async def _scan_config_env_vars(prisma_client: object) -> LocationReport:
     return report
 
 
+def _secret_values(profile: Mapping[str, JsonValue]) -> Iterator[str]:
+    return (value for name in AUTH_PROFILE_SECRET_FIELDS if isinstance(value := profile.get(name), str))
+
+
+def _classified_profile_secrets(profile_sets: Iterable[JsonValue]) -> Iterator[ValueClass]:
+    for profiles in profile_sets:
+        if not isinstance(profiles, list):
+            yield "undecryptable"
+            continue
+        for profile in profiles:
+            if not isinstance(profile, dict):
+                yield "undecryptable"
+                continue
+            for value in _secret_values(profile):
+                yield classify_value(value, key="scan")
+
+
+async def _scan_auth_profiles(database: SupportsRawQueries, report: LocationReport) -> None:
+    for classification in _classified_profile_secrets(await stored_auth_profile_sets(database)):
+        report.count(classification)
+
+
 async def _scan_covered_tables(prisma_client: object) -> list[LocationReport]:
     """Read-only classification of every rotation-covered table. No writes."""
     reports: Final[list[LocationReport]] = []
     for location, db_attr, json_cols, scalar_cols in _COVERED_TABLE_SPECS:
-        reports.append(await _scan_one_table(prisma_client, location, db_attr, json_cols, scalar_cols))
+        report = await _scan_one_table(prisma_client, location, db_attr, json_cols, scalar_cols)
+        reports.append(report)
+        if db_attr == "litellm_mcpservertable":
+            await _scan_auth_profiles(_writer_database(prisma_client), report)
     reports.append(await _scan_config_env_vars(prisma_client))
     return reports
+
+
+def _writer_database(prisma_client: object) -> SupportsRawQueries:
+    return cast(  # cast-ok: PrismaWrapper forwards raw queries to the Prisma client dynamically
+        "SupportsRawQueries",
+        cast("PrismaClient", prisma_client).writer_db,  # cast-ok: callers pass the proxy's client
+    )
 
 
 # ---------------------------------------------------------------------------

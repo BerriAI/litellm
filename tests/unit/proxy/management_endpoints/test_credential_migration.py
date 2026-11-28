@@ -8,6 +8,10 @@ proof-of-fix (real proxy + DB) is performed separately on the repro server.
 
 import asyncio
 import json
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -18,6 +22,7 @@ from litellm._service_logger import ServiceTypes
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     V2_GCM_PREFIX,
+    decrypt_if_encrypted_with,
     encrypt_value_helper,
 )
 from litellm.proxy.management_endpoints import credential_migration as cm
@@ -51,6 +56,7 @@ def _empty_covered_tables(client):
     """
     for _, db_attr, _, _ in cm._COVERED_TABLE_SPECS:
         getattr(client.db, db_attr).find_many = AsyncMock(return_value=[])
+    client.writer_db.query_raw = AsyncMock(return_value=[])
 
 
 # --------------------------- pure engine ---------------------------
@@ -645,3 +651,191 @@ async def test_sso_walker_write_emits_a_postgres_update_event_for_litellm_ssocon
         "migrate_sso_credentials",
         {"table_name": "LiteLLM_SSOConfig"},
     )
+
+
+class _ProfileColumn:
+
+    def __init__(
+        self,
+        server_id: str,
+        stored: object,
+        read_error: Exception | None = None,
+        edited_after_read: bool = False,
+    ) -> None:
+        self.server_id = server_id
+        self.stored = stored
+        self.read_error = read_error
+        self.edited_after_read = edited_after_read
+
+    async def execute_raw(self, query: str, new_value: str, server_id: str, expected: str) -> int:
+        assert '"LiteLLM_MCPServerTable"' in query and '"additional_auth"' in query, query
+        if (server_id, json.loads(expected)) != (self.server_id, self.stored):
+            return 0
+        self.stored = json.loads(new_value)
+        return 1
+
+    async def query_raw(self, query: str, *args: object) -> list[dict[str, object]]:
+        if self.read_error is not None:
+            raise self.read_error
+        if "information_schema.columns" in query:
+            return [{"table_name": "LiteLLM_MCPServerTable", "column_name": "additional_auth"}]
+        assert '"LiteLLM_MCPServerTable"' in query and '"additional_auth"' in query, query
+        rows: Final = [{"server_id": self.server_id, "additional_auth": self.stored}]
+        if self.edited_after_read:
+            self.stored = [{"id": "Edited"}]
+        return rows
+
+    @asynccontextmanager
+    async def tx(self, timeout: timedelta) -> AsyncIterator["_ProfileColumn"]:
+        yield self
+
+
+def _client_with_profiles(column: _ProfileColumn) -> MagicMock:
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+    client.writer_db = column
+    return client
+
+
+async def _mcp_server_report(column: _ProfileColumn) -> dict[str, int]:
+    reports: Final = {
+        report.location: report for report in await cm._scan_covered_tables(_client_with_profiles(column))
+    }
+    return reports["mcp_server"].as_dict()
+
+
+def _report(**counts: int) -> dict[str, int]:
+    return {"scanned": 0, "migrated": 0, "already_v2": 0, "plaintext": 0, "undecryptable": 0, "legacy": 0, **counts}
+
+
+@pytest.mark.asyncio
+async def test_the_inventory_counts_profile_secrets_under_mcp_servers(salt_key, monkeypatch):
+    legacy: Final = _legacy_ct("build-secret", monkeypatch)
+    _enable_aes(monkeypatch)
+    column: Final = _ProfileColumn(
+        "tickets",
+        [
+            {"id": "Build", "auth_type": "basic", "authentication_token": legacy},
+            {"id": "Read", "auth_type": "basic", "authentication_token": encrypt_value_helper("read-secret")},
+        ],
+    )
+
+    assert await _mcp_server_report(column) == _report(scanned=2, legacy=1, already_v2=1)
+
+
+@pytest.mark.asyncio
+async def test_the_inventory_only_reads_the_secret_fields_of_a_profile(salt_key, monkeypatch):
+    legacy: Final = _legacy_ct("not-a-secret-field", monkeypatch)
+    _enable_aes(monkeypatch)
+    column: Final = _ProfileColumn(
+        "tickets",
+        [
+            {
+                "id": legacy,
+                "auth_type": "oauth2",
+                "oauth2_flow": "client_credentials",
+                "token_url": legacy,
+                "scopes": [legacy],
+                "client_secret": encrypt_value_helper("build-secret"),
+            }
+        ],
+    )
+
+    assert await _mcp_server_report(column) == _report(scanned=1, already_v2=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored", ["{invalid", {"id": "Build"}, ["not-a-profile"]], ids=("text", "object", "entry-that-is-not-a-profile")
+)
+async def test_the_inventory_reports_a_profile_set_the_readers_cannot_parse(salt_key, stored):
+    assert await _mcp_server_report(_ProfileColumn("tickets", stored)) == _report(scanned=1, undecryptable=1)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_profile_read_fails_the_inventory_instead_of_reporting_it_clean(salt_key):
+    column: Final = _ProfileColumn("tickets", [], read_error=RuntimeError("writer is down"))
+
+    with pytest.raises(RuntimeError, match="writer is down"):
+        await cm._scan_covered_tables(_client_with_profiles(column))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("salt", ["sk-salt-in-the-environment", None], ids=("salt-key", "master-key"))
+async def test_the_aes_migration_moves_profile_secrets_to_v2(monkeypatch, salt):
+    from litellm.proxy.management_endpoints.key_management_endpoints import reencrypt_credentials_for_aes_migration
+
+    master: Final = "sk-master-key-of-the-deployment"
+    stored_key: Final = salt or master
+    if salt is None:
+        monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_SALT_KEY", salt)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    profile: Final = {
+        "id": "Build",
+        "auth_type": "basic",
+        "authentication_token": encrypt_value_helper("build-secret", new_encryption_key=stored_key),
+    }
+    _enable_aes(monkeypatch)
+    column: Final = _ProfileColumn("tickets", [profile])
+
+    await reencrypt_credentials_for_aes_migration(
+        _client_with_profiles(column), MagicMock(user_id="admin"), master, master
+    )
+
+    (migrated,) = column.stored
+    assert migrated["authentication_token"].startswith(V2_GCM_PREFIX)
+    assert {
+        **migrated,
+        "authentication_token": decrypt_if_encrypted_with(migrated["authentication_token"], stored_key),
+    } == {
+        "id": "Build",
+        "auth_type": "basic",
+        "authentication_token": "build-secret",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_profile_store_that_fails_does_not_stop_the_rest_of_the_re_encryption(
+    salt_key: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.proxy.management_endpoints import key_management_endpoints
+
+    column: Final = _ProfileColumn("tickets", [], read_error=RuntimeError("writer is down"))
+    client: Final = _client_with_profiles(column)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await key_management_endpoints.reencrypt_credentials_for_aes_migration(
+            client, MagicMock(user_id="admin"), salt_key, salt_key
+        )
+
+    client.db.litellm_mcpusercredentials.find_many.assert_awaited_once()
+    assert [record.getMessage() for record in caplog.records if "auth profile" in record.getMessage()] == [
+        "Failed to rotate MCP auth profile credentials: writer is down"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_profile_edited_after_it_was_read_is_skipped_with_a_warning(
+    salt_key: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.proxy.management_endpoints import key_management_endpoints
+
+    legacy: Final = _legacy_ct("build-secret", monkeypatch)
+    _enable_aes(monkeypatch)
+    column: Final = _ProfileColumn(
+        "tickets",
+        [{"id": "Build", "auth_type": "basic", "authentication_token": legacy}],
+        edited_after_read=True,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await key_management_endpoints.reencrypt_credentials_for_aes_migration(
+            _client_with_profiles(column), MagicMock(user_id="admin"), salt_key, salt_key
+        )
+
+    assert [record.getMessage() for record in caplog.records if "edited during" in record.getMessage()] == [
+        "Skipped 1 MCP servers whose auth profiles were edited during re-encryption"
+    ]
+    assert column.stored == [{"id": "Edited"}]

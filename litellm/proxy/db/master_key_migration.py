@@ -28,8 +28,12 @@ class _SecretColumn:
     is_json: bool = True
     only_rows_with_marked_ciphertexts: bool = False
     legacy_mcp_format: Literal["credential", "secret_map"] | None = None
+    in_lock_order: bool = False
 
 
+_AUTH_PROFILE_COLUMN: Final = _SecretColumn(
+    "LiteLLM_MCPServerTable", "server_id", "additional_auth", in_lock_order=True
+)
 _SECRET_COLUMNS: Final = (
     _SecretColumn("LiteLLM_ProxyModelTable", "model_id", "litellm_params"),
     _SecretColumn("LiteLLM_CredentialsTable", "credential_id", "credential_values"),
@@ -39,6 +43,7 @@ _SECRET_COLUMNS: Final = (
     _SecretColumn("LiteLLM_CacheConfig", "id", "cache_settings"),
     _SecretColumn("LiteLLM_ConfigOverrides", "config_type", "config_value"),
     _SecretColumn("LiteLLM_MCPServerTable", "server_id", "credentials"),
+    _AUTH_PROFILE_COLUMN,
     _SecretColumn("LiteLLM_MCPServerTable", "server_id", "static_headers", legacy_mcp_format="secret_map"),
     _SecretColumn("LiteLLM_MCPServerTable", "server_id", "env_vars"),
     _SecretColumn("LiteLLM_MCPServerTable", "server_id", "env", legacy_mcp_format="secret_map"),
@@ -107,6 +112,16 @@ async def count_values_encrypted_with_or_none(
         return None
 
 
+def _reencrypting(from_key: str, to_key: str) -> ReplaceCiphertext:
+    def reencrypted(value: str) -> str | None:
+        if from_key == to_key and value.startswith(V2_GCM_PREFIX):
+            return None
+        plaintext: Final = decrypt_if_encrypted_with(value, from_key)
+        return None if plaintext is None else _CIPHERTEXT.validate_python(encrypt_value_helper(plaintext, to_key))
+
+    return reencrypted
+
+
 async def reencrypt_stored_values(
     database: SupportsRawQueries,
     *,
@@ -115,10 +130,7 @@ async def reencrypt_stored_values(
     require_unchanged: bool = False,
     upgrade_legacy_mcp: bool = False,
 ) -> int | None:
-    def reencrypted(value: str) -> str | None:
-        plaintext: Final = decrypt_if_encrypted_with(value, from_key)
-        return None if plaintext is None else _CIPHERTEXT.validate_python(encrypt_value_helper(plaintext, to_key))
-
+    reencrypted: Final = _reencrypting(from_key, to_key)
     migrated = 0  # rebind-ok: count successful writes while stopping on the first conflict during rotation
     for secret_column in await _secret_columns_in(database):
         for row in await _rows_of(database, secret_column):
@@ -129,6 +141,42 @@ async def reencrypt_stored_values(
                 return None
             migrated += count or 0
     return migrated
+
+
+async def _has_auth_profile_column(database: SupportsRawQueries) -> bool:
+    return _AUTH_PROFILE_COLUMN in await _secret_columns_in(database)
+
+
+async def stored_auth_profile_sets(database: SupportsRawQueries) -> tuple[JsonValue, ...]:
+    if not await _has_auth_profile_column(database):
+        return ()
+    return tuple(
+        _STORED_VALUE.validate_python(row[_AUTH_PROFILE_COLUMN.column])
+        for row in await _rows_of(database, _AUTH_PROFILE_COLUMN)
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileRotation:
+    rotated: int
+    conflicts: int
+
+
+async def reencrypt_auth_profile_secrets(
+    database: SupportsRawQueries, *, from_key: str, to_key: str
+) -> ProfileRotation:
+    if not await _has_auth_profile_column(database):
+        return ProfileRotation(rotated=0, conflicts=0)
+    reencrypted: Final = _reencrypting(from_key, to_key)
+    counts: Final = tuple(
+        [
+            await _reencrypt_row(database, _AUTH_PROFILE_COLUMN, row, reencrypted, None)
+            for row in await _rows_of(database, _AUTH_PROFILE_COLUMN)
+        ]
+    )
+    return ProfileRotation(
+        rotated=sum(count or 0 for count in counts), conflicts=sum(count is None for count in counts)
+    )
 
 
 async def _secret_columns_in(database: SupportsRawQueries) -> tuple[_SecretColumn, ...]:
@@ -150,10 +198,11 @@ async def _rows_of(database: SupportsRawQueries, secret_column: _SecretColumn) -
         if secret_column.only_rows_with_marked_ciphertexts
         else ""
     )
+    lock_order: Final = f' ORDER BY "{secret_column.primary_key}" COLLATE "C"' if secret_column.in_lock_order else ""
     return tuple(
         await database.query_raw(
             f'SELECT "{secret_column.primary_key}", "{secret_column.column}" FROM "{secret_column.table}" '
-            f'WHERE "{secret_column.column}" IS NOT NULL{marked_only}'
+            f'WHERE "{secret_column.column}" IS NOT NULL{marked_only}{lock_order}'
         )
     )
 
