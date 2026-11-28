@@ -864,6 +864,8 @@ async def test_async_post_call_failure_hook(prometheus_logger, known_model_route
             rate_limit_type=None,
             route=user_api_key_dict.request_route,
             model_id=None,
+            model_group=None,
+            api_base=None,
             client_ip=None,
             user_agent=None,
             api_provider="openai",

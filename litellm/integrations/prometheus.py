@@ -8,7 +8,7 @@ import math
 import os
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from functools import partial
 from types import MappingProxyType
@@ -40,6 +40,7 @@ from litellm.exceptions import (
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus_helpers import (
     PrometheusLabelFactoryContext,
+    deployment_identity,
     get_cached_end_user_id_for_cost_tracking,
 )
 from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
@@ -114,6 +115,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy.utils import PrismaClient
     from litellm.router import Router
+    from litellm.types.router import Deployment
 else:
     AsyncIOScheduler = Any
 
@@ -657,6 +659,53 @@ def _bounded_requested_model_label(requested_model: object, router_originated: b
     return UNRECOGNIZED_REQUESTED_MODEL_LABEL
 
 
+@dataclass(frozen=True, slots=True)
+class _FailedRequestDeployment:
+    model_id: str | None
+    model_group: str | None
+    api_base: str | None
+
+
+def _first_label_text(*values: object) -> str | None:
+    return next((value for value in values if isinstance(value, str) and value), None)
+
+
+def _failed_request_deployment(
+    request_data: Mapping[str, object], original_exception: Exception
+) -> _FailedRequestDeployment:
+    """Deployment a failed proxy request reached, labelled the way the deployment-scoped metrics label it.
+
+    Labels come from the deployment record the request's ids resolve to in the router registry, never from the
+    request body, which a caller holding an invalid key can write. A request naming no registered deployment
+    keeps its deployment labels empty.
+    """
+    logged: Final = _logged_fields(request_data.get("standard_logging_object"))
+    if isinstance(original_exception, MalformedRequestFieldError):
+        return _FailedRequestDeployment(model_id=None, model_group=None, api_base=None)
+    lookup: Final = _registry_lookup()
+    if lookup is None:
+        return _FailedRequestDeployment(
+            model_id=_first_label_text(logged.get("model_id")),
+            model_group=_bounded_requested_model_label(_first_label_text(logged.get("model_group"))),
+            api_base=None,
+        )
+    deployment: Final = deployment_identity.resolve_deployment(request_data, lookup)
+    if deployment is None:
+        return _FailedRequestDeployment(model_id=None, model_group=None, api_base=None)
+    identity: Final = deployment_identity.identity_from_deployment(deployment)
+    return _FailedRequestDeployment(
+        model_id=identity.model_id or None,
+        model_group=deployment.model_name or None,
+        api_base=identity.api_base or None,
+    )
+
+
+def _registry_lookup() -> Callable[[str], Deployment | None] | None:
+    """The router registry, the deployment attribution a caller cannot write."""
+    llm_router: Final = _get_proxy_llm_router()
+    return None if llm_router is None else llm_router.registry().deployment
+
+
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
 
@@ -1077,6 +1126,7 @@ class PrometheusLogger(CustomLogger):
                 "litellm_deployment_state",
                 "LLM Deployment Analytics - The state of the deployment: 0 = healthy, 1 = partial outage, 2 = complete outage",
                 labelnames=self.get_labels_for_metric("litellm_deployment_state"),
+                multiprocess_mode="livemostrecent",
             )
 
             self.litellm_deployment_tpm_limit = self._gauge_factory(
@@ -3310,11 +3360,7 @@ class PrometheusLogger(CustomLogger):
                 proxy_server_request=_logged_fields(request_data.get("proxy_server_request")),
             )
             _metadata: Final = _logged_fields(request_data.get("metadata"))
-            model_id: Final = (
-                _logged_fields(_metadata.get("model_info")).get("id")
-                or _logged_fields(request_data.get("model_info")).get("id")
-                or _logged_fields(request_data.get("standard_logging_object")).get("model_id")
-            )
+            deployment: Final = _failed_request_deployment(request_data, original_exception)
             rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(original_exception)
             api_provider: Final = self._extract_api_provider_from_request_data(
                 request_data
@@ -3341,7 +3387,9 @@ class PrometheusLogger(CustomLogger):
                 route=user_api_key_dict.request_route,
                 client_ip=_metadata.get("requester_ip_address"),
                 user_agent=_metadata.get("user_agent"),
-                model_id=model_id,
+                model_id=deployment.model_id,
+                model_group=deployment.model_group,
+                api_base=deployment.api_base,
                 api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
                 custom_metadata_labels=_custom_labels_of_an_answer_without_an_image(
@@ -3563,8 +3611,6 @@ class PrometheusLogger(CustomLogger):
                     "model_group"
                 ) or require_get(_litellm_params.get("metadata") or {}).get("model_group")
 
-            llm_provider: Final = _litellm_params.get("custom_llm_provider", None)
-
             if self._should_skip_metrics_for_invalid_key(
                 kwargs=request_kwargs,
                 standard_logging_payload=standard_logging_payload,
@@ -3646,12 +3692,15 @@ class PrometheusLogger(CustomLogger):
             """
             # Only mark a deployment outage when one was actually picked.
             if deployment_selected:
+                failure_identity: Final = deployment_identity.identity_from_request_kwargs(
+                    request_kwargs, _registry_lookup()
+                )
                 self._set_deployment_state_after_failure(
                     refused_prompt=refused_prompt,
-                    litellm_model_name=litellm_model_name or "",
-                    model_id=model_id,
-                    api_base=api_base,
-                    api_provider=llm_provider or "",
+                    litellm_model_name=failure_identity.litellm_model_name,
+                    model_id=failure_identity.model_id,
+                    api_base=failure_identity.api_base,
+                    api_provider=failure_identity.api_provider,
                 )
             _deployment_label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
             if refused_prompt:
@@ -3834,22 +3883,18 @@ class PrometheusLogger(CustomLogger):
             ):
                 return
 
-            api_base: Final = standard_logging_payload["api_base"]
             _litellm_params: Final = request_kwargs.get("litellm_params", {}) or {}
-            _metadata: Final = get_litellm_metadata_from_kwargs(request_kwargs)
-            litellm_model_name: Final = request_kwargs.get("model", None)
-            llm_provider: Final = _litellm_params.get("custom_llm_provider", None)
-            _model_info: Final = _metadata.get("model_info") or {}
-            model_id: Final = _model_info.get("id", None)
+            _model_info: Final = get_litellm_metadata_from_kwargs(request_kwargs).get("model_info") or {}
+            identity: Final = deployment_identity.identity_from_request_kwargs(request_kwargs, _registry_lookup())
 
             if _model_info or _litellm_params:
                 self._set_deployment_tpm_rpm_limit_metrics(
                     model_info=_model_info,
                     litellm_params=_litellm_params,
-                    litellm_model_name=litellm_model_name,
-                    model_id=model_id,
-                    api_base=api_base,
-                    llm_provider=llm_provider,
+                    litellm_model_name=identity.litellm_model_name,
+                    model_id=identity.model_id,
+                    api_base=identity.api_base,
+                    llm_provider=identity.api_provider,
                     model_group=enum_values.model_group,
                 )
 
@@ -3902,10 +3947,10 @@ class PrometheusLogger(CustomLogger):
             ["litellm_model_name", "requested_model", model_id", "api_base", "api_provider"]
             """
             self.set_deployment_healthy(
-                litellm_model_name=litellm_model_name or "",
-                model_id=model_id or "",
-                api_base=api_base or "",
-                api_provider=llm_provider or "",
+                litellm_model_name=identity.litellm_model_name,
+                model_id=identity.model_id,
+                api_base=identity.api_base,
+                api_provider=identity.api_provider,
             )
 
             PrometheusLogger._inc_labeled_counter(

@@ -2,7 +2,7 @@
 Unit tests for prometheus metric labels configuration
 """
 
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 import pytest
 from pydantic import JsonValue
@@ -12,6 +12,9 @@ from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
 )
+
+if TYPE_CHECKING:
+    from litellm.types.router import Deployment
 
 
 def _clear_prometheus_registry() -> None:
@@ -809,14 +812,18 @@ async def test_failure_hook_emits_api_provider_value_on_failed_requests_metric()
     (
         (None, None, "logged-deployment", "logged-deployment"),
         ("", None, "logged-deployment", "logged-deployment"),
-        ("metadata-deployment", "request-deployment", "logged-deployment", "metadata-deployment"),
-        (None, "request-deployment", "logged-deployment", "request-deployment"),
+        ("metadata-deployment", "request-deployment", "logged-deployment", "logged-deployment"),
+        (None, "request-deployment", "logged-deployment", "logged-deployment"),
+        ("metadata-deployment", None, None, "None"),
+        (None, "request-deployment", None, "None"),
         (None, None, None, "None"),
     ),
 )
-async def test_failure_counters_keep_logged_deployment_attribution(
+async def test_failure_counters_label_only_the_router_logged_deployment(
     metadata_id: str | None, request_id: str | None, logged_id: str | None, expected: str
 ) -> None:
+    """Only the standard logging object's ``model_id`` labels a failure. ``metadata`` and
+    ``model_info`` on the body are caller input, so they never become a label value."""
     from fastapi import HTTPException
 
     from litellm.integrations.prometheus import PrometheusLogger
@@ -842,6 +849,181 @@ async def test_failure_counters_keep_logged_deployment_attribution(
             ]
     finally:
         _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_failed_requests_metric_names_the_deployment_that_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failure raised by a deployment must attribute it on the proxy failure
+    metric, from the deployment's config rather than from the labels the caller sent."""
+    from fastapi import HTTPException
+
+    from litellm import Router
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "client-alias",
+                    "litellm_params": {
+                        "model": "hosted_vllm/qwen",
+                        "api_base": "http://vllm.internal:8000/v1",
+                        "api_key": "test-key",
+                    },
+                    "model_info": {"id": "deployment-abc123"},
+                }
+            ]
+        ),
+    )
+    request_data: Final[dict[str, JsonValue]] = {
+        "model": "client-alias",
+        "litellm_params": {
+            "model": "hosted_vllm/qwen",
+            "metadata": {"api_base": "http://caller-chosen.invalid/v1", "model_group": "caller-chosen-group"},
+        },
+        "standard_logging_object": {
+            "model_id": "deployment-abc123",
+            "model_group": "client-alias",
+            "api_base": "http://vllm.internal:8000/v1/chat/completions",
+            "custom_llm_provider": "hosted_vllm",
+        },
+    }
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=HTTPException(status_code=500, detail="upstream failed"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        samples: Final = _collected_samples("litellm_proxy_failed_requests_metric_total")
+        assert [
+            (sample.labels["model_id"], sample.labels["model_group"], sample.labels["api_base"], sample.value)
+            for sample in samples
+        ] == [("deployment-abc123", "client-alias", "http://vllm.internal:8000/v1", 1.0)]
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_failed_requests_metric_labels_an_anthropic_messages_call_from_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On the generic route the caller's `metadata` and the logged `model_group` are both writable, so the
+    labels have to come from the deployment record the id resolves to."""
+    from fastapi import HTTPException
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    _served_deployment(monkeypatch)
+    request_data: Final[dict[str, JsonValue]] = {
+        "model": "served-a",
+        "metadata": {"model_group": "caller-group", "model_info": {"id": "dep-a"}},
+        "litellm_params": {
+            "metadata": {
+                "deployment": "caller-chosen",
+                "api_base": "http://caller.example/v1",
+                "model_info": {"id": "caller-id"},
+            }
+        },
+        "standard_logging_object": {
+            "call_type": "anthropic_messages",
+            "model_id": "dep-a",
+            "model_group": "caller-group",
+            "api_base": "http://caller.example/v1/messages",
+        },
+    }
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=HTTPException(status_code=500, detail="upstream failed"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        samples: Final = _collected_samples("litellm_proxy_failed_requests_metric_total")
+        assert [
+            (sample.labels["model_id"], sample.labels["model_group"], sample.labels["api_base"])
+            for sample in samples
+        ] == [("dep-a", "served-a", "http://127.0.0.1:9/v1")]
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_failed_requests_metric_ignores_a_caller_supplied_deployment_identity() -> None:
+    """A caller with a rejected key must not be able to mint deployment labels.
+
+    The auth-failure hook is handed the raw request body, so every deployment field a caller can write there
+    (``metadata``, ``litellm_params``) has to stay out of the labels, or one caller can grow the series without
+    bound.
+    """
+    from fastapi import HTTPException
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request_data: Final[dict[str, JsonValue]] = {
+        "model": "client-alias",
+        "metadata": {"model_info": {"id": "caller-minted-id"}, "model_group": "caller-minted-group"},
+        "litellm_params": {
+            "api_base": "http://caller-chosen.invalid/v1",
+            "metadata": {
+                "api_base": "http://caller-chosen.invalid/v1",
+                "model_group": "caller-minted-group",
+                "model_info": {"id": "caller-minted-id"},
+            },
+        },
+    }
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=HTTPException(status_code=401, detail="invalid key"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        samples: Final = _collected_samples("litellm_proxy_failed_requests_metric_total")
+        assert [(sample.labels["model_id"], sample.labels["api_base"]) for sample in samples] == [("None", "None")]
+        assert [sample.labels["model_group"] for sample in samples] == ["None"]
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_failed_requests_metric_does_not_attribute_a_deployment_to_a_pre_routing_reject() -> None:
+    from fastapi import HTTPException
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request_data: Final[dict[str, JsonValue]] = {
+        "model": "client-alias",
+        "litellm_params": {"metadata": {"model_group": "unregistered-client-chosen-group"}},
+    }
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=HTTPException(status_code=401, detail="invalid key"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        samples: Final = _collected_samples("litellm_proxy_failed_requests_metric_total")
+        assert [(sample.labels["model_id"], sample.labels["api_base"]) for sample in samples] == [("None", "None")]
+        assert [sample.labels["model_group"] for sample in samples] == ["None"]
+    finally:
+        _clear_prometheus_registry()
+
+
+def test_proxy_failed_requests_metric_declares_deployment_identity_labels() -> None:
+    labels: Final = PrometheusMetricLabels.get_labels("litellm_proxy_failed_requests_metric")
+    assert {
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+    } <= set(labels)
 
 
 @pytest.mark.asyncio
@@ -1826,6 +2008,146 @@ def test_deployment_latency_per_output_token_emits_model_group_from_enum_values(
         )
     finally:
         _clear_prometheus_registry()
+
+
+def _served_deployment(monkeypatch: pytest.MonkeyPatch, *, model_id: str = "dep-a") -> "Deployment":
+    from litellm import Router
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "served-a",
+                    "litellm_params": {
+                        "model": "hosted_vllm/served-a",
+                        "api_base": "http://127.0.0.1:9/v1",
+                        "api_key": "test-key",
+                    },
+                    "model_info": {"id": model_id},
+                }
+            ]
+        ),
+    )
+    return proxy_server.llm_router.registry().deployment(model_id)
+
+
+def test_deployment_state_identity_ignores_caller_metadata_whatever_bucket_it_lands_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`/v1/messages` goes through the generic route, which stamps `litellm_metadata` while logging
+    `anthropic_messages`. Both dicts are caller-writable, so neither may decide the series."""
+    from litellm.integrations.prometheus_helpers import deployment_identity
+
+    deployment: Final = _served_deployment(monkeypatch)
+    identity: Final = deployment_identity.identity_from_request_kwargs(
+        {
+            "model": "served-a",
+            "metadata": {
+                "deployment": "caller-chosen",
+                "api_base": "http://caller.example/v1",
+                "model_info": {"id": "caller-id"},
+            },
+            "litellm_params": {
+                "metadata": {
+                    "deployment": "caller-chosen",
+                    "api_base": "http://caller.example/v1",
+                    "model_info": {"id": "caller-id"},
+                },
+                "litellm_metadata": {
+                    "deployment": "hosted_vllm/served-a",
+                    "api_base": "http://127.0.0.1:9/v1",
+                    "model_info": {"id": "dep-a"},
+                },
+            },
+            "standard_logging_object": {"call_type": "anthropic_messages", "model_id": "dep-a"},
+        },
+        lambda model_id: deployment if model_id == "dep-a" else None,
+    )
+
+    assert identity == deployment_identity.DeploymentStateIdentity(
+        litellm_model_name="hosted_vllm/served-a",
+        model_id="dep-a",
+        api_base="http://127.0.0.1:9/v1",
+        api_provider="hosted_vllm",
+    )
+
+
+def test_deployment_state_identity_prefers_the_configured_id_over_a_request_scoped_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Forwarded client credentials give the call a generated model id; cooldown knows only the configured one."""
+    from litellm.integrations.prometheus_helpers import deployment_identity
+
+    deployment: Final = _served_deployment(monkeypatch)
+    identity: Final = deployment_identity.identity_from_request_kwargs(
+        {
+            "model": "served-a",
+            "litellm_params": {
+                "metadata": {
+                    "deployment": "hosted_vllm/served-a",
+                    "api_base": "http://127.0.0.1:9/v1",
+                    "model_info": {"id": "a7f3c2d1", "original_model_id": "dep-a"},
+                }
+            },
+        },
+        lambda model_id: deployment if model_id == "dep-a" else None,
+    )
+
+    assert identity.model_id == "dep-a"
+
+
+def test_a_request_naming_no_registered_deployment_gets_no_deployment_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller-chosen id the registry does not know cannot become a series label."""
+    from litellm.integrations.prometheus_helpers import deployment_identity
+
+    _served_deployment(monkeypatch)
+    identity: Final = deployment_identity.identity_from_request_kwargs(
+        {
+            "model": "served-a",
+            "litellm_params": {
+                "metadata": {
+                    "deployment": "caller-chosen",
+                    "api_base": "http://caller.example/v1",
+                    "model_info": {"id": "caller-id"},
+                }
+            },
+            "standard_logging_object": {"call_type": "anthropic_messages", "model_id": "caller-id"},
+        },
+        lambda model_id: None,
+    )
+
+    assert identity == deployment_identity.EMPTY_IDENTITY
+
+
+def test_declared_provider_is_used_without_inferring_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The deployment's declared provider is the label; deriving it is the fallback, not the rule."""
+    from litellm.integrations.prometheus_helpers import deployment_identity
+    from litellm.litellm_core_utils import get_llm_provider_logic
+
+    def _fail_inference(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the declared provider should have been used")
+
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", _fail_inference)
+
+    assert deployment_identity.resolve_api_provider("hosted_vllm/served-a", "hosted_vllm") == "hosted_vllm"
+
+
+def test_inference_failure_keeps_an_inferred_provider_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no declared provider an unparseable model yields no label rather than a raised exception."""
+    from litellm.integrations.prometheus_helpers import deployment_identity
+    from litellm.litellm_core_utils import get_llm_provider_logic
+
+    def _fail_inference(*args: object, **kwargs: object) -> None:
+        raise ValueError("unknown provider")
+
+    monkeypatch.setattr(get_llm_provider_logic, "get_llm_provider", _fail_inference)
+
+    assert deployment_identity.resolve_api_provider("mystery/model", None) == ""
 
 
 if __name__ == "__main__":
