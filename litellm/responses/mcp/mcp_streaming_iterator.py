@@ -6,6 +6,7 @@ from typing_extensions import TypedDict as ExtraItemsTypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.agentic_loop_settings import validated_max_agentic_loops
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     NO_GATEWAY_TOOLS,
@@ -29,6 +30,7 @@ from litellm.types.llms.openai import (
     MCPListToolsCompletedEvent,
     MCPListToolsFailedEvent,
     MCPListToolsInProgressEvent,
+    ResponseFailedEvent,
     ResponseInputParam,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -373,6 +375,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self._initial_creation_error: Exception | None = None
         self._stream_error: Exception | None = None
         self._error_event_emitted = False
+        self._limit_event: ResponseFailedEvent | None = None
         self._last_sequence_number = 0
 
         self._round_index = 0
@@ -584,6 +587,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 self.phase = "continue_initial_response"
                 return await self._anext_impl()
             self.phase = "finished"
+            if self._limit_event is not None:
+                return await self._anext_impl()
             if self._stream_error is not None and not self._error_event_emitted:
                 self._error_event_emitted = True
                 return self._make_stream_error_event()
@@ -591,6 +596,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Phase 6: Finished
         if self.phase == "finished":
+            if self._limit_event is not None:
+                terminal: Final = self._limit_event
+                self._limit_event = None
+                return terminal
             if self._stream_error is not None and not self._error_event_emitted:
                 self._error_event_emitted = True
                 return self._make_stream_error_event()
@@ -714,7 +723,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             if self._output_index_offset:
                 _set_event_field(chunk, "output_index", output_index + self._output_index_offset)
 
-        if self.should_auto_execute and chunk_type == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE:
+        if self.should_auto_execute and chunk_type in (
+            ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            ResponsesAPIStreamEvents.RESPONSE_FAILED,
+        ):
             return self._charge_incomplete_round(chunk)
         if not (self.should_auto_execute and self._is_response_completed(chunk)):
             return chunk
@@ -756,16 +768,28 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _charge_incomplete_round(self, chunk: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse:
         response_obj: Final[object] = getattr(chunk, "response", None)
-        if self._round_billing is None or not isinstance(response_obj, ResponsesAPIResponse):
+        if not isinstance(response_obj, ResponsesAPIResponse):
+            return chunk
+        merged_response: Final = (
+            response_obj.model_copy(update={"output": [*self._composed_output, *_output_items(response_obj)]})
+            if self._composed_output
+            else response_obj
+        )
+        if merged_response is not response_obj:
+            _set_event_field(chunk, "response", merged_response)
+        if self._round_billing is None:
+            return chunk
+        if chunk.type == ResponsesAPIStreamEvents.RESPONSE_FAILED:
+            _set_event_field(chunk, "response", self._round_billing.merge_failed_response(merged_response))
             return chunk
         if not self._round_billed_early():
             self._round_billing.complete_round(
-                chunk, response_obj, _output_items(response_obj), self._restore_round_headers
+                chunk, response_obj, _output_items(merged_response), self._restore_round_headers
             )
         client_response: Final = self._round_billing.charge_final_round(
-            chunk, response_obj, self._restore_round_headers
+            chunk, merged_response, self._restore_round_headers
         )
-        if client_response is not response_obj:
+        if client_response is not merged_response:
             _set_event_field(chunk, "response", client_response)
         return chunk
 
@@ -776,9 +800,13 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         if not self.base_iterator or not hasattr(self.base_iterator, "__anext__"):
             raise StopAsyncIteration
 
-        chunk: Final[ResponsesAPIStreamingResponse] = await cast(  # cast-ok: hasattr __anext__ checked above
-            "AsyncIterator[ResponsesAPIStreamingResponse]", self.base_iterator
-        ).__anext__()
+        try:
+            chunk = await cast("AsyncIterator[ResponsesAPIStreamingResponse]", self.base_iterator).__anext__()
+        except MidStreamFallbackError:
+            terminal: Final[object] = getattr(self.base_iterator, "completed_response", None)
+            if not self._composed_output or not isinstance(terminal, ResponseFailedEvent):
+                raise
+            chunk = terminal
 
         if self._cached_response_id is None and hasattr(chunk, "response"):
             new_response: Final[ResponsesAPIResponse | None] = getattr(chunk, "response", None)
@@ -1020,6 +1048,32 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self.base_iterator = None
             return
 
+        if self.tool_call_round >= self.max_tool_call_rounds:
+            failed: Final = self.collected_response.model_copy(
+                update={
+                    "status": "failed",
+                    "error": {
+                        "code": "server_error",
+                        "message": f"MCP auto-execute exceeded max_agentic_loops={self.max_tool_call_rounds}; "
+                        "the workflow is incomplete. Completed tool results are retained in output.",
+                    },
+                    "output": [*self._composed_output],
+                }
+            )
+            terminal: Final = ResponseFailedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_FAILED,
+                sequence_number=self._last_sequence_number + 1,
+                response=failed,
+            )
+            charged: Final = (
+                failed
+                if self._round_billing is None
+                else self._round_billing.charge_final_round(terminal, failed, self._restore_round_headers)
+            )
+            self._limit_event = terminal.model_copy(update={"response": charged})
+            self.base_iterator = None
+            return
+
         from litellm.responses.main import aresponses  # noqa: TID251  # follow-up call without MCP logic
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
@@ -1054,19 +1108,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 return
             follow_up_params.pop("tool_choice", None)
 
-            if self.tool_call_round >= self.max_tool_call_rounds:
-                # Hit the round cap: drop tools entirely so the model must
-                # answer in text instead of emitting another (unexecuted)
-                # tool call that would otherwise end the stream in silence.
-                follow_up_params.pop("tools", None)
-                verbose_logger.warning(
-                    "MCP auto-execute hit max_agentic_loops=%s; forcing a text-only follow-up.",
-                    self.max_tool_call_rounds,
-                )
-            else:
-                follow_up_params.update(
-                    allowed_tools_tool_choice_kept_on_follow_up(self.original_request_params.get("tool_choice"))
-                )
+            follow_up_params.update(
+                allowed_tools_tool_choice_kept_on_follow_up(self.original_request_params.get("tool_choice"))
+            )
 
             follow_up_response: Final = await aresponses(**_FollowUpRequest(**follow_up_params))
 
