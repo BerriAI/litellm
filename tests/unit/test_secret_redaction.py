@@ -19,6 +19,7 @@ from litellm._logging import (
     verbose_proxy_logger,
     verbose_router_logger,
 )
+from litellm.constants import MAX_REDACTION_SCAN_CHARS
 from litellm.litellm_core_utils.secret_redaction import (
     redact_internal_details,
     redact_structured_value,
@@ -976,3 +977,122 @@ def test_redact_internal_details_from_client_message_respects_disable_flag():
     with patch("litellm._logging._ENABLE_SECRET_REDACTION", False):  # test-quality-ok: the opt-out flag is the SUT
         text = "config file /etc/litellm/secrets/db.yaml"
         assert redact_internal_details_from_client_message(text) == text
+
+
+_ROTATING_KEY: Final = "sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6"
+_PEM_BODY_LINE: Final = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldY"
+
+
+def _surviving_fragments(output: str, secret: str, width: int = 8) -> tuple[str, ...]:
+    return tuple(secret[i : i + width] for i in range(len(secret) - width + 1) if secret[i : i + width] in output)
+
+
+def _pem_block(body_lines: int) -> str:
+    body: Final = "\n".join([_PEM_BODY_LINE] * body_lines)
+    return f"-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----"
+
+
+@pytest.mark.parametrize("oversize_factor", (1.01, 10, 200))
+def test_redact_string_output_never_exceeds_the_scan_limit(oversize_factor: float) -> None:
+    value: Final = "lorem ipsum " * int(MAX_REDACTION_SCAN_CHARS * oversize_factor / 12)
+    assert len(value) > MAX_REDACTION_SCAN_CHARS
+    assert len(redact_string(value)) <= MAX_REDACTION_SCAN_CHARS
+
+
+def test_redact_string_leaves_input_within_the_limit_untouched() -> None:
+    value: Final = "a" * MAX_REDACTION_SCAN_CHARS
+    assert redact_string(value) == value
+
+
+def test_redact_string_is_stable_when_applied_twice_to_oversized_input() -> None:
+    value: Final = f"{SECRET} " + "payload " * MAX_REDACTION_SCAN_CHARS + SECRET
+    once: Final = redact_string(value)
+    assert redact_string(once) == once
+
+
+def test_redact_string_redacts_secrets_in_the_kept_head_and_tail_of_oversized_input() -> None:
+    value: Final = f"{SECRET} " + "payload " * MAX_REDACTION_SCAN_CHARS + f" {SECRET}"
+    result: Final = redact_string(value)
+    assert SECRET not in result
+    assert result.startswith("REDACTED")
+    assert result.endswith("REDACTED")
+
+
+def test_redact_string_keeps_the_end_of_oversized_input_so_error_classification_still_works() -> None:
+    indicator: Final = "maximum context length exceeded"
+    value: Final = "echoed prompt " * MAX_REDACTION_SCAN_CHARS + indicator
+    assert redact_string(value).endswith(indicator)
+
+
+@pytest.mark.parametrize("offset", range(-120, 12, 3))
+def test_redact_string_leaves_no_fragment_of_a_secret_split_by_the_head_cut(offset: int) -> None:
+    prefix: Final = "x " * ((MAX_REDACTION_SCAN_CHARS // 2 + offset) // 2)
+    value: Final = prefix + _ROTATING_KEY + " tail" * MAX_REDACTION_SCAN_CHARS
+    assert _surviving_fragments(redact_string(value), _ROTATING_KEY) == ()
+
+
+@pytest.mark.parametrize("offset", range(-120, 12, 3))
+def test_redact_string_leaves_no_fragment_of_a_secret_split_by_the_tail_cut(offset: int) -> None:
+    suffix: Final = " y" * ((MAX_REDACTION_SCAN_CHARS // 2 + offset) // 2)
+    value: Final = "head " * MAX_REDACTION_SCAN_CHARS + _ROTATING_KEY + suffix
+    assert _surviving_fragments(redact_string(value), _ROTATING_KEY) == ()
+
+
+@pytest.mark.parametrize("offset", range(-200, 200, 40))
+def test_redact_string_drops_a_private_key_whose_begin_line_survives_the_head_cut(offset: int) -> None:
+    prefix: Final = "x " * ((MAX_REDACTION_SCAN_CHARS // 2 - 1500 + offset) // 2)
+    value: Final = prefix + _pem_block(body_lines=60) + " tail" * MAX_REDACTION_SCAN_CHARS
+    assert _PEM_BODY_LINE not in redact_string(value)
+
+
+@pytest.mark.parametrize("offset", range(-200, 200, 40))
+def test_redact_string_drops_a_private_key_whose_end_line_survives_the_tail_cut(offset: int) -> None:
+    suffix: Final = " y" * ((MAX_REDACTION_SCAN_CHARS // 2 - 1500 + offset) // 2)
+    value: Final = "head " * MAX_REDACTION_SCAN_CHARS + _pem_block(body_lines=60) + suffix
+    assert _PEM_BODY_LINE not in redact_string(value)
+
+
+@pytest.mark.parametrize("offset", range(-60, 12))
+def test_redact_string_leaves_no_fragment_of_a_bearer_token_whose_prefix_the_tail_cut_severs(offset: int) -> None:
+    token: Final = "ABCDEFGHIJKLMNOP1234"
+    suffix: Final = " y" * ((MAX_REDACTION_SCAN_CHARS // 2 + offset) // 2)
+    value: Final = "head " * MAX_REDACTION_SCAN_CHARS + "Bearer " + token + suffix
+    assert _surviving_fragments(redact_string(value), token) == ()
+
+
+@pytest.mark.parametrize("offset", range(-80, 12))
+def test_redact_string_leaves_no_fragment_of_a_quoted_api_key_value_whose_name_the_tail_cut_severs(offset: int) -> None:
+    secret: Final = "Zq8Xv3Lm9Pw2Rt5Yb7N"
+    suffix: Final = " y" * ((MAX_REDACTION_SCAN_CHARS // 2 + offset) // 2)
+    value: Final = "head " * MAX_REDACTION_SCAN_CHARS + '{"api_key": "' + secret + '"}' + suffix
+    assert _surviving_fragments(redact_string(value), secret) == ()
+
+
+@pytest.mark.parametrize("offset", range(-45, 10))
+def test_redact_string_drops_a_private_key_whose_end_line_is_cut_in_half_by_the_head_cut(offset: int) -> None:
+    begin_and_body: Final = "-----BEGIN PRIVATE KEY-----\n" + "\n".join([_PEM_BODY_LINE] * 60) + "\n"
+    prefix: Final = " " * (MAX_REDACTION_SCAN_CHARS // 2 - len(begin_and_body) + offset)
+    value: Final = prefix + begin_and_body + "-----END PRIVATE KEY-----" + " tail" * MAX_REDACTION_SCAN_CHARS
+    assert _PEM_BODY_LINE not in redact_string(value)
+
+
+def test_redact_internal_details_output_never_exceeds_the_scan_limit() -> None:
+    value: Final = "echoed prompt " * MAX_REDACTION_SCAN_CHARS
+    assert len(redact_internal_details(value)) <= MAX_REDACTION_SCAN_CHARS
+
+
+def test_redact_internal_details_drops_a_traceback_whose_frames_run_past_the_kept_tail_of_oversized_input() -> None:
+    frame: Final = '  File "app.py", line 1, in <module>\n    call_the_provider()\n'
+    value: Final = (
+        "echoed prompt " * (MAX_REDACTION_SCAN_CHARS // 14)
+        + "Traceback (most recent call last):\n"
+        + frame * MAX_REDACTION_SCAN_CHARS
+    )
+    result: Final = redact_internal_details(value)
+    assert "call_the_provider" not in result
+    assert "Traceback" not in result
+
+
+def test_redact_internal_details_redacts_secrets_in_the_kept_head_and_tail_of_oversized_input() -> None:
+    value: Final = f"{SECRET} " + "payload " * MAX_REDACTION_SCAN_CHARS + f" {SECRET}"
+    assert SECRET not in redact_internal_details(value)

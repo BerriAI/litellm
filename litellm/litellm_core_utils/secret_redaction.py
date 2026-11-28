@@ -11,7 +11,7 @@ import sys
 from functools import lru_cache
 from typing import Final
 
-from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
+from litellm.constants import MAX_REDACTION_SCAN_CHARS, MINIMUM_CUSTOM_KEY_LENGTH
 from litellm.rust_bridge import _native, diagnostics
 
 REDACTED: Final = "REDACTED"
@@ -104,9 +104,68 @@ def python_redact_string(value: str) -> str:
 _python_redact_string = python_redact_string
 
 
+_TRUNCATION_MARKER: Final = "...[truncated]"
+_TRUNCATION_BOUNDARY_WINDOW: Final = 4096
+_TRUNCATION_CONTEXT_SKIP: Final = 256
+_TRUNCATION_DELIMITERS: Final = (" ", "\t", "\r", "\n", "'", '"', ",", ";", "(", ")", "{", "}", "[", "]", "<", ">")
+_PEM_BEGIN: Final = "-----begin"
+_PEM_END: Final = "-----end"
+_PEM_FENCE: Final = "-----"
+_PEM_PRIVATE_KEY_BLOCK_RE: Final = re.compile(_PEM_PRIVATE_KEY_BLOCK, re.IGNORECASE)
+
+
+def _cut_head_at_boundary(head: str) -> str:
+    window_start: Final = max(len(head) - _TRUNCATION_BOUNDARY_WINDOW, 0)
+    boundary: Final = max(head.rfind(delimiter, window_start) for delimiter in _TRUNCATION_DELIMITERS)
+    return head[:boundary] if boundary != -1 else head[:window_start]
+
+
+def _cut_tail_at_boundary(tail: str) -> str:
+    window: Final = tail[:_TRUNCATION_BOUNDARY_WINDOW]
+    found: Final = tuple(
+        index
+        for delimiter in _TRUNCATION_DELIMITERS
+        if (index := window.find(delimiter, _TRUNCATION_CONTEXT_SKIP)) != -1
+    )
+    return tail[min(found) + 1 :] if found else tail[_TRUNCATION_BOUNDARY_WINDOW:]
+
+
+def _drop_unterminated_pem(head: str) -> str:
+    begin: Final = head.lower().rfind(_PEM_BEGIN)
+    return head if begin == -1 or _PEM_PRIVATE_KEY_BLOCK_RE.match(head, begin) else head[:begin]
+
+
+def _drop_orphan_pem_end(tail: str) -> str:
+    lowered: Final = tail.lower()
+    end: Final = lowered.find(_PEM_END)
+    if end == -1 or lowered.rfind(_PEM_BEGIN, 0, end) != -1:
+        return tail
+    fence_close: Final = tail.find(_PEM_FENCE, end + len(_PEM_END))
+    return "" if fence_close == -1 else tail[fence_close + len(_PEM_FENCE) :]
+
+
+def bound_scan_input(value: str) -> str:
+    """Cap *value* at MAX_REDACTION_SCAN_CHARS by keeping its head and tail, so redaction cost stays bounded.
+
+    The head backs off to a token boundary. The tail skips past the context a cut may have severed, such as
+    "Bearer " or a key name, and then to a token boundary, so a value that lost its context is dropped, not
+    kept unrecognized. A PEM block split by either cut is dropped.
+    """
+    if len(value) <= MAX_REDACTION_SCAN_CHARS:
+        return value
+    keep: Final = max((MAX_REDACTION_SCAN_CHARS - len(_TRUNCATION_MARKER)) // 2, 0)
+    head: Final = _drop_unterminated_pem(_cut_head_at_boundary(value[:keep]))
+    tail: Final = _drop_orphan_pem_end(_cut_tail_at_boundary(value[len(value) - keep :]))
+    return head + _TRUNCATION_MARKER + tail
+
+
 def redact_string(value: str) -> str:
-    """Scrub known secret/credential patterns from *value* and return the result."""
-    return diagnostics.run(lambda native: native.redact_text(value), lambda: python_redact_string(value))
+    """Scrub known secret/credential patterns from *value* and return the result.
+
+    Input longer than MAX_REDACTION_SCAN_CHARS is shortened first, see bound_scan_input.
+    """
+    bounded: Final = bound_scan_input(value)
+    return diagnostics.run(lambda native: native.redact_text(bounded), lambda: python_redact_string(bounded))
 
 
 _TOKEN_SHAPES: Final = (
@@ -187,17 +246,21 @@ _INTERNAL_DETAIL_RE: Final = re.compile(
 _TRACEBACK_MARKER: Final = "Traceback (most recent call last):"
 
 
+def _drop_traceback(value: str) -> str:
+    marker_index: Final = value.find(_TRACEBACK_MARKER)
+    return value[:marker_index].rstrip() if marker_index != -1 else value
+
+
 def _python_redact_internal_details(value: str) -> str:
     """Drop an embedded traceback and scrub filesystem paths and internal hostnames,
     on top of redact_string(). For client-facing messages only: server logs keep this detail."""
-    marker_index: Final = value.find(_TRACEBACK_MARKER)
-    without_traceback: Final = value[:marker_index].rstrip() if marker_index != -1 else value
-    return _INTERNAL_DETAIL_RE.sub(REDACTED, python_redact_string(without_traceback))
+    return _INTERNAL_DETAIL_RE.sub(REDACTED, python_redact_string(_drop_traceback(value)))
 
 
 def redact_internal_details(value: str) -> str:
+    bounded: Final = bound_scan_input(_drop_traceback(value))
     return diagnostics.run(
-        lambda native: native.redact_client_message(value), lambda: _python_redact_internal_details(value)
+        lambda native: native.redact_client_message(bounded), lambda: _python_redact_internal_details(bounded)
     )
 
 
