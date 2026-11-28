@@ -768,6 +768,46 @@ class TestLiteLLMCompletionResponsesConfig:
         assert "message" not in output_types
         assert "function_call" in output_types
 
+    def test_tool_call_only_response_with_empty_string_content_emits_no_message_item(self):
+        """Providers that return content "" instead of None for a tool-only turn
+        must also emit no message item, matching the streaming path which drops
+        falsy final content and native OpenAI tool-only turns."""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content="",
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="toolu_01OnlyToolCall",
+                                type="function",
+                                function=Function(name="get_weather", arguments='{"city": "SF"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="what's the weather in SF?",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
+        )
+
+        output_types = [item.type for item in responses_api_response.output]
+        assert "message" not in output_types
+        assert "function_call" in output_types
+
     def test_cited_tool_call_only_response_keeps_its_citations_in_a_message_item(self) -> None:
         citation: Final = {"start_index": 0, "end_index": 0, "url": "https://example.com", "title": "Example"}
         chat_completion_response: Final = ModelResponse(
@@ -835,6 +875,160 @@ class TestLiteLLMCompletionResponsesConfig:
         message_items = [item for item in responses_api_response.output if item.type == "message"]
         assert len(message_items) == 1
         assert message_items[0].content[0].text == "It is sunny."
+
+    def test_empty_string_content_without_tool_calls_still_emits_message_item(self):
+        """An empty answer with no tool calls must keep its message item. Skipping
+        every falsy content would hide a blank completion from the client."""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="", role="assistant"),
+                )
+            ],
+        )
+
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="what's the weather in SF?",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
+        )
+
+        message_items = [item for item in responses_api_response.output if item.type == "message"]
+        assert len(message_items) == 1
+        assert message_items[0].content[0].text == ""
+        assert "function_call" not in [item.type for item in responses_api_response.output]
+
+    def test_content_bearing_tool_call_response_keeps_message_and_function_call(self):
+        """Junction: real text on a tool turn must not be dropped with the empty-content skip."""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content="I'll look that up.",
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="toolu_01WithText",
+                                type="function",
+                                function=Function(name="get_weather", arguments='{"city": "SF"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="what's the weather in SF?",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
+        )
+
+        output_types = [item.type for item in responses_api_response.output]
+        message_items = [item for item in responses_api_response.output if item.type == "message"]
+        assert output_types.count("message") == 1
+        assert "function_call" in output_types
+        assert message_items[0].content[0].text == "I'll look that up."
+
+    def test_cited_tool_call_with_empty_string_content_still_keeps_its_citations(self) -> None:
+        """Junction: main keeps citations on a tool-only turn with content None.
+        The same citations must survive when the provider sends content ""."""
+        citation: Final = {"start_index": 0, "end_index": 0, "url": "https://example.com", "title": "Example"}
+        chat_completion_response: Final = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gemini-3.8-flash",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content="",
+                        role="assistant",
+                        annotations=[{"type": "url_citation", "url_citation": citation}],
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_cited",
+                                type="function",
+                                function=Function(name="save_museum", arguments='{"name": "Louvre"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response: Final = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="which museum?",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
+        )
+
+        output: Final = responses_api_response.output
+        assert [item.type for item in output] == ["message", "function_call"]
+        assert output[0].content[0].text == ""
+        assert [annotation.url for annotation in output[0].content[0].annotations] == [citation["url"]]
+
+    def test_tool_call_with_empty_string_content_still_emits_reasoning_and_function_call(self) -> None:
+        """Junction: skipping the empty message item must not drop a sibling reasoning item."""
+        chat_completion_response: Final = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content="",
+                        role="assistant",
+                        reasoning_content="I should call get_weather for San Francisco.",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="toolu_01WithReasoning",
+                                type="function",
+                                function=Function(name="get_weather", arguments='{"city": "SF"}'),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response: Final = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="what's the weather in SF?",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
+        )
+
+        output_types: Final = [item.type for item in responses_api_response.output]
+        assert "message" not in output_types
+        assert "function_call" in output_types
+        reasoning_items = [item for item in responses_api_response.output if item.type == "reasoning"]
+        assert len(reasoning_items) == 1
+        assert "get_weather" in reasoning_items[0].content[0].text
 
     def test_transform_chat_completion_response_preserves_hidden_params(self):
         """Test that _hidden_params from chat completion response are preserved in responses API response"""

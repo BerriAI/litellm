@@ -4323,7 +4323,7 @@ class LiteLLMCompletionResponsesConfig:
         has_text_part: Final = (
             bool(message.content)
             or bool(getattr(message, "annotations", None))
-            or (message.content is not None and not refusal_parts)
+            or (message.content is not None and not refusal_parts and not getattr(message, "tool_calls", None))
         )
         text_parts: Final = (
             (LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(message),)
