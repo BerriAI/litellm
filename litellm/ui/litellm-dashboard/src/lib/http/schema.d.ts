@@ -20128,7 +20128,8 @@ export interface paths {
          * Update Default Team Settings
          * @description Update the default team parameters (litellm_settings.default_team_params).
          *     Applied to every new team for fields not explicitly provided in the create request;
-         *     `models` only applies to teams automatically created via SSO Groups.
+         *     `models` only applies to teams automatically created via SSO Groups, SCIM, or `team_id_upsert`
+         *     (a JWT request or a UI SSO login). An organization with a model allowlist must allow them.
          */
         patch: operations["update_default_team_settings_update_default_team_settings_patch"];
         trace?: never;
@@ -35117,7 +35118,8 @@ export interface components {
         /**
          * DefaultTeamSSOParams
          * @description Default parameters applied to every /team/new call for fields not explicitly provided in the request.
-         *     `models` is the exception: it only applies to teams automatically created by LiteLLM via SSO Groups.
+         *     `models` is the exception: it only applies to teams automatically created by LiteLLM via SSO Groups, SCIM,
+         *     or `team_id_upsert` (a JWT request or a UI SSO login).
          */
         DefaultTeamSSOParams: {
             /**
@@ -35137,7 +35139,7 @@ export interface components {
             max_budget?: number | null;
             /**
              * Models
-             * @description Default list of models for teams automatically created via SSO Groups
+             * @description Default list of models for teams automatically created via SSO Groups, SCIM, or `team_id_upsert` (a JWT request or a UI SSO login). When `organization_id` points at an organization with a model allowlist, that organization must allow these models or the `team_id_upsert` team is not created
              * @default []
              */
             models: string[];

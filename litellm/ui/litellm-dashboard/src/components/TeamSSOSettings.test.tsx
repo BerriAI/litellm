@@ -285,12 +285,16 @@ describe("TeamSSOSettings", () => {
     expect(screen.getByText("ag-missing")).toBeInTheDocument();
   });
 
-  it("should say the models default only applies to SSO auto-created teams", async () => {
+  it("should say the models default only applies to auto-created teams", async () => {
     mockGetDefaultTeamSettings.mockResolvedValue(mockSettingsResponse);
 
     renderWithProviders(<TeamSSOSettings {...defaultProps} />);
 
-    expect(await screen.findByText(/auto-created from SSO groups/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        /auto-created from SSO groups, SCIM, or team_id_upsert \(a JWT request or a UI SSO login\)/i,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("should send the newly selected access group alongside the existing one when saving", async () => {

@@ -17862,7 +17862,7 @@
         },
         "models": {
           "label": "Models",
-          "description": "Default list of models for teams auto-created from SSO groups. Teams created from the UI or /team/new are not affected."
+          "description": "Default list of models for teams auto-created from SSO groups, SCIM, or team_id_upsert (a JWT request or a UI SSO login). Teams created from the UI or /team/new are not affected."
         },
         "permissions": {
           "label": "Team Member Permissions",

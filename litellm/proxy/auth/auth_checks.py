@@ -3747,9 +3747,13 @@ async def _get_team_db_check(
     )
 
     if response is None and team_id_upsert:
-        from litellm.proxy.management_endpoints.team_endpoints import new_team
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _get_default_team_param,  # pyright: ignore[reportPrivateUsage]  # the team endpoints' own default_team_params reader
+            new_team,
+        )
 
-        new_team_data: Final = NewTeamRequest(team_id=team_id)
+        default_models: Final = TypeAdapter(list[str]).validate_python(_get_default_team_param("models") or [])
+        new_team_data: Final = NewTeamRequest(team_id=team_id, models=default_models)
 
         mock_request: Final = Request(scope={"type": "http"})
         system_admin_user: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
