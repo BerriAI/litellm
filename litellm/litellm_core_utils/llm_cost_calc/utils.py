@@ -533,6 +533,35 @@ class PromptTokensDetailsResult(TypedDict):
     query_count: int
 
 
+AUTO_CACHE_WRITING_PROVIDERS: Final = frozenset({"openai", "azure"})
+AUTO_CACHE_WRITING_MINIMUM_PROMPT_TOKENS: Final = 1024
+
+
+def provider_writes_prompt_to_cache_unasked(custom_llm_provider: object, prompt_tokens: int) -> bool:
+    """OpenAI and Azure write a long prompt into their own cache without the request asking for it
+    and bill every written token at the cache-creation rate, which runs above the input rate. Both
+    of them cache from 1024 tokens up and nothing below that, so a shorter prompt bills the plain
+    input rate. Every other provider writes only the blocks a request marks with cache_control."""
+    return (
+        custom_llm_provider in AUTO_CACHE_WRITING_PROVIDERS
+        and prompt_tokens >= AUTO_CACHE_WRITING_MINIMUM_PROMPT_TOKENS
+    )
+
+
+def normalize_service_tier(service_tier: object) -> str | None:
+    """
+    Reduce a service_tier value to a concrete billable tier string or None.
+
+    "auto" is a routing preference and any non-string value is not a billable
+    tier, so both defer to standard pricing (or to the tier the provider reports
+    on the response usage) instead of crashing the downstream cost-key lookup,
+    which calls service_tier.lower()
+    """
+    if not isinstance(service_tier, str) or service_tier.lower() == ServiceTier.AUTO.value:
+        return None
+    return service_tier
+
+
 def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     cache_hit_tokens: Final = cast(int | None, getattr(usage.prompt_tokens_details, "cached_tokens", 0)) or 0
     cache_creation_tokens: Final = (
@@ -1026,6 +1055,68 @@ def call_context(
         at=reference.astimezone(timezone.utc)
         if reference.tzinfo is not None
         else reference.replace(tzinfo=timezone.utc),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class TokenRates:
+    input_rate: float
+    output_rate: float
+    cache_read_rate: float
+    cache_creation_rate: float
+    billed_reasoning_rate: float
+
+
+def _highest_token_rates(quotes: tuple[NativeQuote, ...]) -> TokenRates:
+    return TokenRates(
+        input_rate=max(quote.input * quote.uplift for quote in quotes),
+        output_rate=max(quote.output * quote.uplift for quote in quotes),
+        cache_read_rate=max(quote.cache_read * quote.uplift for quote in quotes),
+        cache_creation_rate=max(quote.cache_write * quote.uplift for quote in quotes),
+        billed_reasoning_rate=max(quote.reasoning * quote.uplift for quote in quotes),
+    )
+
+
+def resolve_token_rates(
+    model_info: ModelInfo,
+    usage: Usage,
+    custom_llm_provider: str | None,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+    vertex_location: str | None = None,
+    current_time: datetime | None = None,
+) -> TokenRates:
+    """The highest per-token rates a request with this usage can be billed at.
+
+    Reads the same native quote generic_cost_per_token bills from (tiered_pricing tables,
+    *_above_Nk_tokens thresholds, service-tier rates, the uplift of the regional or FedRAMP OpenAI
+    host or non-global Vertex location the request is sent to, and the provider's threshold inclusivity),
+    so a caller that only knows the token counts ahead of the request, such as budget reservation,
+    prices them the way the finished request will be. One of those can still move between the
+    estimate and the bill: an off-peak window open right now can close before the response lands,
+    so each rate is the highest of the off-peak and standard-hours candidates rather than the one
+    in force right now.
+    """
+    standard_hours_info: Final[ModelInfo] = {**model_info, "off_peak_pricing": None}
+    off_peak_variants: Final = (
+        (model_info,) if model_info.get("off_peak_pricing") is None else (model_info, standard_hours_info)
+    )
+    call: Final = call_context(service_tier, data_residency, vertex_location, current_time)
+    return _highest_token_rates(
+        tuple(
+            NativePrices(info, custom_llm_provider).quote(_count(usage.prompt_tokens), call)
+            for info in off_peak_variants
+        )
+    )
+
+
+def token_rate_uplift(model_info: ModelInfo, *, data_residency: str | None, vertex_location: str | None) -> float:
+    """The price uplift of the regional or FedRAMP OpenAI host or non-global Vertex location a request is sent to,
+    applied to every per-token rate."""
+    return (
+        get_regional_uplift_multiplier(model_info, data_residency)
+        * get_fedramp_uplift_multiplier(model_info, data_residency)
+        * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
     )
 
 
