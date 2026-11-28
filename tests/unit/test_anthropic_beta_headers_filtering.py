@@ -444,6 +444,20 @@ class TestAnthropicBetaHeadersFiltering:
         assert set(headers["anthropic-beta"].split(",")) == {beta, "context-1m-2025-08-07"}
         assert body["anthropic_beta"] == ["context-1m-2025-08-07"]
 
+    def test_vertex_ai_drops_the_linked_billing_beta_from_the_header_and_the_body(self) -> None:
+        """Vertex answers 400 "Unexpected value(s) `user-profiles-billing-2026-10-01` for the `anthropic-beta`
+        header" (live on claude-haiku-4-5, 2026-11-24), so the beta is dropped in both placements."""
+        headers, body = update_request_with_filtered_beta(
+            headers={"anthropic-beta": "user-profiles-billing-2026-10-01,context-1m-2025-08-07"},
+            request_data={"anthropic_beta": ["user-profiles-billing-2026-10-01", "context-1m-2025-08-07"]},
+            provider="vertex_ai",
+        )
+
+        assert (headers["anthropic-beta"], body["anthropic_beta"]) == (
+            "context-1m-2025-08-07",
+            ["context-1m-2025-08-07"],
+        )
+
     def test_header_only_betas_stay_out_of_the_provider_columns_older_proxies_read(self) -> None:
         """Proxies released before header-only columns existed fetch this map from main, read only the
         provider column, and copy its betas into the body field too, where Vertex answers 400. So a
@@ -518,6 +532,18 @@ class TestAnthropicBetaHeadersFiltering:
         )
 
         assert filtered == ["dangerous-tool-use-2026-09-03"]
+
+    @pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
+    def test_linked_billing_beta_forwarded(self, provider: str) -> None:
+        """user-profiles-billing-2026-10-01 gates the `billing_policy` request field. Anthropic documents it for the
+        Claude API (https://platform.claude.com/docs/en/release-notes/overview, 2026-11-17 entry, fetched
+        2026-11-22); the azure_ai row follows the other user-profiles betas."""
+        filtered: Final = filter_and_transform_beta_headers(
+            beta_headers=["user-profiles-billing-2026-10-01"],
+            provider=provider,
+        )
+
+        assert filtered == ["user-profiles-billing-2026-10-01"]
 
     @pytest.mark.parametrize("provider", ["anthropic", "vertex_ai"])
     def test_inline_tools_forwarded(self, provider: str) -> None:

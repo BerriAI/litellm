@@ -633,6 +633,23 @@ def test_messages_request_drops_clear_at_from_a_mid_conversation_system_turn_wit
     assert system_turn == {"role": "system", "content": "be terse", "clear_at": "end_turn"}
 
 
+@pytest.mark.parametrize("drop_params", (False, True))
+def test_billing_policy_is_forwarded_as_sent_even_under_drop_params_without_its_beta(
+    drop_params: bool, local_beta_headers_config: None
+) -> None:
+    """`billing_policy` says who pays. Dropping it would bill the request the default way with no error, so a leg
+    that does not send `user-profiles-billing-2026-10-01` forwards it and the provider answers its own 400."""
+    billing_policy: Final = {"type": "billing_policy"}
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "billing_policy": dict(billing_policy)},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+    assert request["billing_policy"] == billing_policy
+
+
 def test_a_provider_without_a_beta_headers_row_forwards_beta_gated_fields_under_drop_params(
     local_beta_headers_config: None,
 ) -> None:

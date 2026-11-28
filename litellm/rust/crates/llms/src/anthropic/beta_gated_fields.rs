@@ -631,6 +631,23 @@ mod tests {
         );
     }
 
+    /// `billing_policy` says who pays, so dropping it would bill the request the default way
+    /// with no error. A leg that does not send its beta gets the provider's own 400 instead.
+    #[rstest]
+    fn a_billing_policy_without_its_beta_is_kept_under_drop_params() {
+        let sent: MessagesRequest = serde_json::from_value(json!({
+            "model": "test-model",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+            "billing_policy": {"type": "billing_policy"},
+        }))
+        .unwrap();
+        assert_eq!(
+            strip_beta_gated_request(sent.clone(), &BetaSet::default(), true, "test"),
+            sent
+        );
+    }
+
     #[rstest]
     fn non_system_messages_keep_their_fields() {
         let sent = messages(json!([

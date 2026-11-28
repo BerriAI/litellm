@@ -74,6 +74,7 @@
     "user-profiles-2026-03-24": "user-profiles-2026-03-24",
     "user-profiles-2026-08-18": "user-profiles-2026-08-18",
     "user-profiles-2026-09-04": "user-profiles-2026-09-04",
+    "user-profiles-billing-2026-10-01": "user-profiles-billing-2026-10-01",
     "webhooks-2026-10-07": "webhooks-2026-10-07",
     "afk-mode-2026-01-31": "afk-mode-2026-01-31",
     "redact-thinking-2026-02-12": "redact-thinking-2026-02-12",
@@ -153,6 +154,7 @@
     "user-profiles-2026-03-24": "user-profiles-2026-03-24",
     "user-profiles-2026-08-18": "user-profiles-2026-08-18",
     "user-profiles-2026-09-04": "user-profiles-2026-09-04",
+    "user-profiles-billing-2026-10-01": "user-profiles-billing-2026-10-01",
     "webhooks-2026-10-07": "webhooks-2026-10-07",
     "afk-mode-2026-01-31": "afk-mode-2026-01-31",
     "redact-thinking-2026-02-12": "redact-thinking-2026-02-12",
@@ -349,6 +351,7 @@
     "user-profiles-2026-03-24": null,
     "user-profiles-2026-08-18": null,
     "user-profiles-2026-09-04": null,
+    "user-profiles-billing-2026-10-01": null,
     "webhooks-2026-10-07": null,
     "afk-mode-2026-01-31": "afk-mode-2026-01-31",
     "redact-thinking-2026-02-12": null,
@@ -372,7 +375,8 @@
     "telemetry-destinations-2026-08-11": "telemetry-destinations-2026-08-11",
     "user-profiles-2026-03-24": "user-profiles-2026-03-24",
     "user-profiles-2026-08-18": "user-profiles-2026-08-18",
-    "user-profiles-2026-09-04": "user-profiles-2026-09-04"
+    "user-profiles-2026-09-04": "user-profiles-2026-09-04",
+    "user-profiles-billing-2026-10-01": null
   },
   "databricks": {
     "advisor-tool-2026-03-01": null,
