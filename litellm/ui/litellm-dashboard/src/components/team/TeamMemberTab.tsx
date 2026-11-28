@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SimpleTooltip } from "@/components/ui/tooltip";
+import BulkAddMembers from "./BulkAddMembers";
 import MemberTable from "@/components/common_components/MemberTable";
 import type { StoredModelMaxBudget } from "@/components/key_team_helpers/modelMaxBudgetPayload";
 import { Member } from "@/components/networking";
@@ -143,7 +144,7 @@ export default function TeamMemberTab({
   };
 
   const { data: uiSettingsData } = useUISettings();
-  const { userId, userRole } = useAuthorized();
+  const { userId, userRole, accessToken } = useAuthorized();
   const disableTeamAdminDeleteTeamUser = Boolean(uiSettingsData?.values?.disable_team_admin_delete_team_user);
   const isUserTeamAdmin = isUserTeamAdminForSingleTeam(teamData.team_info.members_with_roles, userId || "");
   const isProxyAdmin = isProxyAdminRole(userRole || "");
@@ -347,6 +348,14 @@ export default function TeamMemberTab({
 
   return (
     <>
+      {canEditTeam && accessToken && (
+        <BulkAddMembers
+          accessToken={accessToken}
+          teamId={teamData.team_id}
+          members={teamData.team_info.members_with_roles}
+          onAdded={onMemberBudgetReset}
+        />
+      )}
       <MemberTable
         key={teamData.team_id}
         members={teamData.team_info.members_with_roles}

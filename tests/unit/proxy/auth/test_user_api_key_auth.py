@@ -1110,6 +1110,7 @@ async def test_auth_with_allowed_routes(route, should_raise_error):
         ("/config/pass_through_endpoint", "internal_user", False),
         ("/config/field/update", "internal_user", False),
         ("/organization/member_add", "internal_user", False),
+        ("/team/bulk_member_add", "internal_user", True),
         # Internal User - BLOCKED from proxy-wide spend routes
         ("/global/spend/logs", "internal_user", False),
         # Internal User Viewer - allowed spend routes only

@@ -18046,6 +18046,26 @@
         "proxyControlledKey": "Only proxy admins can set this key",
         "cannotBeEmpty": "This field cannot be left empty"
       }
+    },
+    "bulkMembers": {
+      "title": "Bulk add members",
+      "emails": "Paste emails separated by commas, semicolons or new lines",
+      "csv": "Or upload a CSV of emails (optional email header)",
+      "role": "Role for all new members",
+      "user": "User",
+      "admin": "Team admin",
+      "budget": "Member budget in USD (optional)",
+      "invalidBudget": "Enter a nonnegative budget.",
+      "summary": "{{count}} new members will be added. Existing members and duplicate or invalid emails are skipped.",
+      "limit": "Add at most 500 new members at a time.",
+      "invalid": "Invalid email",
+      "duplicate": "Duplicate",
+      "existing": "Already a member",
+      "ready": "Ready",
+      "added": "Added",
+      "failed": "Failed",
+      "adding": "Adding members…",
+      "confirm": "Confirm adding {{count}} members"
     }
   },
   "memberTable": {

@@ -630,7 +630,7 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    const addButton = screen.getByRole("button", { name: /add member/i });
+    const addButton = screen.getByRole("button", { name: /^add member$/i });
     await user.click(addButton);
 
     expect(mockSetIsAddMemberModalVisible).toHaveBeenCalledWith(true);

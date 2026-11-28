@@ -18046,6 +18046,26 @@
         "proxyControlledKey": "只有代理管理员可以设置此键",
         "cannotBeEmpty": "此字段不能为空"
       }
+    },
+    "bulkMembers": {
+      "title": "批量添加成员",
+      "emails": "粘贴电子邮件地址，以逗号、分号或换行分隔",
+      "csv": "或上传电子邮件 CSV（可包含 email 表头）",
+      "role": "所有新成员的角色",
+      "user": "用户",
+      "admin": "团队管理员",
+      "budget": "成员预算（美元，可选）",
+      "invalidBudget": "请输入非负预算。",
+      "summary": "将添加 {{count}} 位新成员。现有成员、重复地址和无效地址将被跳过。",
+      "limit": "每次最多添加 500 位新成员。",
+      "invalid": "无效地址",
+      "duplicate": "重复地址",
+      "existing": "已是成员",
+      "ready": "待添加",
+      "added": "已添加",
+      "failed": "失败",
+      "adding": "正在添加成员…",
+      "confirm": "确认添加 {{count}} 位成员"
     }
   },
   "memberTable": {
