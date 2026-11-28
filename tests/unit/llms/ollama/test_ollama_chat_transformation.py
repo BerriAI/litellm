@@ -1102,9 +1102,39 @@ class TestOllamaToolCallTransformation:
         ]
 
     @pytest.mark.parametrize(
+        ("arguments", "expected"),
+        [
+            (
+                '{"path": "a.rs"}{"path": "b.rs"}',
+                [
+                    {"id": "call_abc123", "function": {"name": "read_file", "arguments": {"path": "a.rs"}}},
+                    {"function": {"name": "read_file", "arguments": {"path": "b.rs"}}},
+                ],
+            ),
+            (
+                '{"path": "a.rs"}\n{"path": "a.rs"}',
+                [{"id": "call_abc123", "function": {"name": "read_file", "arguments": {"path": "a.rs"}}}],
+            ),
+        ],
+        ids=["distinct", "repeated"],
+    )
+    def test_replayed_tool_call_with_glued_json_objects_is_forwarded_one_call_per_object(
+        self, arguments: str, expected: list[dict[str, object]]
+    ):
+        result: Final = OllamaChatConfig().transform_request(
+            model="qwen3:8b",
+            messages=self._replayed_history(arguments),
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["messages"][1]["tool_calls"] == expected
+
+    @pytest.mark.parametrize(
         "arguments",
-        ['{"path": "a.rs"}{"path": "b.rs"}', '["a.rs", "b.rs"]', '[["path", "a.rs"]]', "[]"],
-        ids=["glued", "array", "pairs", "empty_array"],
+        ['{"path": "a.rs"} trailing', '{"path": "a.rs"}["b.rs"]', '["a.rs", "b.rs"]', '[["path", "a.rs"]]', "[]"],
+        ids=["glued_garbage", "glued_array", "array", "pairs", "empty_array"],
     )
     def test_replayed_tool_call_arguments_that_are_not_an_object_answer_400_without_echoing_them(
         self, arguments: str
