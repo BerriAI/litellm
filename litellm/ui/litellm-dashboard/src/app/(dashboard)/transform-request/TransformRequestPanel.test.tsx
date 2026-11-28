@@ -149,4 +149,38 @@ describe("TransformRequestPanel", () => {
     expect(writeText.mock.calls[0]?.[0]).toContain("https://api.anthropic.com/v1/messages");
     expect(notify.success).toHaveBeenCalledWith("Copied to clipboard");
   });
+
+  it("formats the curl snippet without duplicate Content-Type or double-nested json braces", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    transformRequestCallMock.mockResolvedValue({
+      raw_request_api_base: "https://api.openai.com/v1/chat/completions",
+      raw_request_body: { model: "gpt-4o", messages: [{ role: "user", content: "hello" }] },
+      raw_request_headers: {
+        Authorization: "Bearer test",
+        "Content-Type": "application/json",
+      },
+    });
+
+    render(<TransformRequestPanel accessToken={ACCESS_TOKEN} />);
+
+    await user.click(getTransformButton());
+    await screen.findByText(/api\.openai\.com\/v1\/chat\/completions/);
+
+    await user.click(getCopyButton());
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const copiedCommand = writeText.mock.calls[0]?.[0] as string;
+
+    const contentTypeMatches = copiedCommand.match(/-H 'Content-Type: application\/json'/g);
+    expect(contentTypeMatches).toHaveLength(1);
+    expect(copiedCommand).not.toContain("-d '{\n  {");
+
+    const bodyMatch = copiedCommand.match(/-d '([\s\S]*)'$/);
+    expect(bodyMatch).not.toBeNull();
+    expect(JSON.parse(bodyMatch![1])).toEqual({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: "hello" }],
+    });
+  });
 });

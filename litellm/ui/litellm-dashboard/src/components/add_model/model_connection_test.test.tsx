@@ -93,6 +93,53 @@ describe("ModelConnectionTest", () => {
     expect(toast.success).toHaveBeenCalledWith("Copied to clipboard");
   });
 
+  it("formats the curl command without duplicate Content-Type or double-nested json braces", async () => {
+    const writeText = vi.fn();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    vi.mocked(testConnectionRequest).mockResolvedValue({
+      status: "error",
+      result: {
+        error: "connection error",
+        raw_request_typed_dict: {
+          raw_request_api_base: "http://10.200.12.5:32090/v1/chat/completions",
+          raw_request_body: { model: "qwen35-4b", messages: [{ role: "user", content: "hello" }] },
+          raw_request_headers: {
+            Authorization: "Bearer test",
+            "Content-Type": "application/json",
+          },
+        },
+      },
+    } as never);
+
+    render(
+      <ModelConnectionTest
+        formValues={{ model: "qwen35-4b" }}
+        accessToken="sk-test"
+        testMode="chat"
+        modelName="qwen35-4b"
+      />,
+    );
+    await finishConnectionTest();
+
+    fireEvent.click(screen.getByRole("button", { name: /Copy to Clipboard/ }));
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const copiedCommand = writeText.mock.calls[0][0] as string;
+
+    const contentTypeMatches = copiedCommand.match(/-H 'Content-Type: application\/json'/g);
+    expect(contentTypeMatches).toHaveLength(1);
+
+    expect(copiedCommand).not.toContain("-d '{\n  {");
+    expect(copiedCommand).toContain('-d \'{\n  "model": "qwen35-4b"');
+
+    const bodyMatch = copiedCommand.match(/-d '([\s\S]*)'$/);
+    expect(bodyMatch).not.toBeNull();
+    expect(JSON.parse(bodyMatch![1])).toEqual({
+      model: "qwen35-4b",
+      messages: [{ role: "user", content: "hello" }],
+    });
+  });
+
   it("asks for the required fields instead of crashing when nothing could be prepared", async () => {
     vi.mocked(prepareModelAddRequest).mockResolvedValue([] as never);
 
