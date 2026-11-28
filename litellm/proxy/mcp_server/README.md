@@ -30,3 +30,10 @@ mcp_servers:
 The downstream MCP client must advertise the requested form or URL capability during initialization. Use the gateway's legacy SSE endpoint (`/mcp/sse`) for the verified interactive form and URL relay path. The current Streamable HTTP endpoint (`/mcp`) can lose initialization state before a tool call, so even a client that advertised support receives an explicit elicitation error instead of an input request. Successful interactive relay over Streamable HTTP is not currently verified. Stateless calls and LLM tool bridges with no downstream MCP client also receive explicit errors
 
 The relay wait uses the upstream server's existing `timeout` setting, or `LITELLM_MCP_CLIENT_TIMEOUT` (60 seconds by default). The enclosing tool call also retains its existing timeout. Unsupported modes, disconnects and relay failures return errors, never a fabricated user decline. Actual user accept, decline and cancel responses are preserved; cancellation stops the relay
+
+
+## Streamable HTTP response header timeout
+
+`LITELLM_MCP_RESPONSE_HEADER_TIMEOUT` controls how long the proxy waits for a Streamable HTTP handler to send response headers on bridged MCP routes, including `/mcp/proxy`. The default is 30 seconds, and values from 1 to 600 seconds are accepted. Set the variable before starting the proxy.
+
+An embedding-based `search_tools` call may need a larger budget the first time it searches a catalog. Set this value to fit the expected indexing time, and make sure the client and any reverse proxy wait long enough. After the deadline, LiteLLM cancels the handler and returns HTTP 504. Upstream tool and listing timeouts are governed by their own settings.
