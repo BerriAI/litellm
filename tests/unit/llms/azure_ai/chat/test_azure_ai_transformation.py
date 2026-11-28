@@ -2798,3 +2798,303 @@ def test_azure_ai_sends_tool_choice_only_with_tools(
     )
 
     assert request.get("tool_choice") == expected_tool_choice
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_ai_stream_raises_bad_request_on_in_body_400_error_sync(respx_mock: respx.MockRouter) -> None:
+    """Regression for #53716: an azure_ai SSE error frame followed by [DONE] must raise, not stop cleanly."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    stream_body: Final = (
+        'data: {"id":"chatcmpl-kimi","object":"chat.completion.chunk","created":1700000000,"model":"kimi-k2.7-code",'
+        '"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"The"},"finish_reason":null}]}\n\n'
+        'data: {"error":{"message":"max_tokens is too large","type":"invalid_request_error","code":400}}\n\n'
+        "data: [DONE]\n\n"
+    )
+    route: Final = respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+
+    stream: Final = litellm.completion(
+        model="azure_ai/kimi-k2.7-code",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://example-resource.services.ai.azure.com/models",
+        api_key="azure-ai-test-key",
+        stream=True,
+    )
+    received: Final[list[object]] = []
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        for chunk in stream:
+            received.append(chunk)
+
+    assert route.call_count == 1
+    assert len(received) == 1
+    assert received[0].choices[0].delta.reasoning_content == "The"  # type: ignore[union-attr]
+    assert received[0].choices[0].finish_reason is None  # type: ignore[union-attr]
+    assert not isinstance(excinfo.value, MidStreamFallbackError)
+    assert excinfo.value.status_code == 400
+    assert "max_tokens is too large" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_azure_ai_stream_raises_bad_request_on_in_body_400_error_async(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Async counterpart for #53716: acompletion(stream=True) must raise on an SSE error event."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    stream_body: Final = (
+        'data: {"id":"chatcmpl-kimi","object":"chat.completion.chunk","created":1700000000,"model":"kimi-k2.7-code",'
+        '"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"The"},"finish_reason":null}]}\n\n'
+        'data: {"error":{"message":"max_tokens is too large","type":"invalid_request_error","code":400}}\n\n'
+        "data: [DONE]\n\n"
+    )
+    route: Final = respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+
+    stream: Final = await litellm.acompletion(
+        model="azure_ai/kimi-k2.7-code",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://example-resource.services.ai.azure.com/models",
+        api_key="azure-ai-test-key",
+        stream=True,
+    )
+    received: Final[list[object]] = []
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        async for chunk in stream:
+            received.append(chunk)
+
+    assert route.call_count == 1
+    assert len(received) == 1
+    assert received[0].choices[0].delta.reasoning_content == "The"  # type: ignore[union-attr]
+    assert received[0].choices[0].finish_reason is None  # type: ignore[union-attr]
+    assert not isinstance(excinfo.value, MidStreamFallbackError)
+    assert excinfo.value.status_code == 400
+    assert "max_tokens is too large" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("error_payload", "include_first_chunk", "expected_inner_type", "expected_status"),
+    [
+        pytest.param(
+            {"message": "upstream overloaded", "code": 503},
+            True,
+            litellm.ServiceUnavailableError,
+            503,
+            id="mid-stream-503",
+        ),
+        pytest.param(
+            {"message": "upstream engine failure", "code": "server_error"},
+            False,
+            litellm.InternalServerError,
+            500,
+            id="pre-first-chunk-string-code-500",
+        ),
+        pytest.param(
+            {"message": "rate limit reached", "code": 429},
+            False,
+            litellm.RateLimitError,
+            429,
+            id="pre-first-chunk-429",
+        ),
+    ],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_ai_stream_wraps_retriable_sse_errors_sync(
+    respx_mock: respx.MockRouter,
+    error_payload: Mapping[str, object],
+    include_first_chunk: bool,
+    expected_inner_type: type[Exception],
+    expected_status: int,
+) -> None:
+    from litellm.exceptions import MidStreamFallbackError
+
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    first_chunk: Final = (
+        'data: {"id":"chatcmpl-kimi","object":"chat.completion.chunk","created":1700000000,"model":"kimi-k2.7-code",'
+        '"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"The"},"finish_reason":null}]}\n\n'
+        if include_first_chunk
+        else ""
+    )
+    stream_body: Final = f"{first_chunk}data: {json.dumps({'error': dict(error_payload)})}\n\ndata: [DONE]\n\n"
+    respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+
+    stream: Final = litellm.completion(
+        model="azure_ai/kimi-k2.7-code",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://example-resource.services.ai.azure.com/models",
+        api_key="azure-ai-test-key",
+        stream=True,
+    )
+    received: Final[list[object]] = []
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        for chunk in stream:
+            received.append(chunk)
+
+    assert len(received) == (1 if include_first_chunk else 0)
+    assert isinstance(excinfo.value.original_exception, expected_inner_type)
+    assert getattr(excinfo.value.original_exception, "status_code", None) == expected_status
+    assert excinfo.value.is_pre_first_chunk is (not include_first_chunk)
+    assert excinfo.value.emitted_disqualifying_content is include_first_chunk
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_azure_ai_stream_wraps_mid_stream_503_async(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.exceptions import MidStreamFallbackError
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    stream_body: Final = (
+        'data: {"id":"chatcmpl-kimi","object":"chat.completion.chunk","created":1700000000,"model":"kimi-k2.7-code",'
+        '"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}\n\n'
+        'data: {"error":{"message":"upstream overloaded","code":503}}\n\n'
+        "data: [DONE]\n\n"
+    )
+    respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+
+    stream: Final = await litellm.acompletion(
+        model="azure_ai/kimi-k2.7-code",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://example-resource.services.ai.azure.com/models",
+        api_key="azure-ai-test-key",
+        stream=True,
+    )
+    received: Final[list[object]] = []
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        async for chunk in stream:
+            received.append(chunk)
+
+    assert len(received) == 1
+    assert isinstance(excinfo.value.original_exception, litellm.ServiceUnavailableError)
+    assert excinfo.value.original_exception.status_code == 503
+    assert excinfo.value.is_pre_first_chunk is False
+    assert excinfo.value.generated_content == "hi"
+
+
+@pytest.mark.parametrize(
+    ("chunk", "expected_status", "expected_message", "expected_body"),
+    [
+        pytest.param(
+            {"error": {"message": "bad request", "code": 400, "param": "max_tokens"}},
+            400,
+            "bad request",
+            {"message": "bad request", "code": 400, "param": "max_tokens"},
+            id="int-400",
+        ),
+        pytest.param(
+            {"error": {"message": "too many requests", "code": 429}},
+            429,
+            "too many requests",
+            {"message": "too many requests", "code": 429},
+            id="int-429",
+        ),
+        pytest.param(
+            {"error": {"type": "overloaded", "code": 503}},
+            503,
+            '{"type": "overloaded", "code": 503}',
+            {"type": "overloaded", "code": 503},
+            id="missing-message-falls-back-to-json",
+        ),
+        pytest.param(
+            {"error": {"message": "string code", "code": "429"}},
+            500,
+            "string code",
+            {"message": "string code", "code": "429"},
+            id="string-code-maps-to-500",
+        ),
+        pytest.param(
+            {"error": {"message": "out of range", "code": 600}},
+            500,
+            "out of range",
+            {"message": "out of range", "code": 600},
+            id="out-of-range-code-maps-to-500",
+        ),
+        pytest.param(
+            {"error": {"message": "bool code", "code": True}},
+            500,
+            "bool code",
+            {"message": "bool code", "code": True},
+            id="bool-code-maps-to-500",
+        ),
+        pytest.param(
+            {"error": "plain string failure"},
+            500,
+            "plain string failure",
+            None,
+            id="plain-string-error",
+        ),
+        pytest.param(
+            {
+                "error": {"message": "error wins over choices", "code": 400},
+                "choices": [{"index": 0, "delta": {"content": "ignored"}, "finish_reason": None}],
+            },
+            400,
+            "error wins over choices",
+            {"message": "error wins over choices", "code": 400},
+            id="error-alongside-choices",
+        ),
+    ],
+)
+def test_azure_ai_iterator_chunk_parser_raises_on_error_payloads(
+    chunk: dict[str, object],
+    expected_status: int,
+    expected_message: str,
+    expected_body: dict[str, object] | None,
+) -> None:
+    from litellm.llms.azure_ai.chat.transformation import AzureAIChatCompletionResponseIterator
+    from litellm.llms.openai.common_utils import RelayOnlyBodyOpenAIError
+
+    iterator: Final = AzureAIChatCompletionResponseIterator(streaming_response=None, sync_stream=True)
+    with pytest.raises(RelayOnlyBodyOpenAIError) as excinfo:
+        iterator.chunk_parser(chunk)
+
+    assert excinfo.value.status_code == expected_status
+    assert excinfo.value.message == expected_message
+    assert excinfo.value.body == expected_body
+
+
+@pytest.mark.parametrize("falsy_error", [None, {}, ""])
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_ai_stream_tolerates_falsy_error_field(respx_mock: respx.MockRouter, falsy_error: object) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    chunk_payload: Final = {
+        "id": "chatcmpl-ok",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "kimi-k2.7-code",
+        "error": falsy_error,
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None}],
+    }
+    stream_body: Final = (
+        f"data: {json.dumps(chunk_payload)}\n\n"
+        'data: {"id":"chatcmpl-ok","object":"chat.completion.chunk","created":1700000000,"model":"kimi-k2.7-code",'
+        '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(200, text=stream_body, headers={"content-type": "text/event-stream"})
+    )
+
+    chunks: Final = tuple(
+        litellm.completion(
+            model="azure_ai/kimi-k2.7-code",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_base="https://example-resource.services.ai.azure.com/models",
+            api_key="azure-ai-test-key",
+            stream=True,
+        )
+    )
+    assert chunks[0].choices[0].delta.content == "ok"
+    assert chunks[-1].choices[0].finish_reason == "stop"

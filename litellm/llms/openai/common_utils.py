@@ -376,6 +376,29 @@ class RelayOnlyBodyOpenAIError(OpenAIError, RelayOnlyBodyLLMException):
     pass
 
 
+def stream_error_from_chunk(chunk: Mapping[str, object]) -> RelayOnlyBodyOpenAIError | None:
+    """Extract an in-body SSE error payload from an OpenAI-compatible stream chunk.
+
+    Backends such as Azure AI Foundry, vLLM, and sglang can return an HTTP 200
+    stream whose body carries an error event, e.g.
+    ``data: {"error": {"message": "...", "code": 400}}``.
+    """
+    error: Final = chunk.get("error")
+    if not error:
+        return None
+    error_mapping: Final = as_str_mapping(error)
+    if error_mapping is None:
+        return RelayOnlyBodyOpenAIError(status_code=500, message=str(error))
+    message: Final = error_mapping.get("message")
+    code: Final = error_mapping.get("code")
+    status_code: Final = code if isinstance(code, int) and 400 <= code < 600 else 500
+    return RelayOnlyBodyOpenAIError(
+        status_code=status_code,
+        message=message if isinstance(message, str) else json.dumps(dict(error_mapping)),
+        body=error_mapping,
+    )
+
+
 def upstream_error_response(error: Exception) -> httpx.Response | None:
     if not isinstance(error, (openai.APIStatusError, httpx.HTTPStatusError)):
         return None

@@ -87,6 +87,7 @@ from .common_utils import (
     is_output_token_limit_error,
     model_dump_provider_response,
     send_create_without_duplicates,
+    stream_error_from_chunk,
     upstream_error_response,
 )
 from .speech_usage_stream import speech_response_with_usage, with_usage_stream
@@ -401,15 +402,18 @@ class OpenAIConfig(BaseConfig):
         )
 
 
+_CHUNK_MAPPING: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
 class OpenAIChatCompletionResponseIterator(BaseModelResponseIterator):
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         """
         {'choices': [{'delta': {'content': '', 'role': 'assistant'}, 'finish_reason': None, 'index': 0, 'logprobs': None}], 'created': 1735763082, 'id': 'a83a2b0fbfaf4aab9c2c93cb8ba346d7', 'model': 'mistral-large', 'object': 'chat.completion.chunk'}
         """
-        try:
-            return ModelResponseStream(**chunk)
-        except Exception as e:
-            raise e
+        stream_error: Final = stream_error_from_chunk(_CHUNK_MAPPING.validate_python(chunk))
+        if stream_error is not None:
+            raise stream_error
+        return ModelResponseStream(**chunk)
 
 
 _EXTRA_HEADERS_ADAPTER: Final = TypeAdapter[dict[str, str | InstanceOf[Omit]] | None](
