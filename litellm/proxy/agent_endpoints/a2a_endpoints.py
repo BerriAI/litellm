@@ -31,7 +31,10 @@ from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.llms.azure.common_utils import caused_by_entra_rejection
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.a2a.agent_card import point_agent_card_at_proxy
+from litellm.proxy.a2a.agent_card import (
+    normalize_protocol_version,
+    point_agent_card_at_proxy,
+)
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
     normalize_agent_card,
@@ -179,8 +182,10 @@ def _served_version(agent: "AgentResponse", request: Request, original_method: s
     to the client's signal: PascalCase JSON-RPC methods and an ``a2a-version: 1.x``
     header both mark a 1.0 caller; otherwise default to 0.3.
     """
-    configured: Final = (agent.agent_card_params or {}).get("protocolVersion")
-    if configured in ("0.3", "1.0"):
+    configured: Final = normalize_protocol_version(
+        (agent.agent_card_params or {}).get("protocolVersion")
+    )
+    if configured is not None:
         return configured
     if original_method in _PASCAL_TO_WIRE:
         return "1.0"

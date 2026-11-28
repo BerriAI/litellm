@@ -2855,6 +2855,24 @@ def test_served_version_falls_back_to_header_when_unconfigured():
     assert _served_version(_agent(None), _request_with_a2a_header(None)) == "0.3"
 
 
+def test_served_version_honors_semver_config_pins():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _served_version
+
+    # A semver pin accepted by registration-time validation must also govern
+    # the served version; previously it was silently ignored in favor of the
+    # client-signal fallback.
+    assert _served_version(_agent("1.0.0"), _request_with_a2a_header(None)) == "1.0"
+    assert _served_version(_agent("0.3.0"), _request_with_a2a_header("1.0")) == "0.3"
+
+
+def test_served_version_ignores_unsupported_config_pins():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _served_version
+
+    # Unsupported pins still fall back to the client signal.
+    assert _served_version(_agent("0.2.6"), _request_with_a2a_header("1.0")) == "1.0"
+    assert _served_version(_agent("garbage"), _request_with_a2a_header(None)) == "0.3"
+
+
 def _sse_agent_handler(upstream_response: httpx.Response) -> MagicMock:
     mock_async_client: Final = MagicMock()
     mock_async_client.build_request = MagicMock(return_value=MagicMock())
