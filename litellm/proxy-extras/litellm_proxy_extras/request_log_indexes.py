@@ -78,6 +78,7 @@ REQUEST_LOG_INDEXES: Final = (
     ),
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_session_id_idx", '("session_id")'),
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_startTime_request_id_idx", '("startTime", "request_id")'),
+    RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_user_startTime_idx", '("user", "startTime")'),
     RequestLogIndex(
         "LiteLLM_SpendLogToolIndex",
         "LiteLLM_SpendLogToolIndex_tool_name_start_time_idx",
