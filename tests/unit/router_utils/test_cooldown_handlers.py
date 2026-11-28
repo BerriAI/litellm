@@ -1333,6 +1333,8 @@ async def test_deployment_state_returns_to_healthy_after_cooldown_when_group_nam
     respx_mock: respx.MockRouter,
     deployment_state_values: Callable[[str], list[float]],
 ) -> None:
+    clock: Final = ManualClock()
+    monkeypatch.setattr(deployment_state_series, "monotonic_seconds", clock)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "callbacks", [PrometheusLogger()])
     router: Final = Router(
@@ -1356,9 +1358,15 @@ async def test_deployment_state_returns_to_healthy_after_cooldown_when_group_nam
     )
     assert deployment_state_values("dep-1") == [2.0]
 
+    clock.now = 4.9
+    await router.acompletion(model="prod-chat", messages=[{"role": "user", "content": "hi"}], **request_params)
+    await await_scheduled_success_logging()
+    during_cooldown: Final = deployment_state_values("dep-1")
+    clock.now = 5.0
     await router.acompletion(model="prod-chat", messages=[{"role": "user", "content": "hi"}], **request_params)
     await await_scheduled_success_logging()
 
+    assert during_cooldown == [2.0]
     assert deployment_state_values("dep-1") == [0.0]
 
 

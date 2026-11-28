@@ -64,10 +64,21 @@ def marked_by_cooldown(history: SeriesHistory) -> tuple[DeploymentStateSeries, .
             assert_never(history)
 
 
+def known_cooldown_running(history: SeriesHistory, now: float) -> bool:
+    match history:
+        case Serving():
+            return False
+        case CoolingDown(ends_at=ends_at):
+            return now < ends_at < math.inf
+        case _:
+            assert_never(history)
+
+
 class DeploymentStateSeriesTracker:
     """
     A cooldown marks each series written since the last success, as its config labels can differ from the request
-    labels. The next success clears them. A failure reads 2 until the cooldown's known length has passed, and 1 after.
+    labels. Until the cooldown's known length has passed, a success leaves them at 2 and a failure reads 2. After it,
+    a failure reads 1 and the next success clears them. A cooldown with no known length lasts until the next success.
     Serving deployments are capped, and a cooling deployment is kept until its next success.
     """
 
@@ -86,6 +97,8 @@ class DeploymentStateSeriesTracker:
     def healthy(self, series: DeploymentStateSeries) -> None:
         with self._lock:
             history: Final = self._history(series.model_id)
+            if known_cooldown_running(history, self._clock()):
+                return
             self._write_all(DeploymentState.HEALTHY, including(marked_by_cooldown(history), series))
             self._remember(series.model_id, Serving(written=(series,)))
 

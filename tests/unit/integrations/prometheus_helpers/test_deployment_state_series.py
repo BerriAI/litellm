@@ -349,6 +349,38 @@ def test_a_failure_before_the_cooldown_ended_keeps_every_series_the_cooldown_mar
     assert gauge == {chat: COMPLETE_OUTAGE, streaming: COMPLETE_OUTAGE}
 
 
+def test_a_success_before_the_cooldown_ended_leaves_every_series_the_cooldown_marked_at_two() -> None:
+    tracker, gauge, clock, chat, streaming = cooled_chat_and_streaming(cooldown_seconds=5.0)
+    clock.now = 4.9
+
+    tracker.healthy(chat)
+
+    assert gauge == {chat: COMPLETE_OUTAGE, streaming: COMPLETE_OUTAGE}
+
+    clock.now = 5.0
+    tracker.healthy(chat)
+
+    assert gauge == {chat: HEALTHY, streaming: HEALTHY}
+
+
+def test_a_success_under_a_new_label_before_the_cooldown_ended_writes_nothing() -> None:
+    tracker, gauge, clock, chat, streaming = cooled_chat_and_streaming(cooldown_seconds=5.0)
+    cached: Final = request_series("dep-1", "https://api.example/v1/cached")
+    clock.now = 4.9
+
+    tracker.healthy(cached)
+
+    assert gauge == {chat: COMPLETE_OUTAGE, streaming: COMPLETE_OUTAGE}
+
+
+def test_a_success_clears_a_cooldown_with_no_known_length() -> None:
+    tracker, gauge, clock, chat, streaming = cooled_chat_and_streaming(cooldown_seconds=None)
+
+    tracker.healthy(chat)
+
+    assert gauge == {chat: HEALTHY, streaming: HEALTHY}
+
+
 def test_a_cooldown_with_no_known_length_lasts_until_the_next_success() -> None:
     tracker, gauge, clock, chat, streaming = cooled_chat_and_streaming(cooldown_seconds=None)
     clock.now = 86_400.0
@@ -369,6 +401,7 @@ def test_a_new_cooldown_after_an_ended_one_marks_the_same_series_again() -> None
 
     assert gauge == {chat: COMPLETE_OUTAGE, streaming: COMPLETE_OUTAGE}
 
+    clock.now = 10.0
     tracker.healthy(chat)
 
     assert gauge == {chat: HEALTHY, streaming: HEALTHY}
