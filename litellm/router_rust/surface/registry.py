@@ -47,10 +47,17 @@ import json
 import os
 import re
 import threading
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast  # noqa: TID251  # entries as a caller wrote them
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Literal,
+    Protocol,
+    TypeAlias,
+    cast,  # noqa: TID251  # entries as a caller wrote them
+)
 
 from pydantic import BaseModel, TypeAdapter
 
@@ -95,8 +102,13 @@ from litellm.litellm_core_utils.routing_common_utils import (
     without_model_capability_flags,
 )
 from litellm.litellm_core_utils.routing_groups import apply_routing_group_priority
+from litellm.llms.lm_studio.model_info import get_lm_studio_model_info
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
+from litellm.llms.openai_like.model_info import (
+    MODEL_INFO_DISCOVERY_PROVIDERS,
+    MODEL_INFO_REFRESH_SECONDS,
+    get_openai_compatible_model_info,
+)
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore, UsageCounter
 from litellm.responses.bridge_check import keep_registered_mode
@@ -162,6 +174,20 @@ _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _BACKEND_NEUTRAL_PARAMS: Final = frozenset(
     {"tpm", "rpm", "max_parallel_requests", "input_cost_per_token", "output_cost_per_token"}
+)
+
+
+class _ModelInfoDiscoverer(Protocol):
+    def __call__(
+        self, *, model: str, api_base: str, headers: Mapping[str, str], client: "AsyncHTTPHandler", cache: InMemoryCache
+    ) -> Awaitable[Mapping[str, int] | None]: ...
+
+
+_MODEL_INFO_DISCOVERERS: Final[Mapping[str, _ModelInfoDiscoverer]] = MappingProxyType(
+    {
+        **dict.fromkeys(MODEL_INFO_DISCOVERY_PROVIDERS, get_openai_compatible_model_info),
+        "lm_studio": get_lm_studio_model_info,
+    }
 )
 
 
@@ -920,8 +946,8 @@ class HostRegistry(HostModelInfo):
                 self._core_deployment_latency_map[str(params["model"])] = 0
 
     async def arefresh_model_info(self, client: "AsyncHTTPHandler | None") -> None:
-        """``_core_arefresh_model_info``: token limits the served OpenAI-compatible deployments
-        advertise on their models endpoint, read with a few workers over a snapshot of the list."""
+        """``_core_arefresh_model_info``: token limits the served deployments advertise on their
+        models endpoint, read with a few workers over a snapshot of the list."""
         import asyncio
 
         from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_CONCURRENCY
@@ -1007,18 +1033,15 @@ class HostRegistry(HostModelInfo):
         client: "AsyncHTTPHandler | None",
     ) -> DiscoveredDeploymentModelInfo | None:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-        from litellm.llms.openai_like.model_info import (
-            MODEL_INFO_DISCOVERY_PROVIDERS,
-            get_openai_compatible_model_info,
-        )
         from litellm.utils import aresolve_api_key_secret_reference
 
-        if provider not in MODEL_INFO_DISCOVERY_PROVIDERS or api_base is None or "*" in model:
+        discover: Final = _MODEL_INFO_DISCOVERERS.get(provider)
+        if discover is None or api_base is None or "*" in model:
             return None
         resolved_key: Final = await aresolve_api_key_secret_reference(
             api_key, model=model, llm_provider=provider, upstream=MappingProxyType({"api_base": params.api_base})
         )
-        limits: Final = await get_openai_compatible_model_info(
+        limits: Final = await discover(
             model=model,
             api_base=api_base,
             headers=_model_info_request_headers(params, resolved_key),
