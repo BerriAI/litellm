@@ -590,6 +590,7 @@ jobs:
           python ./tests/code_coverage_tests/check_workflow_startup_safety.py
           python ./tests/code_coverage_tests/check_workflow_job_name_collisions.py
           pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_workflow_job_name_collisions.py
+          pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_migration_impact.py
           pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_unit_passed_gate.py
           pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_scan_bundled_crypto.py
           pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_e2e_idp_stack.py
