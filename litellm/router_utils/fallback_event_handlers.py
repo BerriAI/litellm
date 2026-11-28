@@ -1,6 +1,5 @@
 from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, field
-from enum import Enum
 from functools import partial, reduce
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # the router passes the request kwargs as an untyped dict
@@ -14,8 +13,8 @@ from litellm.integrations.custom_logger_v2.enums import Field, Hook
 from litellm.integrations.custom_logger_v2.legacy import Admit, hook_subscribers, kwargs_after, run_subscribers
 from litellm.integrations.custom_logger_v2.logger import CustomLoggerV2
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
-from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.routing_common_utils import get_fallback_model_group_with_owner
 from litellm.llms.openai.common_utils import create_may_already_exist
 from litellm.types.integrations.custom_logger_v2 import Outcome
 from litellm.types.router import (
@@ -60,38 +59,6 @@ class AttemptedFallbackTargets:
 
     def record_skip(self, target: str, reason: FallbackSkipReason) -> None:
         self._skip_reasons.setdefault(target, reason)
-
-
-def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
-    """
-    Handles wildcard routing scenario
-
-    where fallbacks set like:
-    [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
-
-    but model_group is like:
-    "openai/gpt-3.5-turbo"
-
-    Returns:
-    - True if the stripped model group == fallback_key
-    """
-    for provider in litellm.provider_list:
-        if isinstance(provider, Enum):
-            _provider = provider.value
-        else:
-            _provider = provider
-        if model_group.startswith(f"{_provider}/"):
-            stripped_model_group = model_group.replace(f"{_provider}/", "")
-            if stripped_model_group == fallback_key:
-                return True
-    return False
-
-
-def _provider_prefixed_model_group(model_group: str, fallback_keys: Sequence[str]) -> str | None:
-    if "/" in model_group or not any(key.endswith(f"/{model_group}") for key in fallback_keys):
-        return None
-    provider: Final = inferred_provider(model_group)
-    return f"{provider}/{model_group}" if provider else None
 
 
 PRE_ROUTING_SELECTED_MODEL_KEY: Final = "pre_routing_selected_model"
@@ -277,36 +244,8 @@ def get_fallback_model_group(
     - provider-prefixed model group match
     - generic fallback
     """
-    generic_fallback_idx: int | None = None
-    stripped_model_fallback: list[str] | None = None
-    fallback_model_group: list[str] | None = None
-    fallback_keys: Final = tuple(next(iter(item)) for item in fallbacks if isinstance(item, dict) and item)
-    prefixed_model_group: Final = _provider_prefixed_model_group(model_group, fallback_keys)
-    ## check for specific model group-specific fallbacks
-    for idx, item in enumerate(fallbacks):
-        if isinstance(item, dict):
-            if not item:
-                continue  # an empty entry names no group: the next entries still apply
-            fallback_key = next(iter(item))
-            if fallback_key == model_group:  # check exact match
-                fallback_model_group = item[model_group]
-                break
-            elif fallback_key == prefixed_model_group or _check_stripped_model_group(
-                model_group=model_group, fallback_key=fallback_key
-            ):  # check generic fallback
-                stripped_model_fallback = item[fallback_key]
-            elif fallback_key == "*":  # check generic fallback
-                generic_fallback_idx = idx
-        elif isinstance(item, str):
-            fallback_model_group = [item]
-    ## if none, check for generic fallback
-    if fallback_model_group is None:
-        if stripped_model_fallback is not None:
-            fallback_model_group = stripped_model_fallback
-        elif generic_fallback_idx is not None:
-            fallback_model_group = fallbacks[generic_fallback_idx]["*"]
-
-    return fallback_model_group, generic_fallback_idx
+    _, chain, generic_idx = get_fallback_model_group_with_owner(fallbacks, model_group)
+    return chain, generic_idx
 
 
 def _resolved_fallback_chain(entries: Sequence[object], lookup_groups: tuple[str, ...]) -> Sequence[object]:
