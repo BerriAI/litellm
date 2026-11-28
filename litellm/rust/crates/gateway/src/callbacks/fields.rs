@@ -295,6 +295,7 @@ fn cost(entries: &CallState) -> Option<Cost> {
 fn spend_log_input(entries: &CallState) -> Option<Value> {
     let call_type = entries.call_type?;
     let provider = provider(entries);
+    let deployment_tags = entries.deployment_tags();
     spend_log_input::success(&Served {
         call_type,
         route: route(call_type),
@@ -306,6 +307,7 @@ fn spend_log_input(entries: &CallState) -> Option<Value> {
         end: entries.end()?,
         provider: provider.as_deref(),
         user_agent: entries.user_agent.as_deref(),
+        deployment_tags: &deployment_tags,
         call: entries.served()?,
     })
 }

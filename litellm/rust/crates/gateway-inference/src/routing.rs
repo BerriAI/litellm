@@ -753,10 +753,14 @@ mod tests {
 
     /// A router of one deployment of `primary`, under `retry_policy` and `num_retries`.
     fn lone_primary(retry_policy: Value, num_retries: u32) -> Router {
+        lone_primary_tagged(json!(null), retry_policy, num_retries)
+    }
+
+    fn lone_primary_tagged(tags: Value, retry_policy: Value, num_retries: u32) -> Router {
         let config = json!({
             "model_list": [{
                 "model_name": "primary",
-                "litellm_params": {"model": "anthropic/test-model"},
+                "litellm_params": {"model": "anthropic/test-model", "tags": tags},
                 "model_info": {"id": "d1"},
             }],
             "retry_policy": retry_policy,
@@ -914,7 +918,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::retried(lone_primary(json!(null), 1))]
+    #[case::retried(lone_primary_tagged(json!(["paid"]), json!(null), 1))]
     #[tokio::test]
     async fn the_served_attempt_and_each_failed_one_reach_the_record(#[case] router: Router) {
         let route = FailsOnce::default();
@@ -940,6 +944,7 @@ mod tests {
                 (
                     state.attempt.as_ref().and_then(url),
                     state.failed_attempts.iter().map(url).collect::<Vec<_>>(),
+                    state.deployment_tags(),
                 )
             })
         })
@@ -951,6 +956,7 @@ mod tests {
                 Some((
                     Some("https://provider.test/2".to_owned()),
                     vec![Some("https://provider.test/1".to_owned())],
+                    vec!["paid".to_owned()],
                 )),
                 2
             )
