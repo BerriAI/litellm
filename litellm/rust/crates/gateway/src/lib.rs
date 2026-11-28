@@ -44,6 +44,7 @@ pub type Gateway = litellm_gateway_inference::Gateway<host::NativeHost>;
 
 use std::{path::Path, sync::Arc};
 
+use arc_swap::ArcSwap;
 use axum::Router;
 
 use litellm_config::{Config, Environment};
@@ -53,7 +54,7 @@ use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution,
     media::PublicDnsResolver,
 };
-use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
+use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog, CostMap};
 use litellm_redis_store::{Remote, active_teams::ActiveTeams, rate_limits::RateLimits};
 use litellm_router_core::registry::DeploymentFilter;
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
@@ -143,7 +144,14 @@ pub(crate) async fn inference_over(
         }));
         ModelCapacity::new(read, counters, active, router.clone())
     });
-    let budget_check = spend_log.map(|spend_log| spend_log.budget_check(free));
+    let cost_map = Arc::new(ArcSwap::from_pointee(CostMap::bundled()));
+    let budget_check = spend_log.map(|spend_log| {
+        spend_log.budget_check(
+            free,
+            (!config.general_settings.disable_budget_reservation)
+                .then(|| (router.clone(), cost_map.clone())),
+        )
+    });
     let callbacks = Callbacks::new(
         budget_check
             .iter()
@@ -162,6 +170,7 @@ pub(crate) async fn inference_over(
         routing,
         host::NativeHost::new(Arc::new(callbacks), Arc::new(windows)),
     )?
+    .with_cost_map(cost_map)
     .with_body_check(litellm_gateway_inference::BodyCheck::new(
         &config.general_settings,
     ));

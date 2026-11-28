@@ -2,12 +2,12 @@
 //! Python behind it: the callback's hosted handler runs as a coroutine, and each host call it
 //! yields is answered by the gateway's [`Answers`] for it before the handler resumes.
 
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use futures_util::future::BoxFuture;
 use litellm_callbacks::{
-    CallbackError, ErasedCallback, HookInput, HookOutput, HostReply, HostRequest, RequestState,
-    hosted,
+    CallbackError, ErasedCallback, HookInput, HookOutput, Host, HostReply, HostRequest,
+    RequestState, hosted,
 };
 use litellm_coroutine::CoroutineState;
 use serde_json::Value;
@@ -24,10 +24,19 @@ pub(crate) async fn turn(
     state: Option<RequestState>,
     answers: &dyn Answers,
 ) -> HookOutput {
-    let mut body =
-        hosted(
-            move |host| async move { callback.handle_hosted(&input, state.as_ref(), host).await },
-        );
+    run(answers, move |host| async move {
+        callback.handle_hosted(&input, state.as_ref(), host).await
+    })
+    .await?
+}
+
+pub(crate) async fn run<T, F, Fut>(answers: &dyn Answers, execute: F) -> Result<T, CallbackError>
+where
+    T: Send + 'static,
+    F: FnOnce(Host) -> Fut + Send + 'static,
+    Fut: Future<Output = T> + Send + 'static,
+{
+    let mut body = hosted(execute);
     loop {
         match body.resume().await {
             Ok(CoroutineState::Yielded(HostRequest {
@@ -35,7 +44,7 @@ pub(crate) async fn turn(
                 request,
                 reply,
             })) => reply.send(answers.answer(call, request).await),
-            Ok(CoroutineState::Complete(output)) => return output,
+            Ok(CoroutineState::Complete(output)) => return Ok(output),
             Err(error) => return Err(CallbackError::Failed(error.to_string())),
         }
     }

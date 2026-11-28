@@ -280,7 +280,7 @@ fn timing(entries: &CallState) -> AttemptTiming {
 /// What the served attempt's route settled the call's cost as. A cache hit cost nothing, and a
 /// stream's price is read off its meter once the stream ended. `None` for a call the route left
 /// unpriced.
-fn cost(entries: &CallState) -> Option<Cost> {
+pub(super) fn cost(entries: &CallState) -> Option<Cost> {
     let amount = match entries.attempt.as_ref()?.cost.as_ref()? {
         Settled::Reported { amount } => Scalar::Float(amount.as_f64()?),
         Settled::Priced(priced) => Scalar::Float(priced.receipt.total),

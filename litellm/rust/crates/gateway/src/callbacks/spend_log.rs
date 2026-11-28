@@ -13,20 +13,27 @@ use std::{
     time::Duration,
 };
 
+use arc_swap::ArcSwap;
 use litellm_callbacks::ErasedCallback;
 use litellm_callbacks_budgets::{Budgets, SpendReader};
 use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
 use litellm_config::Environment;
+use litellm_model_catalog::CostMap;
 use litellm_redaction::TokenRedactor;
 use litellm_redis_store::{Remote, spend_counters::SpendCounters};
 use litellm_repositories::{Database, SpendLogRepository};
+use litellm_router_core::Router;
 use litellm_spend_log_writer::{
     LedgerStore, PgLedgerStore, SpendLogFlusher, SpendLogWriter, WriterSettings,
 };
 use rand::Rng;
 use tokio::sync::Notify;
 
-use super::{Registered, budget_check::BudgetCheck, parallel_request_limiter::REDIS_DEFAULT_TTL};
+use super::{
+    Registered,
+    budget_check::{BudgetCheck, Reserve},
+    parallel_request_limiter::REDIS_DEFAULT_TTL,
+};
 use crate::{
     RedisClients,
     host::{FreeModels, Rows, RustSpendLogHost},
@@ -126,11 +133,25 @@ impl SpendLog {
 
     /// The budget checks over the counters this callback charges, so a check reads what every
     /// served call charged, skipped for a call to a model `free` holds free.
-    pub(crate) fn budget_check(&self, free: Arc<FreeModels>) -> Arc<BudgetCheck> {
-        BudgetCheck::new(
-            SpendReader::new(self.budgets.store().clone(), self.rows.clone()),
-            free,
-        )
+    pub(crate) fn budget_check(
+        &self,
+        free: Arc<FreeModels>,
+        reservation: Option<(Router, Arc<ArcSwap<CostMap>>)>,
+    ) -> Arc<BudgetCheck> {
+        let spend = SpendReader::new(self.budgets.store().clone(), self.rows.clone());
+        match reservation {
+            Some((router, prices)) => BudgetCheck::with_reservation(
+                spend,
+                free,
+                Reserve {
+                    router,
+                    prices,
+                    budgets: self.budgets.clone(),
+                    host: self.host.clone(),
+                },
+            ),
+            None => BudgetCheck::new(spend, free),
+        }
     }
 
     /// The callback as one config's callback stage runs it.

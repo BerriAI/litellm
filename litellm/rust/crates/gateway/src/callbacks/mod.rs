@@ -6,6 +6,7 @@
 //! yet is never told.
 
 pub mod budget_check;
+mod budget_price;
 pub(crate) mod budgets;
 mod fields;
 pub mod hosted;
@@ -225,6 +226,40 @@ fn refusal(abort: Abort) -> Refusal {
 }
 
 impl Call {
+    fn budgeted(&self) -> Option<&budget_check::Budgeted> {
+        self.states
+            .iter()
+            .flatten()
+            .find_map(|state| state.downcast_ref())
+    }
+
+    async fn finish_budget(&self, success: bool) {
+        let Some(budgeted) = self.budgeted() else {
+            return;
+        };
+        let Some((finalized, actual)) = record::read(|entries| {
+            let finalized = entries
+                .budget_reservation
+                .as_ref()
+                .and_then(|hold| hold.finalized)
+                .unwrap_or(false);
+            let actual = success
+                .then(|| fields::cost(entries))
+                .flatten()
+                .and_then(|cost| match cost.response_cost {
+                    Some(litellm_callbacks::Scalar::Float(actual)) if actual.is_finite() => {
+                        Some(actual)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+            (finalized, actual)
+        }) else {
+            return;
+        };
+        budgeted.finish(finalized, actual).await;
+    }
+
     /// Runs the hook of `point` over the callbacks subscribed to it, in order. On a hook that
     /// decides, the first to abort or fail ends it and the call. The time the hook took is added
     /// to the call's callback time.
@@ -328,17 +363,22 @@ impl CallHooks for Call {
     }
 
     async fn response_headers(&self) {
+        if let Some(budgeted) = self.budgeted() {
+            budgeted.response_headers();
+        }
         let _ = self.run(Point::ResponseHeaders).await;
     }
 
     async fn succeeded(&self, served: ServedCall) {
         record::write(|entries| entries.serve(served));
         let _ = self.run(Point::AttemptEnded).await;
+        self.finish_budget(true).await;
     }
 
     async fn failed(&self) {
         record::write(CallState::fail);
         let _ = self.run(Point::PostCallFailure).await;
+        self.finish_budget(false).await;
         let _ = self.run(Point::AttemptEnded).await;
     }
 }

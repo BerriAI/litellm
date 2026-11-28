@@ -55,6 +55,16 @@ pub async fn release(
     reservation: &mut BudgetReservation,
     window_resets: &[Option<String>],
 ) -> Result<(), EngineError> {
+    settle_cost(budgets, host, reservation, window_resets, 0.0).await
+}
+
+pub async fn settle_cost(
+    budgets: &Budgets,
+    host: &Host,
+    reservation: &mut BudgetReservation,
+    window_resets: &[Option<String>],
+    actual: f64,
+) -> Result<(), EngineError> {
     if reservation.finalized == Some(true) {
         return Ok(());
     }
@@ -67,7 +77,7 @@ pub async fn release(
             reservation,
             window_resets,
             observed: &observed,
-            actual: 0.0,
+            actual,
             apply_consistent: true,
         },
         &Moment::now(),

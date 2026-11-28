@@ -119,7 +119,7 @@ async fn merged_window(catalog: &Catalog, deployment: &Deployment) -> Option<i64
 
 /// `get_router_model_info` for `deployment`: its own `model_info` over the cost map's row, or
 /// `None` when the deployment cannot be resolved.
-pub(super) async fn merged_info(
+pub(crate) async fn merged_info(
     catalog: &Catalog,
     deployment: &Deployment,
 ) -> Option<Map<String, Value>> {

@@ -8,7 +8,7 @@ mod boot;
 mod capacity;
 mod free;
 mod model_info;
-mod precall;
+pub(crate) mod precall;
 mod router;
 mod spend_log;
 

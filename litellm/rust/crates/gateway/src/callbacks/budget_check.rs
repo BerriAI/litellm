@@ -20,20 +20,30 @@
 
 use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use axum::http::StatusCode;
 use futures_util::future::{BoxFuture, join_all};
 use litellm_callbacks::{
-    Abort, AbortError, Callback, CallbackError, Field, FieldSet, Hook, HookInput, HookOutput,
-    Manifest, Selection, Subscription, Verdict, typed,
+    Abort, AbortError, BudgetPlanCounter, Callback, CallbackError, Field, FieldSet, Hook,
+    HookInput, HookOutput, Manifest, Patch, Selection, Subscription, Verdict, typed,
 };
-use litellm_callbacks_budgets::{Check, Decision, PyNumber, SpendReader, decide};
+use litellm_callbacks_budgets::{
+    Admission, BudgetCounterSpend, BudgetPlan, BudgetReservation, Budgets, Check, Decision,
+    PlannedCounter, PyNumber, SpendReader, decide, post_call,
+};
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::Credential;
-use litellm_gateway_inference::Refusal;
-use litellm_redis_store::spend_counters::SpendCounter;
+use litellm_gateway_inference::{CallType, Refusal, record};
+use litellm_model_catalog::CostMap;
+use litellm_redis_store::{
+    Number,
+    spend_counters::{LostSeed, SpendCounter},
+};
+use litellm_router_core::Router;
+use parking_lot::Mutex;
 use serde_json::{Map, Value};
 
-use super::{Registered, budgets};
+use super::{Registered, budget_price, budgets, hosted};
 use crate::host::{FreeModels, NativeRows};
 
 pub(crate) const NAME: &str = "budget_check";
@@ -47,6 +57,63 @@ pub struct BudgetCheck {
     manifest: Manifest,
     spend: SpendReader,
     free: Arc<FreeModels>,
+    reserve: Option<Arc<Reserve>>,
+}
+
+/// The live routing and spend services used by pre-call reservations.
+pub(super) struct Reserve {
+    pub(super) router: Router,
+    pub(super) prices: Arc<ArcSwap<CostMap>>,
+    pub(super) budgets: Arc<Budgets>,
+    pub(super) host: Arc<dyn hosted::Answers>,
+}
+
+/// Owns a hold until the spend log finalizes it or the request is dropped.
+struct Hold {
+    reservation: Option<BudgetReservation>,
+    budget: Arc<Reserve>,
+    disconnected: bool,
+}
+
+impl Hold {
+    async fn finish(mut self, actual: f64) -> Option<BudgetReservation> {
+        let budget = self.budget.clone();
+        let mut reservation = self.reservation.take()?;
+        hosted::run(budget.host.as_ref(), {
+            let budgets = budget.budgets.clone();
+            move |host| async move {
+                if let Err(error) =
+                    post_call::settle_cost(&budgets, &host, &mut reservation, &[], actual).await
+                {
+                    tracing::error!(%error, "Failed to settle request budget reservation");
+                    post_call::invalidate(budgets.store(), &reservation).await;
+                    reservation.finalized = Some(true);
+                }
+                reservation
+            }
+        })
+        .await
+        .ok()
+    }
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        let Some(reservation) = self.reservation.take() else {
+            return;
+        };
+        let actual = if self.disconnected {
+            reservation.input_cost.unwrap_or_default()
+        } else {
+            0.0
+        };
+        let hold = Self {
+            reservation: Some(reservation),
+            budget: self.budget.clone(),
+            disconnected: false,
+        };
+        litellm_call_scope::spawn_in_call(hold.finish(actual));
+    }
 }
 
 /// What a budget is checked as. The variants are in the order Python checks them.
@@ -129,6 +196,7 @@ impl Entity {
 
 /// One budget the caller holds: the counter its spend is read from, and what it is checked as.
 struct Held {
+    planned: PlannedCounter,
     counter: SpendCounter,
     fallback_spend: f64,
     max_budget: f64,
@@ -138,6 +206,29 @@ struct Held {
 /// The budgets one request's caller is checked against.
 pub struct Budgeted {
     held: Vec<Held>,
+    reservation: Arc<Mutex<Option<Hold>>>,
+    team_id: Option<String>,
+}
+
+impl Budgeted {
+    pub(super) fn response_headers(&self) {
+        if let Some(hold) = self.reservation.lock().as_mut() {
+            hold.disconnected = true;
+        }
+    }
+
+    pub(super) async fn finish(&self, finalized: bool, actual: f64) {
+        let hold = self.reservation.lock().take();
+        if let Some(mut hold) = hold {
+            if finalized {
+                hold.reservation = None;
+            } else if let Ok(Some(reservation)) =
+                litellm_call_scope::spawn_in_call(hold.finish(actual)).await
+            {
+                record::write(|entries| entries.budget_reservation = Some(reservation));
+            }
+        }
+    }
 }
 
 fn entities(identity: &Authenticated<NativeRows>, counter: &SpendCounter) -> Vec<Entity> {
@@ -196,10 +287,19 @@ fn budgeted(identity: &Authenticated<NativeRows>) -> Budgeted {
                 counter,
                 fallback_spend: planned.fallback_spend,
                 max_budget: planned.max_budget,
+                planned,
             })
         })
         .collect();
-    Budgeted { held }
+    Budgeted {
+        held,
+        reservation: Default::default(),
+        team_id: identity
+            .affiliation
+            .holder
+            .team()
+            .map(|team| team.id().to_owned()),
+    }
 }
 
 /// Python's `BudgetExceededError` for an over-budget caller, as an abort.
@@ -258,7 +358,8 @@ fn manifest() -> Manifest {
     Manifest {
         selection: Selection::named(NAME),
         subscriptions: vec![Subscription {
-            reads: FieldSet::of(&[Field::Model]),
+            reads: FieldSet::of(&[Field::Model, Field::RequestBody]),
+            writes: FieldSet::of(&[Field::BudgetReservation]),
             may_abort: true,
             ..Subscription::on(Hook::PreCall)
         }],
@@ -272,6 +373,20 @@ impl BudgetCheck {
             manifest: manifest(),
             spend,
             free,
+            reserve: None,
+        })
+    }
+
+    pub(super) fn with_reservation(
+        spend: SpendReader,
+        free: Arc<FreeModels>,
+        reserve: Reserve,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            manifest: manifest(),
+            spend,
+            free,
+            reserve: Some(Arc::new(reserve)),
         })
     }
 
@@ -279,7 +394,12 @@ impl BudgetCheck {
         Registered::for_caller(self.clone(), budgeted)
     }
 
-    async fn pre_call(&self, model: Option<&str>, budgeted: &Budgeted) -> HookOutput {
+    async fn pre_call(
+        &self,
+        model: Option<&str>,
+        body: Option<&Map<String, Value>>,
+        budgeted: &Budgeted,
+    ) -> HookOutput {
         if model.is_some_and(|model| self.free.is_free(model)) {
             return Ok(None);
         }
@@ -291,7 +411,7 @@ impl BudgetCheck {
         let mut checks = budgeted
             .held
             .iter()
-            .zip(spends)
+            .zip(spends.iter().copied())
             .flat_map(|(held, spend)| {
                 held.entities
                     .iter()
@@ -299,12 +419,114 @@ impl BudgetCheck {
             })
             .collect::<Vec<_>>();
         checks.sort_by_key(|&(entity, ..)| entity);
-        checks
-            .into_iter()
-            .find_map(|(entity, spend, max_budget)| {
-                verdict(decide(&entity.check(spend, max_budget)))
+        if let Some(outcome) = checks.into_iter().find_map(|(entity, spend, max_budget)| {
+            verdict(decide(&entity.check(spend, max_budget)))
+        }) {
+            return outcome;
+        }
+        let Some((reserve, body)) = self.reserve.as_ref().zip(body) else {
+            return Ok(None);
+        };
+        if budgeted.held.is_empty()
+            || record::read(|entries| entries.call_type) != Some(Some(CallType::AnthropicMessages))
+        {
+            return Ok(None);
+        }
+        let Some((bound, input_tokens)) = budget_price::estimate(
+            &reserve.router,
+            &reserve.prices.load_full(),
+            body,
+            budgeted.team_id.as_deref(),
+        )
+        .await
+        else {
+            return Ok(None);
+        };
+        let Some(max) = bound.max.filter(|max| max.is_finite() && *max > 0.0) else {
+            return Ok(None);
+        };
+        let pairs = budgeted
+            .held
+            .iter()
+            .zip(spends)
+            .filter(|(held, _)| {
+                matches!(
+                    held.counter,
+                    SpendCounter::TeamMember { .. } | SpendCounter::User(_)
+                )
             })
-            .unwrap_or(Ok(None))
+            .map(|(held, spend)| (held.counter.clone(), held.planned.clone(), spend))
+            .collect::<Vec<_>>();
+        if pairs.is_empty() {
+            return Ok(None);
+        }
+        let reserve = reserve.clone();
+        let held = budgeted.reservation.clone();
+        let admission = litellm_call_scope::spawn_in_call(async move {
+            for (counter, _, spend) in &pairs {
+                if *spend > 0.0 {
+                    let _ = reserve
+                        .budgets
+                        .store()
+                        .seed(counter, Number::Float(*spend), LostSeed::Answer)
+                        .await;
+                }
+            }
+            let observed = pairs
+                .iter()
+                .map(|(_, plan, spend)| BudgetCounterSpend {
+                    counter_key: Some(plan.counter_key.clone()),
+                    spend: Some(*spend),
+                })
+                .collect::<Vec<_>>();
+            let plan = BudgetPlan {
+                counters: Some(
+                    pairs
+                        .into_iter()
+                        .map(|(_, plan, _)| BudgetPlanCounter {
+                            counter_key: Some(plan.counter_key),
+                            max_budget: Some(plan.max_budget),
+                            fallback_spend: Some(plan.fallback_spend),
+                            entity_type: Some(plan.entity_type),
+                            entity_id: Some(plan.entity_id),
+                            spend_log_entity_id: plan.spend_log_entity_id,
+                        })
+                        .collect(),
+                ),
+                reservation_cost: Some(max),
+                input_cost: Some(bound.input_floor.unwrap_or_default()),
+                input_tokens,
+                status_code: Some(BUDGET_EXCEEDED_STATUS),
+                ..BudgetPlan::default()
+            };
+            let admission = reserve.budgets.admit(plan, &observed).await?;
+            if let Admission::Held { reservation } = &admission {
+                *held.lock() = Some(Hold {
+                    budget: reserve,
+                    reservation: Some(reservation.clone()),
+                    disconnected: false,
+                });
+            }
+            Ok::<_, String>(admission)
+        })
+        .await
+        .map_err(|error| CallbackError::Failed(error.to_string()))?
+        .map_err(CallbackError::Failed)?;
+        match admission {
+            Admission::Skipped => Ok(None),
+            Admission::Held { reservation } => {
+                let value = serde_json::to_value(reservation)
+                    .map_err(|error| CallbackError::Failed(error.to_string()))?;
+                Ok(Some(Verdict::Patch(
+                    Patch::default().set(Field::BudgetReservation, value),
+                )))
+            }
+            Admission::Refused {
+                kind: BUDGET_EXCEEDED,
+                fields,
+            } => Ok(Some(Verdict::Abort(over_budget(fields)))),
+            Admission::Refused { kind, .. } => Err(CallbackError::Failed(kind.to_owned())),
+        }
     }
 }
 
@@ -324,7 +546,13 @@ impl Callback for BudgetCheck {
             match (input.hook, state) {
                 (Hook::PreCall, Some(budgeted)) => {
                     let model = input.fields.get::<typed::Model>()?;
-                    self.pre_call(model.as_deref(), budgeted).await
+                    let body = input.fields.get::<typed::RequestBody>()?;
+                    self.pre_call(
+                        model.as_deref(),
+                        body.as_ref().and_then(Value::as_object),
+                        budgeted,
+                    )
+                    .await
                 }
                 _ => Ok(None),
             }
@@ -530,7 +758,7 @@ mod tests {
     async fn checked(identity: &Authenticated<NativeRows>) -> Option<(StatusCode, String, String)> {
         let check = check(&Arc::new(SpendCounters::new(None)), FreeModels::default());
         let verdict = check
-            .pre_call(Some("held-model"), &budgeted(identity))
+            .pre_call(Some("held-model"), None, &budgeted(identity))
             .await
             .unwrap();
         match verdict {
@@ -736,5 +964,138 @@ mod tests {
         let refusal = refused_by_the_stage(budget(MAX, MAX + 1.0), model).await;
 
         assert_eq!(refusal.is_some(), refused, "{refusal:?}");
+    }
+
+    #[derive(Clone, Copy)]
+    enum Outcome {
+        Success,
+        Failure,
+        Disconnect,
+    }
+
+    #[rstest]
+    #[case::owner_success(false, Outcome::Success)]
+    #[case::member_success(true, Outcome::Success)]
+    #[case::owner_failure(false, Outcome::Failure)]
+    #[case::member_failure(true, Outcome::Failure)]
+    #[case::owner_disconnect(false, Outcome::Disconnect)]
+    #[case::member_disconnect(true, Outcome::Disconnect)]
+    #[tokio::test]
+    async fn a_request_holds_then_reconciles_its_shared_counter(
+        #[case] member: bool,
+        #[case] outcome: Outcome,
+    ) {
+        let store = Arc::new(SpendCounters::new(None));
+        let config = litellm_config::Config::from_value(
+            serde_yaml_ng::from_str(
+                "model_list:
+  - model_name: metered
+    litellm_params: {model: anthropic/claude-test}
+    model_info: {input_cost_per_token: 0.01, output_cost_per_token: 0.02}",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let check = BudgetCheck::with_reservation(
+            SpendReader::new(store.clone(), Arc::new(NoRow)),
+            Arc::new(FreeModels::default()),
+            Reserve {
+                router: crate::boot::router(&config).await.unwrap(),
+                prices: Arc::new(ArcSwap::from_pointee(CostMap::bundled())),
+                budgets: Arc::new(Budgets::new(store.clone())),
+                host: Arc::new(crate::host::RustSpendLogHost::new(None)),
+            },
+        );
+        let callbacks = Arc::new(Callbacks::new(vec![check.registered()]).unwrap());
+        let known_spend = 2.0;
+        let budget = budget(MAX, known_spend);
+        let (caller, counter) = if member {
+            (
+                caller(own_member(budget)),
+                SpendCounter::TeamMember {
+                    user_id: "u1".to_owned(),
+                    team_id: "t1".to_owned(),
+                },
+            )
+        } else {
+            (caller(user(budget)), SpendCounter::User("u1".to_owned()))
+        };
+        let read = || async {
+            store
+                .read(&counter)
+                .await
+                .unwrap()
+                .value()
+                .unwrap()
+                .as_f64()
+        };
+        let actual = record::scope(CallRecord::new(), async {
+            record::write(|entries| entries.call_type = Some(CallType::AnthropicMessages));
+            let call = callbacks.begin(&caller);
+            let body = json!({
+                "model": "metered",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hello there"}],
+            })
+            .as_object()
+            .unwrap()
+            .clone();
+            call.pre_call(body.clone()).await.unwrap();
+            let hold = record::read(|entries| entries.budget_reservation.clone())
+                .flatten()
+                .expect("the call reserved before dispatch");
+            let input_tokens = crate::prompt_estimate::Countable::of(
+                &litellm_gateway_inference::routing::Prompt::Messages(&body),
+            )
+            .and_then(|prompt| prompt.tokens())
+            .unwrap();
+            let input_cost = input_tokens as f64 * 0.01;
+            assert!((read().await - (known_spend + input_cost + 16.0 * 0.02)).abs() < 1e-9);
+
+            let actual = match outcome {
+                Outcome::Success => {
+                    record::write(|entries| {
+                        entries.attempt = Some(litellm_gateway_inference::record::AttemptRecord {
+                            cost: Some(litellm_host::interceptors::Cost::Reported {
+                                amount: serde_json::Number::from_f64(0.25).unwrap(),
+                            }),
+                            ..Default::default()
+                        });
+                    });
+                    call.succeeded(litellm_gateway_inference::ServedCall {
+                        model_group: "metered".to_owned(),
+                        deployment: None,
+                        response_id: None,
+                        usage: None,
+                        first_event: None,
+                    })
+                    .await;
+                    0.25
+                }
+                Outcome::Failure => {
+                    call.failed().await;
+                    0.0
+                }
+                Outcome::Disconnect => {
+                    call.response_headers().await;
+                    drop(call);
+                    input_cost
+                }
+            };
+            assert!((hold.input_cost.unwrap() - input_cost).abs() < 1e-9);
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                while (read().await - (known_spend + actual)).abs() >= 1e-9 {
+                    if !matches!(outcome, Outcome::Disconnect) {
+                        panic!("the terminal hook did not reconcile the hold");
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("disconnect settled the input cost");
+            actual
+        })
+        .await;
+        assert!((read().await - (known_spend + actual)).abs() < 1e-9);
     }
 }

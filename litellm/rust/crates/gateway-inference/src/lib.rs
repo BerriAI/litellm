@@ -102,6 +102,14 @@ impl<H: Host> Gateway<H> {
         self.cost_map.load_full()
     }
 
+    pub fn with_cost_map(mut self, cost_map: Arc<ArcSwap<CostMap>>) -> Self {
+        self.messages = self
+            .messages
+            .with_pricing(Arc::new(pricing::CostMapPricing::new(cost_map.clone())));
+        self.cost_map = cost_map;
+        self
+    }
+
     /// Has every request from now on read `cost_map`.
     pub fn install(&self, cost_map: CostMap) {
         self.cost_map.store(Arc::new(cost_map));
