@@ -31,7 +31,7 @@ def read_version(pyproject: pathlib.Path) -> str:
 def main(argv: list[str]) -> int:
     pyproject: Final = pathlib.Path(argv[1]) if len(argv) > 1 else pathlib.Path("pyproject.toml")
     version: Final = read_version(pyproject)
-    if RELEASE_VERSION.fullmatch(version) is None:
+    if not isinstance(version, str) or RELEASE_VERSION.fullmatch(version) is None:
         print(  # noqa: T201  # the ::error:: line to stderr is the workflow's failure signal
             f"::error::pyproject.toml version {version} is not an X.Y.0 release version", file=sys.stderr
         )
