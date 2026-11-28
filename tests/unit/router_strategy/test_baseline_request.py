@@ -57,3 +57,9 @@ def test_baseline_projection_keeps_caller_tools_and_request_parameter_precedence
         **deployment,
         **actual_request,
     }
+
+
+def test_baseline_does_not_project_cache_salt_from_a_deployment_into_caller_requests() -> None:
+    snapshot: Final = capture_baseline_parameters({"cache_salt": "deployment-salt", "verbosity": "low"})
+    assert snapshot is not None
+    assert baseline_request({}, snapshot, {}) == {"verbosity": "low"}

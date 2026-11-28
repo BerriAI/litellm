@@ -719,7 +719,7 @@ def previous_response_client_ids(previous_response_id: str | None, kwargs: Mappi
     )
 
 
-_RESPONSES_REQUEST_FIELDS: Final = frozenset(get_type_hints(ResponsesAPIOptionalRequestParams))
+_RESPONSES_REQUEST_FIELDS: Final = frozenset(get_type_hints(ResponsesAPIOptionalRequestParams)).difference({"cache_salt"})
 _CHAT_SETTINGS_A_TEMPLATE_PASSES_TO_THE_BRIDGED_CALL: Final = frozenset(OPENAI_CHAT_COMPLETION_PARAMS).difference(
     OPENAI_CHAT_COMPLETION_TRANSPORT_PARAMS, _RESPONSES_REQUEST_FIELDS
 )

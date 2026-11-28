@@ -52,7 +52,7 @@ _GENERIC_PARAMETERS: Final = (
 NATIVE_ONLY_PARAMETERS: Final = tuple(
     key
     for key in sorted(anthropic_messages_optional_param_keys())
-    if key not in (*_GENERIC_PARAMETERS, "metadata", "stream")
+    if key not in (*_GENERIC_PARAMETERS, "metadata", "stream", "cache_salt")
 )
 BASELINE_PARAMETERS: Final = (*_GENERIC_PARAMETERS, *NATIVE_ONLY_PARAMETERS)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
