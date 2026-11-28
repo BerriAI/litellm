@@ -4,6 +4,8 @@
 //! rule that reads it, except a team's, which copies each column of its row that a plain value
 //! holds, read or not. The host refuses a caller whose team holds one nothing reads yet.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value};
 
 use crate::authz::ModelList;
@@ -34,6 +36,9 @@ pub struct TeamRecord {
     pub default_team_member_models: Vec<String>,
     pub policies: Vec<String>,
     pub allow_team_guardrail_config: bool,
+    pub model_rpm_limit: BTreeMap<String, i64>,
+    pub model_tpm_limit: BTreeMap<String, i64>,
+    pub priority: Option<String>,
     /// The `max_budget` of the budget `metadata.team_member_budget_id` names, which a member with
     /// no budget of its own is held to.
     pub member_max_budget: Option<f64>,
