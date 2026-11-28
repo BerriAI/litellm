@@ -14,9 +14,9 @@ pub use self::local::TeamRoster;
 pub use self::types::{
     Bag, BudgetEntry, BudgetFullEntry, BudgetLimitEntry, Dict, EndUserEntry, ExcludedIfNone, Ints,
     KeyEntry, Lists, MemberEntry, MemberRole, ModelAliases, ModelRegion, ModelTableEntry,
-    ObjectPermissionEntry, OrganizationEntry, OrganizationMembershipEntry, ProjectEntry,
-    RestrictedEndUsers, Settings, TeamEntry, TeamMembershipEntry, TeamMembershipReservation,
-    UserEntry,
+    ObjectPermissionEntry, OrganizationEntry, OrganizationMembershipEntry, ProfileGrants,
+    ProjectEntry, RestrictedEndUsers, Settings, TeamEntry, TeamMembershipEntry,
+    TeamMembershipReservation, UserEntry,
 };
 use crate::{
     Error, IntoValue, Number, Pending, RequestRedis, Send, codec,

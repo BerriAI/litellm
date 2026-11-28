@@ -3,8 +3,9 @@
 
 use std::sync::Arc;
 
-use litellm_redis_store::auth_cache::ObjectPermissionEntry;
-use litellm_repositories::{ObjectPermission, ObjectPermissionRepository, Side};
+use litellm_python_compat::json;
+use litellm_redis_store::auth_cache::{ObjectPermissionEntry, ProfileGrants};
+use litellm_repositories::{ObjectPermission, ObjectPermissionRepository, RawJson, Side};
 
 use crate::{Error, column::nullable, error::within};
 
@@ -70,6 +71,7 @@ pub(crate) fn object_permission_entry(
         search_tools,
         mcp_tool_search_enabled,
         skills,
+        mcp_auth_profiles,
     } = row;
     Ok(ObjectPermissionEntry {
         object_permission_id,
@@ -86,6 +88,41 @@ pub(crate) fn object_permission_entry(
         mcp_tool_search_enabled,
         skills: Some(skills),
         apps: None,
+        mcp_auth_profiles: grants(mcp_auth_profiles.as_ref()),
         unread: Vec::new(),
     })
+}
+
+fn grants(raw: Option<&RawJson>) -> ProfileGrants {
+    match raw.map(|raw| json::loads(raw.get())) {
+        None => ProfileGrants::Absent,
+        Some(Ok(value)) => match ProfileGrants::from(&value) {
+            ProfileGrants::Empty => ProfileGrants::Absent,
+            grants => grants,
+        },
+        Some(Err(_)) => ProfileGrants::Unreadable,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use litellm_python_compat::MAX_DEPTH;
+    use litellm_redis_store::auth_cache::ProfileGrants;
+    use litellm_repositories::RawJson;
+    use rstest::rstest;
+    use serde_json::value::RawValue;
+
+    use super::grants;
+
+    #[rstest]
+    #[case::json_null("null".to_owned(), ProfileGrants::Absent)]
+    #[case::too_deep(
+        format!("{}{}", "[".repeat(MAX_DEPTH + 1), "]".repeat(MAX_DEPTH + 1)),
+        ProfileGrants::Unreadable
+    )]
+    fn grants_reads_a_stored_column(#[case] text: String, #[case] expected: ProfileGrants) {
+        let raw = RawJson(RawValue::from_string(text).expect("valid JSON"));
+
+        assert_eq!(grants(Some(&raw)), expected);
+    }
 }

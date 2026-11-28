@@ -38842,6 +38842,10 @@ export interface components {
              * @default []
              */
             mcp_access_groups: string[] | null;
+            /** Mcp Auth Profiles */
+            mcp_auth_profiles?: {
+                [key: string]: string;
+            } | components["schemas"]["StoredProfileGrantError"] | null;
             /**
              * Mcp Servers
              * @default []
@@ -51624,6 +51628,11 @@ export interface components {
              */
             user_ids: string[];
         };
+        /**
+         * StoredProfileGrantError
+         * @enum {string}
+         */
+        StoredProfileGrantError: "unreadable";
         /** StoredReport */
         StoredReport: {
             /** Id */

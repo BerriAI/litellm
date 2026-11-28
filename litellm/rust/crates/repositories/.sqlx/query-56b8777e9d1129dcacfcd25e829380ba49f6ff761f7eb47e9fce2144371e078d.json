@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT object_permission_id,\n       COALESCE(mcp_servers, '{}') AS \"mcp_servers!\",\n       COALESCE(mcp_access_groups, '{}') AS \"mcp_access_groups!\",\n       mcp_tool_permissions AS \"mcp_tool_permissions: RawJson\",\n       COALESCE(vector_stores, '{}') AS \"vector_stores!\",\n       COALESCE(agents, '{}') AS \"agents!\",\n       COALESCE(agent_access_groups, '{}') AS \"agent_access_groups!\",\n       COALESCE(models, '{}') AS \"models!\",\n       COALESCE(blocked_tools, '{}') AS \"blocked_tools!\",\n       COALESCE(mcp_toolsets, '{}') AS \"mcp_toolsets!\",\n       COALESCE(search_tools, '{}') AS \"search_tools!\",\n       mcp_tool_search_enabled,\n       COALESCE(skills, '{}') AS \"skills!\"\nFROM \"LiteLLM_ObjectPermissionTable\"\nWHERE object_permission_id = $1\n",
+  "query": "SELECT object_permission_id,\n       COALESCE(mcp_servers, '{}') AS \"mcp_servers!\",\n       COALESCE(mcp_access_groups, '{}') AS \"mcp_access_groups!\",\n       mcp_tool_permissions AS \"mcp_tool_permissions: RawJson\",\n       COALESCE(vector_stores, '{}') AS \"vector_stores!\",\n       COALESCE(agents, '{}') AS \"agents!\",\n       COALESCE(agent_access_groups, '{}') AS \"agent_access_groups!\",\n       COALESCE(models, '{}') AS \"models!\",\n       COALESCE(blocked_tools, '{}') AS \"blocked_tools!\",\n       COALESCE(mcp_toolsets, '{}') AS \"mcp_toolsets!\",\n       COALESCE(search_tools, '{}') AS \"search_tools!\",\n       mcp_tool_search_enabled,\n       COALESCE(skills, '{}') AS \"skills!\",\n       NULLIF(mcp_auth_profiles, '{}'::jsonb) AS \"mcp_auth_profiles?: RawJson\"\nFROM \"LiteLLM_ObjectPermissionTable\"\nWHERE object_permission_id = $1\n",
   "describe": {
     "columns": [
       {
@@ -95,6 +95,12 @@
         "name": "skills!",
         "type_info": "TextArray",
         "origin": "Expression"
+      },
+      {
+        "ordinal": 13,
+        "name": "mcp_auth_profiles?: RawJson",
+        "type_info": "Jsonb",
+        "origin": "Expression"
       }
     ],
     "parameters": {
@@ -115,8 +121,9 @@
       null,
       null,
       true,
+      null,
       null
     ]
   },
-  "hash": "54a371b59c857669d4e65af698ecac0e52a4461021bed314e687b7ce08dad51d"
+  "hash": "56b8777e9d1129dcacfcd25e829380ba49f6ff761f7eb47e9fce2144371e078d"
 }
