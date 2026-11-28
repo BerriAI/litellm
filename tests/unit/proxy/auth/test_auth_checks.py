@@ -2647,6 +2647,94 @@ def test_request_skips_budget_checks_for_mcp_tool_calls_that_cost_nothing(
     ), f"{route} {request_body}"
 
 
+def test_request_skips_budget_checks_prices_the_server_a_colliding_tool_name_routes_to(monkeypatch):
+    """A paid server can list a tool under a free server's prefixed name; routing and managed re-prefixing both stay priced."""
+    from litellm.proxy.auth.auth_checks import request_skips_budget_checks
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    free_server = ("docs-id", "docs", None)
+    monkeypatch.setattr(  # test-quality-ok: the registry is a module singleton read by the budget check; no injection seam
+        global_mcp_server_manager,
+        "config_mcp_servers",
+        {server[0]: _mcp_server(*server) for server in (free_server, _PAID_SERVER)},
+    )
+    monkeypatch.setattr(  # test-quality-ok: the routing map is a module singleton read by the budget check; no injection seam
+        global_mcp_server_manager,
+        "published_tool_routes",
+        {"search": "docs", "docs-search": _PAID_SERVER[1]},
+    )
+
+    def skips_jsonrpc(name: str) -> bool:
+        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name}}
+        return request_skips_budget_checks(route="/mcp", model=None, llm_router=None, request_body=body)
+
+    def skips_rest(name: str, server_id: str) -> bool:
+        body = {"name": name, "server_id": server_id}
+        return request_skips_budget_checks(
+            route="/mcp-rest/tools/call", model=None, llm_router=None, request_body=body
+        )
+
+    # Direct prefixed collision on /mcp routes to the paid server.
+    routed = global_mcp_server_manager.get_mcp_server_from_tool_name("docs-search")
+    assert routed is not None and routed.server_id == _PAID_SERVER[0]
+    assert skips_jsonrpc("docs-search") is False
+
+    # Bare "search" on /mcp and REST (server_id="docs-id") both reach _resolve_mcp_server_for_tool_call("docs", "search"),
+    # which re-prefixes to "docs-search" and selects the paid server, so neither may skip budget enforcement.
+    managed_target = global_mcp_server_manager._resolve_mcp_server_for_tool_call("docs", "search")
+    assert managed_target.server_id == _PAID_SERVER[0]
+    assert skips_jsonrpc("search") is False
+    assert skips_rest("search", "docs-id") is False
+
+    # Non-colliding tools on the free server remain zero-cost exempt on both surfaces.
+    assert skips_jsonrpc("docs-other") is True
+    assert skips_rest("other", "docs-id") is True
+
+
+def test_zero_cost_dispatch_pairs_skip_a_bare_name_fallback_that_managed_execution_cannot_reach(monkeypatch):
+    """The bare-name fallback is priced only for a server sharing the stage-1 name, matching what managed execution can reach."""
+    from litellm.proxy.auth.auth_checks import (
+        _managed_dispatch_pairs,
+        _stage2_pairs_for_name,
+        request_skips_budget_checks,
+    )
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    free_server = ("docs-id", "docs", None)
+    monkeypatch.setattr(  # test-quality-ok: the registry is a module singleton read by the budget check; no injection seam
+        global_mcp_server_manager,
+        "config_mcp_servers",
+        {server[0]: _mcp_server(*server) for server in (free_server, _PAID_SERVER)},
+    )
+    monkeypatch.setattr(  # test-quality-ok: the routing map is a module singleton read by the budget check; no injection seam
+        global_mcp_server_manager,
+        "published_tool_routes",
+        {"search": _PAID_SERVER[1]},
+    )
+    free = global_mcp_server_manager.get_mcp_server_by_id(free_server[0])
+    paid = global_mcp_server_manager.get_mcp_server_by_id(_PAID_SERVER[0])
+    assert free is not None and paid is not None
+
+    # The bare name routes to the paid server, but the free server's prefixed lookup misses.
+    fallback = global_mcp_server_manager.get_mcp_server_from_tool_name("search")
+    assert fallback is not None and fallback.server_id == paid.server_id
+    assert global_mcp_server_manager.get_mcp_server_from_tool_name("docs-search") is None
+
+    # Managed execution, called with the stage-1 server's name, never dispatches to the paid server.
+    with pytest.raises(ValueError, match="Tool search not found"):
+        global_mcp_server_manager._resolve_mcp_server_for_tool_call(free.name, "search")
+
+    # The budget check prices the same targets: the paid fallback is not a dispatch pair.
+    stage2 = _stage2_pairs_for_name("search", free, (free,))
+    assert [server.server_id for _, server in stage2] == [free.server_id]
+    all_pairs = _managed_dispatch_pairs("docs-search", free, (free, paid))
+    assert all(server.server_id == free.server_id for _, server in all_pairs)
+
+    # So a prefixed call that execution cannot send to the paid server stays zero-cost.
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "docs-search"}}
+    assert request_skips_budget_checks(route="/mcp", model=None, llm_router=None, request_body=body) is True
+
+
 @pytest.mark.asyncio
 async def test_get_skill_names_from_access_groups_reads_cached_group_rows():
     from litellm.proxy._types import LiteLLM_AccessGroupTable
