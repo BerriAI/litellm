@@ -8,6 +8,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.fal_ai.image_edit import FalAIImageEditConfig
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -149,7 +150,7 @@ def test_transform_response_maps_fal_images():
 
 @pytest.mark.parametrize("image", [None, []])
 def test_transform_request_requires_an_image(image):
-    with pytest.raises(ValueError, match="input image"):
+    with pytest.raises(litellm.BadRequestError, match="input image") as exc_info:
         FalAIImageEditConfig().transform_image_edit_request(
             model="openai/gpt-image-2.5/flare/edit",
             prompt="make it blue",
@@ -158,6 +159,7 @@ def test_transform_request_requires_an_image(image):
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
+    assert exc_info.value.status_code == 400
 
 
 def _transform_response(payload: object) -> ImageResponse:
