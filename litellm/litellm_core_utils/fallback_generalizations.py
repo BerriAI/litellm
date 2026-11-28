@@ -187,6 +187,20 @@ class _FallbackGeneralizations:
         if not model:
             return None
         matched = tuple(rule.model_info for rule in self.capability_rules if rule.pattern.search(model) is not None)
+        if not matched and ("/" in model or re.search(r"^(?:fw|cf|oai|custom|proxy)[-_]", model, re.IGNORECASE)):
+            candidates = []
+            if "/" in model:
+                stripped = model.split("/")[-1]
+                candidates.append(stripped)
+                cleaned = re.sub(r"^(?:fw|cf|oai|custom|proxy)[-_]", "", stripped, flags=re.IGNORECASE)
+                if cleaned != stripped:
+                    candidates.append(cleaned)
+            else:
+                candidates.append(re.sub(r"^(?:fw|cf|oai|custom|proxy)[-_]", "", model, flags=re.IGNORECASE))
+            for cand in candidates:
+                matched = tuple(rule.model_info for rule in self.capability_rules if rule.pattern.search(cand) is not None)
+                if matched:
+                    break
         if not matched:
             return None
         return {key: value for model_info in matched for key, value in model_info.items()}
