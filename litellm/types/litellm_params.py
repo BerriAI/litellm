@@ -116,6 +116,7 @@ class ProviderConnection:
     request_timeout: float | None = None
     force_timeout: float | None = None
     stream_timeout: float | str | None = None
+    stream_ttft_timeout: float | str | None = None
     timeout_by_service_tier: Mapping[str, float] | None = None
     stream_timeout_by_service_tier: Mapping[str, float] | None = None
     max_retries: int | None = None
@@ -478,6 +479,7 @@ class ProxyRequestState:
     strip_stream_usage: bool | None = field(default=None, metadata=wire(STREAM_USAGE_STRIPPED_FIELD))
     stream_usage_injected: bool | None = field(default=None, metadata=wire(STREAM_USAGE_INJECTED_FIELD))
     client_side_timeout: bool | None = None
+    client_side_stream_ttft_timeout: bool | None = None
     model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None
 
 
