@@ -10,7 +10,10 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use litellm_config::GeneralSettings;
-use litellm_gateway_auth_core::{Allowlists, RequestDenial, check_request, client_address::Origin};
+use litellm_gateway_auth_core::{
+    Allowlists, RequestDenial, check_request,
+    client_address::{Origin, peer_address},
+};
 use serde_json::json;
 
 const FORWARDED_FOR: &str = "x-forwarded-for";
@@ -83,17 +86,6 @@ pub(crate) fn checked(
         forwarded_for: forwarded_for.as_deref(),
     };
     check_request(route, origin, allowlists)
-}
-
-/// The peer as Python's `_restore_peer` writes it: the address alone, and an IPv6 one with its
-/// numeric scope.
-fn peer_address(peer: SocketAddr) -> String {
-    match peer {
-        SocketAddr::V6(peer) if peer.scope_id() != 0 => {
-            format!("{}%{}", peer.ip(), peer.scope_id())
-        }
-        _ => peer.ip().to_string(),
-    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ use axum::{
     extract::{FromRequestParts, Request},
     http::{HeaderName, request::Parts},
 };
+use litellm_gateway_inference::record::SentCallId;
 use tower::util::MapRequestLayer;
 use tower_http::request_id::{
     MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
@@ -13,15 +14,19 @@ const CALL_ID: HeaderName = HeaderName::from_static("x-litellm-call-id");
 const MAX_CALL_ID_LENGTH: usize = 256;
 
 type DropUnusableCallId = MapRequestLayer<fn(Request) -> Request>;
+type RememberSentCallId = MapRequestLayer<fn(Request) -> Request>;
 
 /// `resolve_litellm_call_id`: a client's `x-litellm-call-id` of 1 to 256 characters is kept,
-/// anything else is replaced by a fresh UUID, and the response echoes the id.
+/// anything else is replaced by a fresh UUID, and the response echoes the id. The id the client
+/// sent is kept as [`SentCallId`] for the logged request headers.
 pub(super) fn layer() -> (
+    RememberSentCallId,
     DropUnusableCallId,
     SetRequestIdLayer<MakeRequestUuid>,
     PropagateRequestIdLayer,
 ) {
     (
+        MapRequestLayer::new(remember_sent_call_id as fn(Request) -> Request),
         MapRequestLayer::new(drop_unusable_call_id as fn(Request) -> Request),
         SetRequestIdLayer::new(CALL_ID, MakeRequestUuid),
         PropagateRequestIdLayer::new(CALL_ID),
@@ -43,6 +48,16 @@ impl<S: Send + Sync> FromRequestParts<S> for CallId {
                 .map(str::to_owned),
         ))
     }
+}
+
+fn remember_sent_call_id(mut request: Request) -> Request {
+    let sent = request
+        .headers()
+        .get(CALL_ID)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    request.extensions_mut().insert(SentCallId(sent));
+    request
 }
 
 fn drop_unusable_call_id(mut request: Request) -> Request {
@@ -91,6 +106,35 @@ mod tests {
     #[tokio::test]
     async fn a_usable_client_call_id_is_kept_and_echoed(#[case] call_id: &str) {
         assert_eq!(call(Some(call_id)).await, (call_id.into(), call_id.into()));
+    }
+
+    #[rstest]
+    #[case::sent(Some("call-1".to_owned()))]
+    #[case::too_long(Some("a".repeat(MAX_CALL_ID_LENGTH + 1)))]
+    #[case::missing(None)]
+    #[tokio::test]
+    async fn the_call_id_the_client_sent_is_remembered_as_sent(#[case] call_id: Option<String>) {
+        let app = Router::new()
+            .route(
+                "/",
+                get(
+                    |axum::Extension(SentCallId(sent)): axum::Extension<SentCallId>| async move {
+                        sent.unwrap_or_else(|| "none".to_owned())
+                    },
+                ),
+            )
+            .layer(layer());
+        let request = call_id
+            .iter()
+            .fold(Request::get("/"), |request, id| request.header(CALL_ID, id))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let seen = axum::body::to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap();
+
+        assert_eq!(seen, call_id.as_deref().unwrap_or("none").as_bytes());
     }
 
     #[rstest]
