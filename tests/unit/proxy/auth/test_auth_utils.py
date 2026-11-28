@@ -7055,3 +7055,50 @@ def test_a_refusal_before_authentication_is_marked_and_raised_as_it_was() -> Non
     assert [frame.name for frame in traceback.extract_tb(refusal.__traceback__)] == [
         "test_a_refusal_before_authentication_is_marked_and_raised_as_it_was"
     ]
+
+
+def test_get_model_from_request_extracts_group_from_encoded_interaction_ids() -> None:
+    from litellm.interactions.id_utils import encode_interaction_id
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": "alpha", "litellm_params": {"model": "openai/gpt-6-astra"}, "model_info": {"id": "beta"}},
+            {"model_name": "beta", "litellm_params": {"model": "openai/gpt-6-astra"}, "model_info": {"id": "beta-id"}},
+        ]
+    )
+    encoded_alpha: Final = encode_interaction_id("int-1", "beta")
+    encoded_beta: Final = encode_interaction_id("int-2", "beta-id")
+    encoded_unknown: Final = encode_interaction_id("int-3", "no-such-deployment")
+
+    assert (
+        get_model_from_request(
+            request_data={"interaction_id": encoded_alpha},
+            route="/v1beta/interactions/{interaction_id}",
+            llm_router=router,
+        )
+        == "alpha"
+    )
+    assert (
+        get_model_from_request(
+            request_data={"interaction_id": encoded_beta},
+            route="/interactions/{interaction_id}/cancel",
+            llm_router=router,
+        )
+        == "beta"
+    )
+    assert (
+        get_model_from_request(
+            request_data={"previous_interaction_id": encoded_beta, "input": "next"},
+            route="/v1beta/interactions",
+            llm_router=router,
+        )
+        == "beta"
+    )
+    assert (
+        get_model_from_request(
+            request_data={"interaction_id": encoded_unknown},
+            route="/v1beta/interactions/{interaction_id}",
+            llm_router=router,
+        )
+        == "no-such-deployment"
+    )

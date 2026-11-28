@@ -103,6 +103,7 @@ from litellm.router_rust.invoke.cache_controls import (
     with_cache_lock,
 )
 from litellm.router_rust.invoke.endpoints import (
+    PINNED_DEPLOYMENT_KEY,
     AttemptCall,
     Plan,
     RustEndpoints,
@@ -3031,8 +3032,16 @@ class RustCore(
         )
         fields: dict[str, object] = dict(_start_fields(request))  # mutable-ok: built up below  # rebind-ok: same
         fields.update(self._group_policy_fields(request))
+        requested_model: Final = request.get("model")
+        pinned_id: Final = request.get(PINNED_DEPLOYMENT_KEY)
+        has_pinned_id: Final = isinstance(pinned_id, str) and bool(pinned_id)
         pinned_grant: Final = pinned_deployment_wildcard_grant(
-            request.get("model"), fields.get("allowed_models"), get_request_team_id(request), self.registry()
+            pinned_id if has_pinned_id else requested_model,
+            fields.get("allowed_models"),
+            get_request_team_id(request),
+            self.registry(),
+            by_pinned_id=has_pinned_id,
+            requested_model=requested_model,
         )
         if pinned_grant is not None:
             fields["allowed_models"] = list(pinned_grant)

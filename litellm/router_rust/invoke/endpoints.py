@@ -1590,9 +1590,14 @@ def pinned_video_deployment(plan: Plan, request: Mapping[str, object]) -> Mappin
 
 def pinned_request_deployment(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
     """The deployment a call names because the upstream object it reaches lives on that deployment's account:
-    a vector store file, or a realtime call from its client secret to the sideband that meters it."""
+    a vector store file, a realtime call from its client secret to the sideband that meters it,
+    or an interaction bound to its creating deployment."""
     deployment_id: Final = request.get(PINNED_DEPLOYMENT_KEY)
-    pins: Final = plan.endpoint.startswith("avector_store_file_") or plan.endpoint in _PINNABLE_REALTIME_ENDPOINTS
+    pins: Final = (
+        plan.endpoint.startswith("avector_store_file_")
+        or plan.endpoint in _PINNABLE_REALTIME_ENDPOINTS
+        or plan.endpoint in _INTERACTION_ENDPOINTS
+    )
     if not pins or not isinstance(deployment_id, str) or not deployment_id:
         return {}
     return {"pinned_deployment_id": deployment_id}

@@ -887,11 +887,17 @@ def populate_request_with_path_params(request_data: dict[str, object], request: 
                 else:
                     request_data["vector_store_ids"] = [value]
                 continue
+            if key == "interaction_id":
+                request_data["interaction_id"] = value  # rebind-ok: path parameter overrides query/body value
+                continue
             request_data.setdefault(key, value)
+        if "interaction_id" not in path_params:
+            _add_interaction_id_from_path(request_data=request_data, request=request)
         return request_data
 
-    # Fallback: parse the URL path directly to extract vector_store_id
+    # Fallback: parse the URL path directly to extract vector_store_id / interaction_id
     _add_vector_store_id_from_path(request_data=request_data, request=request)
+    _add_interaction_id_from_path(request_data=request_data, request=request)
 
     return request_data
 
@@ -923,3 +929,18 @@ def _add_vector_store_id_from_path(request_data: dict[str, object], request: Req
                 existing_ids.append(vector_store_id)
         else:
             request_data["vector_store_ids"] = [vector_store_id]
+
+
+_INTERACTION_ID_PATH_RE: Final = re.compile(r"/interactions/([^/?]+)(?:/cancel)?/?$")
+
+
+def _add_interaction_id_from_path(
+    request_data: dict[str, object],  # mutable-ok: mutates caller carrier in place
+    request: Request,
+) -> None:
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415  # cycle-avoidance inline import
+
+    path: Final = get_request_route(request)
+    match: Final = _INTERACTION_ID_PATH_RE.search(path)
+    if match:
+        request_data["interaction_id"] = match.group(1)  # rebind-ok: path parameter overrides query/body value
