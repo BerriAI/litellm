@@ -412,6 +412,68 @@ async def test_registered_inference_routes_reject_hierarchy_model_denials_before
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("query", "customers_model", "status_code", "sent_key"),
+    [
+        ("model=seedance-video", "seedance-video", 200, "ark-key"),
+        ("model=my-video", "seedance-video", 200, "ark-key"),
+        ("custom_llm_provider=volcengine", "seedance-video", 200, "ark-key"),
+        ("model=seedance-video", "other-video", 403, None),
+        ("model=my-video", "other-video", 403, None),
+        ("custom_llm_provider=volcengine", "other-video", 200, "env-ark-key"),
+    ],
+)
+async def test_a_video_list_is_held_to_the_customers_models_by_the_group_it_lists(
+    monkeypatch: pytest.MonkeyPatch, query: str, customers_model: str, status_code: int, sent_key: str | None
+) -> None:
+    import litellm
+    from litellm import Router
+    from litellm.proxy import proxy_server as server
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    auth: Final = UserAPIKeyAuth(
+        api_key="controlled-hash",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        metadata={"customer_org_id": "org-1"},
+        models=["seedance-video", "other-video", "my-video"],
+        aliases={"my-video": "seedance-video"},
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "volcengine/doubao-seedance-2-0-mini-260615",
+                    "api_key": "ark-key",
+                    "api_base": "https://ark.example",
+                },
+                "model_info": {"id": f"dep-{name}"},
+            }
+            for name in ("seedance-video", "other-video")
+        ]
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("ARK_API_KEY", "env-ark-key")
+    monkeypatch.setattr(server, "prisma_client", _prisma(_budget_database(organization=(customers_model,))))
+    monkeypatch.setattr(server, "general_settings", {"use_spend_logs_ledger": True})
+    monkeypatch.setattr(server, "llm_router", router)
+    monkeypatch.setitem(server.app.dependency_overrides, user_api_key_auth, lambda: auth)
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        ark: Final = respx_mock.get(url__regex=r"^https://ark\.").mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=server.app, raise_app_exceptions=False), base_url="http://controlled-proxy"
+        ) as client:
+            response: Final = await client.get(f"/v1/videos?{query}")
+
+    assert response.status_code == status_code, response.text
+    assert [call.request.headers["Authorization"] for call in ark.calls] == ([f"Bearer {sent_key}"] if sent_key else [])
+
+
+@pytest.mark.asyncio
 async def test_untracked_request_enrichment_does_not_touch_customer_database_tables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -5,7 +5,7 @@ import itertools
 import logging
 import mimetypes
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import IntEnum
@@ -36,16 +36,21 @@ from litellm.litellm_core_utils.core_helpers import (
     subscript,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.routing_common_utils import deployments_the_caller_may_use
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.llms.gemini.files.utils import gemini_file_id
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_V1_URI_PREFIX
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import LitellmUserRoles, ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
     ManagedObjectRepository,
 )
-from litellm.router_api import RoutingContext
+from litellm.router_api import RoutingContext, deployment_usable_by_team
+from litellm.router_strategy.tag_based_routing import (
+    get_deployments_for_tag,
+    get_tag_metadata_variable_name_from_kwargs,
+)
 from litellm.types.llms.openai import OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 
@@ -629,6 +634,34 @@ async def authorize_model_for_key(
     )
 
 
+async def authorize_model_for_caller(
+    model_id: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> None:
+    """``authorize_model_for_key`` plus the model limits of the key's agent and of the user who owns the key."""
+    from litellm.proxy.auth.auth_checks import can_agent_and_owner_call_model
+
+    await authorize_model_for_key(model_id, llm_router, user_api_key_dict)
+    await can_agent_and_owner_call_model(model_id, user_api_key_dict, llm_router)
+
+
+async def _agent_and_owner_may_use_model(
+    model: str,
+    llm_router: "Router",
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> bool:
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import can_agent_and_owner_call_model
+
+    try:
+        await can_agent_and_owner_call_model(model, user_api_key_dict, llm_router)
+    except (ProxyException, HTTPException):
+        return False
+    return True
+
+
 async def team_deployment_the_caller_may_use(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
@@ -685,12 +718,155 @@ async def model_less_provider_credentials(
     if llm_router is None:
         return None
     team_deployments: Final = _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider)
-    if not team_deployments:
-        return _accessible_provider_credentials(llm_router, user_api_key_dict, custom_llm_provider)
-    team_deployment: Final = await _model_less_pick(
-        team_deployments, custom_llm_provider, llm_router, user_api_key_dict
+    deployment: Final = (
+        await _model_less_pick(team_deployments, custom_llm_provider, llm_router, user_api_key_dict)
+        if team_deployments
+        else next(_accessible_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider), None)
     )
-    return None if team_deployment is None else team_deployment.credentials
+    return None if deployment is None else deployment.credentials
+
+
+async def video_deployment_the_caller_may_use(
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str,
+    request_kwargs: Mapping[str, object],
+) -> TeamProviderDeployment | None:
+    if llm_router is None:
+        return None
+    lists_videos: Final = _lists_videos_of_provider(llm_router.registry(), custom_llm_provider)
+    team_deployment: Final = await _first_team_deployment_the_caller_may_use(
+        tuple(
+            [
+                deployment
+                for deployment in _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider)
+                if lists_videos(deployment.deployment_id)
+                and await tags_route_to_deployment(llm_router, deployment, request_kwargs)
+                and await _agent_and_owner_may_use_model(deployment.public_model_name, llm_router, user_api_key_dict)
+            ]
+        ),
+        custom_llm_provider,
+        llm_router,
+        user_api_key_dict,
+    )
+    if team_deployment is not None:
+        return team_deployment
+    for deployment in _accessible_provider_deployments(
+        llm_router,
+        user_api_key_dict,
+        custom_llm_provider,
+        candidates=functools.partial(_video_deployments_in_group, lists_videos),
+    ):
+        if (
+            await tags_route_to_deployment(llm_router, deployment, request_kwargs)
+            and await caller_may_use_model(deployment.public_model_name, llm_router, user_api_key_dict)
+            and await _agent_and_owner_may_use_model(deployment.public_model_name, llm_router, user_api_key_dict)
+        ):
+            return deployment
+    return None
+
+
+async def tags_route_to_deployment(
+    llm_router: "Router", listed_with: TeamProviderDeployment, request_kwargs: Mapping[str, object]
+) -> bool:
+    registry: Final = llm_router.registry()
+    deployment: Final = registry.deployment(listed_with.deployment_id)
+    if deployment is None:
+        return False
+    model_name: Final = listed_with.public_model_name
+    request: Final = {**request_kwargs, "model": model_name}
+    routable: Final = tuple(
+        row
+        for row in deployments_the_caller_may_use(
+            registry.deployments(model_name, source="routable", request=request), request
+        )
+        if registry.credentials(_deployment_id(row) or "", form="deployment") is not None
+    )
+    pool: Final = routable or (deployment.model_dump(exclude_none=True),)
+    try:
+        routed: Final = await get_deployments_for_tag(
+            ctx=RoutingContext(llm_router),
+            model=model_name,
+            healthy_deployments=pool,  # pyright: ignore[reportArgumentType]  # deployment dicts
+            request_kwargs=request,  # pyright: ignore[reportArgumentType]  # the request kwargs
+            metadata_variable_name=get_tag_metadata_variable_name_from_kwargs(request),
+            request_deployments=pool,  # pyright: ignore[reportArgumentType]  # deployment dicts
+        )
+    except ValueError:
+        return False
+    return any(_deployment_id(row) == listed_with.deployment_id for row in routed)
+
+
+def _video_fit(registry: "RouterRegistry") -> "Callable[[str], _VideoFit]":
+    def fit(deployment_id: str) -> _VideoFit:
+        deployment: Final = registry.deployment(deployment_id)
+        model_info: Final = (
+            None
+            if deployment is None
+            else registry.deployment_model_info(deployment_id, deployment.litellm_params.model, cached=True)
+        )
+        match None if model_info is None else model_info.get("mode"):
+            case "video_generation":
+                return _VideoFit.SERVES_VIDEOS
+            case None:
+                return _VideoFit.UNKNOWN
+            case _:
+                return _VideoFit.SERVES_ANOTHER_MODE
+
+    return fit
+
+
+def _lists_videos_of_provider(registry: "RouterRegistry", custom_llm_provider: str) -> Callable[[str], bool]:
+    from litellm.utils import ProviderConfigManager
+
+    fit: Final = _video_fit(registry)
+    listed_fits: Final = (
+        (_VideoFit.SERVES_VIDEOS,)
+        if ProviderConfigManager.get_custom_provider_video_config(custom_llm_provider) is None
+        else (_VideoFit.SERVES_VIDEOS, _VideoFit.UNKNOWN)
+    )
+    return lambda deployment_id: fit(deployment_id) in listed_fits
+
+
+def deployment_with_credentials(
+    llm_router: "Router", deployment_id: str, team_id: str | None, every_team: bool
+) -> TeamProviderDeployment | None:
+    registry: Final = llm_router.registry()
+    deployment: Final = registry.deployment(deployment_id)
+    credentials: Final = as_str_mapping(registry.credentials(deployment_id, form="with_provider"))
+    if deployment is None or credentials is None:
+        return None
+    if not (every_team or deployment_usable_by_team(deployment, team_id)):
+        return None
+    return TeamProviderDeployment(
+        deployment_id,
+        deployment.model_info.team_public_model_name or deployment.model_name,
+        MappingProxyType({key: value for key, value in credentials.items() if key != "model"}),
+    )
+
+
+async def video_deployment_in_group(
+    llm_router: Optional["Router"],
+    model_name: str,
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str | None,
+    request_kwargs: Mapping[str, object],
+) -> TeamProviderDeployment | None:
+    if llm_router is None:
+        return None
+    registry: Final = llm_router.registry()
+    team_id: Final = user_api_key_dict.team_id
+    every_team: Final = team_id is None and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    usable: Final = tuple(
+        deployment
+        for deployment in _provider_deployments_in_group(registry, model_name, team_id, custom_llm_provider)
+        if every_team or _usable_by_team(registry, deployment.deployment_id, team_id)
+    )
+    fit: Final = _video_fit(registry)
+    for deployment in sorted(usable, key=lambda deployment: fit(deployment.deployment_id)):
+        if await tags_route_to_deployment(llm_router, deployment, request_kwargs):
+            return deployment
+    return None
 
 
 async def team_deployment_as_the_caller_reaches_it(
@@ -981,6 +1157,12 @@ class _SupportsGet(Protocol):
     def get(self, key: str, /) -> object: ...
 
 
+class _VideoFit(IntEnum):
+    SERVES_VIDEOS = 0
+    UNKNOWN = 1
+    SERVES_ANOTHER_MODE = 2
+
+
 class _KeyReach(IntEnum):
     NAMED = 0
     SHARED = 1
@@ -1008,12 +1190,65 @@ def _by_team_deployment_rank(order: _TeamDeploymentOrder) -> tuple[_KeyReach, da
 
 
 def _provider_credentials(
-    registry: "RouterRegistry", model_id: str, team_id: str | None, custom_llm_provider: str
+    registry: "RouterRegistry", model_id: str, team_id: str | None, custom_llm_provider: str | None
 ) -> Mapping[str, object] | None:
     credentials: Final = as_str_mapping(registry.credentials(model_id, form="with_provider", team_id=team_id))
-    if credentials is None or credentials.get("custom_llm_provider") != custom_llm_provider:
+    if credentials is None or custom_llm_provider not in (None, credentials.get("custom_llm_provider")):
         return None
     return MappingProxyType({key: value for key, value in credentials.items() if key != "model"})
+
+
+def _provider_deployment_by_name(
+    registry: "RouterRegistry", model_name: str, team_id: str | None, custom_llm_provider: str | None
+) -> tuple[TeamProviderDeployment, ...]:
+    credentials: Final = _provider_credentials(registry, model_name, team_id, custom_llm_provider)
+    deployment: Final = (
+        None if credentials is None else registry.credentials(model_name, form="deployment", team_id=team_id)
+    )
+    if credentials is None or deployment is None or deployment.model_info.id is None:
+        return ()
+    return (TeamProviderDeployment(deployment.model_info.id, model_name, credentials),)
+
+
+def _usable_by_team(registry: "RouterRegistry", deployment_id: str, team_id: str | None) -> bool:
+    deployment: Final = registry.deployment(deployment_id)
+    return deployment is not None and deployment_usable_by_team(deployment, team_id)
+
+
+def _deployment_id(deployment: object) -> str | None:
+    deployment_id: Final = require_attributes(subscript(deployment, "model_info"), _SupportsGet, "get").get("id")
+    return deployment_id if isinstance(deployment_id, str) else None
+
+
+def _provider_deployments_in_group(
+    registry: "RouterRegistry", model_name: str, team_id: str | None, custom_llm_provider: str | None
+) -> tuple[TeamProviderDeployment, ...]:
+    group_deployment_ids: Final = (
+        deployment_id
+        for deployment in registry.deployments(model_name, source="all", team_id=team_id)
+        if (deployment_id := _deployment_id(deployment)) is not None
+    )
+    in_group: Final = tuple(
+        TeamProviderDeployment(deployment_id, model_name, credentials)
+        for deployment_id in group_deployment_ids
+        if (credentials := _provider_credentials(registry, deployment_id, team_id, custom_llm_provider)) is not None
+    )
+    return in_group or _provider_deployment_by_name(registry, model_name, team_id, custom_llm_provider)
+
+
+def _video_deployments_in_group(
+    lists_videos: Callable[[str], bool],
+    registry: "RouterRegistry",
+    model_name: str,
+    team_id: str | None,
+    custom_llm_provider: str,
+) -> Iterator[TeamProviderDeployment]:
+    group: Final = registry.resolve(model_name, kind="alias") or model_name
+    return (
+        replace(deployment, public_model_name=model_name)
+        for deployment in _provider_deployments_in_group(registry, group, team_id, custom_llm_provider)
+        if _usable_by_team(registry, deployment.deployment_id, team_id) and lists_videos(deployment.deployment_id)
+    )
 
 
 def _team_provider_deployments(
@@ -1078,11 +1313,14 @@ def _team_provider_deployments(
     )
 
 
-def _accessible_provider_credentials(
+def _accessible_provider_deployments(
     llm_router: "Router",
     user_api_key_dict: "UserAPIKeyAuth",
     custom_llm_provider: str,
-) -> Mapping[str, object] | None:
+    candidates: Callable[
+        ["RouterRegistry", str, str | None, str], Iterable[TeamProviderDeployment]
+    ] = _provider_deployment_by_name,
+) -> Iterator[TeamProviderDeployment]:
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import is_model_allowed_by_pattern
     from litellm.proxy.auth.model_checks import get_complete_model_list
@@ -1122,13 +1360,9 @@ def _accessible_provider_credentials(
             is_model_allowed_by_pattern(model=model_name, allowed_model_pattern=granted) for granted in granted_models
         )
     )
-    return next(
-        (
-            credentials
-            for model_id in dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
-            if (credentials := _provider_credentials(registry, model_id, team_id, custom_llm_provider)) is not None
-        ),
-        None,
+    return itertools.chain.from_iterable(
+        candidates(registry, model_name, team_id, custom_llm_provider)
+        for model_name in dict.fromkeys(itertools.chain(granted_models, deployments_granted_by_wildcard))
     )
 
 

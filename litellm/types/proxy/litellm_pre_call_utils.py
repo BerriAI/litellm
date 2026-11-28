@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -14,6 +15,14 @@ class RedactedDict(dict):
 
     def copy(self) -> "RedactedDict":
         return RedactedDict(super().copy())
+
+
+@dataclass(frozen=True, slots=True)
+class PinnedDeployment:
+    deployment_id: str
+    model_group: str
+    custom_llm_provider: str | None
+    served_model: str | None = None
 
 
 class SecretFields(TypedDict):

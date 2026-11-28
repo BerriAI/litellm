@@ -15,12 +15,27 @@ are checked by the genuine decode round-trip.
 """
 
 from typing import Final
+from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
-
+import litellm
 from litellm.router import Router
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import (
+    UI_TEAM_ID,
+    LiteLLM_ProjectTableCachedObj,
+    LiteLLM_TeamTableCachedObj,
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    ProxyException,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.auth_checks import NO_TEAM_MEMBERSHIP_SENTINEL
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.types.agents import AgentResponse
+from litellm.types.proxy.litellm_pre_call_utils import PinnedDeployment
 from litellm.types.videos.main import DecodedVideoId
 from litellm.proxy.video_endpoints.utils import (
     authorized_video_model,
@@ -30,6 +45,9 @@ from litellm.proxy.video_endpoints.utils import (
     fallback_requested_model,
     get_custom_provider_from_data,
     routable_model_name,
+    stamp_listed_video_ids,
+    VideoListTarget,
+    video_list_target,
     video_model_group,
     video_reference_to_id,
 )
@@ -620,3 +638,1078 @@ def test_fallback_requested_model__is_none_for_a_create_a_provider_wildcard_serv
 
 def test_video_model_group__is_none_without_a_router() -> None:
     assert video_model_group(_decoded("sora-2", "dep-sora-shared"), None) is None
+
+
+def _listed_with(target: VideoListTarget) -> str | None:
+    return target.model if target.pinned is None else target.pinned.deployment_id
+
+
+def _video_list_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "seedance-video",
+                "litellm_params": {"model": "volcengine/doubao-seedance-2-0-mini-260615", "api_key": "ark-key"},
+                "model_info": {"id": "dep-seedance"},
+            },
+            {
+                "model_name": "sora-video",
+                "litellm_params": {"model": "openai/sora-2", "api_key": "openai-key"},
+                "model_info": {"id": "dep-sora"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("custom_llm_provider", "deployment_id"), [("volcengine", "dep-seedance"), ("openai", "dep-sora")])
+async def test_video_list_target_routes_a_model_less_list_to_the_providers_deployment(
+    custom_llm_provider: str, deployment_id: str
+) -> None:
+    target: Final = await video_list_target(
+        None, custom_llm_provider, _video_list_router(), UserAPIKeyAuth(api_key="hashed")
+    )
+
+    assert _listed_with(target) == deployment_id
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_never_lends_a_deployment_the_key_cannot_call() -> None:
+    restricted: Final = UserAPIKeyAuth(api_key="hashed", models=["sora-video"])
+
+    assert await video_list_target(None, "volcengine", _video_list_router(), restricted) == VideoListTarget()
+    assert _listed_with(await video_list_target(None, "openai", _video_list_router(), restricted)) == "dep-sora"
+
+
+def _team_video_list_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "team-seedance",
+                "litellm_params": {"model": "volcengine/doubao-seedance-2-0-mini-260615", "api_key": "team-ark-key"},
+                "model_info": {"id": "team-a-seedance", "team_id": "team-a", "team_public_model_name": "team-seedance"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("router", "team_id", "custom_llm_provider", "project_models", "expected"),
+    [
+        (_team_video_list_router(), "team-a", "volcengine", ["sora-video"], None),
+        (_team_video_list_router(), "team-a", "volcengine", ["team-seedance"], "team-a-seedance"),
+        (_video_list_router(), None, "volcengine", ["sora-video"], None),
+        (_video_list_router(), None, "openai", ["sora-video"], "dep-sora"),
+    ],
+)
+async def test_video_list_target_lends_a_key_without_a_model_list_only_what_its_project_allows(
+    router: Router,
+    team_id: str | None,
+    custom_llm_provider: str,
+    project_models: list[str],
+    expected: str | None,
+) -> None:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=AuthObject.team("team-a"), value=LiteLLM_TeamTableCachedObj(team_id="team-a", models=["team-seedance"])
+    )
+    await cache.async_set_cache(
+        key=AuthObject.project("proj-1"),
+        value=LiteLLM_ProjectTableCachedObj(project_id="proj-1", models=project_models),
+    )
+    project_key: Final = UserAPIKeyAuth(
+        api_key="hashed",
+        team_id=team_id,
+        team_models=["team-seedance"] if team_id else [],
+        models=[],
+        project_id="proj-1",
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: proxy_server global, no seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: proxy_server global, no seam
+    ):
+        target: Final = await video_list_target(None, custom_llm_provider, router, project_key)
+
+    assert _listed_with(target) == expected
+
+
+def _mixed_video_list_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "mixed-video",
+                "litellm_params": {"model": "openai/sora-2", "api_key": "openai-key"},
+                "model_info": {"id": "mixed-sora"},
+            },
+            {
+                "model_name": "mixed-video",
+                "litellm_params": {"model": "volcengine/doubao-seedance-2-0-mini-260615", "api_key": "ark-key"},
+                "model_info": {"id": "mixed-seedance"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_model", "custom_llm_provider", "deployment_id"),
+    [
+        (None, "volcengine", "mixed-seedance"),
+        (None, "openai", "mixed-sora"),
+        ("mixed-video", "volcengine", "mixed-seedance"),
+        ("mixed-video", "openai", "mixed-sora"),
+    ],
+)
+async def test_video_list_target_finds_the_providers_deployment_anywhere_in_a_mixed_group(
+    requested_model: str | None, custom_llm_provider: str, deployment_id: str
+) -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed", models=["mixed-video"])
+
+    target: Final = await video_list_target(requested_model, custom_llm_provider, _mixed_video_list_router(), key)
+
+    assert _listed_with(target) == deployment_id
+
+
+def _two_seedance_groups_router(group_alias: dict[str, str]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "seedance-a",
+                "litellm_params": {"model": "volcengine/dreamina-seedance-2-5-260628", "api_key": "ark-key-a"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "seedance-b",
+                "litellm_params": {"model": "volcengine/dreamina-seedance-2-5-260628", "api_key": "ark-key-b"},
+                "model_info": {"id": "dep-b"},
+            },
+        ],
+        model_group_alias=group_alias,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_llm_provider", [None, "volcengine"])
+@pytest.mark.parametrize(
+    ("key", "router_settings", "group_alias"),
+    [
+        (UserAPIKeyAuth(api_key="hashed", aliases={"seedance-a": "seedance-b"}), None, {}),
+        (UserAPIKeyAuth(api_key="hashed", team_model_aliases={"seedance-a": "seedance-b"}), None, {}),
+        (UserAPIKeyAuth(api_key="hashed"), {"model_group_alias": {"seedance-a": "seedance-b"}}, {}),
+        (UserAPIKeyAuth(api_key="hashed"), None, {"seedance-a": "seedance-b"}),
+    ],
+    ids=["key-alias", "team-alias", "key-or-team-router-settings", "router-group-alias"],
+)
+async def test_video_list_target_pins_the_group_the_callers_aliases_send_a_named_model_to(
+    key: UserAPIKeyAuth,
+    router_settings: dict[str, object] | None,
+    group_alias: dict[str, str],
+    custom_llm_provider: str | None,
+) -> None:
+    target: Final = await video_list_target(
+        "seedance-a", custom_llm_provider, _two_seedance_groups_router(group_alias), key, router_settings
+    )
+
+    assert _listed_with(target) == "dep-b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_model", "custom_llm_provider", "expected"),
+    [
+        pytest.param(
+            "mixed-video",
+            None,
+            VideoListTarget("mixed-video", PinnedDeployment("mixed-sora", "mixed-video", "openai", "mixed-video")),
+            id="named",
+        ),
+        pytest.param(
+            "mixed-video",
+            "volcengine",
+            VideoListTarget(
+                "mixed-video", PinnedDeployment("mixed-seedance", "mixed-video", "volcengine", "mixed-video")
+            ),
+            id="named-with-provider",
+        ),
+        pytest.param(
+            None,
+            "volcengine",
+            VideoListTarget(None, PinnedDeployment("mixed-seedance", "mixed-video", "volcengine", None)),
+            id="provider-only",
+        ),
+        pytest.param(
+            "mixed-seedance",
+            None,
+            VideoListTarget(
+                "mixed-seedance",
+                PinnedDeployment("mixed-seedance", "mixed-seedance", "volcengine", "mixed-seedance"),
+            ),
+            id="named-by-id",
+        ),
+    ],
+)
+async def test_video_list_target_names_a_model_for_the_pre_list_checks_only_when_the_caller_did(
+    requested_model: str | None, custom_llm_provider: str | None, expected: VideoListTarget
+) -> None:
+    target: Final = await video_list_target(
+        requested_model, custom_llm_provider, _mixed_video_list_router(), UserAPIKeyAuth(api_key="hashed")
+    )
+
+    assert target == expected
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_keeps_the_name_a_team_reaches_its_own_deployment_by() -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed", team_id="team-b", team_models=["seedance"])
+
+    target: Final = await video_list_target(None, "volcengine", _video_router(_TEAM_B_SEEDANCE), key)
+
+    assert target == VideoListTarget(None, PinnedDeployment("dep-team-b", "seedance", "volcengine", None))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "router_settings"),
+    [
+        (UserAPIKeyAuth(api_key="hashed", aliases={"seedance-a": "seedance-b"}), None),
+        (UserAPIKeyAuth(api_key="hashed", team_model_aliases={"seedance-a": "seedance-b"}), None),
+        (UserAPIKeyAuth(api_key="hashed"), {"model_group_alias": {"seedance-a": "seedance-b"}}),
+    ],
+    ids=["key-alias", "team-alias", "key-or-team-router-settings"],
+)
+async def test_video_list_target_never_renames_the_group_of_a_list_that_names_no_model(
+    key: UserAPIKeyAuth, router_settings: dict[str, object] | None
+) -> None:
+    router: Final = _video_router(
+        ("seedance-a", {"model": "volcengine/doubao-seedance-2-0-mini-260615"}, {"id": "dep-a"}),
+        ("seedance-b", {"model": "volcengine/doubao-seedance-2-0-mini-260615"}, {"id": "dep-b"}),
+    )
+
+    target: Final = await video_list_target(None, "volcengine", router, key, router_settings)
+
+    assert target == VideoListTarget(None, PinnedDeployment("dep-a", "seedance-a", "volcengine", None))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested_model", ["video-alias", None])
+async def test_video_list_target_lists_with_the_group_behind_the_router_alias_a_key_is_limited_to(
+    requested_model: str | None,
+) -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed", models=["video-alias"])
+
+    target: Final = await video_list_target(
+        requested_model, "volcengine", _two_seedance_video_groups_router({"video-alias": "seedance-b"}), key
+    )
+
+    assert _listed_with(target) == "dep-b"
+
+
+def _two_seedance_video_groups_router(group_alias: dict[str, str]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": f"seedance-{account}",
+                "litellm_params": {"model": "volcengine/doubao-seedance-2-0-mini-260615", "api_key": f"ark-{account}"},
+                "model_info": {"id": f"dep-{account}"},
+            }
+            for account in ("a", "b")
+        ],
+        model_group_alias=group_alias,
+    )
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_judges_deployments_of_one_upstream_model_by_their_own_mode() -> None:
+    router: Final = _video_router(
+        ("ark-chat", {"model": "volcengine/two-modes"}, {"id": "dep-chat", "mode": "chat"}),
+        ("ark-video", {"model": "volcengine/two-modes"}, {"id": "dep-video", "mode": "video_generation"}),
+    )
+
+    target: Final = await video_list_target(None, "volcengine", router, UserAPIKeyAuth(api_key="hashed"))
+
+    assert _listed_with(target) == "dep-video"
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_falls_back_to_a_config_deployment_the_project_allows_over_the_teams() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "team-seedance",
+                "litellm_params": {"model": "volcengine/doubao-seedance-2-0-mini-260615", "api_key": "team-ark-key"},
+                "model_info": {"id": "team-a-seedance", "team_id": "team-a", "team_public_model_name": "team-seedance"},
+            },
+            {
+                "model_name": "seedance-video",
+                "litellm_params": {"model": "volcengine/doubao-seedance-2-0-mini-260615", "api_key": "ark-key"},
+                "model_info": {"id": "dep-seedance"},
+            },
+        ]
+    )
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=AuthObject.team("team-a"), value=LiteLLM_TeamTableCachedObj(team_id="team-a"))
+    await cache.async_set_cache(
+        key=AuthObject.project("proj-1"),
+        value=LiteLLM_ProjectTableCachedObj(project_id="proj-1", models=["seedance-video"]),
+    )
+    project_key: Final = UserAPIKeyAuth(api_key="hashed", team_id="team-a", models=[], project_id="proj-1")
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: proxy_server global, no seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: proxy_server global, no seam
+    ):
+        target: Final = await video_list_target(None, "volcengine", router, project_key)
+
+    assert _listed_with(target) == "dep-seedance"
+
+
+def test_stamp_listed_video_ids_records_the_deployment_that_served_the_list() -> None:
+    first_id: Final = encode_video_id_with_provider("cgt-1", "volcengine", "doubao-seedance-2-0-mini-260615")
+    last_id: Final = encode_video_id_with_provider("cgt-2", "volcengine", "doubao-seedance-2-0-mini-260615")
+    kept_id: Final = encode_video_id_with_provider("cgt-3", "volcengine", "doubao-seedance-2-0-mini-260615", deployment_id="dep-old")
+    listed: Final = {
+        "object": "list",
+        "data": [{"id": first_id, "status": "succeeded"}, {"id": kept_id}, {"id": last_id}],
+        "first_id": first_id,
+        "last_id": last_id,
+        "has_more": False,
+    }
+
+    stamped: Final = stamp_listed_video_ids(listed, PinnedDeployment("dep-b", "seedance-b", "volcengine"))
+
+    assert [decode_video_id_with_provider(video["id"]) for video in stamped["data"]] == [
+        decode_video_id_with_provider(
+            encode_video_id_with_provider("cgt-1", "volcengine", "doubao-seedance-2-0-mini-260615", deployment_id="dep-b")
+        ),
+        decode_video_id_with_provider(kept_id),
+        decode_video_id_with_provider(
+            encode_video_id_with_provider("cgt-2", "volcengine", "doubao-seedance-2-0-mini-260615", deployment_id="dep-b")
+        ),
+    ]
+    assert (stamped["first_id"], stamped["last_id"]) == (stamped["data"][0]["id"], stamped["data"][2]["id"])
+    assert (stamped["object"], stamped["data"][0]["status"], stamped["has_more"]) == ("list", "succeeded", False)
+    assert stamp_listed_video_ids(listed, None) == listed
+
+
+@pytest.mark.parametrize("wrapped", [True, False])
+def test_stamp_listed_video_ids_makes_the_video_objects_of_a_provider_readable(wrapped: bool) -> None:
+    videos: Final = [_video("job-7"), _video("job;8")]
+    listed: Final = {"data": videos, "first_id": "job-7", "last_id": "job;8"} if wrapped else videos
+
+    stamped: Final = stamp_listed_video_ids(listed, PinnedDeployment("dep-queue", "queue-group", "queue-video"))
+    stamped_videos: Final = stamped["data"] if wrapped else stamped
+
+    assert decode_video_id_with_provider(stamped_videos[0].id) == decode_video_id_with_provider(
+        encode_video_id_with_provider("job-7", "queue-video", "dep-queue", deployment_id="dep-queue")
+    )
+    assert [video.model_dump(exclude={"id"}) for video in stamped_videos] == [
+        video.model_dump(exclude={"id"}) for video in videos
+    ]
+    assert stamped_videos[1].id == "job;8"
+    assert not wrapped or (stamped["first_id"], stamped["last_id"]) == (stamped_videos[0].id, "job;8")
+
+
+def test_stamp_listed_video_ids_makes_a_providers_raw_ids_readable_and_leaves_ids_it_cannot_encode() -> None:
+    raw: Final = {
+        "data": [{"id": "job-7"}, {"id": "job;8"}, {"id": 9}, {"status": "queued"}],
+        "first_id": "job-7",
+        "last_id": "job;8",
+    }
+
+    stamped: Final = stamp_listed_video_ids(raw, PinnedDeployment("dep-queue", "queue-group", "queue-video"))
+    readable_id: Final = stamped["data"][0]["id"]
+
+    assert decode_video_id_with_provider(readable_id) == decode_video_id_with_provider(
+        encode_video_id_with_provider("job-7", "queue-video", "dep-queue", deployment_id="dep-queue")
+    )
+    assert stamped == {
+        "data": [{"id": readable_id}, {"id": "job;8"}, {"id": 9}, {"status": "queued"}],
+        "first_id": readable_id,
+        "last_id": "job;8",
+    }
+
+
+@pytest.mark.parametrize(
+    "listed_with",
+    [
+        pytest.param(PinnedDeployment("dep;1", "queue-group", "queue-video"), id="unencodable-deployment"),
+        pytest.param(PinnedDeployment("dep-queue", "queue-group", None), id="no-provider"),
+        pytest.param(PinnedDeployment("dep-queue", "queue-group", "queue;video"), id="unencodable-provider"),
+    ],
+)
+def test_stamp_listed_video_ids_leaves_raw_ids_alone_when_it_cannot_name_their_deployment(
+    listed_with: PinnedDeployment,
+) -> None:
+    raw: Final = {"data": [{"id": "job-7"}], "first_id": "job-7", "last_id": "job-7"}
+
+    assert stamp_listed_video_ids(raw, listed_with) == raw
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream_listed_id",
+    [
+        pytest.param(
+            encode_video_id_with_provider("cgt-b-1", "volcengine", "doubao-seedance-2-0-mini-260615"), id="encoded"
+        ),
+        pytest.param("cgt-b-1", id="raw"),
+    ],
+)
+async def test_a_listed_video_resolves_to_the_group_that_listed_it_when_groups_share_an_upstream_model(
+    upstream_listed_id: str,
+) -> None:
+    router: Final = _two_seedance_video_groups_router({})
+    key_for_b: Final = UserAPIKeyAuth(api_key="hashed", models=["seedance-b"])
+
+    target: Final = await video_list_target(None, "volcengine", router, key_for_b)
+    stamped: Final = stamp_listed_video_ids({"object": "list", "data": [{"id": upstream_listed_id}]}, target.pinned)
+    listed_id: Final = stamped["data"][0]["id"]
+
+    assert await authorized_video_model(decode_video_id_with_provider(listed_id), router, key_for_b) == "seedance-b"
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_without_a_provider_or_model_leaves_routing_alone() -> None:
+    assert await video_list_target(
+        None, None, _video_list_router(), UserAPIKeyAuth(api_key="hashed")
+    ) == VideoListTarget()
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_routes_a_named_model_the_key_may_call() -> None:
+    allowed: Final = UserAPIKeyAuth(api_key="hashed", models=["seedance-video"])
+
+    assert _listed_with(await video_list_target("seedance-video", None, _video_list_router(), allowed)) == "dep-seedance"
+    assert await video_list_target("seedance-video", "openai", _video_list_router(), allowed) == VideoListTarget()
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_lists_the_asked_provider_when_the_named_group_has_no_deployment_for_it() -> None:
+    target: Final = await video_list_target(
+        "seedance-video", "openai", _video_list_router(), UserAPIKeyAuth(api_key="hashed")
+    )
+
+    assert _listed_with(target) == "dep-sora"
+
+
+def _scoped_to(team_id: str | None, public_name: str) -> dict[str, str]:
+    return {} if team_id is None else {"team_id": team_id, "team_public_model_name": public_name}
+
+
+def _chat_model_listed_before_the_video_model_router(chat_deployment: dict[str, object], team_id: str | None) -> Router:
+    return Router(
+        model_list=[
+            chat_deployment,
+            {
+                "model_name": "team-seedance",
+                "litellm_params": {"model": "volcengine/doubao-seedance-2-0-mini-260615", "api_key": "ark-key"},
+                "model_info": {"id": "dep-seedance", **_scoped_to(team_id, "team-seedance")},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chat_model_info",
+    [
+        pytest.param({}, id="cost-map-chat-mode"),
+        pytest.param({"mode": "chat"}, id="deployment-chat-mode"),
+    ],
+)
+@pytest.mark.parametrize("team_id", [None, "team-a"])
+async def test_video_list_target_lists_with_a_video_deployment_over_a_chat_model_listed_first(
+    chat_model_info: dict[str, str], team_id: str | None
+) -> None:
+    chat_model: Final = "volcengine/doubao-seed-2-0-pro-260215" if not chat_model_info else "volcengine/house-chat"
+    router: Final = _chat_model_listed_before_the_video_model_router(
+        {
+            "model_name": "team-chat",
+            "litellm_params": {"model": chat_model, "api_key": "ark-chat-key"},
+            "model_info": {"id": "dep-chat", **_scoped_to(team_id, "team-chat"), **chat_model_info},
+        },
+        team_id,
+    )
+    key: Final = UserAPIKeyAuth(api_key="hashed", team_id=team_id, team_models=["team-chat", "team-seedance"] if team_id else [])
+
+    target: Final = await video_list_target(None, "volcengine", router, key)
+
+    assert _listed_with(target) == "dep-seedance"
+
+
+def _group_with_its_chat_model_first_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "ark-models",
+                "litellm_params": {"model": "volcengine/doubao-seed-2-0-pro-260215", "api_key": "ark-chat-key"},
+                "model_info": {"id": "dep-chat"},
+            },
+            {
+                "model_name": "ark-models",
+                "litellm_params": {"model": "volcengine/doubao-seedance-2-0-mini-260615", "api_key": "ark-key"},
+                "model_info": {"id": "dep-seedance"},
+            },
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_model", "custom_llm_provider"),
+    [(None, "volcengine"), ("ark-models", "volcengine"), ("ark-models", None)],
+)
+async def test_video_list_target_lists_with_the_video_deployment_of_a_group_whose_chat_model_comes_first(
+    requested_model: str | None, custom_llm_provider: str | None
+) -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed", models=["ark-models"])
+
+    target: Final = await video_list_target(
+        requested_model, custom_llm_provider, _group_with_its_chat_model_first_router(), key
+    )
+
+    assert _listed_with(target) == "dep-seedance"
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_keeps_a_named_group_that_has_only_a_chat_model_for_the_provider() -> None:
+    router: Final = _chat_model_listed_before_the_video_model_router(
+        {
+            "model_name": "team-chat",
+            "litellm_params": {"model": "volcengine/doubao-seed-2-0-pro-260215", "api_key": "ark-chat-key"},
+            "model_info": {"id": "dep-chat"},
+        },
+        None,
+    )
+
+    target: Final = await video_list_target("team-chat", "volcengine", router, UserAPIKeyAuth(api_key="hashed"))
+
+    assert _listed_with(target) == "dep-chat"
+
+
+def _video_router(*deployments: tuple[str, dict[str, object], dict[str, object]]) -> Router:
+    return Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"api_key": "video-key", **params}, "model_info": model_info}
+            for name, params, model_info in deployments
+        ]
+    )
+
+
+_TEAM_B_SEEDANCE: Final = (
+    "team-b-seedance",
+    {"model": "volcengine/doubao-seedance-2-0-mini-260615"},
+    {"id": "dep-team-b", "team_id": "team-b", "team_public_model_name": "seedance"},
+)
+_SHARED_SEEDANCE: Final = (
+    "seedance-video",
+    {"model": "volcengine/doubao-seedance-2-0-mini-260615"},
+    {"id": "dep-shared"},
+)
+_PROXY_ADMIN: Final = UserAPIKeyAuth(api_key="hashed", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested_model", ["dep-team-b", "team-b-seedance", "seedance"])
+@pytest.mark.parametrize("custom_llm_provider", [None, "volcengine"])
+@pytest.mark.parametrize(
+    ("team_id", "user_role"),
+    [(None, None), ("team-a", None), ("team-a", LitellmUserRoles.PROXY_ADMIN)],
+)
+async def test_video_list_target_never_pins_a_deployment_another_team_owns(
+    requested_model: str, custom_llm_provider: str | None, team_id: str | None, user_role: LitellmUserRoles | None
+) -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed", team_id=team_id, user_role=user_role)
+
+    target: Final = await video_list_target(requested_model, custom_llm_provider, _video_router(_TEAM_B_SEEDANCE), key)
+
+    assert target.pinned is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested_model", ["seedance", pytest.param(None, id="provider-only")])
+async def test_video_list_target_pins_the_callers_own_team_deployment(requested_model: str | None) -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed", team_id="team-b", team_models=["seedance"])
+
+    target: Final = await video_list_target(requested_model, "volcengine", _video_router(_TEAM_B_SEEDANCE), key)
+
+    assert _listed_with(target) == "dep-team-b"
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_keeps_a_teams_deployment_from_a_key_without_a_team_that_lists_its_name() -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed", models=["team-b-seedance", "seedance-video"])
+
+    target: Final = await video_list_target(None, "volcengine", _video_router(_TEAM_B_SEEDANCE, _SHARED_SEEDANCE), key)
+
+    assert _listed_with(target) == "dep-shared"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested_model", ["dep-team-b", "team-b-seedance"])
+async def test_video_list_target_lets_a_proxy_admin_name_a_teams_deployment(requested_model: str) -> None:
+    router: Final = _video_router(_SHARED_SEEDANCE, _TEAM_B_SEEDANCE)
+
+    target: Final = await video_list_target(requested_model, "volcengine", router, _PROXY_ADMIN)
+
+    assert _listed_with(target) == "dep-team-b"
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_never_sends_a_proxy_admins_model_less_list_to_a_teams_deployment() -> None:
+    assert await video_list_target(None, "volcengine", _video_router(_TEAM_B_SEEDANCE), _PROXY_ADMIN) == VideoListTarget()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "params"),
+    [
+        ("azure", {"model": "azure/house-chat", "api_base": "https://house.openai.azure.com", "api_version": "2025-04-01"}),
+        ("openai", {"model": "openai/house-chat", "api_base": "https://house.example/v1"}),
+    ],
+)
+async def test_video_list_target_leaves_a_model_less_list_alone_when_no_deployment_is_known_to_serve_videos(
+    custom_llm_provider: str, params: dict[str, object]
+) -> None:
+    router: Final = _video_router(("house-chat", params, {"id": "dep-chat"}))
+
+    target: Final = await video_list_target(None, custom_llm_provider, router, UserAPIKeyAuth(api_key="hashed"))
+
+    assert target == VideoListTarget()
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_lists_with_an_unlisted_model_its_deployment_marks_as_video() -> None:
+    router: Final = _video_router(
+        ("new-video", {"model": "volcengine/unlisted-video"}, {"id": "dep-new", "mode": "video_generation"})
+    )
+
+    target: Final = await video_list_target(None, "volcengine", router, UserAPIKeyAuth(api_key="hashed"))
+
+    assert _listed_with(target) == "dep-new"
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_lists_with_a_custom_video_providers_unlisted_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.integration._support.custom_video_provider import IMAGE_ONLY_HANDLER, VIDEO_CONFIG
+
+    monkeypatch.setattr(
+        litellm,
+        "custom_provider_map",
+        [
+            {"provider": "queue-video", "custom_handler": VIDEO_CONFIG},
+            {"provider": "image-only", "custom_handler": IMAGE_ONLY_HANDLER},
+        ],
+    )
+    router: Final = _video_router(
+        ("queue-video", {"model": "queue-video/seedance-1"}, {"id": "dep-queue"}),
+        ("image-only", {"model": "image-only/seedance-1"}, {"id": "dep-image"}),
+    )
+    key: Final = UserAPIKeyAuth(api_key="hashed")
+
+    assert _listed_with(await video_list_target(None, "queue-video", router, key)) == "dep-queue"
+    assert await video_list_target(None, "image-only", router, key) == VideoListTarget()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_llm_provider", [None, "volcengine"])
+async def test_video_list_target_prefers_video_then_unknown_then_chat_deployments_of_a_named_group(
+    custom_llm_provider: str | None,
+) -> None:
+    chat: Final = ("ark-models", {"model": "volcengine/doubao-seed-2-0-pro-260215"}, {"id": "dep-chat"})
+    unknown: Final = ("ark-models", {"model": "volcengine/unlisted-model"}, {"id": "dep-unknown"})
+    video: Final = ("ark-models", {"model": "volcengine/doubao-seedance-2-0-mini-260615"}, {"id": "dep-video"})
+    key: Final = UserAPIKeyAuth(api_key="hashed")
+
+    with_video: Final = await video_list_target(
+        "ark-models", custom_llm_provider, _video_router(chat, unknown, video), key
+    )
+    without_video: Final = await video_list_target(
+        "ark-models", custom_llm_provider, _video_router(chat, unknown), key
+    )
+
+    assert _listed_with(with_video) == "dep-video"
+    assert _listed_with(without_video) == "dep-unknown"
+
+
+def _tagged_seedance(
+    deployment_id: str, *tags: str, group: str = "seedance-video", **model_info: object
+) -> tuple[str, dict[str, object], dict[str, object]]:
+    return (
+        group,
+        {"model": "volcengine/doubao-seedance-2-0-mini-260615", "tags": list(tags)},
+        {"id": deployment_id, **model_info},
+    )
+
+
+def _tag_filtering_router(
+    *deployments: tuple[str, dict[str, object], dict[str, object]], enable_tag_filtering: bool = True
+) -> Router:
+    return Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"api_key": "video-key", **params}, "model_info": model_info}
+            for name, params, model_info in deployments
+        ],
+        enable_tag_filtering=enable_tag_filtering,
+    )
+
+
+def _routing(*tags: str, inherited: tuple[str, ...] = (), team_id: str | None = None) -> dict[str, object]:
+    return {
+        "metadata": {
+            "tags": list(tags),
+            "inherited_tags": inherited,
+            **({"user_api_key_team_id": team_id} if team_id else {}),
+        }
+    }
+
+
+_PAID_AND_FREE: Final = (_tagged_seedance("dep-paid", "paid"), _tagged_seedance("dep-free", "free"))
+_KEY: Final = UserAPIKeyAuth(api_key="hashed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_model", "custom_llm_provider"),
+    [("seedance-video", None), ("seedance-video", "volcengine"), (None, "volcengine")],
+    ids=["named", "named-with-provider", "provider-only"],
+)
+@pytest.mark.parametrize(
+    ("routing", "deployment_id"),
+    [
+        pytest.param(_routing("paid"), "dep-paid", id="first-tag"),
+        pytest.param(_routing("free"), "dep-free", id="second-tag"),
+        pytest.param(_routing("!paid", inherited=("!paid",)), "dep-free", id="inherited-exclusion"),
+        pytest.param(_routing("&free", inherited=("&free",)), "dep-free", id="inherited-requirement"),
+    ],
+)
+async def test_video_list_target_pins_the_deployment_the_callers_tags_route_to(
+    requested_model: str | None, custom_llm_provider: str | None, routing: dict[str, object], deployment_id: str
+) -> None:
+    target: Final = await video_list_target(
+        requested_model,
+        custom_llm_provider,
+        _tag_filtering_router(*_PAID_AND_FREE),
+        _KEY,
+        request_routing=routing,
+    )
+
+    assert _listed_with(target) == deployment_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_model", "custom_llm_provider", "expected"),
+    [
+        ("seedance-video", None, VideoListTarget(model="seedance-video")),
+        ("seedance-video", "volcengine", VideoListTarget()),
+        (None, "volcengine", VideoListTarget()),
+        ("dep-paid", None, VideoListTarget(model="dep-paid")),
+    ],
+    ids=["named", "named-with-provider", "provider-only", "raw-id"],
+)
+@pytest.mark.parametrize(
+    "routing",
+    [_routing("other"), _routing("&gold", inherited=("&gold",))],
+    ids=["unknown-tag", "inherited-requirement"],
+)
+async def test_video_list_target_pins_nothing_when_the_callers_tags_route_to_no_deployment(
+    requested_model: str | None,
+    custom_llm_provider: str | None,
+    expected: VideoListTarget,
+    routing: dict[str, object],
+) -> None:
+    target: Final = await video_list_target(
+        requested_model,
+        custom_llm_provider,
+        _tag_filtering_router(*_PAID_AND_FREE),
+        _KEY,
+        request_routing=routing,
+    )
+
+    assert target == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_model", "deployment_id"), [("dep-paid", "dep-paid"), ("seedance-video", "dep-default")]
+)
+async def test_video_list_target_prefers_a_default_tagged_deployment_only_when_the_group_is_named(
+    requested_model: str, deployment_id: str
+) -> None:
+    router: Final = _tag_filtering_router(
+        _tagged_seedance("dep-paid", "paid"), _tagged_seedance("dep-default", "default")
+    )
+
+    target: Final = await video_list_target(requested_model, None, router, _KEY, request_routing=_routing())
+
+    assert _listed_with(target) == deployment_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested_model", ["seedance-video", None])
+async def test_video_list_target_ignores_tags_while_tag_filtering_is_off(requested_model: str | None) -> None:
+    target: Final = await video_list_target(
+        requested_model,
+        "volcengine",
+        _tag_filtering_router(*_PAID_AND_FREE, enable_tag_filtering=False),
+        _KEY,
+        request_routing=_routing("free", inherited=("free",)),
+    )
+
+    assert _listed_with(target) == "dep-paid"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("group_setting", "router_settings"),
+    [({"enable_tag_filtering": True}, None), ({}, {"enable_tag_filtering": True})],
+    ids=["model-group", "key-or-team"],
+)
+async def test_video_list_target_follows_tag_filtering_set_below_the_router(
+    group_setting: dict[str, object], router_settings: dict[str, object] | None
+) -> None:
+    router: Final = _tag_filtering_router(
+        _tagged_seedance("dep-paid", "paid", **group_setting),
+        _tagged_seedance("dep-free", "free"),
+        enable_tag_filtering=False,
+    )
+
+    target: Final = await video_list_target(
+        "seedance-video", None, router, _KEY, router_settings=router_settings, request_routing=_routing("free")
+    )
+
+    assert _listed_with(target) == "dep-free"
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_never_lets_a_blocked_default_deployment_hide_the_usable_ones() -> None:
+    router: Final = _tag_filtering_router(
+        _tagged_seedance("dep-blocked", "default", blocked=True), _tagged_seedance("dep-open", "paid")
+    )
+
+    target: Final = await video_list_target("seedance-video", None, router, _KEY, request_routing=_routing())
+
+    assert _listed_with(target) == "dep-open"
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_never_lets_another_teams_default_deployment_hide_the_usable_ones() -> None:
+    router: Final = _tag_filtering_router(
+        _tagged_seedance("dep-team-b", "default", team_id="team-b"), _tagged_seedance("dep-shared", "paid")
+    )
+
+    target: Final = await video_list_target("seedance-video", None, router, _KEY, request_routing=_routing())
+
+    assert _listed_with(target) == "dep-shared"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested_model", ["seedance", None])
+@pytest.mark.parametrize("tag", ["paid", "free"])
+async def test_video_list_target_pins_the_team_deployment_the_callers_tags_route_to(
+    requested_model: str | None, tag: str
+) -> None:
+    router: Final = _tag_filtering_router(
+        *(
+            _tagged_seedance(
+                f"dep-{name}", name, group=f"team-b-{name}", team_id="team-b", team_public_model_name="seedance"
+            )
+            for name in ("paid", "free")
+        )
+    )
+    key: Final = UserAPIKeyAuth(api_key="hashed", team_id="team-b", team_models=["seedance"])
+
+    target: Final = await video_list_target(
+        requested_model, "volcengine", router, key, request_routing=_routing(tag, team_id="team-b")
+    )
+
+    assert _listed_with(target) == f"dep-{tag}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_llm_provider", [None, "volcengine"])
+async def test_video_list_target_pins_a_teams_own_deployment_over_a_shared_group_of_the_same_name(
+    custom_llm_provider: str | None,
+) -> None:
+    shared: Final = ("seedance", {"model": "volcengine/doubao-seedance-2-0-mini-260615"}, {"id": "dep-shared"})
+    key: Final = UserAPIKeyAuth(api_key="hashed", team_id="team-b", team_models=["seedance"])
+
+    target: Final = await video_list_target(
+        "seedance",
+        custom_llm_provider,
+        _video_router(shared, _TEAM_B_SEEDANCE),
+        key,
+        request_routing=_routing(team_id="team-b"),
+    )
+
+    assert _listed_with(target) == "dep-team-b"
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_refuses_a_named_model_the_key_cannot_call() -> None:
+    restricted: Final = UserAPIKeyAuth(api_key="hashed", models=["sora-video"])
+
+    with pytest.raises(ProxyException) as refused:
+        await video_list_target("seedance-video", None, _video_list_router(), restricted)
+
+    assert str(refused.value.code) == "403"
+
+
+async def _cache_with_owner(owner_models: list[str], teams: list[str]) -> UserApiKeyCache:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=AuthObject.user("owner-1"), value=LiteLLM_UserTable(user_id="owner-1", models=owner_models, teams=teams)
+    )
+    await cache.async_set_cache(
+        key=AuthObject.team("team-a"), value=LiteLLM_TeamTableCachedObj(team_id="team-a", models=["seedance-video"])
+    )
+    await cache.async_set_cache(
+        key=AuthObject.team_membership_reservation(user_id="owner-1", team_id="team-a"),
+        value=NO_TEAM_MEMBERSHIP_SENTINEL,
+    )
+    return cache
+
+
+async def _target_for_owner(
+    key: UserAPIKeyAuth,
+    requested_model: str | None,
+    custom_llm_provider: str | None,
+    owner_models: list[str],
+    teams: list[str] | None = None,
+) -> VideoListTarget:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: proxy_server global, no seam
+        patch(  # test-quality-ok: proxy_server global, no seam
+            "litellm.proxy.proxy_server.user_api_key_cache", await _cache_with_owner(owner_models, teams or [])
+        ),
+    ):
+        return await video_list_target(requested_model, custom_llm_provider, _video_list_router(), key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("owner_models", "volcengine_pick", "openai_pick"),
+    [
+        pytest.param([], "dep-seedance", "dep-sora", id="owner-without-limits"),
+        pytest.param(["sora-video"], None, "dep-sora", id="owner-limited-to-sora"),
+        pytest.param(["no-default-models"], None, None, id="owner-with-team-models-only"),
+    ],
+)
+async def test_video_list_target_lends_a_personal_key_only_what_its_owner_may_call(
+    owner_models: list[str], volcengine_pick: str | None, openai_pick: str | None
+) -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed", user_id="owner-1")
+
+    picks: Final = [
+        _listed_with(await _target_for_owner(key, None, provider, owner_models)) for provider in ("volcengine", "openai")
+    ]
+
+    assert picks == [volcengine_pick, openai_pick]
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_refuses_a_named_model_the_keys_owner_cannot_call() -> None:
+    key: Final = UserAPIKeyAuth(api_key="hashed", user_id="owner-1")
+
+    with pytest.raises(ProxyException) as refused:
+        await _target_for_owner(key, "seedance-video", None, ["sora-video"])
+
+    assert str(refused.value.code) == "403"
+    assert _listed_with(await _target_for_owner(key, "sora-video", None, ["sora-video"])) == "dep-sora"
+
+
+def _personal_key_in_a_dashboard_session() -> UserAPIKeyAuth:
+    key: Final = UserAPIKeyAuth(api_key="hashed", user_id="owner-1", user_role=LitellmUserRoles.INTERNAL_USER)
+    key.bind_dashboard_session(UserAPIKeyAuth(api_key="ui-session", user_id="owner-1", team_id=UI_TEAM_ID))
+    return key
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requested_model", [None, "seedance-video"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        pytest.param(
+            UserAPIKeyAuth(api_key="hashed", user_id="owner-1", team_id="team-a", team_models=["seedance-video"]),
+            id="team-key",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(api_key="hashed", user_id="owner-1", user_role=LitellmUserRoles.PROXY_ADMIN), id="proxy-admin"
+        ),
+        pytest.param(
+            UserAPIKeyAuth(
+                api_key="hashed",
+                user_id="owner-1",
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                team_id=UI_TEAM_ID,
+            ),
+            id="dashboard-session-with-a-team-grant",
+        ),
+        pytest.param(_personal_key_in_a_dashboard_session(), id="personal-key-in-a-dashboard-session"),
+        pytest.param(UserAPIKeyAuth(api_key="hashed", user_id="deleted-owner"), id="owner-without-a-row"),
+    ],
+)
+async def test_video_list_target_applies_the_owners_models_only_where_auth_does(
+    key: UserAPIKeyAuth, requested_model: str | None
+) -> None:
+    target: Final = await _target_for_owner(key, requested_model, "volcengine", ["sora-video"], ["team-a"])
+
+    assert _listed_with(target) == "dep-seedance"
+
+
+def _agent_key(granted_models: list[str]) -> UserAPIKeyAuth:
+    policy: Final = AgentResponse(
+        agent_id="agent-1", agent_name="agent", agent_card_params={}, object_permission={"models": granted_models}
+    )
+    return UserAPIKeyAuth(api_key="hashed").model_copy(update={"managed_agent_policy": policy})
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_lends_an_agent_key_only_what_its_agent_may_call() -> None:
+    agent_key: Final = _agent_key(["sora-video"])
+
+    assert await video_list_target(None, "volcengine", _video_list_router(), agent_key) == VideoListTarget()
+    assert _listed_with(await video_list_target(None, "openai", _video_list_router(), agent_key)) == "dep-sora"
+    assert _listed_with(await video_list_target("sora-video", None, _video_list_router(), agent_key)) == "dep-sora"
+    with pytest.raises(ProxyException) as refused:
+        await video_list_target("seedance-video", None, _video_list_router(), agent_key)
+    assert str(refused.value.code) == "403"
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_lends_nothing_to_an_agent_key_without_model_grants() -> None:
+    agent_key: Final = _agent_key([])
+
+    assert await video_list_target(None, "openai", _video_list_router(), agent_key) == VideoListTarget()
+    with pytest.raises(HTTPException) as refused:
+        await video_list_target("sora-video", None, _video_list_router(), agent_key)
+    assert refused.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_video_list_target_lends_a_team_deployment_only_to_an_agent_that_may_call_it() -> None:
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=AuthObject.team("team-a"), value=LiteLLM_TeamTableCachedObj(team_id="team-a", models=["team-seedance"])
+    )
+    team_key: Final = {"team_id": "team-a", "team_models": ["team-seedance"]}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: proxy_server global, no seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: proxy_server global, no seam
+    ):
+        picks: Final = [
+            _listed_with(
+                await video_list_target(
+                    None, "volcengine", _team_video_list_router(), _agent_key(granted).model_copy(update=team_key)
+                )
+            )
+            for granted in (["team-seedance"], ["sora-video"])
+        ]
+
+    assert picks == ["team-a-seedance", None]

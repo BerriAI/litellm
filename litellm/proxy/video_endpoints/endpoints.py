@@ -1,5 +1,6 @@
 #### Video Endpoints #####
 
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
@@ -8,6 +9,7 @@ from pydantic import TypeAdapter
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_utils import MODEL_ROUTING_HEADER_NAME
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -29,6 +31,8 @@ from litellm.proxy.video_endpoints.utils import (
     fallback_requested_model,
     get_custom_provider_from_data,
     routable_model_name,
+    stamp_listed_video_ids,
+    video_list_target,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
@@ -164,9 +168,12 @@ async def video_list(
         -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
     """
+    from litellm.proxy.litellm_pre_call_utils import request_routing_metadata
     from litellm.proxy.proxy_server import (
+        caller_routing_kwargs,
         general_settings,
         llm_router,
+        prisma_client,
         proxy_config,
         proxy_logging_obj,
         select_data_generator,
@@ -178,20 +185,30 @@ async def video_list(
         version,
     )
 
-    # Read query parameters
-    query_params: Final = dict(request.query_params)
-    data: Final[dict[str, object]] = {"query_params": query_params}
-
-    # Extract custom_llm_provider from headers, query params, or body
     custom_llm_provider: Final = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or await get_custom_llm_provider_from_request_body(request=request)
     )
-    if custom_llm_provider:
-        data["custom_llm_provider"] = custom_llm_provider
-    # Process request using ProxyBaseLLMRequestProcessing
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    router_settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict, prisma_client, proxy_logging_obj
+    )
+    target: Final = await video_list_target(
+        requested_model=request.query_params.get("model") or request.headers.get(MODEL_ROUTING_HEADER_NAME),
+        custom_llm_provider=custom_llm_provider,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+        router_settings=router_settings,
+        request_routing=caller_routing_kwargs(
+            user_api_key_dict, request_routing_metadata(request, MappingProxyType({}), user_api_key_dict)
+        ),
+    )
+    data: Final[dict[str, object]] = {
+        "query_params": dict(request.query_params),
+        **({"custom_llm_provider": custom_llm_provider} if custom_llm_provider else {}),
+        **({"model": target.model} if target.model else {}),
+    }
+    processor: Final = ProxyBaseLLMRequestProcessing(data=data, pinned=target.pinned)
     try:
         listed: Final[object] = await processor.base_process_llm_request(
             request=request,
@@ -219,7 +236,7 @@ async def video_list(
             version=version,
         )
     else:
-        return listed
+        return stamp_listed_video_ids(listed, processor.dispatched)
 
 
 @router.get(

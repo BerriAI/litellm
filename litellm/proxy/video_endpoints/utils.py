@@ -1,13 +1,22 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 import orjson
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, has_attributes
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import video_access_group
-from litellm.proxy.openai_files_endpoints.common_utils import authorize_model_for_key
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    TeamProviderDeployment,
+    authorize_model_for_caller,
+    authorize_model_for_key,
+    video_deployment_in_group,
+    video_deployment_the_caller_may_use,
+)
+from litellm.types.proxy.litellm_pre_call_utils import PinnedDeployment
 from litellm.types.videos.main import DecodedVideoId, VideoObject
 from litellm.types.videos.utils import (
     decode_video_id_with_provider,
@@ -145,6 +154,121 @@ async def authorized_video_model(
         user_api_key_dict=user_api_key_dict,
     )
     return model
+
+
+@dataclass(frozen=True, slots=True)
+class VideoListTarget:
+    model: str | None = None
+    pinned: PinnedDeployment | None = None
+
+
+async def _pre_call_model(
+    requested_model: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: "Router | None",
+    router_settings: Mapping[str, object] | None,
+) -> str:
+    from litellm.proxy.common_request_processing import resolve_per_request_model_group_alias
+    from litellm.proxy.litellm_pre_call_utils import request_served_model
+
+    prepared: Final = request_served_model(requested_model, user_api_key_dict, None, llm_router)
+    if llm_router is None:
+        return prepared
+    per_request: Final = await resolve_per_request_model_group_alias(
+        prepared, router_settings or MappingProxyType({}), user_api_key_dict, llm_router
+    )
+    return per_request or prepared
+
+
+def _pinned(deployment: TeamProviderDeployment, served_model: str | None = None) -> PinnedDeployment:
+    provider: Final = deployment.credentials.get("custom_llm_provider")
+    return PinnedDeployment(
+        deployment.deployment_id,
+        deployment.public_model_name,
+        provider if isinstance(provider, str) else None,
+        served_model,
+    )
+
+
+async def video_list_target(
+    requested_model: str | None,
+    custom_llm_provider: object,
+    llm_router: "Router | None",
+    user_api_key_dict: UserAPIKeyAuth,
+    router_settings: Mapping[str, object] | None = None,
+    request_routing: Mapping[str, object] = MappingProxyType({}),
+) -> VideoListTarget:
+    from litellm.proxy.route_llm_request import per_request_router_settings
+
+    provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+    request_kwargs: Final = {**per_request_router_settings(router_settings or MappingProxyType({})), **request_routing}
+    if requested_model:
+        await authorize_model_for_caller(requested_model, llm_router, user_api_key_dict)
+        served: Final = await _pre_call_model(requested_model, user_api_key_dict, llm_router, router_settings)
+        group: Final = None if llm_router is None else llm_router.registry().resolve(served, kind="alias")
+        named: Final = await video_deployment_in_group(
+            llm_router, group or served, user_api_key_dict, provider, request_kwargs
+        )
+        if named is not None:
+            return VideoListTarget(requested_model, _pinned(named, served))
+        if provider is None:
+            return VideoListTarget(requested_model)
+    if provider is None:
+        return VideoListTarget()
+    deployment: Final = await video_deployment_the_caller_may_use(
+        llm_router, user_api_key_dict, provider, request_kwargs
+    )
+    return VideoListTarget() if deployment is None else VideoListTarget(pinned=_pinned(deployment))
+
+
+def _video_id_with_deployment(video_id: object, listed_with: PinnedDeployment) -> object:
+    deployment_id: Final = id_safe_name(listed_with.deployment_id)
+    if not isinstance(video_id, str) or deployment_id is None:
+        return video_id
+    decoded: Final = decode_video_id_with_provider(video_id)
+    encoded_provider: Final = decoded.get("custom_llm_provider")
+    provider: Final = encoded_provider or id_safe_name(listed_with.custom_llm_provider)
+    original_video_id: Final = id_safe_name(decoded.get("video_id"))
+    if not provider or original_video_id is None or decoded.get("deployment_id"):
+        return video_id
+    return encode_video_id_with_provider(
+        video_id=original_video_id,
+        provider=provider,
+        model_id=decoded.get("model_id") if encoded_provider else deployment_id,
+        served_model=decoded.get("served_model"),
+        deployment_id=deployment_id,
+        requested_model=decoded.get("requested_model"),
+    )
+
+
+def _listed_video_with_deployment(video: object, listed_with: PinnedDeployment) -> object:
+    if isinstance(video, VideoObject):
+        return video.model_copy(update={"id": _video_id_with_deployment(video.id, listed_with)})
+    fields: Final = as_str_mapping(video)
+    if fields is None or "id" not in fields:
+        return video
+    return {**fields, "id": _video_id_with_deployment(fields["id"], listed_with)}
+
+
+def stamp_listed_video_ids(listed: object, listed_with: PinnedDeployment | None) -> object:
+    if listed_with is None:
+        return listed
+    unwrapped_videos: Final = as_object_list(listed)
+    if unwrapped_videos is not None:
+        return [_listed_video_with_deployment(video, listed_with) for video in unwrapped_videos]
+    fields: Final = as_str_mapping(listed)
+    if fields is None:
+        return listed
+    videos: Final = as_object_list(fields.get("data"))
+    stamped_videos: Final[Mapping[str, object]] = (
+        {} if videos is None else {"data": [_listed_video_with_deployment(video, listed_with) for video in videos]}
+    )
+    stamped_cursors: Final = {
+        cursor: _video_id_with_deployment(fields[cursor], listed_with)
+        for cursor in ("first_id", "last_id")
+        if cursor in fields
+    }
+    return {**fields, **stamped_videos, **stamped_cursors}
 
 
 def fallback_requested_model(requested_model: str | None, response: object, llm_router: "Router | None") -> str | None:

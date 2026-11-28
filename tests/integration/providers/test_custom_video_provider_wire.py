@@ -1,10 +1,12 @@
-"""A provider registered in `custom_provider_map` with a `BaseVideoConfig` serves /v1/videos create, status and content."""
+"""A provider registered in `custom_provider_map` with a `BaseVideoConfig` serves /v1/videos create, status, content and list."""
 
 import json
 import shutil
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Final
+
+import pytest
 
 from integration._support.client import Gateway
 from integration._support.process import owned_proxy_process
@@ -13,6 +15,7 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 _SUPPORT_MODULE: Final = Path(__file__).resolve().parents[1] / "_support" / "custom_video_provider.py"
 _PROMPT: Final = "a cat walking across a bridge"
 _MP4: Final = b"\x00\x00\x00\x18ftypmp42" + b"queue-video-bytes"
+_JOB_LIST: Final = {"object": "list", "data": [{"id": "job-7", "object": "video", "status": "completed"}]}
 
 
 def _queue_backend(request: Request) -> Reply:
@@ -22,6 +25,8 @@ def _queue_backend(request: Request) -> Reply:
         return Reply(body=json.dumps({"job_id": "job-7", "state": "done", "seconds": 8}).encode())
     if (request.method, request.target) == ("GET", "/jobs/job-7/file"):
         return Reply(body=_MP4, content_type="video/mp4")
+    if (request.method, request.target) == ("GET", "/jobs"):
+        return Reply(body=json.dumps(_JOB_LIST).encode())
     return Reply(status=404, body=json.dumps({"error": f"no route {request.method} {request.target}"}).encode())
 
 
@@ -99,6 +104,37 @@ def test_custom_provider_map_base_video_config_serves_create_status_and_content(
         polls: Final = wire.drain()
         assert [(r.method, r.target) for r in polls] == [("GET", "/jobs/job-7"), ("GET", "/jobs/job-7/file")], polls
         assert all(_lower_headers(r)["x-api-key"] == "queue-secret" for r in polls)
+
+
+@pytest.mark.parametrize("query", ["custom_llm_provider=queue-video", "model=queue-video"])
+def test_custom_provider_lists_videos_with_its_deployments_api_base_and_key_and_reads_them_back(
+    gateway: Gateway, tmp_path: Path, query: str
+) -> None:
+    with ExitStack() as stack:
+        wire: Final = stack.enter_context(wire_server(_queue_backend))
+        config: Final = _write_config(tmp_path / "custom-video.yaml", wire)
+        owned: Final = stack.enter_context(owned_proxy_process(gateway, tmp_path, {}, config=config))
+
+        listed: Final = owned.gateway.request("GET", f"/v1/videos?{query}")
+        assert listed.status_code == 200, listed.text
+        videos: Final = listed.json()["data"]
+        assert [(video["object"], video["status"]) for video in videos] == [("video", "completed")], listed.text
+
+        status: Final = owned.gateway.request("GET", f"/v1/videos/{videos[0]['id']}")
+        assert status.status_code == 200, status.text
+        assert status.json()["status"] == "completed", status.text
+
+        content: Final = owned.gateway.request("GET", f"/v1/videos/{videos[0]['id']}/content")
+        assert content.status_code == 200, content.text
+        assert content.content == _MP4
+
+        calls: Final = wire.drain()
+        assert [(r.method, r.target) for r in calls] == [
+            ("GET", "/jobs"),
+            ("GET", "/jobs/job-7"),
+            ("GET", "/jobs/job-7/file"),
+        ], calls
+        assert all(_lower_headers(r)["x-api-key"] == "queue-secret" for r in calls)
 
 
 def test_custom_provider_without_a_video_config_is_refused_with_400(gateway: Gateway, tmp_path: Path) -> None:

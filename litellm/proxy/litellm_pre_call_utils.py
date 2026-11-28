@@ -126,6 +126,7 @@ from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_met
 from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 from litellm.types.proxy.auth.customer_hierarchy import customer_budget_scopes_metadata
+from litellm.types.proxy.litellm_pre_call_utils import PinnedDeployment
 from litellm.types.semantic_cache import (
     CachePolicyScope,
     SemanticCacheParams,
@@ -225,6 +226,18 @@ def check_customer_request_model_access(
     names: Final = (requested,) if isinstance(requested, str) else (requested or ())
     for model in (*names, *request_fallback_model_names(data)):
         check_customer_model_access(model=model, valid_token=auth, llm_router=llm_router)
+
+
+def pinned_the_customer_may_use(
+    pinned: PinnedDeployment | None, auth: UserAPIKeyAuth | None, llm_router: "Router | None"
+) -> PinnedDeployment | None:
+    if pinned is None:
+        return None
+    try:
+        check_customer_request_model_access({"model": pinned.model_group}, auth, llm_router)
+    except ProxyException:
+        return None
+    return pinned
 
 
 async def resolve_customer_request_usage(
@@ -3044,6 +3057,7 @@ async def add_litellm_data_to_request(
     general_settings: dict[str, object] | None = None,
     version: str | None = None,
     pricing_rates: ReferenceRateLookup = reference_rates,
+    pinned: PinnedDeployment | None = None,
 ):
     """
     Adds LiteLLM-specific data to the request.
@@ -3554,6 +3568,7 @@ async def add_litellm_data_to_request(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
         user_api_key_dict=user_api_key_dict,
+        pinned_group=None if pinned is None else pinned.model_group,
     )
 
     # Save pre-alias model name for credential override lookup
@@ -3581,6 +3596,7 @@ async def add_litellm_data_to_request(
         user_api_key_dict=user_api_key_dict,
         pre_alias_model_name=cast("str | None", _pre_alias_model),  # cast-ok: the pre-alias model name arrives as a str
         llm_router=llm_router,
+        pinned_provider=None if pinned is None else pinned.custom_llm_provider,
     )
 
     await _resolve_user_provider_credentials_for_request(
@@ -4233,11 +4249,27 @@ def request_served_model(
     )
 
 
+def dispatched_to_pinned(
+    request_fields: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, pinned: PinnedDeployment
+) -> dict[str, object]:  # mutable-ok: the request body dict the handlers downstream write into
+    data: Final = {**request_fields}
+    if pinned.served_model is None:
+        _apply_credential_overrides_from_model_config(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            pinned_provider=pinned.custom_llm_provider,
+            pinned_group=pinned.model_group,
+        )
+    return {**data, "model": pinned.deployment_id}
+
+
 def _apply_credential_overrides_from_model_config(
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
     pre_alias_model_name: str | None = None,
     llm_router: Router | None = None,
+    pinned_provider: str | None = None,
+    pinned_group: str | None = None,
 ) -> None:
     """
     Walk the model_config precedence chain in team/project metadata.
@@ -4260,7 +4292,7 @@ def _apply_credential_overrides_from_model_config(
     if data.get("api_base") is not None or data.get("api_key") is not None:
         return
 
-    model_name: Final = data.get("model")
+    model_name: Final = data.get("model") or pinned_group
     if not model_name:
         return
 
@@ -4277,10 +4309,10 @@ def _apply_credential_overrides_from_model_config(
     # When the user-facing name has no provider prefix, fall back to the
     # deployment's litellm_params so multi-provider defaultconfig entries
     # don't silently match the first dict key (#27516).
-    provider: str | None = None
-    if "/" in model_name:
+    provider: str | None = pinned_provider
+    if provider is None and "/" in model_name:
         provider = model_name.split("/", 1)[0]
-    elif llm_router is not None:
+    elif provider is None and llm_router is not None:
         provider = _resolve_provider_from_deployment(
             llm_router=llm_router,
             model_name=model_name,
@@ -4559,6 +4591,7 @@ def _add_guardrails_from_policies_in_metadata(
     data: dict,
     metadata_variable_name: str,
     project_metadata: Mapping[str, object] | None = None,
+    pinned_group: str | None = None,
 ) -> None:
     """
     Helper to resolve guardrails from policies attached to key/team/project metadata.
@@ -4574,6 +4607,7 @@ def _add_guardrails_from_policies_in_metadata(
         data: The request data to update
         metadata_variable_name: The name of the metadata field in data
         project_metadata: The project metadata dictionary to check for policies
+        pinned_group: The model group a request that names no model is pinned to
     """
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
@@ -4614,7 +4648,7 @@ def _add_guardrails_from_policies_in_metadata(
         return
 
     # Build context for policy resolution (model from request data)
-    context: Final = PolicyMatchContext(model=data.get("model"))
+    context: Final = PolicyMatchContext.model_validate({"model": _policy_match_model(data.get("model"), pinned_group)})
 
     # Get all policies from registry
     all_policies: Final = registry.get_all_policies()
@@ -4661,6 +4695,7 @@ def add_guardrails_from_auth_metadata(
     user_api_key_dict: UserAPIKeyAuth,
     data: dict[str, object],  # mutable-ok: writes guardrails into the live request dict, same contract as helpers
     metadata_variable_name: str,
+    pinned_group: str | None = None,
 ) -> None:
     """Resolve key, team, and project guardrails, direct and via policies, onto the request metadata."""
     add_guardrails_from_key_or_team_metadata(
@@ -4676,6 +4711,7 @@ def add_guardrails_from_auth_metadata(
         project_metadata=user_api_key_dict.project_metadata,
         data=data,
         metadata_variable_name=metadata_variable_name,
+        pinned_group=pinned_group,
     )
 
 
@@ -4683,6 +4719,7 @@ async def move_guardrails_to_metadata(
     data: dict,
     _metadata_variable_name: str,
     user_api_key_dict: UserAPIKeyAuth,
+    pinned_group: str | None = None,
 ):
     """
     Helper to add guardrails from request to metadata
@@ -4719,6 +4756,7 @@ async def move_guardrails_to_metadata(
         user_api_key_dict=user_api_key_dict,
         data=data,  # pyright: ignore[reportUnknownArgumentType]  # request data retains a legacy dynamic shape
         metadata_variable_name=_metadata_variable_name,
+        pinned_group=pinned_group,
     )
 
     #########################################################################################
@@ -4728,6 +4766,7 @@ async def move_guardrails_to_metadata(
         data=data,
         metadata_variable_name=_metadata_variable_name,
         user_api_key_dict=user_api_key_dict,
+        pinned_group=pinned_group,
     )
 
     #########################################################################################
@@ -4890,6 +4929,12 @@ def _apply_resolved_guardrails_to_metadata(
     verbose_proxy_logger.debug("Policy engine: added guardrails to request metadata: %s", combined)
 
 
+def _policy_match_model(requested_model: object, pinned_group: str | None) -> object:
+    if pinned_group is None or requested_model:
+        return requested_model
+    return pinned_group
+
+
 def _policy_match_tags(request_data: Mapping[str, object], metadata_variable_name: str) -> list[str] | None:
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
     from litellm.router_strategy.tag_based_routing import without_baggage_mapped_tags
@@ -4904,6 +4949,7 @@ async def add_guardrails_from_policy_engine(
     data: dict[str, object],  # mutable-ok: pops the request's policies and records the resolved guardrails in place
     metadata_variable_name: str,
     user_api_key_dict: UserAPIKeyAuth,
+    pinned_group: str | None = None,
 ) -> None:
     """
     Add guardrails from the policy engine based on request context.
@@ -4922,6 +4968,7 @@ async def add_guardrails_from_policy_engine(
         data: The request data to update
         metadata_variable_name: The name of the metadata field in data
         user_api_key_dict: The user's API key authentication info
+        pinned_group: The model group a request that names no model is pinned to
     """
     from litellm._logging import verbose_proxy_logger
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
@@ -4948,7 +4995,7 @@ async def add_guardrails_from_policy_engine(
         {
             "team_alias": _team_alias if isinstance(_team_alias, str) else None,
             "key_alias": _key_alias if isinstance(_key_alias, str) else None,
-            "model": data.get("model"),
+            "model": _policy_match_model(data.get("model"), pinned_group),
             "tags": all_tags,
         }
     )
