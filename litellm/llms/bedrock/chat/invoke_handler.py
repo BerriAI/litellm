@@ -41,6 +41,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
 )
 from litellm.types.utils import (
+    ChatCompletionUsageBlock,
     Delta,
     ModelResponse,
     ModelResponseStream,
@@ -83,6 +84,8 @@ NOVA_INVOKE_STREAM_EVENT_TYPES: Final = (
     "metadata",
 )
 NOVA_INVOKE_STREAM_EVENT_PAYLOAD: Final = TypeAdapter(dict[str, object])
+# what llama's invoke-with-response-stream reports in stop_reason once it is done
+_LLAMA_STOP_REASONS: Final = frozenset({"stop", "stop_sequence", "end_turn"})
 
 
 class AmazonCohereChatConfig:
@@ -733,6 +736,7 @@ class AWSEventStreamDecoder:
         text = ""
         is_finished = False
         finish_reason = ""
+        usage = None
         if "outputText" in chunk_data:
             text = chunk_data["outputText"]
         # ai21 mapping
@@ -765,6 +769,19 @@ class AWSEventStreamDecoder:
         # meta mapping
         elif "generation" in chunk_data:
             text = chunk_data["generation"]  # bedrock.meta
+            # llama reports running totals, and only the first event carries prompt_token_count, not deltas - take
+            # them as they are, and keep reporting the completion count on later events
+            prompt_tokens: Final = chunk_data.get("prompt_token_count") or 0
+            completion_tokens: Final = chunk_data.get("generation_token_count") or 0
+            usage = ChatCompletionUsageBlock(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
+            stop_reason = chunk_data.get("stop_reason")
+            if stop_reason is not None:
+                is_finished = True
+                finish_reason = "stop" if stop_reason in _LLAMA_STOP_REASONS else "length"
         # cohere mapping
         elif "text" in chunk_data:
             text = chunk_data["text"]  # bedrock.cohere
@@ -779,7 +796,7 @@ class AWSEventStreamDecoder:
             text=text,
             is_finished=is_finished,
             finish_reason=finish_reason,
-            usage=None,
+            usage=usage,
             index=0,
             tool_use=None,
         )
