@@ -1,3 +1,4 @@
+mod accounting;
 mod queries;
 mod record;
 mod repository;

@@ -11,6 +11,99 @@ use sqlx::{PgExecutor, types::Json};
 use litellm_db::Error;
 
 use super::SpendLogOwner;
+use super::accounting::{Entity, WindowCharge, WindowKey};
+
+pub(super) async fn lock_teams(executor: impl PgExecutor<'_>, ids: &[String]) -> Result<(), Error> {
+    sqlx::query_file!("src/spend_log/queries/lock_accounting_teams.sql", ids)
+        .fetch_all(executor)
+        .await?;
+    Ok(())
+}
+
+pub(super) async fn update_entities(
+    executor: impl PgExecutor<'_>,
+    entity: Entity,
+    charges: &Value,
+) -> Result<(), Error> {
+    macro_rules! apply {
+        ($file:literal) => {
+            sqlx::query_file!($file, charges).execute(executor).await?
+        };
+    }
+    match entity {
+        Entity::Organization => apply!("src/spend_log/queries/apply_accounting_organization.sql"),
+        Entity::OrganizationMember => {
+            apply!("src/spend_log/queries/apply_accounting_organization_member.sql")
+        }
+        Entity::Team => apply!("src/spend_log/queries/apply_accounting_team.sql"),
+        Entity::User => apply!("src/spend_log/queries/apply_accounting_user.sql"),
+        Entity::EndUser => apply!("src/spend_log/queries/apply_accounting_end_user.sql"),
+        Entity::TeamMember => apply!("src/spend_log/queries/apply_accounting_team_member.sql"),
+        Entity::Key => apply!("src/spend_log/queries/apply_accounting_key.sql"),
+        Entity::Project => apply!("src/spend_log/queries/apply_accounting_project.sql"),
+        Entity::Tag => apply!("src/spend_log/queries/apply_accounting_tag.sql"),
+        Entity::ModelAccessGroup => {
+            apply!("src/spend_log/queries/apply_accounting_model_access_group.sql")
+        }
+        Entity::Agent => apply!("src/spend_log/queries/apply_accounting_agent.sql"),
+        Entity::AppGroup => apply!("src/spend_log/queries/apply_accounting_app_group.sql"),
+        Entity::AppGroupCustomerOrg => {
+            apply!("src/spend_log/queries/apply_accounting_app_group_customer_org.sql")
+        }
+        Entity::App => apply!("src/spend_log/queries/apply_accounting_app.sql"),
+        Entity::AppCustomerOrg => {
+            apply!("src/spend_log/queries/apply_accounting_app_customer_org.sql")
+        }
+        Entity::AppCustomerMember => {
+            apply!("src/spend_log/queries/apply_accounting_app_customer_member.sql")
+        }
+        Entity::CustomerOrg => apply!("src/spend_log/queries/apply_accounting_customer_org.sql"),
+        Entity::CustomerTeam => apply!("src/spend_log/queries/apply_accounting_customer_team.sql"),
+        Entity::CustomerMember => {
+            apply!("src/spend_log/queries/apply_accounting_customer_member.sql")
+        }
+    };
+    Ok(())
+}
+
+pub(super) async fn window_seed_base(
+    executor: impl PgExecutor<'_>,
+    key: &WindowKey<'_>,
+    charge: &WindowCharge,
+) -> Result<f64, Error> {
+    Ok(sqlx::query_file_scalar!(
+        "src/spend_log/queries/seed_accounting_window.sql",
+        key.entity_type,
+        key.entity_id,
+        key.duration,
+        key.starts_at,
+        charge.earliest_request,
+        charge.spend,
+    )
+    .fetch_one(executor)
+    .await?)
+}
+
+pub(super) async fn apply_window(
+    executor: impl PgExecutor<'_>,
+    key: &WindowKey<'_>,
+    charge: &WindowCharge,
+    seed: f64,
+) -> Result<(), Error> {
+    let initial = seed + charge.spend;
+    sqlx::query_file!(
+        "src/spend_log/queries/apply_accounting_window.sql",
+        key.entity_type,
+        key.entity_id,
+        key.duration,
+        key.starts_at,
+        initial,
+        charge.spend,
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
 
 #[derive(Serialize)]
 pub(super) struct ClaimedDelivery {

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_EndUserTable\" (user_id, spend, blocked)\nSELECT id, spend, false FROM jsonb_to_recordset($1::jsonb) AS input(id text, spend double precision)\nORDER BY id COLLATE \"C\"\nON CONFLICT (user_id) DO UPDATE\nSET spend = \"LiteLLM_EndUserTable\".spend + EXCLUDED.spend\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aeb7dcf52f8763eb65bc12341c4615a6671e0b0ccb252ccdd5927c9a315ab0ef"
+}

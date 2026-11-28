@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH locked AS MATERIALIZED (\n    SELECT input.* FROM jsonb_to_recordset($1::jsonb) AS input(id text, member_id text, spend double precision)\n    JOIN \"LiteLLM_AppCustomerMemberTable\" AS stored ON stored.app_id = input.id AND stored.customer_member_id = input.member_id\n    ORDER BY input.id COLLATE \"C\", input.member_id COLLATE \"C\"\n    FOR UPDATE OF stored\n)\nUPDATE \"LiteLLM_AppCustomerMemberTable\" AS stored\nSET spend = stored.spend + input.spend\nFROM locked AS input\nWHERE stored.app_id = input.id AND stored.customer_member_id = input.member_id\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "75a99a4cf11fc56f4b8ecec3784423f606fae0a3ddb24a43968cb9f54edeb542"
+}

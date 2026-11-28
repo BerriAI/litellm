@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT CASE\n    WHEN EXISTS (\n        SELECT 1 FROM \"LiteLLM_BudgetWindowSpend\"\n        WHERE entity_type = $1 AND entity_id = $2 AND window_duration = $3\n    ) OR $1 NOT IN ('key', 'team', 'user') THEN 0.0::double precision\n    ELSE (\n        SELECT greatest(\n            coalesce(sum(spend), 0.0) - $6,\n            coalesce(sum(spend) FILTER (\n                WHERE $5::timestamp IS NULL OR \"startTime\" < date_trunc('second', $5::timestamp)\n            ), 0.0)\n        )\n        FROM \"LiteLLM_SpendLogs\"\n        WHERE \"startTime\" >= $4\n          AND (($1 = 'key' AND api_key = $2) OR ($1 = 'team' AND team_id = $2)\n            OR ($1 = 'user' AND \"user\" = $2))\n    )\nEND AS \"base!\"\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "base!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Timestamp",
+        "Timestamp",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "201db7c7fecf2e122261ddf86de57e199c15dd867103fef6aa0d87f9d21b4e89"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pg_advisory_xact_lock(hashtext(id)) IS NULL AS locked\nFROM (SELECT DISTINCT unnest($1::text[]) COLLATE \"C\" AS id ORDER BY id) AS teams\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "locked",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "75f7172c6231c1b2c03854bb7578d3dfce4e54e78071f4bee217fb4dbbcd41c0"
+}

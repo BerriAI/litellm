@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH locked AS MATERIALIZED (\n    SELECT input.* FROM jsonb_to_recordset($1::jsonb) AS input(id text, member_id text, spend double precision)\n    JOIN \"LiteLLM_OrganizationMembership\" AS stored ON stored.organization_id = input.id AND stored.user_id = input.member_id\n    ORDER BY input.id COLLATE \"C\", input.member_id COLLATE \"C\"\n    FOR UPDATE OF stored\n)\nUPDATE \"LiteLLM_OrganizationMembership\" AS stored\nSET spend = stored.spend + input.spend,\n    updated_at = (NOW() AT TIME ZONE 'UTC')\nFROM locked AS input\nWHERE stored.organization_id = input.id AND stored.user_id = input.member_id\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "395bfec1829dc9dc75fad9b8eceb5c7ccd7f7e9069dbb9e3026a3fabcd1f3970"
+}

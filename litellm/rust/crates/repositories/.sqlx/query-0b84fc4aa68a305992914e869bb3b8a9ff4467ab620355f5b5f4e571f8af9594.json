@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO \"LiteLLM_TeamMembership\" (team_id, user_id, spend, total_spend)\nSELECT id, member_id, spend, spend FROM jsonb_to_recordset($1::jsonb) AS input(id text, member_id text, spend double precision)\nWHERE EXISTS (\n    SELECT 1 FROM \"LiteLLM_TeamTable\" AS team\n    WHERE team.team_id = input.id\n      AND team.members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', input.member_id))\n) OR EXISTS (\n    SELECT 1 FROM \"LiteLLM_TeamMembership\" AS membership\n    WHERE membership.team_id = input.id AND membership.user_id = input.member_id\n)\nORDER BY id COLLATE \"C\", member_id COLLATE \"C\"\nON CONFLICT (user_id, team_id) DO UPDATE\nSET spend = \"LiteLLM_TeamMembership\".spend + EXCLUDED.spend,\n    total_spend = greatest(\"LiteLLM_TeamMembership\".total_spend, \"LiteLLM_TeamMembership\".spend) + EXCLUDED.total_spend\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0b84fc4aa68a305992914e869bb3b8a9ff4467ab620355f5b5f4e571f8af9594"
+}

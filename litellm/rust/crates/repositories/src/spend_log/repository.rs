@@ -19,9 +19,10 @@ use serde::Serialize;
 use serde_json::{Value, value::RawValue};
 use sqlx::{PgConnection, types::Json};
 
+use super::accounting::{self, EntityCharges, Payload};
 use super::queries;
 use super::record::{SpendLogDelivery, SpendLogRecord, SpendLogWrite};
-use crate::{Database, Side};
+use crate::{Database, Side, database::Connections};
 
 const WINDOW_SPEND: Call = Call {
     call_type: "group_by",
@@ -48,6 +49,48 @@ pub enum SpendLogOwner {
     Key,
     Team,
     User,
+}
+
+async fn apply_affiliation(
+    transaction: &mut impl Connections,
+    payloads: &[Payload],
+) -> Result<(), Error> {
+    let charges = EntityCharges::project(payloads);
+    let teams = charges.teams();
+    if !teams.is_empty() {
+        transaction
+            .with(Side::Writer, async |executor| {
+                queries::lock_teams(executor, &teams).await
+            })
+            .await?;
+    }
+    for (entity, charges) in charges.groups() {
+        let charges = json(&charges)?;
+        transaction
+            .with(Side::Writer, async |executor| {
+                queries::update_entities(executor, entity, &charges).await
+            })
+            .await?;
+    }
+    let windows = accounting::windows(payloads)?;
+    let mut seeds = Vec::with_capacity(windows.len());
+    for (key, charge) in &windows {
+        seeds.push(
+            transaction
+                .with(Side::Writer, async |executor| {
+                    queries::window_seed_base(executor, key, charge).await
+                })
+                .await?,
+        );
+    }
+    for ((key, charge), seed) in windows.iter().zip(seeds) {
+        transaction
+            .with(Side::Writer, async |executor| {
+                queries::apply_window(executor, key, charge, seed).await
+            })
+            .await?;
+    }
+    Ok(())
 }
 
 /// Reads `LiteLLM_SpendLogs`.
@@ -277,10 +320,13 @@ mod tests {
     use serde_json::{Map, Value, json};
     use sqlx::{PgExecutor, PgPool};
 
-    use super::{commit_ledger, first_write_per_delivery, json_text, queries, write_ledger};
+    use super::{
+        Payload, apply_affiliation, commit_ledger, first_write_per_delivery, json_text, queries,
+        write_ledger,
+    };
     use crate::{
         spend_log::record::{JsonText, SpendLogDelivery, SpendLogRecord, SpendLogWrite},
-        test_support::database_pool,
+        test_support::{OneTransaction, database_pool},
     };
 
     fn at(text: &str) -> NaiveDateTime {
@@ -289,6 +335,61 @@ mod tests {
 
     fn text(value: Value) -> JsonText {
         JsonText::new(value.to_string()).expect("JSON text")
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn applying_affiliation_spend_updates_members_and_preserves_window_history(
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        #[expect(clippy::disallowed_methods, reason = "Fixture inserts are outside the compile-checked query set")]
+        sqlx::raw_sql(r#"
+            INSERT INTO "LiteLLM_UserTable" (user_id, spend) VALUES ('accounting-owner', 8);
+            INSERT INTO "LiteLLM_TeamTable" (team_id, members_with_roles)
+            VALUES ('accounting-team', '[{"user_id":"accounting-owner"}]');
+            INSERT INTO "LiteLLM_SpendLogs"
+                (request_id, call_type, team_id, spend, "startTime", "endTime", updated_at)
+            VALUES ('accounting-earlier', 'acompletion', 'accounting-team', 6, '2026-11-01 03:00', '2026-11-01 03:00', '2026-11-01'),
+                   ('accounting-current', 'acompletion', 'accounting-team', 2, '2026-11-01 04:00', '2026-11-01 04:00', '2026-11-01');
+        "#).execute(&mut *tx).await?;
+        let delivery = |cost, start: &str| {
+            Payload::decode(json!({
+                "spend": cost, "startTime": start,
+                "metadata": {
+                    "accounting_entities": {"user": "accounting-owner", "team_id": "accounting-team"},
+                    "accounting_windows": [{
+                        "entity_type": "team", "entity_id": "accounting-team",
+                        "window_duration": "1d", "window_start": "2026-11-01T00:00:00Z",
+                    }],
+                },
+            }))
+        };
+
+        apply_affiliation(
+            &mut OneTransaction(&mut tx),
+            &[delivery(2.0, "2026-11-01T04:00:00Z")?],
+        )
+        .await?;
+        apply_affiliation(
+            &mut OneTransaction(&mut tx),
+            &[delivery(3.0, "2026-11-01T05:00:00Z")?],
+        )
+        .await?;
+
+        #[expect(clippy::disallowed_methods, reason = "Fixture assertions are outside the compile-checked query set")]
+        let spend = sqlx::query_as::<_, (f64, f64, f64, f64, f64)>(r#"
+            SELECT owner.spend, team.spend, member.spend, member.total_spend, budget_window.spend
+            FROM "LiteLLM_UserTable" AS owner
+            JOIN "LiteLLM_TeamMembership" AS member ON member.user_id = owner.user_id
+            JOIN "LiteLLM_TeamTable" AS team ON team.team_id = member.team_id
+            JOIN "LiteLLM_BudgetWindowSpend" AS budget_window ON budget_window.entity_id = team.team_id
+            WHERE owner.user_id = 'accounting-owner' AND team.team_id = 'accounting-team'
+        "#).fetch_one(&mut *tx).await?;
+        assert_eq!(spend, (13.0, 5.0, 5.0, 5.0, 11.0));
+        Ok(())
     }
 
     fn object(value: Value) -> Map<String, Value> {
