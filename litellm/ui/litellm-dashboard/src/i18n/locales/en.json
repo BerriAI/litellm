@@ -21072,6 +21072,7 @@
         "open": "Open user actions",
         "edit": "Edit user",
         "resetPassword": "Reset password",
+        "adjustBudget": "Adjust budget",
         "copyId": "Copy user ID",
         "copied": "User ID copied",
         "viewUsage": "View usage",
