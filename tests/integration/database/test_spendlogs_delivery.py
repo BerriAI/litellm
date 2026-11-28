@@ -11,6 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 import pytest
 import pytest_asyncio
+from litellm_proxy_extras.request_log_indexes import REQUEST_LOG_INDEXES, ensure_request_log_indexes
 from prisma import Prisma
 
 from litellm.repositories.accounting_delivery_repository import (
@@ -26,6 +27,8 @@ _RUST_DELIVERY_INSERT: Final = (
     Path(__file__).resolve().parents[3]
     / "litellm/rust/crates/repositories/src/spend_log/queries/insert_spend_log_deliveries.sql"
 )
+_BATCH_INDEX_NAME: Final = "LiteLLM_SpendLogDelivery_batch_idx"
+_BATCH_INDEXES: Final = tuple(index for index in REQUEST_LOG_INDEXES if index.name == _BATCH_INDEX_NAME)
 
 
 @pytest.fixture
@@ -44,6 +47,25 @@ def delivery_database(request: pytest.FixtureRequest) -> Iterator[psycopg.Connec
         )""")
         connection.execute((_MIGRATIONS / "20261103010000_spendlogs_accounting_delivery/migration.sql").read_text())
         yield connection
+
+
+def _database_url(connection: psycopg.Connection[tuple[object, ...]]) -> str:
+    return urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{connection.info.dbname}"))
+
+
+def _ensure_batch_index(connection: psycopg.Connection[tuple[object, ...]]) -> bool:
+    schema: Final = connection.execute("SELECT current_schema()").fetchone()
+    assert schema is not None
+    return ensure_request_log_indexes(_database_url(connection), str(schema[0]), indexes=_BATCH_INDEXES)
+
+
+def _partial_indexes(connection: psycopg.Connection[tuple[object, ...]]) -> tuple[tuple[object, ...], ...]:
+    return tuple(
+        connection.execute(
+            "SELECT c.relname, x.indexrelid::int FROM pg_index x JOIN pg_class c ON c.oid = x.indexrelid "
+            "WHERE x.indrelid = '\"LiteLLM_SpendLogDelivery\"'::regclass AND x.indpred IS NOT NULL"
+        ).fetchall()
+    )
 
 
 def _insert(
@@ -504,6 +526,45 @@ async def test_backlog_reads_only_unapplied_deliveries_however_many_receipts_are
 
     backlog = await AccountingDeliveryRepository(delivery_client).backlog()
     assert (backlog.pending_count, backlog.parked_count) == (1, 1)
+
+
+@pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
+def test_batch_count_reads_only_batch_receipts_however_much_other_history_is_retained(
+    delivery_database: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    from litellm.repositories.accounting_delivery_repository import _STORAGE
+
+    delivery_database.execute(
+        'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch, state, applied_at) '
+        "SELECT 'receipt-' || n, 'receipt-' || n, jsonb_build_object('payload', repeat(md5(n::text), 32)), "
+        "n % 4000 = 0, 'applied', CURRENT_TIMESTAMP FROM generate_series(1, 20000) AS n"
+    )
+    assert _ensure_batch_index(delivery_database) is True
+    delivery_database.execute('ANALYZE "LiteLLM_SpendLogDelivery"')
+    explained: Final = delivery_database.execute(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {_STORAGE}").fetchone()
+    assert explained is not None
+    plan: Final = explained[0][0]["Plan"]
+    table_pages: Final = delivery_database.execute(
+        "SELECT relpages FROM pg_class WHERE oid = '\"LiteLLM_SpendLogDelivery\"'::regclass"
+    ).fetchone()
+    assert table_pages is not None and table_pages[0] > 1000
+    assert plan["Shared Hit Blocks"] + plan["Shared Read Blocks"] < table_pages[0] / 20, plan
+
+    storage: Final = delivery_database.execute(_STORAGE).fetchone()
+    assert storage is not None and storage[0] == 5
+
+
+@pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
+def test_a_hand_built_batch_index_is_adopted_and_a_rerun_builds_nothing(
+    delivery_database: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    delivery_database.execute('CREATE INDEX batch_by_hand ON "LiteLLM_SpendLogDelivery" (delivery_id) WHERE is_batch')
+    ((_, hand_built),) = _partial_indexes(delivery_database)
+
+    assert _ensure_batch_index(delivery_database) is True
+    assert _partial_indexes(delivery_database) == ((_BATCH_INDEX_NAME, hand_built),)
+    assert _ensure_batch_index(delivery_database) is True
+    assert _partial_indexes(delivery_database) == ((_BATCH_INDEX_NAME, hand_built),)
 
 
 @pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
