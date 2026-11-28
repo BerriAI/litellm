@@ -110,12 +110,13 @@ async def test_amoderation_is_not_retried(make_core: MakeCore, host: EndpointHos
     assert host.sleeps == []
 
 
-async def test_arerank_sends_the_builtin_input_function_as_input(make_core: MakeCore, host: EndpointHost):
-    """arerank sets kwargs["input"] = input, the Python builtin, and it reaches the host."""
+async def test_arerank_does_not_send_builtin_input_function(make_core: MakeCore, host: EndpointHost):
+    """arerank forwards caller arguments without injecting python's builtin input function."""
     core: Final = make_core(model_list=[deployment("g", "d1")])
     await core.arerank(model="g", query="q", documents=["a"])
     sent: Final = _sent(host)
-    assert (sent["input"], sent["query"], sent["documents"]) == (input, "q", ["a"])
+    assert "input" not in sent
+    assert (sent["query"], sent["documents"]) == ("q", ["a"])
 
 
 @pytest.mark.parametrize(("request_voice", "expected"), [(None, "deployment-voice"), ("alloy", "alloy")])
