@@ -26,7 +26,7 @@ keys:
   sk-spent: {max_budget: 10.0, spend: 12.0}
   sk-reset: {max_budget: 10.0, budget_duration: 30d, budget_reset_at: "2100-01-01T00:00:00"}
   sk-cooldown: {max_budget: 10.0, soft_budget_cooldown: true}
-  sk-windows: {max_budget: 10.0, budget_limits: [{budget_duration: 1d, max_budget: 1.0}]}
+  sk-windows: {budget_limits: [{budget_duration: 1d, max_budget: 1.0}]}
   sk-fallbacks: {max_budget: 10.0, budget_fallbacks: {claude-haiku-5-5: [unpriced]}}
   sk-model-budget: {max_budget: 10.0, model_max_budget: {claude-haiku-5-5: {max_budget: 1.0}}}
   sk-temporary: {max_budget: 10.0, metadata: {temp_budget_increase: 5.0, temp_budget_expiry: "2100-01-01"}}
@@ -58,9 +58,7 @@ requests:
   - name: a key with budget windows
     headers: {authorization: Bearer sk-windows}
     body: {model: claude-haiku-5-5, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: not_native
+    expect: rust
 
   - name: a key with budget fallbacks
     headers: {authorization: Bearer sk-fallbacks}

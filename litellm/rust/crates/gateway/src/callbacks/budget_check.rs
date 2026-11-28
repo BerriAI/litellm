@@ -128,6 +128,7 @@ enum Entity {
         alias: Option<String>,
         name: Option<String>,
     },
+    KeyWindow(String, String),
     Project(String),
     Team(String),
     TeamWindow(String, String),
@@ -159,6 +160,12 @@ impl Entity {
                 key_alias: alias,
                 key_name: name,
                 throttle_pct: None,
+            },
+            Self::KeyWindow(token, budget_duration) => Check::KeyWindow {
+                spend,
+                max_budget,
+                budget_duration,
+                token: Some(token),
             },
             Self::Project(project_id) => Check::ProjectMax {
                 spend,
@@ -234,7 +241,7 @@ fn held_window(
     let (check, entity_type) = match entity {
         windows::Entity::Team => (Entity::TeamWindow(id.to_owned(), duration.clone()), "Team"),
         windows::Entity::User => (Entity::UserWindow(id.to_owned(), duration.clone()), "User"),
-        windows::Entity::Key => return None,
+        windows::Entity::Key => (Entity::KeyWindow(id.to_owned(), duration.clone()), "Key"),
     };
     Some(Held {
         planned: PlannedCounter {
@@ -345,6 +352,13 @@ fn budgeted(identity: &Authenticated<NativeRows>) -> Budgeted {
             })
         })
         .collect();
+    if let (Credential::Key { key }, Some(hash)) = (&identity.credential, identity.hash()) {
+        held.extend(
+            key.budget_windows()
+                .iter()
+                .filter_map(|window| held_window(windows::Entity::Key, hash.as_str(), window, now)),
+        );
+    }
     let holder = &identity.affiliation.holder;
     if let Some(Team::Row(team)) = holder.team() {
         held.extend(

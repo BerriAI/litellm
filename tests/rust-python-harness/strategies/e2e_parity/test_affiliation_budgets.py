@@ -292,21 +292,21 @@ def _paused_between_sweeps(pid: int, redis: Redis) -> Iterator[None]:
 
 
 def _window_outcome(
-    proxies: Proxies, client: httpx.Client, ended: datetime, actual_cost: float, owner: bool
+    proxies: Proxies, client: httpx.Client, ended: datetime, actual_cost: float, scope: str
 ) -> tuple[datetime, datetime, float, float, float]:
-    identity: Final = _identity(proxies.database, Case(owner=owner))
+    identity: Final = _identity(proxies.database, Case(owner=scope != "team"))
+    key_hash: Final = hashlib.sha256(identity.token.encode()).hexdigest()
     old_start: Final = ended - timedelta(hours=1)
-    entity: Final = identity.user if owner else identity.team
-    scope: Final = "user" if owner else "team"
+    entity: Final = {"key": key_hash, "user": identity.user, "team": identity.team}[scope]
     assert entity is not None
-    counter: Final = f"spend:user_window:{entity}:1h" if owner else f"spend:team:{entity}:window:1h"
+    counter: Final = f"spend:user_window:{entity}:1h" if scope == "user" else f"spend:{scope}:{entity}:window:1h"
     windows: Final = Jsonb([{"budget_duration": "1h", "max_budget": 1, "reset_at": ended.isoformat()}])
     with psycopg.connect(proxies.database) as connection:
-        statement: Final = (
-            'UPDATE "LiteLLM_UserTable" SET budget_limits = %s WHERE user_id = %s'
-            if owner
-            else 'UPDATE "LiteLLM_TeamTable" SET budget_limits = %s WHERE team_id = %s'
-        )
+        statement: Final = {
+            "key": 'UPDATE "LiteLLM_VerificationToken" SET budget_limits = %s WHERE token = %s',
+            "user": 'UPDATE "LiteLLM_UserTable" SET budget_limits = %s WHERE user_id = %s',
+            "team": 'UPDATE "LiteLLM_TeamTable" SET budget_limits = %s WHERE team_id = %s',
+        }[scope]
         connection.execute(statement, (windows, entity))
         connection.execute(
             """INSERT INTO "LiteLLM_BudgetWindowSpend"
@@ -321,6 +321,7 @@ def _window_outcome(
             """WITH budgets AS (
                    SELECT user_id AS id, budget_limits, 'user' AS scope FROM "LiteLLM_UserTable"
                    UNION ALL SELECT team_id, budget_limits, 'team' FROM "LiteLLM_TeamTable"
+                   UNION ALL SELECT token, budget_limits, 'key' FROM "LiteLLM_VerificationToken"
                ) SELECT b.budget_limits->0->>'reset_at' AS reset_at,
                       w.window_start::text AS window_start, w.spend
                FROM budgets b JOIN "LiteLLM_BudgetWindowSpend" w ON b.id = w.entity_id AND b.scope = w.entity_type
@@ -341,23 +342,49 @@ def _window_outcome(
     assert response.status_code == 200, response.text
     result: Final = eventually(row, lambda row: row[2:] == pytest.approx((actual_cost, 0.5 + actual_cost)), seconds=30)
     assert result[:2] == reset[:2]
+    proxies.redis.set(counter, "1.5")
+    denied: Final = _send(client, identity)
+    assert denied.status_code == 422, denied.text
     persisted: Final = eventually(
         lambda: identity.persisted(proxies.database), lambda value: value == pytest.approx(actual_cost), seconds=30
     )
     return (*result, persisted)
 
 
-@pytest.mark.parametrize("owner", [pytest.param(True, id="owner"), pytest.param(False, id="team")])
+@pytest.mark.parametrize("scope", ["user", "team", "key"])
 def test_standalone_advances_window_and_redis_counter_while_python_is_paused(
-    proxies: Proxies, actual_cost: float, owner: bool
+    proxies: Proxies, actual_cost: float, scope: str
 ) -> None:
     ended: Final = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=2)
     with _paused_between_sweeps(proxies.rust_pid, proxies.redis):
-        python: Final = _window_outcome(proxies, proxies.python, ended, actual_cost, owner)
+        python: Final = _window_outcome(proxies, proxies.python, ended, actual_cost, scope)
     with _paused_between_sweeps(proxies.python_pid, proxies.redis):
-        rust: Final = _window_outcome(proxies, proxies.rust, ended, actual_cost, owner)
+        rust: Final = _window_outcome(proxies, proxies.rust, ended, actual_cost, scope)
     assert rust[:2] == python[:2]
     assert rust[2:] == pytest.approx(python[2:])
+
+
+@pytest.mark.parametrize("proxies", [False], ids=["postgres"], indirect=True)
+def test_key_window_refuses_using_maintained_spend_without_redis(proxies: Proxies) -> None:
+    identity: Final = _identity(proxies.database, Case(owner=True))
+    token_hash: Final = hashlib.sha256(identity.token.encode()).hexdigest()
+    start: Final = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=2)
+    reset: Final = start + timedelta(hours=1)
+    windows: Final = Jsonb([{"budget_duration": "1h", "max_budget": 1, "reset_at": reset.isoformat()}])
+    with psycopg.connect(proxies.database) as connection:
+        connection.execute(
+            'UPDATE "LiteLLM_VerificationToken" SET budget_limits = %s WHERE token = %s', (windows, token_hash)
+        )
+        connection.execute(
+            """INSERT INTO "LiteLLM_BudgetWindowSpend"
+                   (entity_type, entity_id, window_duration, window_start, spend, created_at, updated_at)
+               VALUES ('key', %s, '1h', %s, 1.5, NOW(), NOW())""",
+            (token_hash, start.replace(tzinfo=None)),
+        )
+    python: Final = _send(proxies.python, identity)
+    rust: Final = _send(proxies.rust, identity)
+    assert python.status_code == rust.status_code == 422, (python.text, rust.text)
+    assert identity.persisted(proxies.database) == 0.0
 
 
 def _provider_response(proxies: Proxies, identity: Identity) -> None:

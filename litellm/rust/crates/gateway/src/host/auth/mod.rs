@@ -52,6 +52,7 @@ pub(crate) use affiliation::{
 };
 pub(crate) use end_user::{end_user, unserved as unserved_end_user};
 pub use key::Key;
+pub(crate) use key::key_budget_windows;
 pub(crate) use models::{allowed_models, layers};
 pub use store::AuthStore;
 

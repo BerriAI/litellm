@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use futures_util::future::{BoxFuture, join_all};
-use litellm_auth_store::{TeamDatabase, UserDatabase};
+use litellm_auth_store::{KeyDatabase, TeamDatabase, UserDatabase};
 use litellm_callbacks::{HostCall, HostFault, HostReply};
 use litellm_callbacks_budgets::RowSpend;
 use litellm_callbacks_spend_log::AccountingWindow;
@@ -21,7 +21,7 @@ use litellm_callbacks_spend_logger::host::{
     AccountingContext, AfterCharge, AfterWrite, BatchAccounting, EnrichKeyIdentity,
     FailedTrackingAlert, IncrementSearchFreeTier, LoggedCost,
 };
-use litellm_gateway_auth_core::record::BudgetWindow;
+use litellm_gateway_auth_core::{KeyHash, record::BudgetWindow};
 use litellm_redis_store::spend_counters::SpendCounter;
 use litellm_repositories::{
     Database, EndUserRecord, EndUserRepository, KeyRepository, ObjectPermissionRepository,
@@ -32,7 +32,7 @@ use litellm_repositories::{
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
-use super::auth::budget_windows;
+use super::auth::{budget_windows, key_budget_windows};
 use crate::callbacks::{hosted::Answers, windows};
 
 /// The counter step's host calls, which `litellm-callbacks-budgets` names but does not export.
@@ -63,6 +63,7 @@ struct WindowEntity {
 
 #[derive(Deserialize)]
 struct AccountingRequest {
+    token: Option<String>,
     team_id: Option<String>,
     user_id: Option<String>,
     charges: bool,
@@ -106,7 +107,7 @@ fn parsed<T: DeserializeOwned>(request: Value) -> Result<T, HostFault> {
 /// `end_user_from_db` read them: the key, team, user, team member, organization, project and end
 /// user rows. A budget window, a committed twin and every other counter have no row here.
 pub struct Rows {
-    keys: KeyRepository,
+    keys: Arc<KeyRepository>,
     teams: TeamRepository,
     users: UserRepository,
     members: TeamMembershipRepository,
@@ -114,20 +115,26 @@ pub struct Rows {
     projects: ProjectRepository,
     end_users: EndUserRepository,
     spend_logs: SpendLogRepository,
+    key_auth: KeyDatabase,
     team_auth: TeamDatabase,
     user_auth: UserDatabase,
 }
 
 impl Rows {
     pub fn new(database: Database) -> Self {
+        let keys = Arc::new(KeyRepository::new(database.clone()));
         Self {
-            keys: KeyRepository::new(database.clone()),
+            keys: keys.clone(),
             teams: TeamRepository::new(database.clone()),
             users: UserRepository::new(database.clone()),
             members: TeamMembershipRepository::new(database.clone()),
             orgs: OrganizationRepository::new(database.clone()),
             projects: ProjectRepository::new(database.clone()),
             end_users: EndUserRepository::new(database.clone()),
+            key_auth: KeyDatabase::new(
+                keys,
+                Arc::new(ObjectPermissionRepository::new(database.clone())),
+            ),
             team_auth: TeamDatabase::new(
                 Arc::new(TeamRepository::new(database.clone())),
                 Arc::new(ObjectPermissionRepository::new(database.clone())),
@@ -139,6 +146,17 @@ impl Rows {
 
     async fn windows(&self, entity: windows::Entity, id: &str) -> Vec<BudgetWindow> {
         let entries = match entity {
+            windows::Entity::Key => {
+                return match self.key_auth.key(&KeyHash::new(id), Side::Read).await {
+                    Ok(key) => key
+                        .and_then(|key| key_budget_windows(&key).ok())
+                        .unwrap_or_default(),
+                    Err(error) => {
+                        tracing::warn!(%error, "Budget windows could not be read");
+                        Vec::new()
+                    }
+                };
+            }
             windows::Entity::Team => self
                 .team_auth
                 .team(id, Side::Read)
@@ -149,7 +167,6 @@ impl Rows {
                 .user(id, Side::Read)
                 .await
                 .map(|user| user.and_then(|user| user.budget_limits)),
-            windows::Entity::Key => return Vec::new(),
         };
         let entries = match entries {
             Ok(entries) => entries,
@@ -226,6 +243,10 @@ impl RowSpend for Rows {
     ) -> BoxFuture<'a, Option<f64>> {
         Box::pin(async move {
             let (owner, entity, id, duration) = match counter {
+                SpendCounter::Key {
+                    token,
+                    window: Some(window),
+                } => (SpendLogOwner::Key, "key", token, window),
                 SpendCounter::Team {
                     team_id,
                     window: Some(window),
@@ -322,6 +343,7 @@ impl RustSpendLogHost {
                 let now = jiff::Timestamp::now();
                 let accounting = join_all(
                     [
+                        (windows::Entity::Key, asked.token),
                         (windows::Entity::Team, asked.team_id),
                         (windows::Entity::User, asked.user_id),
                     ]

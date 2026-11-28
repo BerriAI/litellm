@@ -9,12 +9,16 @@ use litellm_gateway_auth_core::{
     KeyHash, StoredKey,
     authn::key::{KeyRecord, Keyed},
     authz::ModelList,
-    record::{Budget, ModelBudget},
+    record::{Budget, BudgetWindow, ModelBudget},
 };
-use litellm_redis_store::auth_cache::KeyEntry;
+use litellm_python_compat::Value;
+use litellm_redis_store::{
+    FromValue,
+    auth_cache::{BudgetLimitEntry, KeyEntry},
+};
 
 use super::{
-    affiliation::read_bag,
+    affiliation::{read_bag, windows},
     carried::{Carried, carried, newer},
     metadata::Metadata,
 };
@@ -43,6 +47,7 @@ pub struct Key {
     name: Option<Arc<str>>,
     /// The key's own budget, which its budget counter is planned from.
     own_budget: Budget,
+    budget_windows: Arc<[BudgetWindow]>,
     model_max_budget: Arc<BTreeMap<String, ModelBudget>>,
     budget_fallbacks: Arc<BTreeMap<String, Vec<String>>>,
     /// The first budget column the row holds that the native app never enforces, which
@@ -86,6 +91,10 @@ impl Key {
         self.own_budget
     }
 
+    pub(crate) fn budget_windows(&self) -> &[BudgetWindow] {
+        &self.budget_windows
+    }
+
     pub(crate) fn model_max_budget(&self) -> &Arc<BTreeMap<String, ModelBudget>> {
         &self.model_max_budget
     }
@@ -109,6 +118,7 @@ impl Key {
             alias: alias.map(Arc::from),
             name: None,
             own_budget: Budget::default(),
+            budget_windows: Arc::default(),
             model_max_budget: Arc::default(),
             budget_fallbacks: Arc::default(),
             budget: None,
@@ -218,10 +228,10 @@ fn held(key: &KeyEntry) -> Held {
         soft_budget,
         budget_duration,
         budget_reset_at,
-        budget_limits,
+        budget_limits: _,
         budget_fallbacks: _,
-        budget_id,
-        model_max_budget,
+        budget_id: _,
+        model_max_budget: _,
         allowed_cache_controls,
         allowed_routes,
         access_group_ids,
@@ -309,13 +319,7 @@ fn held(key: &KeyEntry) -> Held {
                     unread,
                 ]
             }),
-        budget: carried![
-            soft_budget_cooldown,
-            soft_budget,
-            budget_limits,
-            budget_id,
-            model_max_budget,
-        ],
+        budget: carried![soft_budget_cooldown, soft_budget],
         checked_budget: carried![max_budget, budget_duration, budget_reset_at],
         aliased: aliases.is_carried(),
     }
@@ -333,6 +337,18 @@ fn expiry(text: &str) -> Result<Timestamp, &'static str> {
         .map_err(|_| "expires")
 }
 
+pub(crate) fn key_budget_windows(key: &KeyEntry) -> Result<Vec<BudgetWindow>, &'static str> {
+    let limits = key
+        .budget_limits
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(|bag| BudgetLimitEntry::from_value(&Value::Dict(bag.entries().to_vec())))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "budget_limits")?;
+    windows(Some(&limits))
+}
+
 /// `key` as the core takes it. `Err` names a field that holds something no host step is asked
 /// about. A blocked key is the core's to deny, whatever else it holds.
 pub(super) fn read(key: &KeyEntry) -> Result<Keyed<Key>, &'static str> {
@@ -344,6 +360,7 @@ pub(super) fn read(key: &KeyEntry) -> Result<Keyed<Key>, &'static str> {
         aliased,
     } = held(key);
     let model_max_budget = read_bag(&key.model_max_budget);
+    let budget_windows = key_budget_windows(key);
     let metadata = Metadata::read(&key.metadata);
     let unread = metadata.is_none().then_some("metadata");
     if let Some(field) = unasked.or(unread).filter(|_| !blocked) {
@@ -383,7 +400,10 @@ pub(super) fn read(key: &KeyEntry) -> Result<Keyed<Key>, &'static str> {
                 spend: key.spend,
             },
             budget: budget
-                .filter(|field| *field != "model_max_budget" || model_max_budget.is_none()),
+                .or(budget_windows.as_ref().err().copied())
+                .or_else(|| key.budget_id.is_carried().then_some("budget_id"))
+                .or_else(|| model_max_budget.is_none().then_some("model_max_budget")),
+            budget_windows: Arc::from(budget_windows.unwrap_or_default()),
             model_max_budget: Arc::new(model_max_budget.unwrap_or_default()),
             budget_fallbacks: Arc::new(key.budget_fallbacks.0.iter().cloned().collect()),
             checked_budget,
@@ -536,7 +556,7 @@ mod tests {
     #[case::a_reset_time_alone(json!({"budget_reset_at": "2100-01-01T00:00:00Z"}), None, Some("budget_reset_at"))]
     #[case::a_soft_budget(json!({"max_budget": 5.0, "soft_budget": 4.0}), Some("soft_budget"), Some("max_budget"))]
     #[case::a_soft_budget_alert_cooldown(json!({"max_budget": 5.0, "soft_budget_cooldown": true}), Some("soft_budget_cooldown"), Some("max_budget"))]
-    #[case::a_budget_window(json!({"max_budget": 5.0, "budget_limits": [{"budget_duration": "1d", "max_budget": 1.0}]}), Some("budget_limits"), Some("max_budget"))]
+    #[case::a_budget_window(json!({"max_budget": 5.0, "budget_limits": [{"budget_duration": "1d", "max_budget": 1.0}]}), None, Some("max_budget"))]
     #[case::a_budget_fallback(json!({"max_budget": 5.0, "budget_fallbacks": {"claude": ["haiku"]}}), None, Some("max_budget"))]
     #[case::a_budget_row(json!({"budget_id": "budget"}), Some("budget_id"), None)]
     #[case::a_per_model_budget(json!({"max_budget": 5.0, "model_max_budget": {"claude": {"budget_limit": 1.0}}}), None, Some("max_budget"))]
