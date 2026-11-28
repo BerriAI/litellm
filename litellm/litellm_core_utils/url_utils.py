@@ -469,7 +469,7 @@ def assert_same_origin(candidate_url: str, expected_url: str) -> None:
 _MAX_REDIRECTS: Final = 10
 
 
-def _extract_redirect_url(response: httpx.Response, request_url: str) -> str:
+def extract_redirect_url(response: httpx.Response, request_url: str) -> str:
     """Extract and resolve the redirect target from a response's Location header."""
     header_view: Final[_LocationHeaderView] = {"location": response.headers.get("location")}
     location: Final = header_view["location"]
@@ -477,6 +477,9 @@ def _extract_redirect_url(response: httpx.Response, request_url: str) -> str:
         raise SSRFError("Redirect response has no Location header")
     # Resolve relative URLs against the request URL
     return str(httpx.URL(request_url).join(location))
+
+
+_extract_redirect_url: Final = extract_redirect_url
 
 
 def safe_get(client: _UrlFetcher, url: str, **kwargs: Unpack[_FetchOptions]) -> httpx.Response:

@@ -1,4 +1,5 @@
 import os
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final, Protocol
@@ -88,6 +89,10 @@ def _json_object_body(response: _JsonObjectSource) -> dict[str, object]:
 
 def _as_json_object(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, Mapping) else None
+
+
+def _encode_vault_path_segments(path: str) -> str:
+    return "/".join(urllib.parse.quote(segment, safe="") for segment in path.split("/"))
 
 
 class HashicorpSecretManager(BaseSecretManager):
@@ -320,11 +325,11 @@ class HashicorpSecretManager(BaseSecretManager):
 
         _url = f"{self.vault_addr}/v1/"
         if resolved_namespace:
-            _url += f"{resolved_namespace}/"
-        _url += f"{resolved_mount}/data/"
+            _url += f"{_encode_vault_path_segments(resolved_namespace)}/"
+        _url += f"{_encode_vault_path_segments(resolved_mount)}/data/"
         if resolved_path_prefix:
-            _url += f"{resolved_path_prefix}/"
-        _url += secret_name
+            _url += f"{_encode_vault_path_segments(resolved_path_prefix)}/"
+        _url += _encode_vault_path_segments(secret_name)
         return _url
 
     def _sanitize_plain_value(self, value: object) -> str | None:
@@ -336,11 +341,14 @@ class HashicorpSecretManager(BaseSecretManager):
         return value_str
 
     def _sanitize_path_component(self, value: object) -> str | None:
-        sanitized_value = self._sanitize_plain_value(value)
+        sanitized_value: Final = self._sanitize_plain_value(value)
         if sanitized_value is None:
             return None
-        sanitized_value = sanitized_value.strip("/")
-        return sanitized_value or None
+        stripped: Final = sanitized_value.strip("/")
+        if not stripped:
+            return None
+        raise_if_unsafe_secret_name(stripped)
+        return stripped
 
     def _extract_secret_manager_settings(self, optional_params: Mapping[str, object] | None) -> dict[str, object]:
         if not isinstance(optional_params, dict):
