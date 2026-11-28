@@ -358,6 +358,10 @@ impl NativeRouterUsage {
         self.0.flush_local_counters().map_err(kind_error)
     }
 
+    fn flush_local(&self) -> PyResult<()> {
+        self.0.flush_local().map_err(kind_error)
+    }
+
     fn snapshot(&self) -> PyResult<HashMap<String, PyNumber>> {
         Ok(self
             .0

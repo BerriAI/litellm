@@ -22,6 +22,8 @@ use serde_json::{Map, Value};
 use super::{Admit, Refused};
 use crate::host::NativeRows;
 
+pub(super) use body::end_user_id;
+
 /// Why one request goes to Python: the reason the client is told, and the setting or trait behind
 /// it, which only the log names.
 #[derive(Debug, PartialEq, Eq)]
@@ -48,5 +50,6 @@ pub(super) const HEAD: &[fn(&Admit, &Parts) -> Option<Reason>] = &[
     head::forwarded_for,
     head::headers,
 ];
-pub(super) const CALLER: &[fn(&Admit, &Authentication) -> Option<Reason>] = &[caller::caller];
+pub(super) const CALLER: &[fn(&Admit, &Authentication) -> Option<Reason>] =
+    &[caller::caller, caller::budgets];
 pub(super) const BODY: &[fn(&Admit, &Fields) -> Option<Reason>] = &[body::fields, model::model];

@@ -1,0 +1,122 @@
+# A virtual key in a team has its team read natively. A team that holds only what the native app
+# honors, its model list included, is found, and its key still goes to Python, since the native
+# spend log charges no team yet. A team that holds a limit, a budget or the per-model limits or
+# priority in its metadata goes to Python over that column. A team whose metadata holds anything
+# else, or a model entry the model rule does not read, is not native, and neither is the UI team
+# or a team with no row.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+
+teams:
+  plain: {}
+  listed: {models: [claude]}
+  capped: {max_budget: 10}
+  limited: {rpm_limit: 10}
+  tagged: {metadata: {tags: [a]}}
+  rpm_by_model: {metadata: {model_rpm_limit: {claude: 2}}}
+  tpm_by_model: {metadata: {model_tpm_limit: {claude: 100}}}
+  prioritized: {metadata: {priority: prod}}
+  patterned: {models: ["anthropic/*"]}
+
+keys:
+  sk-plain: {team_id: plain}
+  sk-listed: {team_id: listed}
+  sk-capped: {team_id: capped}
+  sk-limited: {team_id: limited}
+  sk-tagged: {team_id: tagged}
+  sk-rpm-by-model: {team_id: rpm_by_model}
+  sk-tpm-by-model: {team_id: tpm_by_model}
+  sk-prioritized: {team_id: prioritized}
+  sk-patterned: {team_id: patterned}
+  sk-gone: {team_id: gone}
+  sk-ui: {team_id: litellm-dashboard}
+  sk-teamless: {}
+
+requests:
+  - name: a key in a team that holds nothing else
+    headers: {authorization: Bearer sk-plain}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a key in a team with a model list
+    headers: {authorization: Bearer sk-listed}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team
+
+  - name: a key in a team with a budget
+    headers: {authorization: Bearer sk-capped}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: max_budget
+
+  - name: a key in a team with a rate limit
+    headers: {authorization: Bearer sk-limited}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: rpm_limit
+
+  - name: a key in a team with metadata
+    headers: {authorization: Bearer sk-tagged}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a key in a team with a per-model request limit in its metadata
+    headers: {authorization: Bearer sk-rpm-by-model}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: model_rpm_limit
+
+  - name: a key in a team with a per-model token limit in its metadata
+    headers: {authorization: Bearer sk-tpm-by-model}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: model_tpm_limit
+
+  - name: a key in a team with a priority in its metadata
+    headers: {authorization: Bearer sk-prioritized}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: priority
+
+  - name: a key in a team whose model list holds a provider pattern
+    headers: {authorization: Bearer sk-patterned}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a key in a team the database does not hold
+    headers: {authorization: Bearer sk-gone}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a key in the UI team
+    headers: {authorization: Bearer sk-ui}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a key in no team
+    headers: {authorization: Bearer sk-teamless}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

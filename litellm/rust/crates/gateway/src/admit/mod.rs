@@ -3,7 +3,8 @@
 //!
 //! [`Admit`] holds what the native app was built from, and each request is put to the three stages
 //! of checks in `checks`. This is the only part that does IO: it authenticates the caller before
-//! the `CALLER` stage and reads the body with `body` before the `BODY` stage.
+//! the `CALLER` stage, reads the body with `body` before the `BODY` stage, and reads the end user
+//! the body names once every check has passed.
 
 mod body;
 mod checks;
@@ -14,7 +15,7 @@ use axum::{body::Body, extract::Request, http::request::Parts};
 use litellm_config::{Config, Environment};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
 use litellm_gateway_auth::{Auth, Authenticated, Preauthenticated};
-use litellm_gateway_auth_core::{Allowlists, authz::ModelList};
+use litellm_gateway_auth_core::{Allowlists, Caller, authz::ModelList};
 use litellm_gateway_inference::{JsonObject, routing};
 use litellm_router_core::{Router, registry::DeploymentFilter};
 use serde_json::{Map, Value};
@@ -22,7 +23,7 @@ use serde_json::{Map, Value};
 use crate::{
     AppState, Gateway, StoredConfig,
     callbacks::parallel_request_limiter,
-    host::{self, NativeHost, NativeRows},
+    host::{self, NativeHost, NativeRows, auth::AuthStore},
     middleware::request_allowlist,
 };
 use checks::Fields;
@@ -84,9 +85,21 @@ pub struct Admit {
     /// The proxy's address and route allowlists, read by the rule the Python proxy reads them with.
     allowlists: Allowlists,
     auth: Auth<NativeRows>,
+    end_users: EndUsers,
     /// The native app's inference, which tells whether a caller may call the model it asks for.
     /// `None` leaves every caller with a model list to Python.
     inference: Option<Arc<Gateway>>,
+}
+
+/// Where the end user a body names is read from.
+enum EndUsers {
+    /// The store a virtual key is read from.
+    Store(Arc<AuthStore>),
+    /// The proxy reads no database either, so no end user has a row.
+    NoDatabase,
+    /// The proxy reads a database the gateway does not, so only the proxy knows what an end
+    /// user's row holds.
+    Unread,
 }
 
 fn refused(request: Parts, body: Body, reason: Reason) -> (Box<Request>, Reason) {
@@ -101,9 +114,7 @@ fn token_estimate(
     path: &str,
     fields: &mut Fields,
 ) -> Option<Reason> {
-    let counts_tokens = parallel_request_limiter::Caller::of(caller)
-        .limits
-        .counts_tokens();
+    let counts_tokens = parallel_request_limiter::Caller::of(caller).counts_tokens();
     (counts_tokens && parallel_request_limiter::python_estimates(fields, path))
         .then(|| Reason::new(Refused::Body, "media_under_a_token_limit"))
 }
@@ -134,6 +145,11 @@ impl Admit {
             environment: state.variables.clone(),
             stored,
             auth: state.auth(config),
+            end_users: match (&state.auth_store, state.database_unread) {
+                (Some(store), _) => EndUsers::Store(store.clone()),
+                (None, false) => EndUsers::NoDatabase,
+                (None, true) => EndUsers::Unread,
+            },
             host: state.inference.host().clone(),
             inference: Some(state.inference.clone()),
             ..Self::built(config, state.inference.router.clone(), deployed)
@@ -149,7 +165,8 @@ impl Admit {
         Self {
             router,
             allowlists: Allowlists::new(&config.general_settings),
-            auth: host::auth::auth(config, None),
+            auth: host::auth::auth(config, None, false),
+            end_users: EndUsers::NoDatabase,
             config: config.clone(),
             environment: Environment::default(),
             stored: StoredConfig::Unused,
@@ -169,6 +186,47 @@ impl Admit {
             None => host::auth::layers(caller).all(|layer| layer.list() == ModelList::Every),
         };
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
+    }
+
+    /// A key whose model list names a model access group goes to Python, which checks the
+    /// budget the proxy's database may hold for that group (`_model_access_group_max_budget_check`).
+    /// The gateway reads no group budget, so every group the router knows is taken as budgeted,
+    /// even one that does not serve the model asked for.
+    fn access_group_budget(&self, caller: &Authenticated<NativeRows>) -> Option<Reason> {
+        let groups = self.router.registry().access_groups();
+        host::auth::allowed_models(caller)
+            .iter()
+            .any(|name| groups.contains_key(name))
+            .then(|| Reason::new(Refused::Credential, "model_access_group_budget"))
+    }
+
+    /// The caller with the end user its body names. The request goes to Python when that end
+    /// user's row holds what the native app does not apply, when the row could not be read, or when
+    /// the proxy reads a database the gateway cannot sign in to. One whose record holds a column
+    /// nothing native reads yet goes over that column, and any other over `end_user`.
+    async fn with_end_user(
+        &self,
+        caller: Authenticated<NativeRows>,
+        fields: &Fields,
+    ) -> Result<Authenticated<NativeRows>, Reason> {
+        let Some(end_user_id) = checks::end_user_id(fields) else {
+            return Ok(caller);
+        };
+        let store = match &self.end_users {
+            EndUsers::Store(store) => Some(store.as_ref()),
+            EndUsers::NoDatabase => None,
+            EndUsers::Unread => return Err(Reason::new(Refused::Body, "end_user")),
+        };
+        let Ok(end_user) = Box::pin(host::auth::end_user(store, end_user_id)).await else {
+            return Err(Reason::new(Refused::Body, "end_user"));
+        };
+        if let Some(column) = host::auth::unserved_end_user(&end_user) {
+            return Err(Reason::new(Refused::Body, column));
+        }
+        Ok(Authenticated::from(Caller {
+            end_user,
+            ..Caller::clone(&caller)
+        }))
     }
 
     /// The body is read only for a request that passes every other check, and parsed once: an
@@ -216,15 +274,19 @@ impl Admit {
         }
         let over_its_caller = authenticated.as_ref().ok().and_then(|caller| {
             self.model_access(caller, &fields)
+                .or_else(|| self.access_group_budget(caller))
                 .or_else(|| token_estimate(caller, parts.uri.path(), &mut fields))
         });
         if let Some(reason) = over_its_caller {
             return Err(refused(parts, body, reason));
         }
-        parts.extensions.insert(JsonObject(fields));
         if let Ok(caller) = authenticated {
-            parts.extensions.insert(Preauthenticated(caller));
+            match self.with_end_user(caller, &fields).await {
+                Ok(caller) => parts.extensions.insert(Preauthenticated(caller)),
+                Err(reason) => return Err(refused(parts, body, reason)),
+            };
         }
+        parts.extensions.insert(JsonObject(fields));
         Ok(Request::from_parts(parts, body))
     }
 }
@@ -257,7 +319,7 @@ mod tests {
     enum Stored {
         Active,
         Revoked,
-        Owned,
+        Unserved,
         Unreachable,
     }
 
@@ -266,7 +328,7 @@ mod tests {
         let columns = match stored {
             Stored::Active => Some(json!({})),
             Stored::Revoked => Some(json!({"blocked": true})),
-            Stored::Owned => Some(json!({"user_id": "owner"})),
+            Stored::Unserved => Some(json!({"soft_budget_cooldown": true})),
             Stored::Unreachable => None,
         };
         let held = match columns {
@@ -281,6 +343,7 @@ mod tests {
             auth: host::auth::auth(
                 &config,
                 Some(Arc::new(AuthStore::new(keys::memory_cache(), database))),
+                false,
             ),
             ..Admit::over(
                 &config,
@@ -294,7 +357,7 @@ mod tests {
     #[case::active(Stored::Active, VIRTUAL_KEY, None)]
     #[case::revoked(Stored::Revoked, VIRTUAL_KEY, Some("invalid_token"))]
     #[case::holding_what_the_native_app_does_not_serve(
-        Stored::Owned,
+        Stored::Unserved,
         VIRTUAL_KEY,
         Some("not_native")
     )]
@@ -367,6 +430,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(body, sent);
+    }
+
+    #[rstest]
+    #[case::an_end_user("\tend-user ", Some("end-user"))]
+    #[case::nobody(" ", None)]
+    #[tokio::test]
+    async fn an_admitted_request_carries_the_end_user_its_body_names(
+        #[case] user_id: &str,
+        #[case] end_user_id: Option<&str>,
+    ) {
+        let sent = json!({"model": "claude", "max_tokens": 8, "messages": [],
+            "metadata": {"user_id": user_id}});
+        let request = Request::post("/v1/messages")
+            .header(MASTER_KEY.0, MASTER_KEY.1)
+            .body(Body::from(sent.to_string()))
+            .unwrap();
+
+        let admitted = admit().admit(request).await.unwrap();
+
+        let caller = admitted.extensions().get::<Preauthenticated<NativeRows>>();
+        assert_eq!(
+            caller.map(|caller| caller.0.end_user.end_user_id.as_deref()),
+            Some(end_user_id)
+        );
     }
 
     #[rstest]

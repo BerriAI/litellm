@@ -1,5 +1,6 @@
 # A virtual key with a model list is served natively for a model the proxy lets it call, and a
-# model it may not call goes to Python, which answers it 403 key_model_access_denied.
+# model it may not call goes to Python, which answers it 403 key_model_access_denied. A key that
+# names an access group goes to Python, which checks the budget its database may hold for the group.
 config:
   model_list:
     - model_name: claude
@@ -55,7 +56,9 @@ requests:
   - name: a model in an access group on the key's list
     headers: {authorization: Bearer sk-haiku}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: rust
+    expect: python
+    reason: credential
+    over: model_access_group_budget
 
   - name: a model outside the access group on the key's list
     headers: {authorization: Bearer sk-haiku}

@@ -9,6 +9,8 @@ from enum import Enum, auto
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Generic, Literal, Protocol, TypeAlias, TypeVar
 
+from litellm.integrations.otel.runtime import background_job_span
+
 if TYPE_CHECKING:
     from litellm.rust_bridge._native import NativeRequestRedis, NativeSend
 
@@ -162,7 +164,8 @@ async def drain_post_call_redis_batches() -> None:
     """Sends every request's post-call batch still waiting on its callbacks or deadline; for the shutdown path."""
     from litellm.rust_bridge._native import drain_post_call_redis_batches as drain_native
 
-    await drain_native()
+    with background_job_span("drain_post_call_redis_batches"):
+        await drain_native()
 
 
 class request_redis_batch_scope:
