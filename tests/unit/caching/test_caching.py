@@ -1753,26 +1753,16 @@ async def test_async_messages_chat_bridge_counts_the_caller_messages_when_only_c
 
 
 def test_semantic_cache_bypasses_tool_and_function_calls() -> None:
-    """
-    Issue #51900: Semantic caching maps similar prompts to identical buckets.
-    Requests with dynamic entity IDs (such as customer charge IDs or account IDs)
-    can trigger cross-tenant tool call argument leaks.
-    Semantic cache MUST bypass tool/function call requests unless explicitly enabled,
-    including tools provided via extra_body or Responses API calls.
-    """
-    semantic_cache = Cache.__new__(Cache)
+    semantic_cache: Final = Cache.__new__(Cache)
     semantic_cache.type = LiteLLMCacheType.REDIS_SEMANTIC
     semantic_cache.mode = CacheMode.default_on
     semantic_cache.max_messages = 4
     semantic_cache.semantic_cache_allow_tools = False
 
-    tool_def = [{"type": "function", "function": {"name": "refund_charge"}}]
-    func_def = [{"name": "refund_charge"}]
+    tool_def: Final = [{"type": "function", "function": {"name": "refund_charge"}}]
+    func_def: Final = [{"name": "refund_charge"}]
 
-    # Without tools/functions, should_use_cache is True
     assert semantic_cache.should_use_cache(messages=[{"role": "user", "content": "hi"}]) is True
-
-    # With tools, semantic cache is bypassed
     assert (
         semantic_cache.should_use_cache(
             messages=[{"role": "user", "content": "refund charge"}],
@@ -1780,8 +1770,6 @@ def test_semantic_cache_bypasses_tool_and_function_calls() -> None:
         )
         is False
     )
-
-    # With functions, semantic cache is bypassed
     assert (
         semantic_cache.should_use_cache(
             messages=[{"role": "user", "content": "refund charge"}],
@@ -1789,8 +1777,6 @@ def test_semantic_cache_bypasses_tool_and_function_calls() -> None:
         )
         is False
     )
-
-    # With tools in extra_body (e.g. Responses API or custom provider), semantic cache is bypassed
     assert (
         semantic_cache.should_use_cache(
             messages=[{"role": "user", "content": "refund charge"}],
@@ -1798,8 +1784,6 @@ def test_semantic_cache_bypasses_tool_and_function_calls() -> None:
         )
         is False
     )
-
-    # With functions in extra_body, semantic cache is bypassed
     assert (
         semantic_cache.should_use_cache(
             messages=[{"role": "user", "content": "refund charge"}],
@@ -1807,8 +1791,6 @@ def test_semantic_cache_bypasses_tool_and_function_calls() -> None:
         )
         is False
     )
-
-    # With tools in nested optional_params extra_body
     assert (
         semantic_cache.should_use_cache(
             input="refund charge",
@@ -1819,16 +1801,13 @@ def test_semantic_cache_bypasses_tool_and_function_calls() -> None:
 
 
 def test_semantic_cache_allows_tools_when_explicitly_opted_in() -> None:
-    """
-    When semantic_cache_allow_tools is True, semantic cache is allowed for tools.
-    """
-    semantic_cache = Cache.__new__(Cache)
+    semantic_cache: Final = Cache.__new__(Cache)
     semantic_cache.type = LiteLLMCacheType.REDIS_SEMANTIC
     semantic_cache.mode = CacheMode.default_on
     semantic_cache.max_messages = 4
     semantic_cache.semantic_cache_allow_tools = True
 
-    tool_def = [{"type": "function", "function": {"name": "refund_charge"}}]
+    tool_def: Final = [{"type": "function", "function": {"name": "refund_charge"}}]
     assert (
         semantic_cache.should_use_cache(
             messages=[{"role": "user", "content": "refund charge"}],
@@ -1846,18 +1825,13 @@ def test_semantic_cache_allows_tools_when_explicitly_opted_in() -> None:
 
 
 def test_semantic_cache_get_cache_logic_rejects_cached_tool_calls() -> None:
-    """
-    Defense-in-depth: get_cache_logic drops cached responses containing tool_calls
-    or function_call when retrieved from semantic cache. This includes Chat Completions
-    choices and Responses API output items with function_call.
-    """
     import time
 
-    semantic_cache = Cache.__new__(Cache)
+    semantic_cache: Final = Cache.__new__(Cache)
     semantic_cache.type = LiteLLMCacheType.REDIS_SEMANTIC
     semantic_cache.semantic_cache_allow_tools = False
 
-    cached_with_tool = {
+    cached_with_tool: Final = {
         "timestamp": time.time(),
         "response": {
             "choices": [
@@ -1878,16 +1852,13 @@ def test_semantic_cache_get_cache_logic_rejects_cached_tool_calls() -> None:
         },
     }
 
-    # Should reject cached tool call from semantic cache
     assert semantic_cache.get_cache_logic(cached_result=cached_with_tool, max_age=3600) is None
 
-    # Opted-in: should return the cached response
     semantic_cache.semantic_cache_allow_tools = True
     assert semantic_cache.get_cache_logic(cached_result=cached_with_tool, max_age=3600) == cached_with_tool["response"]
 
-    # Responses API format with output item of type="function_call"
     semantic_cache.semantic_cache_allow_tools = False
-    cached_responses_api_tool = {
+    cached_responses_api_tool: Final = {
         "timestamp": time.time(),
         "response": {
             "id": "resp_test123",
@@ -1911,14 +1882,10 @@ def test_semantic_cache_get_cache_logic_rejects_cached_tool_calls() -> None:
 
 
 def test_exact_cache_preserves_tool_caching() -> None:
-    """
-    Exact caching (LOCAL, REDIS) hashes messages verbatim so different IDs
-    never collide. Exact caching for tool calls must continue to function normally.
-    """
     import time
 
-    local_cache = Cache(type=LiteLLMCacheType.LOCAL)
-    tool_def = [{"type": "function", "function": {"name": "refund_charge"}}]
+    local_cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    tool_def: Final = [{"type": "function", "function": {"name": "refund_charge"}}]
 
     assert (
         local_cache.should_use_cache(
@@ -1935,7 +1902,7 @@ def test_exact_cache_preserves_tool_caching() -> None:
         is True
     )
 
-    cached_with_tool = {
+    cached_with_tool: Final = {
         "timestamp": time.time(),
         "response": {
             "choices": [
@@ -1956,11 +1923,9 @@ def test_exact_cache_preserves_tool_caching() -> None:
         },
     }
 
-    # Local exact cache preserves tool calls
     assert local_cache.get_cache_logic(cached_result=cached_with_tool, max_age=3600) == cached_with_tool["response"]
 
-    # Responses API format
-    cached_responses_api_tool = {
+    cached_responses_api_tool: Final = {
         "timestamp": time.time(),
         "response": {
             "id": "resp_test123",

@@ -418,19 +418,75 @@ def _is_positive_finite_ttl(value: object) -> bool:
     return math.isfinite(seconds) and seconds > 0
 
 
+_OBJECT_SEQ: Final = TypeAdapter(tuple[object, ...])
+
+
+class _SupportsToolsAttr(Protocol):
+    @property
+    def tools(self) -> object: ...
+
+
+class _SupportsFunctionsAttr(Protocol):
+    @property
+    def functions(self) -> object: ...
+
+
+class _SupportsExtraBodyAttr(Protocol):
+    @property
+    def extra_body(self) -> object: ...
+
+
+class _SupportsMessageAttr(Protocol):
+    @property
+    def message(self) -> object: ...
+
+
+class _SupportsToolCallsAttr(Protocol):
+    @property
+    def tool_calls(self) -> object: ...
+
+
+class _SupportsFunctionCallAttr(Protocol):
+    @property
+    def function_call(self) -> object: ...
+
+
+class _SupportsTypeAttr(Protocol):
+    @property
+    def type(self) -> object: ...
+
+
+class _SupportsCallIdAttr(Protocol):
+    @property
+    def call_id(self) -> object: ...
+
+
+class _SupportsChoicesAttr(Protocol):
+    @property
+    def choices(self) -> object: ...
+
+
+class _SupportsOutputAttr(Protocol):
+    @property
+    def output(self) -> object: ...
+
+
 def _mapping_or_obj_has_tools(obj: object) -> bool:
-    if isinstance(obj, Mapping):
-        if obj.get("tools") or obj.get("functions"):
+    mapping: Final = as_str_mapping(obj)
+    if mapping is not None:
+        if mapping.get("tools") or mapping.get("functions"):
             return True
-        nested = obj.get("extra_body")
-        if isinstance(nested, Mapping) and (nested.get("tools") or nested.get("functions")):
-            return True
-    elif obj is not None:
-        if getattr(obj, "tools", None) or getattr(obj, "functions", None):
-            return True
-        nested = getattr(obj, "extra_body", None)
-        if isinstance(nested, Mapping) and (nested.get("tools") or nested.get("functions")):
-            return True
+        nested: Final = as_str_mapping(mapping.get("extra_body"))
+        return nested is not None and bool(nested.get("tools") or nested.get("functions"))
+    if obj is None:
+        return False
+    if has_attributes(obj, _SupportsToolsAttr, "tools") and obj.tools:
+        return True
+    if has_attributes(obj, _SupportsFunctionsAttr, "functions") and obj.functions:
+        return True
+    if has_attributes(obj, _SupportsExtraBodyAttr, "extra_body"):
+        nested_attr: Final = as_str_mapping(obj.extra_body)
+        return nested_attr is not None and bool(nested_attr.get("tools") or nested_attr.get("functions"))
     return False
 
 
@@ -443,50 +499,42 @@ def _request_has_tools(kwargs: Mapping[str, object]) -> bool:
     return False
 
 
+def _read_field(obj: object, name: str) -> object:
+    mapping: Final = as_str_mapping(obj)
+    if mapping is not None:
+        return mapping.get(name)
+    if name == "choices" and has_attributes(obj, _SupportsChoicesAttr, "choices"):
+        return obj.choices
+    if name == "output" and has_attributes(obj, _SupportsOutputAttr, "output"):
+        return obj.output
+    if name == "message" and has_attributes(obj, _SupportsMessageAttr, "message"):
+        return obj.message
+    if name == "tool_calls" and has_attributes(obj, _SupportsToolCallsAttr, "tool_calls"):
+        return obj.tool_calls
+    if name == "function_call" and has_attributes(obj, _SupportsFunctionCallAttr, "function_call"):
+        return obj.function_call
+    if name == "type" and has_attributes(obj, _SupportsTypeAttr, "type"):
+        return obj.type
+    if name == "call_id" and has_attributes(obj, _SupportsCallIdAttr, "call_id"):
+        return obj.call_id
+    return None
+
+
 def _cached_response_has_tool_calls(cached_response: object) -> bool:
     """Check if cached response contains tool calls or function calls (Chat Completions or Responses API)."""
-    if isinstance(cached_response, Mapping):
-        # Chat Completions format
-        choices = cached_response.get("choices")
-        if isinstance(choices, list):
-            for choice in choices:
-                if isinstance(choice, Mapping):
-                    message = choice.get("message")
-                    if isinstance(message, Mapping) and (message.get("tool_calls") or message.get("function_call")):
-                        return True
-                elif hasattr(choice, "message"):
-                    msg = getattr(choice, "message", None)
-                    if msg is not None and (getattr(msg, "tool_calls", None) or getattr(msg, "function_call", None)):
-                        return True
-        # Responses API format
-        output = cached_response.get("output")
-        if isinstance(output, list):
-            for item in output:
-                if isinstance(item, Mapping):
-                    item_type = item.get("type")
-                    if item_type in ("function_call", "tool_call", "custom_tool_call") or item.get("call_id"):
-                        return True
-                elif hasattr(item, "type"):
-                    item_type = getattr(item, "type", None)
-                    if item_type in ("function_call", "tool_call", "custom_tool_call") or getattr(
-                        item, "call_id", None
-                    ):
-                        return True
-    elif hasattr(cached_response, "choices"):
-        choices = getattr(cached_response, "choices", None)
-        if isinstance(choices, list):
-            for choice in choices:
-                msg = getattr(choice, "message", None)
-                if msg is not None and (getattr(msg, "tool_calls", None) or getattr(msg, "function_call", None)):
-                    return True
-    elif hasattr(cached_response, "output"):
-        output = getattr(cached_response, "output", None)
-        if isinstance(output, list):
-            for item in output:
-                item_type = getattr(item, "type", None) if not isinstance(item, Mapping) else item.get("type")
-                call_id = getattr(item, "call_id", None) if not isinstance(item, Mapping) else item.get("call_id")
-                if item_type in ("function_call", "tool_call", "custom_tool_call") or call_id:
-                    return True
+    choices: Final = _read_field(cached_response, "choices")
+    if isinstance(choices, list):
+        for choice in _OBJECT_SEQ.validate_python(choices):
+            message = _read_field(choice, "message")
+            if message is not None and (_read_field(message, "tool_calls") or _read_field(message, "function_call")):
+                return True
+    output: Final = _read_field(cached_response, "output")
+    if isinstance(output, list):
+        for item in _OBJECT_SEQ.validate_python(output):
+            if _read_field(item, "type") in ("function_call", "tool_call", "custom_tool_call") or _read_field(
+                item, "call_id"
+            ):
+                return True
     return False
 
 
