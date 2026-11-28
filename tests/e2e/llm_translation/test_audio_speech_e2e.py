@@ -10,6 +10,8 @@ the SDK refuses to send a request missing its required fields.
 
 from __future__ import annotations
 
+import io
+import wave
 from typing import Final
 
 import pytest
@@ -26,6 +28,8 @@ pytestmark = pytest.mark.e2e
 
 OPENAI_TTS_MODEL: Final = "openai/tts-1-1106"
 AWS_POLLY_MODEL: Final = "aws_polly/generative"
+GNANI_TIMBRE_V25: Final = "gnani/timbre-v2.5"
+GNANI_TIMBRE_V3: Final = "gnani/timbre-v3.0"
 
 
 class _OptionalSpeechBody(BaseModel):
@@ -235,3 +239,35 @@ class TestAwsPollySpeech:
         assert response.content.startswith(MP3_PREFIXES), (
             f"polly speech body is not MP3 audio: {response.content[:16]!r}"
         )
+
+
+class TestGnaniSpeech:
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+            providers=(Provider.GNANI,),
+            models=(GNANI_TIMBRE_V25, GNANI_TIMBRE_V3),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    @pytest.mark.parametrize(("timbre", "voice"), ((GNANI_TIMBRE_V25, "Nalini"), (GNANI_TIMBRE_V3, "Shivani")))
+    def test_synthesizes_wav_at_the_requested_sample_rate(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, timbre: str, voice: str
+    ) -> None:
+        alias: Final = f"e2e-gnani-{unique_marker()}"
+        model_id: Final = proxy.create_model(alias, LiteLLMParamsBody(model=timbre, api_key="os.environ/GNANI_API_KEY"))
+        resources.defer(lambda: proxy.delete_model(model_id))
+        client: Final = sdk.openai(resources.key(models=[alias]))
+        sample_rate: Final = 24000
+        response: Final = client.audio.speech.with_raw_response.create(
+            model=alias,
+            voice=voice,
+            input="नमस्ते! आज हम गणित सीखेंगे।",
+            response_format="wav",
+            extra_body={"language": "hi-IN", "audio_config": {"sample_rate": sample_rate}},
+        )
+        assert response_header(response.headers, "content-type") == "audio/wav"
+        with wave.open(io.BytesIO(response.content), "rb") as wav:
+            assert wav.getframerate() == sample_rate
+            assert wav.readframes(1)
