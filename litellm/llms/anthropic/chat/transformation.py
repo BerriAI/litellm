@@ -2809,7 +2809,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Related issue: https://github.com/BerriAI/litellm/issues/18926
         def drop_thinking_without_replayed_blocks(turns: Sequence[AllMessageValues]) -> None:
             thinking: Final = cast(object, optional_params.get("thinking"))  # cast-ok: optional_params is untyped
-            if _thinking_param_lacks_replayed_blocks(thinking, turns):
+            if thinking != {"type": "disabled"} and _thinking_param_lacks_replayed_blocks(thinking, turns):
                 optional_params.pop("thinking", None)
                 litellm.verbose_logger.warning(
                     "Dropping 'thinking' param because the last assistant message with tool_calls "
