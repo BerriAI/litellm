@@ -9,7 +9,12 @@ import pytest
 
 import litellm
 from litellm.proxy._types import KeyManagementSystem
-from litellm.secret_managers.main import _should_read_secret_from_secret_manager, get_secret
+from litellm.secret_managers.main import (
+    _should_read_secret_from_secret_manager,
+    get_secret,
+    get_secret_bool,
+    str_to_bool,
+)
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -280,3 +285,46 @@ def test_key_management_settings_serialization_roundtrip():
     assert reloaded.access_mode == "read_and_write"
     assert reloaded.description == "Roundtrip test"
     assert reloaded.tags == {"Env": "QA"}
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("true", True),
+        (" True ", True),
+        ("1", True),
+        ("YES", True),
+        ("on", True),
+        ("false", False),
+        ("FALSE", False),
+        ("0", False),
+        (" no ", False),
+        ("Off", False),
+        ("2", None),
+        ("t", None),
+        ("enabled", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_str_to_bool_reads_the_common_boolean_spellings(raw: str | None, expected: bool | None) -> None:
+    assert str_to_bool(raw) is expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "as_secret", "as_flag"),
+    [
+        ("1", "1", True),
+        ("0", "0", False),
+        ("off", "off", False),
+        ("true", True, True),
+        ("False", False, False),
+    ],
+)
+def test_get_secret_keeps_numeric_values_as_text_while_get_secret_bool_reads_them_as_flags(
+    monkeypatch: pytest.MonkeyPatch, raw: str, as_secret: str | bool, as_flag: bool
+) -> None:
+    monkeypatch.setenv("LITELLM_TEST_TOGGLE", raw)
+
+    assert get_secret("LITELLM_TEST_TOGGLE") == as_secret
+    assert get_secret_bool("LITELLM_TEST_TOGGLE") is as_flag

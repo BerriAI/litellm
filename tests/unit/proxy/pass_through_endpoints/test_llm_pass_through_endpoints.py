@@ -2463,7 +2463,7 @@ class TestBedrockAgentRuntimePassthroughToggle:
         assert probe.served_during_refresh is True
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("value", (True, "true", "True"))
+    @pytest.mark.parametrize("value", (True, "true", "True", "yes", "1", " ON "))
     async def test_agent_runtime_dispatch_rejected_when_disabled(self, value: bool | str):
         settings: Final = MappingProxyType({"disable_bedrock_agent_runtime_passthrough": value})
 
@@ -2509,7 +2509,7 @@ class TestBedrockAgentRuntimePassthroughToggle:
         llm_route.assert_awaited_once()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("value", (False, "false", None, "", "yes"))
+    @pytest.mark.parametrize("value", (False, "false", None, "", "no", "0", "maybe"))
     async def test_agent_runtime_dispatch_allowed_for_non_true_values(self, value: object):
         settings: Final = MappingProxyType({"disable_bedrock_agent_runtime_passthrough": value})
 

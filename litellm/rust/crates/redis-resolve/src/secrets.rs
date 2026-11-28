@@ -31,7 +31,7 @@ impl SecretSnapshot {
         names: BTreeSet<String>,
         lookup: &dyn litellm_env::Lookup,
     ) -> Self {
-        use litellm_python_compat::flags::str_to_bool;
+        use litellm_python_compat::flags::true_or_false;
         use litellm_secret_value::SecretValue;
 
         Self(
@@ -39,7 +39,7 @@ impl SecretSnapshot {
                 .into_iter()
                 .map(|name| {
                     let value = lookup.get(&name).map(|text| {
-                        str_to_bool(&text)
+                        true_or_false(&text)
                             .map_or_else(|| Secret::String(SecretValue::new(text)), Secret::Bool)
                     });
                     (name, value)

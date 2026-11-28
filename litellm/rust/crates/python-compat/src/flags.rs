@@ -2,7 +2,8 @@
 //!
 //! | Function | Python |
 //! |---|---|
-//! | [`str_to_bool`] | `litellm.secret_managers.main.str_to_bool(text)` |
+//! | [`str_to_bool`] | `litellm.litellm_core_utils.env_utils.str_to_bool(text)` |
+//! | [`true_or_false`] | `litellm.litellm_core_utils.env_utils.true_or_false(text)` |
 //! | [`redis_str_to_bool`] | `litellm._redis._str_to_bool(text)` |
 //! | [`lower_is_true`] | `text.lower() == "true"` |
 //! | [`coerces_to_true`] | `litellm._redis._coerces_to_true(value)` |
@@ -11,13 +12,28 @@
 
 use crate::{Value, pydantic, truthy::truthy, unicode::isspace};
 
-/// `true` or `false` in any case once stripped, otherwise `None`.
+/// `true`, `1`, `yes` or `on` in any case once stripped, `false`, `0`, `no` or `off` likewise,
+/// otherwise `None`.
 pub fn str_to_bool(text: &str) -> Option<bool> {
+    read_words(
+        text,
+        &["true", "1", "yes", "on"],
+        &["false", "0", "no", "off"],
+    )
+}
+
+/// `true` or `false` in any case once stripped, otherwise `None`.
+pub fn true_or_false(text: &str) -> Option<bool> {
+    read_words(text, &["true"], &["false"])
+}
+
+fn read_words(text: &str, true_words: &[&str], false_words: &[&str]) -> Option<bool> {
     let word = text.trim_matches(isspace);
-    if word.eq_ignore_ascii_case("true") {
+    let spells = |words: &[&str]| words.iter().any(|known| word.eq_ignore_ascii_case(known));
+    if spells(true_words) {
         return Some(true);
     }
-    word.eq_ignore_ascii_case("false").then_some(false)
+    spells(false_words).then_some(false)
 }
 
 /// `text.lower() in ("true", "1", "yes")`, with no stripping.

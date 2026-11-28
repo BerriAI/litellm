@@ -13,7 +13,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
-from litellm.litellm_core_utils.env_utils import get_env_float
+from litellm.litellm_core_utils.env_utils import get_env_float, str_to_bool, true_or_false
 from litellm.litellm_core_utils.single_flight import single_flight_lru_cache
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.secret_managers.get_azure_ad_token_provider import (
@@ -124,33 +124,6 @@ def _get_oidc_http_handler(timeout: httpx.Timeout | None = None) -> HTTPHandler:
     if timeout is None:
         timeout = httpx.Timeout(timeout=600.0, connect=5.0)
     return HTTPHandler(timeout=timeout)
-
-
-######### Secret Manager ############################
-# checks if user has passed in a secret manager client
-# if passed in then checks the secret there
-def str_to_bool(value: str | None) -> bool | None:
-    """
-    Converts a string to a boolean if it's a recognized boolean string.
-    Returns None if the string is not a recognized boolean value.
-
-    :param value: The string to be checked.
-    :return: True or False if the string is a recognized boolean, otherwise None.
-    """
-    if value is None:
-        return None
-
-    true_values: Final = {"true"}
-    false_values: Final = {"false"}
-
-    value_lower: Final = value.strip().lower()
-
-    if value_lower in true_values:
-        return True
-    elif value_lower in false_values:
-        return False
-    else:
-        return None
 
 
 def get_secret_str(
@@ -499,8 +472,8 @@ def get_secret(
                 return secret
         else:
             secret = os.environ.get(secret_name)
-            secret_value_as_bool = str_to_bool(secret) if secret is not None else None
-            if secret_value_as_bool is not None and isinstance(secret_value_as_bool, bool):
+            secret_value_as_bool = true_or_false(secret) if secret is not None else None
+            if secret_value_as_bool is not None:
                 return secret_value_as_bool
             else:
                 return secret

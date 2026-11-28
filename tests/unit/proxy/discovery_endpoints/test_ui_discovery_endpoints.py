@@ -6,6 +6,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from litellm.proxy.common_utils.admin_ui_utils import is_admin_ui_disabled
 from litellm.proxy.discovery_endpoints.ui_discovery_endpoints import router
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 
@@ -322,6 +323,45 @@ def test_ui_discovery_endpoints_with_admin_ui_disabled():
         assert data["sso_configured"] is False
 
 
+@pytest.mark.parametrize(("flag", "disabled"), [("1", True), ("yes", True), ("on", True), ("0", False), ("off", False)])
+def test_ui_config_agrees_with_the_admin_ui_gate_on_disable_admin_ui(
+    monkeypatch: pytest.MonkeyPatch, flag: str, disabled: bool
+) -> None:
+    monkeypatch.setenv("DISABLE_ADMIN_UI", flag)
+    app: Final[FastAPI] = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
+        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=False),
+    ):
+        response: Final = TestClient(app).get("/.well-known/litellm-ui-config")
+
+    assert response.status_code == 200
+    assert response.json()["admin_ui_disabled"] is disabled
+    assert is_admin_ui_disabled() is disabled
+
+
+@pytest.mark.parametrize(("flag", "redirect"), [("1", True), ("on", True), ("0", False), ("no", False)])
+def test_ui_config_reads_auto_redirect_to_sso_spellings(
+    monkeypatch: pytest.MonkeyPatch, flag: str, redirect: bool
+) -> None:
+    monkeypatch.setenv("AUTO_REDIRECT_UI_LOGIN_TO_SSO", flag)
+    app: Final[FastAPI] = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
+        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=True),
+    ):
+        response: Final = TestClient(app).get("/.well-known/litellm-ui-config")
+
+    assert response.status_code == 200
+    assert response.json()["auto_redirect_to_sso"] is redirect
+
+
 def test_ui_discovery_endpoints_is_control_plane_true_when_workers_configured():
     app = FastAPI()
     app.include_router(router)
@@ -503,7 +543,10 @@ def test_ui_config_tells_the_dashboard_whether_stdio_mcp_servers_are_enabled(mon
     assert response.json()["mcp_stdio_enabled"] is expected
 
 
-@pytest.mark.parametrize(("flag", "expected"), [(None, False), ("false", False), ("true", True), ("TRUE", True)])
+@pytest.mark.parametrize(
+    ("flag", "expected"),
+    [(None, False), ("false", False), ("0", False), ("true", True), ("TRUE", True), ("1", True), ("yes", True)],
+)
 def test_ui_config_tells_the_dashboard_whether_to_use_si_terminology(
     monkeypatch: pytest.MonkeyPatch, flag: str | None, expected: bool
 ) -> None:

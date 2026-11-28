@@ -11,6 +11,7 @@ import ast
 import json
 import sys
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -26,13 +27,20 @@ def helpers(module, *names: str):
         if (isinstance(node, ast.FunctionDef) and node.name in names)
         or (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id in names)
     ]
-    namespace = {"Final": Final, "TypeAdapter": TypeAdapter, "ValidationError": ValidationError}
+    namespace = {
+        "Final": Final,
+        "MappingProxyType": MappingProxyType,
+        "TypeAdapter": TypeAdapter,
+        "ValidationError": ValidationError,
+    }
     exec(compile(ast.Module(body=functions, type_ignores=[]), module, "exec"), namespace)
     return [namespace[name] for name in names]
 
 
 _str_to_bool, _coerces_to_true = helpers("_redis.py", "_str_to_bool", "_coerces_to_true")
-(str_to_bool,) = helpers("secret_managers/main.py", "str_to_bool")
+_, _, str_to_bool, true_or_false = helpers(
+    "litellm_core_utils/env_utils.py", "_TRUE_FALSE_STRINGS", "_BOOL_STRINGS", "str_to_bool", "true_or_false"
+)
 _, lax_bool = helpers("litellm_core_utils/core_helpers.py", "_LAX_BOOL", "lax_bool")
 
 TEXTS = [
@@ -59,9 +67,12 @@ TEXTS = [
     "YES",
     " yes",
     "no",
+    " NO ",
     "on",
     "On",
     "off",
+    "OFF",
+    "\toff\n",
     "t",
     "f",
     "y",
@@ -101,6 +112,7 @@ def row(value):
     return {
         "input": json.dumps(value),
         "str_to_bool": str_to_bool(value) if is_text else None,
+        "true_or_false": true_or_false(value) if is_text else None,
         "redis_str_to_bool": _str_to_bool(value) if is_text else None,
         "lower_is_true": value.lower() == "true" if is_text else None,
         "coerces_to_true": _coerces_to_true(value),

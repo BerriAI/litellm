@@ -4,6 +4,7 @@ Utility helpers for reading and parsing environment variables.
 
 import logging
 import os
+from types import MappingProxyType
 from typing import Final, TypeVar
 
 _NumberT = TypeVar("_NumberT", int, float)
@@ -11,6 +12,29 @@ _NumberT = TypeVar("_NumberT", int, float)
 # Marked before logging: the LiteLLM loggers' own filters read env knobs through these helpers, so
 # warning first would re-enter the helper from inside the log call and recurse until RecursionError.
 _reported_unparsable_values: Final[set[tuple[str, str]]] = set()  # mutable-ok: process-wide warn-once registry
+
+
+_TRUE_FALSE_STRINGS: Final = MappingProxyType({"true": True, "false": False})
+_BOOL_STRINGS: Final = MappingProxyType(
+    {**_TRUE_FALSE_STRINGS, "1": True, "yes": True, "on": True, "0": False, "no": False, "off": False}
+)
+
+
+def str_to_bool(value: str | None) -> bool | None:
+    """
+    Converts a string to a boolean if it's a recognized boolean string.
+    Returns None if the string is not a recognized boolean value.
+
+    :param value: The string to be checked.
+    :return: True or False if the string is a recognized boolean, otherwise None.
+    """
+    if value is None:
+        return None
+    return _BOOL_STRINGS.get(value.strip().lower())
+
+
+def true_or_false(value: str) -> bool | None:
+    return _TRUE_FALSE_STRINGS.get(value.strip().lower())
 
 
 def _warn_unparsable_once(env_var: str, raw: str, number_type: type[int] | type[float]) -> None:

@@ -113,10 +113,13 @@ struct TextFlag(#[serde_as(as = "StrBool")] bool);
 #[case::true_text(json!(" True "), true)]
 #[case::python_stripped_true_text(json!("\u{1c}true"), true)]
 #[case::false_text(json!("false"), false)]
-#[case::other_text(json!("yes"), false)]
+#[case::yes_text(json!("yes"), true)]
+#[case::one_text(json!("1"), true)]
+#[case::off_text(json!("OFF"), false)]
+#[case::other_text(json!("maybe"), false)]
 #[case::number(json!(1), false)]
 #[case::null(json!(null), false)]
-fn str_bool_is_true_only_for_true(#[case] value: Value, #[case] expected: bool) {
+fn str_bool_is_true_only_for_true_words(#[case] value: Value, #[case] expected: bool) {
     assert_eq!(
         serde_json::from_value::<TextFlag>(value).unwrap().0,
         expected

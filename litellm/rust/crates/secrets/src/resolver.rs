@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::compatibility::python_manager_string;
 use litellm_env::Lookup;
-use litellm_python_compat::flags::str_to_bool;
+use litellm_python_compat::flags::{str_to_bool, true_or_false};
 
 use crate::state::Route;
 use crate::{
@@ -197,7 +197,7 @@ impl SecretResolver {
             return Some(python_manager_string(SecretValue::new(value)));
         }
         Some(
-            str_to_bool(&value)
+            true_or_false(&value)
                 .map_or_else(|| Secret::String(SecretValue::new(value)), Secret::Bool),
         )
     }

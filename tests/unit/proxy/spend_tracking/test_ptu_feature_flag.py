@@ -57,13 +57,13 @@ def test_disabled_when_env_var_is_unset(monkeypatch):
     assert is_ptu_cost_attribution_enabled() is False
 
 
-@pytest.mark.parametrize("value", ["true", "True", "TRUE", " true "])
+@pytest.mark.parametrize("value", ["true", "True", "TRUE", " true ", "1", "yes", "on"])
 def test_enabled_for_the_values_the_house_helper_recognises(monkeypatch, value):
     monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, value)
     assert is_ptu_cost_attribution_enabled() is True
 
 
-@pytest.mark.parametrize("value", ["false", "False", "0", "1", "", "yes", "off", "maybe"])
+@pytest.mark.parametrize("value", ["false", "False", "0", "", "no", "off", "maybe"])
 def test_disabled_for_everything_else(monkeypatch, value):
     monkeypatch.setenv(PTU_COST_ATTRIBUTION_ENV_VAR, value)
     assert is_ptu_cost_attribution_enabled() is False

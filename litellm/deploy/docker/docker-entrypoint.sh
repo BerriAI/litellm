@@ -135,7 +135,7 @@ if [ -n "${PROMETHEUS_MULTIPROC_DIR:-}" ]; then
 fi
 
 case "${USE_DDTRACE:-}" in
-    [Tt][Rr][Uu][Ee])
+    [Tt][Rr][Uu][Ee] | 1 | [Yy][Ee][Ss] | [Oo][Nn])
         export DD_TRACE_OPENAI_ENABLED="False"
         exec ddtrace-run "$@"
         ;;

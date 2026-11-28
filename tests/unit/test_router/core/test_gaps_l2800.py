@@ -454,6 +454,10 @@ async def test_a_default_metadata_list_applies_only_when_the_request_sets_none(
         (False, True, True),
         (False, None, False),
         ("false", True, True),
+        ("yes", False, "yes"),
+        ("1", None, "1"),
+        ("no", True, True),
+        ("0", False, False),
     ],
 )
 async def test_default_metadata_masking_stays_on_once_either_side_turns_it_on(
@@ -480,6 +484,9 @@ async def test_default_metadata_masking_stays_on_once_either_side_turns_it_on(
         (True, False, False),
         (True, None, True),
         ("true", True, True),
+        ("no", True, "no"),
+        ("0", True, "0"),
+        ("yes", False, False),
     ],
 )
 async def test_a_private_default_trace_stays_private_whatever_the_request_sends(

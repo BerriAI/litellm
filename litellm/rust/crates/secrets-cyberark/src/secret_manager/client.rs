@@ -45,10 +45,7 @@ impl CyberArkSecretManager {
         if !enterprise_enabled {
             return Err(Error::EnterpriseRequired);
         }
-        let verify = environment
-            .get(CYBERARK_SSL_VERIFY)
-            .map(|value| str_to_bool(&value) != Some(false))
-            .unwrap_or(true);
+        let verify = ssl_verify_enabled(environment.get(CYBERARK_SSL_VERIFY).as_deref());
         if !verify {
             tracing::warn!(
                 "CyberArk SSL verification is disabled. This is insecure and should only be used for testing with self-signed certificates."
@@ -151,6 +148,10 @@ impl CyberArkSecretManager {
     }
 }
 
+fn ssl_verify_enabled(value: Option<&str>) -> bool {
+    value.and_then(str_to_bool) != Some(false)
+}
+
 fn effective_verify(cyberark_verify: bool, host: &Verify) -> Verify {
     match (cyberark_verify, host) {
         (false, _) => Verify::Disabled,
@@ -188,5 +189,21 @@ mod tests {
         #[case] expected: Verify,
     ) {
         assert_eq!(effective_verify(cyberark_verify, &host_verify), expected);
+    }
+
+    #[rstest]
+    #[case::unset(None, true)]
+    #[case::true_word(Some("true"), true)]
+    #[case::one(Some("1"), true)]
+    #[case::unrecognized(Some("strict"), true)]
+    #[case::false_word(Some(" False "), false)]
+    #[case::zero(Some("0"), false)]
+    #[case::no(Some("no"), false)]
+    #[case::off(Some("OFF"), false)]
+    fn cyberark_ssl_verify_turns_off_only_for_false_words(
+        #[case] value: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(ssl_verify_enabled(value), expected);
     }
 }
