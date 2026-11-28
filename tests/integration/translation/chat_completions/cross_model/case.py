@@ -182,6 +182,11 @@ MID: Final[tuple[AgentCases, ...]] = (
         openai.GPT_5_6_TERRA_AGENT_FOLLOWUP_TEST_CASE,
         openai.GPT_5_6_TERRA_AGENT_STREAMING_TEST_CASE,
     ),
+    (
+        openai.GPT_6_1_TERRA_AGENT_TEST_CASE,
+        openai.GPT_6_1_TERRA_AGENT_FOLLOWUP_TEST_CASE,
+        openai.GPT_6_1_TERRA_AGENT_STREAMING_TEST_CASE,
+    ),
     (openai.GPT_6_SOL_TEST_CASE, openai.GPT_6_SOL_AGENT_FOLLOWUP_TEST_CASE, openai.GPT_6_SOL_AGENT_STREAMING_TEST_CASE),
     (
         openai.GPT_6_1_SOL_AGENT_TEST_CASE,
