@@ -49,6 +49,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     choice_refusal,
     effective_scan_only_tool_results_for_guardrail,
     effective_scan_tool_calls_as_text_for_guardrail,
+    effective_skip_assistant_message_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     list_field,
@@ -139,6 +140,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        skip_assistant: Final = effective_skip_assistant_message_for_guardrail(guardrail_to_apply)
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
         include_tool_calls: Final = tool_calls_in_guardrail_scope(guardrail_to_apply)
 
@@ -160,6 +162,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 tool_call_task_mappings=tool_call_task_mappings,
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
+                skip_assistant_message=skip_assistant,
                 scan_only_tool_results=scan_only_tool_results,
                 include_tool_calls=include_tool_calls,
             )
@@ -196,6 +199,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 scan_only_tool_results=scan_only_tool_results,
                 skip_system=skip_system,
                 skip_tool=skip_tool,
+                skip_assistant=skip_assistant,
             )
             if structured_messages:
                 inputs["structured_messages"] = [structured_messages[index] for index in scoped_message_indices]
@@ -352,6 +356,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         skip_tool_message: bool = False,
         scan_only_tool_results: bool = False,
         include_tool_calls: bool = True,
+        skip_assistant_message: bool = False,
     ) -> None:
         """
         Extract text content, images, and tool calls from a message.
@@ -363,10 +368,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             role,
             skip_system_message=skip_system_message,
             skip_tool_message=skip_tool_message,
+            skip_assistant_message=skip_assistant_message,
             scan_only_tool_results=scan_only_tool_results,
         )
         tool_calls_in_scope: Final = include_tool_calls and not role_out_of_guardrail_scope(
-            role, skip_system_message=skip_system_message, skip_tool_message=skip_tool_message
+            role,
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+            skip_assistant_message=skip_assistant_message,
         )
 
         content: Final = message.get("content", None) if text_in_scope else None

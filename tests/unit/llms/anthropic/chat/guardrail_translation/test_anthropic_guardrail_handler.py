@@ -31,6 +31,45 @@ from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 
+@pytest.mark.parametrize("skip_assistant", [False, True])
+@pytest.mark.asyncio
+async def test_skip_assistant_keeps_tool_results_and_mask_writeback(skip_assistant: bool) -> None:
+    guardrail: Final = MockMaskingGuardrail()
+    guardrail.skip_assistant_message_in_guardrail = skip_assistant
+    data: Final = {
+        "model": "test-model",
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "previous reply"},
+                    {"type": "tool_use", "id": "call_1", "name": "search", "input": {"q": "old"}},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "call_1", "content": "tool result"},
+                    {"type": "text", "text": "prohibited correction"},
+                ],
+            },
+        ],
+    }
+    original_assistant: Final = deepcopy(data["messages"][1])
+
+    await AnthropicMessagesHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.inputs is not None
+    assert ("previous reply" in guardrail.inputs["texts"]) is not skip_assistant
+    assert "tool result" in guardrail.inputs["texts"]
+    assert bool(guardrail.inputs.get("tool_calls")) is not skip_assistant
+    assert any(message["role"] == "assistant" for message in guardrail.inputs["structured_messages"]) is not skip_assistant
+    assert data["messages"][1] == original_assistant
+    assert data["messages"][2]["content"][0]["content"] == "tool result"
+    assert data["messages"][2]["content"][1]["text"] == "[MASKED]"
+
+
 class MockPassThroughGuardrail(CustomGuardrail):
     """Mock guardrail that passes through without blocking - for testing streaming fallback behavior"""
 

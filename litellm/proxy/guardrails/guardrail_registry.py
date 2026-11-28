@@ -744,6 +744,7 @@ def _configure_callback_scoping(
     for scoping_param in (
         "skip_system_message_in_guardrail",
         "skip_tool_message_in_guardrail",
+        "skip_assistant_message_in_guardrail",
         "scan_only_tool_results",
         "scan_tool_calls_as_text",
     ):
