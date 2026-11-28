@@ -19,7 +19,7 @@ pub use self::{
     bag::{Bag, Dict, Ints, Lists},
     budget::{BudgetEntry, BudgetFullEntry},
     budget_limit::BudgetLimitEntry,
-    end_user::{EndUserEntry, ModelRegion},
+    end_user::{EndUserEntry, ModelRegion, RestrictedEndUsers},
     key::KeyEntry,
     member::{MemberEntry, MemberRole},
     object_permission::ObjectPermissionEntry,

@@ -9,6 +9,7 @@
 //! change serves more keys by answering one more step.
 
 mod carried;
+mod end_user;
 mod key;
 mod models;
 mod store;
@@ -37,6 +38,7 @@ use litellm_gateway_auth_core::{
 use litellm_redis_store::auth_cache::KeyEntry;
 use serde_json::Value;
 
+pub(crate) use end_user::end_user;
 pub use key::Key;
 pub(crate) use models::{allowed_models, layers};
 pub use store::AuthStore;
@@ -44,7 +46,8 @@ pub use store::AuthStore;
 /// The rows the native host hands the core: a key's, and a core record for each thing a caller
 /// belongs to. The steps that would read those records still decline, so no caller this host
 /// serves holds one yet. `Infallible` is a row this host has no record for, so no identity that
-/// needs one exists. The end user's record is empty for a request that names none.
+/// needs one exists. The end user's record is empty for a request that names none, and names
+/// the end user alone for one whose row holds nothing the native app would have to apply.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeRows;
 
@@ -325,7 +328,9 @@ impl AuthHost for NativeAuthHost {
         declined("jwt_end_user")
     }
 
-    /// A request that names no end user reads none.
+    /// A request that names no end user reads none. The gateway reads the body after it
+    /// authenticates, so it hands the core no end user, and `admit` reads the one a body names
+    /// through [`end_user`] once the body is read.
     async fn end_user(&self, end_user_id: Option<&str>) -> Result<EndUserRecord, Error> {
         match end_user_id {
             None => Ok(EndUserRecord::default()),

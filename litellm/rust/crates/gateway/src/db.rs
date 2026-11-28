@@ -25,17 +25,33 @@ impl Observer for Logged {
     }
 }
 
-/// The pools, and what a repository runs its queries on them with.
-pub(crate) async fn connect(
-    config: &Config,
-    secrets: &SecretResolver,
-) -> Result<Option<(Pools, Database)>, Error> {
+/// What the gateway reads the proxy's database through.
+pub(crate) enum Connected {
+    /// The pools, and what a repository runs its queries on them with.
+    Pools(Pools, Database),
+    /// The config names no database, so the proxy reads none either.
+    NoDatabase,
+    /// The config names a database the gateway cannot sign in to (token auth), so the proxy holds
+    /// rows the gateway cannot read.
+    Unread,
+}
+
+impl Connected {
+    pub(crate) fn pools(self) -> Option<(Pools, Database)> {
+        match self {
+            Self::Pools(pools, repositories) => Some((pools, repositories)),
+            Self::NoDatabase | Self::Unread => None,
+        }
+    }
+}
+
+pub(crate) async fn connect(config: &Config, secrets: &SecretResolver) -> Result<Connected, Error> {
     let database = match litellm_db_resolve::resolve(&config.general_settings, secrets).await {
         Ok(Some(database)) => database,
-        Ok(None) => return Ok(None),
+        Ok(None) => return Ok(Connected::NoDatabase),
         Err(error @ litellm_db_resolve::Error::TokenAuth { .. }) => {
             tracing::warn!("{error}, so the gateway runs without a database pool");
-            return Ok(None);
+            return Ok(Connected::Unread);
         }
         Err(error) => return Err(error.into()),
     };
@@ -58,5 +74,5 @@ pub(crate) async fn connect(
         database.writer.socket_timeout()?,
         names_statements,
     );
-    Ok(Some((pools, repositories)))
+    Ok(Connected::Pools(pools, repositories))
 }
