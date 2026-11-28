@@ -5017,6 +5017,7 @@ class SearchProviders(str, Enum):
     WEBIQ = "webiq"
     DEEPSEEK = "deepseek"
     XAI = "xai"
+    SPECSTREAM = "specstream"
 
 
 # Create a set of all search provider values for quick lookup
