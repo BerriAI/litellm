@@ -78,6 +78,12 @@ Each object has one entry here, its writes included, in the same form, and a lat
 - Writes: `UserDatabase::insert` creates the user under `user_id_upsert` with the `NewUserDefaults` the host resolved from `default_internal_user_params` (`UserRepository::insert`), and returns `Inserted` with the entry for the row that won a concurrent sign-in. `UserDatabase::backfill_email` stores a sign-in's email on a row with none (`backfill_email_returning`), and `UserDatabase::set_role` sets the role the JWT role sync maps (`set_role`). Both return the entry for the row as stored. Python caches the row it already held with the email copied in, so its `updated_at` is the one before the backfill. Joining `default_internal_user_params.teams` after an insert is `TeamMembershipDatabase::add_member_as`, once per team
 - Not read: the object permission the user points at, and each membership's budget and user
 
+### Tag
+
+- Query: `TagDatabase::tags` reads the requested rows with their budgets in one query (`find_many_with_budgets`). `TagDatabase::names` reads up to the limit the caller gives the registry
+- Entry: `TagEntry` under `AuthObject::Tag`, the `LiteLLM_TagTable` dump
+- Nested: the budget as `LiteLLM_BudgetTable` dumps it (`BudgetEntry`). A bad row refuses the whole batch, as Python's batch validation does
+
 ## The cached shape
 
 - What the database gives is not what the cache holds. Python's entry is `Model(**row).model_dump(mode="json")`, so each shaper converts its row field by field into the entry, and the entry dumps to the bytes Python writes for the same row

@@ -190,7 +190,7 @@ macro_rules! record {
     (
         $(#[$meta:meta])*
         pub struct $name:ident {
-            $($(#[$field_meta:meta])* $field:ident: $kind:ty $(= $default:expr)?,)+
+            $($(#[$field_meta:meta])* $field:ident: $kind:ty $(= $default:expr)? $(=> $null:ident)?,)+
         }
         $(refuse_unless $check:path;)?
     ) => {
@@ -213,7 +213,7 @@ macro_rules! record {
                 let record = Self {
                     $($field: match unnamed.remove(stringify!($field)) {
                         None => record!(@default $($default)?),
-                        Some(value) => <$kind as $crate::auth_cache::types::record::Field>::read(value)
+                        Some(value) => record!(@read $kind, value $(, $null)?)
                             .ok_or($crate::DecodeError::Shape(stringify!($field)))?,
                     },)+
                     unread: entries
@@ -265,6 +265,15 @@ macro_rules! record {
     };
     (@default $default:expr) => {
         $default
+    };
+    (@read $kind:ty, $value:expr) => {
+        <$kind as $crate::auth_cache::types::record::Field>::read($value)
+    };
+    (@read $kind:ty, $value:expr, default_on_null) => {
+        match $value {
+            ::litellm_python_compat::Value::None => Some(<$kind>::default()),
+            value => record!(@read $kind, value),
+        }
     };
 }
 
