@@ -334,6 +334,11 @@ class OpenAIConfig(BaseConfig):
             headers=headers,
         )
 
+    def _transform_chat_request_params(
+        self, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        return optional_params
+
     def transform_request(
         self,
         model: str,
@@ -343,7 +348,8 @@ class OpenAIConfig(BaseConfig):
         headers: dict[str, object],
     ) -> dict[str, object]:
         messages = self._transform_messages(messages=messages, model=model)
-        return {"model": model, "messages": messages, **optional_params}
+        request_params: Final = self._transform_chat_request_params(optional_params, litellm_params)
+        return {"model": model, "messages": messages, **request_params}
 
     def transform_response(
         self,

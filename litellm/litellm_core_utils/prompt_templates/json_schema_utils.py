@@ -372,6 +372,10 @@ def drop_lookaround_regex_patterns(schema: Mapping[str, object]) -> Mapping[str,
     return _schema_without_rejected_regex(schema, _uses_regex_lookaround)
 
 
+def drop_matching_pattern_values(schema: Mapping[str, object], rejected: Callable[[str], bool]) -> Mapping[str, object]:
+    return _schema_without_rejected_regex(schema, rejected, check_pattern_property_keys=False)
+
+
 def drop_schema_keywords(schema: Mapping[str, object], keywords: frozenset[str]) -> Mapping[str, object]:
     """Drop each of ``keywords`` from every schema position, with its value.
 
@@ -430,9 +434,14 @@ def with_sanitized_schema_at(
 
 
 def _schema_without_rejected_regex(
-    schema: Mapping[str, object], rejected: Callable[[str], bool]
+    schema: Mapping[str, object], rejected: Callable[[str], bool], *, check_pattern_property_keys: bool = True
 ) -> Mapping[str, object]:
-    return _schema_rebuilt(schema, partial(_node_without_rejected_regex, rejected=rejected), _subschemas)
+    rewrite: Final = partial(
+        _node_without_rejected_regex,
+        rejected=rejected,
+        reject_property_name=rejected if check_pattern_property_keys else _rejects_no_regex,
+    )
+    return _schema_rebuilt(schema, rewrite, _subschemas)
 
 
 def _schema_rebuilt(
@@ -595,9 +604,10 @@ def _node_without_rejected_regex(
     node: Mapping[str, object],
     rebuilt: Mapping[int, Mapping[str, object]],
     rejected: Callable[[str], bool],
+    reject_property_name: Callable[[str], bool],
 ) -> Mapping[str, object]:
     kept: Final = {
-        key: _keyword_value_rebuilt(key, value, rebuilt, rejected)
+        key: _keyword_value_rebuilt(key, value, rebuilt, reject_property_name)
         for key, value in node.items()
         if key != "pattern" or not isinstance(value, str) or not rejected(value)
     }
