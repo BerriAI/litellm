@@ -618,22 +618,32 @@ class DualCache(BaseCache):
         """
         Delete a key from the cache
         """
-        if self.in_memory_cache is not None:
-            self.in_memory_cache.delete_cache(key)
-        if self.redis_cache is not None:
-            await self.redis_cache.async_delete_cache(key)
+        try:
+            if self.redis_cache is not None:
+                await self.redis_cache.async_delete_cache(key)
+        finally:
+            if self.in_memory_cache is not None:
+                self.in_memory_cache.delete_cache(key)
 
     async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
         """Batch twin of ``async_delete_cache``, chunked because Redis takes the
-        whole list as one DELETE command."""
+        whole list as one DELETE command.
+
+        Redis goes first and memory last: a read that misses memory while the
+        Redis delete is in flight refills memory from the still-present Redis
+        entry, and deleting memory afterwards removes that refilled copy. A
+        Redis failure must not leave the memory copy behind, so the memory
+        delete runs even when the Redis delete raises.
+        """
         if not keys:
             return
-        for key in keys:
-            self.in_memory_cache.delete_cache(key)
-        if self.redis_cache is None:
-            return
-        for start in range(0, len(keys), DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE):
-            await self.redis_cache.delete_cache_keys(keys[start : start + DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE])
+        try:
+            if self.redis_cache is not None:
+                for start in range(0, len(keys), DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE):
+                    await self.redis_cache.delete_cache_keys(keys[start : start + DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE])
+        finally:
+            for key in keys:
+                self.in_memory_cache.delete_cache(key)
 
     async def async_get_ttl(self, key: str) -> int | None:
         """

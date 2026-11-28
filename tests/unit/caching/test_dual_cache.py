@@ -692,6 +692,40 @@ async def test_async_delete_cache_keys_on_empty_list_touches_no_backend():
     redis_cache.delete_cache_keys.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_async_delete_cache_keys_drops_refill_from_concurrent_read():
+    """A read interleaved with the Redis delete must not leave the key in
+    memory once the delete returns."""
+    delete_started = asyncio.Event()
+    let_delete_finish = asyncio.Event()
+
+    class _SlowRedis:
+        def __init__(self):
+            self.store = {"team-1_user-1": "membership-row"}
+
+        async def async_get_cache(self, key, parent_otel_span=None, **kwargs):
+            return self.store.get(key)
+
+        async def delete_cache_keys(self, keys):
+            delete_started.set()
+            await let_delete_finish.wait()
+            for key in keys:
+                self.store.pop(key, None)
+
+    redis_cache = _SlowRedis()
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache)  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    await dual_cache.in_memory_cache.async_set_cache("team-1_user-1", "membership-row")
+
+    deleting = asyncio.create_task(dual_cache.async_delete_cache_keys(["team-1_user-1"]))
+    await delete_started.wait()
+    assert await dual_cache.async_get_cache("team-1_user-1") == "membership-row"
+    let_delete_finish.set()
+    await deleting
+
+    assert await dual_cache.async_get_cache("team-1_user-1", local_only=True) is None
+    assert await dual_cache.async_get_cache("team-1_user-1") is None
+
+
 def _recording_redis(values: dict) -> MagicMock:
     redis = MagicMock(spec=RedisCache)
     redis.async_batch_get_cache = AsyncMock(
