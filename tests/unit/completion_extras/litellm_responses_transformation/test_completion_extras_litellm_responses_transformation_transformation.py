@@ -7002,17 +7002,86 @@ def test_auto_truncation_keeps_system_prompt_in_instructions(location: str) -> N
     assert request["input"] == [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "equivalent"),
+    [
+        ("instructions", "Caller instructions", "a `system` message"),
+        ("reasoning", {"effort": "low"}, "`reasoning_effort`"),
+        ("text", {"verbosity": "low"}, "`response_format` and `verbosity`"),
+        ("max_output_tokens", 64, "`max_completion_tokens`"),
+    ],
+)
+@pytest.mark.parametrize("in_extra_body", [False, True])
+def test_responses_only_fields_are_rejected_with_their_chat_equivalent(
+    field: str, value: object, equivalent: str, in_extra_body: bool
+) -> None:
+    optional_params: Final = {"extra_body": {field: value}} if in_extra_body else {field: value}
+    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+        _bridged_transform_request(
+            "gpt-6.2-sol",
+            [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
+            {"custom_llm_provider": "openai"},
+            optional_params,
+        )
+    assert f"`{field}` is only supported on the Responses API" in str(rejected.value)
+    assert equivalent in str(rejected.value)
+
+
+@pytest.mark.parametrize("in_extra_body", [False, True])
+def test_responses_only_field_set_on_the_deployment_is_not_rejected(in_extra_body: bool) -> None:
+    def routed(caller_sent: tuple[str, ...]) -> dict[str, object]:
+        return _bridged_transform_request(
+            "gpt-6.2-sol",
+            [{"role": "user", "content": "hi"}],
+            {"custom_llm_provider": "openai", "metadata": {"_caller_sent_responses_fields": caller_sent}},
+            {"extra_body": {"max_output_tokens": 64}} if in_extra_body else {"max_output_tokens": 64},
+        )
+
+    assert routed(())["max_output_tokens"] == 64
+    with pytest.raises(litellm.UnsupportedParamsError, match="`max_output_tokens` is only supported"):
+        routed(("max_output_tokens",))
+
+
 @pytest.mark.parametrize("continuation", [{}, {"truncation": "auto"}])
-def test_explicit_instructions_are_preserved(continuation: dict[str, str]) -> None:
+def test_deployment_instructions_are_kept_alongside_the_system_message(continuation: dict[str, str]) -> None:
     request: Final = _bridged_transform_request(
         "gpt-6.2-sol",
         [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "hi"}],
-        {"custom_llm_provider": "openai"},
-        {"instructions": "Caller instructions", **continuation},
+        {"custom_llm_provider": "openai", "metadata": {"_caller_sent_responses_fields": ()}},
+        {"instructions": "Deployment instructions", **continuation},
     )
-    assert request["instructions"] == ("Be brief.\nCaller instructions" if continuation else "Caller instructions")
-    if not continuation:
-        assert request["input"][0] == _system_input_item("Be brief.")
+    assert request["instructions"] == (
+        "Be brief.\nDeployment instructions" if continuation else "Deployment instructions"
+    )
+
+
+@pytest.mark.parametrize(
+    ("deployment_params", "request_params", "rejected_field"),
+    [
+        ({"max_output_tokens": 64, "instructions": "Be brief."}, {}, None),
+        ({"max_output_tokens": 64}, {"reasoning": {"effort": "low"}}, "reasoning"),
+        ({"instructions": "Be brief."}, {"extra_body": {"instructions": "Be long."}}, "instructions"),
+    ],
+)
+def test_router_rejects_only_the_responses_only_fields_the_caller_sent(
+    deployment_params: dict[str, object], request_params: dict[str, object], rejected_field: str | None
+) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "bridged", "litellm_params": {"model": "openai/responses/gpt-6.2-sol", **deployment_params}}
+        ],
+        num_retries=0,
+    )
+
+    reached_provider: Final = litellm.RateLimitError("reached the provider", "openai", "gpt-6.2-sol")
+    with (
+        patch("litellm.responses", side_effect=reached_provider),
+        pytest.raises(litellm.RateLimitError if rejected_field is None else litellm.UnsupportedParamsError) as raised,
+    ):
+        router.completion(model="bridged", messages=[{"role": "user", "content": "hi"}], **request_params)
+    if rejected_field is not None:
+        assert f"`{rejected_field}` is only supported on the Responses API" in str(raised.value)
+        assert "max_output_tokens" not in str(raised.value)
 
 
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():

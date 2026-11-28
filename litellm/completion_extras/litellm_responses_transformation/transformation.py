@@ -35,6 +35,7 @@ from litellm.completion_extras.litellm_responses_transformation.history import (
     replay_items,
     requested_phase,
 )
+from litellm.constants import CALLER_SENT_RESPONSES_FIELDS_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     routed_model_info,
@@ -286,6 +287,33 @@ _PREVIOUS_RESPONSE_ID_UNSUPPORTED: Final = (
     "`previous_response_id` is only supported on the Responses API (`/v1/responses`). Continue the stored "
     "response there, or send the earlier turns in `messages`."
 )
+
+
+_RESPONSES_ONLY_FIELD_EQUIVALENTS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "instructions": "a `system` message",
+        "reasoning": "`reasoning_effort`",
+        "text": "`response_format` and `verbosity`",
+        "max_output_tokens": "`max_completion_tokens`",
+    }
+)
+
+
+def _responses_only_field_error(sent_params: Sequence[Mapping[str, object]], caller_sent: object) -> str | None:
+    """``caller_sent`` is what the router saw on the request, so a field its deployment sets is not rejected."""
+    sent: Final = tuple(
+        field
+        for field in _RESPONSES_ONLY_FIELD_EQUIVALENTS
+        if any(params.get(field) is not None for params in sent_params)
+        and (not isinstance(caller_sent, Sequence) or field in caller_sent)
+    )
+    if not sent:
+        return None
+    return " ".join(
+        f"`{field}` is only supported on the Responses API (`/v1/responses`). "
+        f"On chat completions, send {_RESPONSES_ONLY_FIELD_EQUIVALENTS[field]} instead."
+        for field in sent
+    )
 
 
 def replays_responses_history(provider: str | None) -> bool:
@@ -1523,6 +1551,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             raise litellm.UnsupportedParamsError(
                 message=_PREVIOUS_RESPONSE_ID_UNSUPPORTED, model=model, llm_provider=_served_provider(litellm_params)
             )
+        responses_only_field_error: Final = _responses_only_field_error(
+            sent_params[:2],
+            (as_str_mapping(litellm_params.get("metadata")) or {}).get(CALLER_SENT_RESPONSES_FIELDS_METADATA_KEY),
+        )
+        if responses_only_field_error is not None:
+            raise litellm.UnsupportedParamsError(
+                message=responses_only_field_error, model=model, llm_provider=_served_provider(litellm_params)
+            )
         preserve_system_instructions: Final = any(params.get("truncation") == "auto" for params in sent_params)
         optional_params = self._extract_extra_body_params(optional_params)
         provider: Final = _served_provider(litellm_params)
@@ -1595,10 +1631,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             custom_llm_provider=_served_provider(litellm_params),
         )
 
-        caller_instructions: Final = responses_api_request.get("instructions")
+        deployment_instructions: Final = responses_api_request.get("instructions")
         if instructions:
             responses_api_request["instructions"] = (
-                f"{instructions}\n{caller_instructions}" if caller_instructions else instructions
+                f"{instructions}\n{deployment_instructions}" if deployment_instructions else instructions
             )
 
         stream: Final = optional_params.get("stream") or litellm_params.get("stream", False)
