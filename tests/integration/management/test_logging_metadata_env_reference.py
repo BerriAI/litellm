@@ -246,27 +246,17 @@ def test_a_key_storing_an_env_reference_names_it_when_its_metadata_is_resent(gat
         assert object_value(_key_metadata(key))["logging"] == []
 
 
-def test_key_bulk_update_reports_the_key_with_an_env_reference_as_failed(gateway: Gateway) -> None:
+def test_key_bulk_update_cannot_store_an_env_reference(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
-        refused_key: Final = scenario.key(metadata={"owner": "env-reference-audit"})
-        plain_key: Final = scenario.key(metadata={"owner": "env-reference-audit"})
+        key: Final = scenario.key(metadata={"owner": "env-reference-audit"})
         response: Final = gateway.request(
-            "POST",
-            "/key/bulk_update",
-            {
-                "keys": [
-                    {"key": refused_key, "metadata": _logging(SPACE_ID)},
-                    {"key": plain_key, "metadata": {"owner": "x"}},
-                ]
-            },
+            "POST", "/key/bulk_update", {"keys": [{"key": key, "max_budget": 5, "metadata": _logging(SPACE_ID)}]}
         )
         assert response.status_code == 200, response.text
-        body: Final = object_value(response.json())
-        failed: Final = body["failed_updates"]
-        assert isinstance(failed, list) and len(failed) == 1, response.text
-        assert _refusal(SPACE_ID, "key metadata") in string_value(object_value(failed[0])["failed_reason"])
-        assert _key_metadata(refused_key) == {"owner": "env-reference-audit"}
-        assert _key_metadata(plain_key) == {"owner": "x"}
+        assert object_value(response.json())["failed_updates"] == [], response.text
+        assert _key_metadata(key) == {"owner": "env-reference-audit"}
+        rows: Final = read_rows('SELECT max_budget FROM "LiteLLM_VerificationToken" WHERE token = %s', (hashed(key),))
+        assert rows == [{"max_budget": 5.0}], rows
 
 
 @pytest.mark.parametrize("field", FIELDS)
