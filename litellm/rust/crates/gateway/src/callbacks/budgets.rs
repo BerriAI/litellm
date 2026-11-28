@@ -6,7 +6,7 @@
 //!
 //! Accepted difference, while the gateway declines every caller that holds a budget other than its
 //! key's own: no `budget_limits` window is planned, no counter is planned for a team the key only
-//! copies, and the owner's rollover is not applied.
+//! copies.
 
 use jiff::Timestamp;
 use litellm_callbacks_budgets::PlannedCounter;
@@ -44,6 +44,24 @@ fn planned(
     })
 }
 
+fn rollover_credit(
+    base: f64,
+    ceiling: Option<f64>,
+    duration: Option<&str>,
+    credit: Option<f64>,
+) -> f64 {
+    ceiling
+        .filter(|ceiling| {
+            ceiling.is_finite()
+                && base > 0.0
+                && base < *ceiling
+                && duration.is_some_and(|duration| !duration.is_empty())
+        })
+        .map_or(0.0, |ceiling| {
+            credit.unwrap_or(0.0).max(0.0).min(ceiling - base)
+        })
+}
+
 fn member_budget(
     membership: Option<&MembershipRecord>,
     default_max: Option<f64>,
@@ -61,25 +79,12 @@ fn member_budget(
     let max = membership
         .and_then(|member| {
             let base = member.budget.max?;
-            let credit = member
-                .budget_extras
-                .rollover_max_budget
-                .filter(|ceiling| {
-                    ceiling.is_finite()
-                        && base > 0.0
-                        && base < *ceiling
-                        && member
-                            .budget_duration
-                            .as_ref()
-                            .is_some_and(|d| !d.is_empty())
-                })
-                .map_or(0.0, |ceiling| {
-                    member
-                        .rollover_credit
-                        .unwrap_or(0.0)
-                        .max(0.0)
-                        .min(ceiling - base)
-                });
+            let credit = rollover_credit(
+                base,
+                member.budget_extras.rollover_max_budget,
+                member.budget_duration.as_deref(),
+                member.rollover_credit,
+            );
             Some(base + active_increase + credit)
         })
         .or_else(|| {
@@ -166,7 +171,17 @@ pub(crate) fn counters(
                 SpendCounter::User(user.user_id.clone()),
                 "User",
                 user.user_id.clone(),
-                user.budget,
+                Budget {
+                    max: user.budget.max.map(|base| {
+                        base + rollover_credit(
+                            base,
+                            user.rollover_max_budget,
+                            user.budget_duration.as_deref(),
+                            user.rollover_credit,
+                        )
+                    }),
+                    spend: user.budget.spend,
+                },
             )
         }),
         end_user.end_user_id.as_ref().and_then(|end_user_id| {
@@ -512,6 +527,34 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(kinds, expected);
+    }
+
+    #[rstest]
+    #[case::capped(Some(10.0), Some(15.0), Some("1d"), Some(10.0), Some(15.0))]
+    #[case::negative(Some(10.0), Some(15.0), Some("1d"), Some(-2.0), Some(10.0))]
+    #[case::unbounded(Some(10.0), Some(f64::INFINITY), Some("1d"), Some(10.0), Some(10.0))]
+    #[case::no_duration(Some(10.0), Some(15.0), None, Some(10.0), Some(10.0))]
+    #[case::no_budget(None, Some(15.0), Some("1d"), Some(10.0), None)]
+    #[case::zero_budget(Some(0.0), Some(15.0), Some("1d"), Some(10.0), Some(0.0))]
+    fn owner_rollover_keeps_the_same_counter_and_raises_only_an_eligible_cap(
+        #[case] base: Option<f64>,
+        #[case] ceiling: Option<f64>,
+        #[case] duration: Option<&str>,
+        #[case] credit: Option<f64>,
+        #[case] expected: Option<f64>,
+    ) {
+        let mut owner = user(base);
+        owner.rollover_max_budget = ceiling;
+        owner.budget_duration = duration.map(str::to_owned);
+        owner.rollover_credit = credit;
+        let identity = caller(Holder::User(Named::Stored(owner)), EndUserRecord::default());
+        let owned = planned(&identity, Settings::default())
+            .into_iter()
+            .find(|(_, kind, ..)| kind == "User");
+        assert_eq!(
+            owned,
+            expected.map(|cap| row("spend:user:u1", "User", "u1", cap, 1.0))
+        );
     }
 
     #[rstest]

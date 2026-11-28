@@ -3,6 +3,7 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use litellm_callbacks::BudgetReservation;
 use litellm_gateway_auth_core::record::Label;
 use serde_json::{Map, Value};
 
@@ -113,6 +114,7 @@ pub struct CallState {
     started: Instant,
     request: Request,
     pub rate_limit_statuses: Option<Value>,
+    pub budget_reservation: Option<BudgetReservation>,
     response_headers: ResponseHeaders,
     served: Option<ServedCall>,
     ended: Option<Ended>,
@@ -159,6 +161,7 @@ impl CallState {
                 stream: false,
             },
             rate_limit_statuses: None,
+            budget_reservation: None,
             response_headers: ResponseHeaders::default(),
             served: None,
             ended: None,

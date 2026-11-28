@@ -13,6 +13,7 @@ arc-swap.workspace = true
 litellm-call-scope.workspace = true
 litellm-secret-value.workspace = true
 litellm-cache-response.workspace = true
+litellm-callbacks.workspace = true
 axum = { workspace = true, features = ["json", "multipart"] }
 bytes.workspace = true
 futures-util.workspace = true
@@ -56,7 +57,6 @@ veil.workspace = true
 [dev-dependencies]
 litellm-redis-client.workspace = true
 litellm-redis-testing.workspace = true
-litellm-callbacks.workspace = true
 litellm-gateway.workspace = true
 litellm-cache-memory.workspace = true
 tokio = { workspace = true, features = ["io-util"] }

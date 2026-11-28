@@ -42,6 +42,8 @@ pub enum Unwritable {
     Set(Field),
     #[error("a model is a name, never {0}")]
     Model(Value),
+    #[error("a budget reservation patch is not a valid reservation")]
+    BudgetReservation,
     #[error("{0:?} is part of the request body, which the route already has")]
     Routed(Field),
     #[error(transparent)]
@@ -315,6 +317,7 @@ fn read(entries: &CallState, field: Field) -> Option<Value> {
         Field::Model => entries.model().map(Value::from),
         Field::RequestBody => entries.body().cloned().map(Value::Object),
         Field::RateLimitStatuses => entries.rate_limit_statuses.clone(),
+        Field::BudgetReservation => record(entries.budget_reservation.as_ref()?),
         Field::ResponseHeaders => Some(Value::Object(entries.response_headers().clone())),
         Field::Outcome => record(outcome(entries.ended()?)),
         Field::Usage => record(usage(entries.served()?.usage.as_ref()?)),
@@ -419,11 +422,18 @@ pub fn write(entries: &mut CallState, op: PatchOp) -> Result<(), Unwritable> {
             value,
         } => entries.rate_limit_statuses = Some(value),
         PatchOp::Set {
+            field: Field::BudgetReservation,
+            value,
+        } => {
+            entries.budget_reservation =
+                serde_json::from_value(value).map_err(|_| Unwritable::BudgetReservation)?;
+        }
+        PatchOp::Set {
             field: field @ (Field::OptionalParams | Field::ResponseHeaders),
             ..
         } => return Err(Unwritable::Set(field)),
         PatchOp::Merge {
-            field: field @ (Field::Model | Field::RateLimitStatuses),
+            field: field @ (Field::Model | Field::RateLimitStatuses | Field::BudgetReservation),
             ..
         } => return Err(Unwritable::Merge(field)),
         PatchOp::Set { field, .. } | PatchOp::Merge { field, .. } => {
@@ -447,6 +457,42 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[rstest]
+    #[case::failure(Hook::PostCallFailure)]
+    #[case::success(Hook::AttemptEnded)]
+    fn settlement_receives_a_budget_hold_and_later_callbacks_see_it_finalized(#[case] hook: Hook) {
+        on_a_call(|entries| {
+            let reservation = litellm_callbacks::BudgetReservation {
+                reserved_cost: Some(1.5),
+                entries: Some(vec![Some(litellm_callbacks::ReservationEntry {
+                    counter_key: Some("spend:team:marketing".to_owned()),
+                    reserved_cost: Some(1.5),
+                    ..Default::default()
+                })]),
+                ..Default::default()
+            };
+            let patch = |reservation: &litellm_callbacks::BudgetReservation| PatchOp::Set {
+                field: Field::BudgetReservation,
+                value: serde_json::to_value(reservation).unwrap(),
+            };
+            let held = |entries: &CallState| {
+                input(entries, hook, FieldSet::of(&[Field::BudgetReservation]))
+                    .fields
+                    .get::<litellm_callbacks::typed::BudgetReservation>()
+                    .unwrap()
+            };
+            write(entries, patch(&reservation)).unwrap();
+            assert_eq!(held(entries), Some(reservation.clone()));
+
+            let finalized = litellm_callbacks::BudgetReservation {
+                finalized: Some(true),
+                ..reservation
+            };
+            write(entries, patch(&finalized)).unwrap();
+            assert_eq!(held(entries), Some(finalized));
+        });
+    }
 
     /// Runs `look` on a fresh record of a Messages call holding a body that names `claude`.
     fn on_a_call<R>(look: impl FnOnce(&mut CallState) -> R) -> R {
