@@ -65,6 +65,7 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import Wind
 from litellm.proxy.hooks.parallel_request_limiter_v3 import RequestRateLimiterStash
 from litellm.proxy.proxy_server import app, aws_error_type_exception_handler, initialize, openai_exception_handler
 from litellm.proxy.spend_tracking import legacy_spend_counters
+from litellm.proxy.ui_static import restructure_ui_html_files
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.rate_limits import RateLimitScope, RateLimitStore
@@ -821,12 +822,6 @@ def test_sso_key_generate_without_sso_keeps_the_cookie_of_a_live_session_key_own
 
 
 def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
-    """
-    Test that _restructure_ui_html_files correctly restructures HTML files.
-    Note: This function is always called now, both in development and non-root Docker environments.
-    """
-    from litellm.proxy import proxy_server
-
     ui_root = tmp_path / "ui"
     ui_root.mkdir()
 
@@ -840,7 +835,7 @@ def test_restructure_ui_html_files_handles_nested_routes(tmp_path):
     write_file(ui_root / "_next" / "ignore.html", "asset")
     write_file(ui_root / "litellm-asset-prefix" / "ignore.html", "asset")
 
-    proxy_server._restructure_ui_html_files(str(ui_root))
+    restructure_ui_html_files(str(ui_root))
 
     assert not (ui_root / "home.html").exists()
     assert (ui_root / "home" / "index.html").read_text() == "home"
@@ -857,8 +852,6 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
     Note: Restructuring always happens now, both in development and non-root Docker environments.
     """
 
-    from litellm.proxy import proxy_server
-
     ui_root = tmp_path / "ui"
     ui_root.mkdir()
     (ui_root / "index.html").write_text("index")
@@ -871,7 +864,7 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
     assert client.get("/ui/login.html").status_code == 200
     assert client.get("/ui/login").status_code == 404
 
-    proxy_server._restructure_ui_html_files(str(ui_root))
+    restructure_ui_html_files(str(ui_root))
 
     response = client.get("/ui/login")
     assert response.status_code == 200

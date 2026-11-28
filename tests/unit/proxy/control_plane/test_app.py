@@ -1,13 +1,17 @@
 from datetime import timedelta
 from itertools import repeat
+from os import utime
+from pathlib import Path
 from typing import Final
 
 import jwt
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
 from pydantic import SecretStr
 
+from litellm._version import version
 from litellm.proxy.control_plane.app import LicenseRequired, create_app
 from litellm.proxy.control_plane.audit.pipeline import Batch, Delivered, DeliveryResult
 from litellm.proxy.control_plane.auth.dependencies import get_token_verifier
@@ -72,6 +76,144 @@ def test_health_routes_need_no_credentials() -> None:
     client: Final = _client()
     assert client.get("/healthz").json() == {"status": "ok"}
     assert client.get("/readyz").json() == {"status": "ok"}
+
+
+@pytest.mark.parametrize("path", ("/.well-known/litellm-ui-config", "/litellm/.well-known/litellm-ui-config"))
+def test_ui_discovery_advertises_the_configured_control_plane_api(path: str) -> None:
+    response: Final = _client(_settings(api_prefix="/control/v1")).get(path, headers={"Origin": "https://other.test"})
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    assert body["mode"] == "control_plane_api"
+    assert body["control_plane_api_prefix"] == "/control/v1"
+    assert body["litellm_version"] == (None if version == "unknown" else version)
+    assert body["is_control_plane"] is False
+    assert body["workers"] == []
+    assert body["proxy_base_url"] is None
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_control_plane_serves_the_dashboard_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_UI_PATH", str(tmp_path))
+    (tmp_path / "index.html").write_text("<html>Dashboard home</html>", encoding="utf-8")
+    (tmp_path / "login.html").write_text("<html>Dashboard login</html>", encoding="utf-8")
+    assets: Final = tmp_path / "_next"
+    assets.mkdir()
+    (assets / "dashboard.js").write_text("export {};", encoding="utf-8")
+    client: Final = _client()
+    assert client.get("/ui/").text == "<html>Dashboard home</html>"
+    login: Final = client.get("/ui/login/")
+    assert login.text == "<html>Dashboard login</html>"
+    assert login.headers["X-Frame-Options"] == "DENY"
+    assert login.headers["Content-Security-Policy"] == "frame-ancestors 'none'"
+    assert client.get("/_next/dashboard.js").text == "export {};"
+    assert client.get("/litellm-asset-prefix/_next/dashboard.js").text == "export {};"
+
+
+def test_control_plane_ui_uses_server_root_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SERVER_ROOT_PATH", "/gateway")
+    monkeypatch.setenv("LITELLM_UI_PATH", str(tmp_path))
+    (tmp_path / "index.html").write_text(
+        '<script src="/litellm-asset-prefix/_next/dashboard.js"></script>', encoding="utf-8"
+    )
+    assets: Final = tmp_path / "_next"
+    assets.mkdir()
+    (assets / "dashboard.js").write_text("export {};", encoding="utf-8")
+    client: Final = _client()
+    html: Final = client.get("/gateway/ui/")
+    assert html.status_code == 200
+    assert html.text == '<script src="/gateway/_next/dashboard.js"></script>'
+    assert client.get("/gateway/_next/dashboard.js").text == "export {};"
+    discovery: Final = client.get("/gateway/.well-known/litellm-ui-config")
+    assert discovery.status_code == 200
+    assert discovery.json()["server_root_path"] == "/gateway"
+    assert discovery.json()["control_plane_api_prefix"] == "/api/v1"
+
+
+def test_control_plane_discovery_uses_the_asgi_request_root_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    app: Final = create_app(build_container(_settings()), Licensed())
+    response: Final = TestClient(app, root_path="/mounted").get("/mounted/.well-known/litellm-ui-config")
+    assert response.status_code == 200
+    assert response.json()["server_root_path"] == "/mounted"
+
+
+def test_control_plane_ui_uses_its_asgi_mount_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+    monkeypatch.setenv("LITELLM_UI_PATH", str(tmp_path))
+    asset_path: Final = "/litellm-asset-prefix/_next/dashboard.js"
+    discovery_path: Final = "/litellm/.well-known/litellm-ui-config"
+    html: Final = f'<script src="{asset_path}"></script>'
+    script: Final = f'fetch("{discovery_path}");'
+    (tmp_path / "index.html").write_text(html, encoding="utf-8")
+    assets: Final = tmp_path / "_next"
+    assets.mkdir()
+    (assets / "dashboard.js").write_text(script, encoding="utf-8")
+    (assets / "legacy.js").write_bytes(b"// legacy code page \xa0")
+    app: Final = create_app(build_container(_settings()), Licensed())
+    parent: Final = FastAPI()
+    parent.mount("/mounted", app)
+    client: Final = TestClient(parent)
+    unmounted: Final = TestClient(app)
+
+    original: Final = unmounted.get("/ui/")
+    response: Final = client.get("/mounted/ui/", headers={"If-None-Match": original.headers["etag"]})
+    assert response.status_code == 200, response.text
+    assert response.text == '<script src="/mounted/_next/dashboard.js"></script>'
+    assert client.get(asset_path).status_code == 404
+    assert client.get("/mounted/_next/dashboard.js").text == 'fetch("/mounted/.well-known/litellm-ui-config");'
+    assert client.get("/mounted/_next/legacy.js").content == b"// legacy code page \xa0"
+    assert client.get("/mounted/.well-known/litellm-ui-config").json()["server_root_path"] == "/mounted"
+    assert original.text == html
+    assert unmounted.get(asset_path).text == script
+
+
+def test_mounted_ui_revalidates_rewritten_assets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_UI_PATH", str(tmp_path))
+    (tmp_path / "index.html").write_text("<html>Dashboard</html>", encoding="utf-8")
+    assets: Final = tmp_path / "_next"
+    assets.mkdir()
+    script: Final = assets / "dashboard.js"
+    script.write_text('const prefix = "/litellm-asset-prefix";', encoding="utf-8")
+    timestamp: Final = 1_700_000_000
+    utime(script, (timestamp, timestamp))
+    app: Final = create_app(build_container(_settings()), Licensed())
+    parent: Final = FastAPI()
+    parent.mount("/first", app)
+    parent.mount("/second", app)
+    client: Final = TestClient(parent)
+    path: Final = "/first/_next/dashboard.js"
+
+    response: Final = client.get(path)
+    assert response.status_code == 200
+    assert response.text == 'const prefix = "/first";'
+    assert "etag" in response.headers
+    etag: Final = response.headers["etag"]
+    last_modified: Final = response.headers["last-modified"]
+    head: Final = client.head(path)
+    assert head.content == b""
+    assert head.headers["etag"] == etag
+    assert head.headers["content-length"] == str(len(response.content))
+
+    other: Final = client.get(
+        "/second/_next/dashboard.js",
+        headers={"If-None-Match": etag, "If-Modified-Since": last_modified},
+    )
+    assert other.status_code == 200
+    assert other.text == 'const prefix = "/second";'
+    assert other.headers["etag"] != etag
+
+    revalidated: Final = client.get(path, headers={"If-None-Match": etag})
+    assert revalidated.status_code == 304
+    assert revalidated.content == b""
+    assert revalidated.headers["etag"] == etag
+    assert client.head(path, headers={"If-Modified-Since": last_modified}).status_code == 304
+
+    script.write_text('const PREFIX = "/litellm-asset-prefix";', encoding="utf-8")
+    utime(script, (timestamp + 1, timestamp + 1))
+    updated: Final = client.get(path, headers={"If-None-Match": etag, "If-Modified-Since": last_modified})
+    assert updated.status_code == 200
+    assert updated.text == 'const PREFIX = "/first";'
+    assert updated.headers["etag"] != etag
 
 
 @pytest.mark.parametrize(
