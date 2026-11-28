@@ -1096,10 +1096,14 @@ def _count_function_call_tokens(
             raise ValueError(f"Unsupported type {type(value)} for key tool_calls in message {message}")
         total = 0
         for tool_call in value:
-            if "function" not in tool_call:
-                raise ValueError(f"Unsupported tool call {tool_call} must contain a function key")
-            function_arguments = tool_call["function"].get("arguments", "")
-            total += count_function(str(function_arguments))
+            if "function" in tool_call:
+                function_arguments = tool_call["function"].get("arguments", "")
+                total += count_function(str(function_arguments))
+            elif tool_call.get("type") == "custom" and isinstance(tool_call.get("custom"), Mapping):
+                # A custom tool call carries free-form `input` instead of JSON `arguments`.
+                total += count_function(str(tool_call["custom"].get("input", "")))
+            else:
+                raise ValueError(f"Unsupported tool call {tool_call} must contain a function or custom key")
         return total
     if key == "function_call":
         if not isinstance(value, Mapping):
