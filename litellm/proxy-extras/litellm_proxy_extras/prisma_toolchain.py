@@ -61,6 +61,8 @@ PRISMA_BOOTSTRAP_TIMEOUT_ENV_VAR = "LITELLM_PRISMA_BOOTSTRAP_TIMEOUT"
 PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR = "LITELLM_PRISMA_MIGRATE_DEPLOY_TIMEOUT"
 MIGRATION_LOCK_TIMEOUT_ENV_VAR = "LITELLM_MIGRATION_LOCK_TIMEOUT"
 NODEENV_CACHE_DIR_ENV_VAR = "PRISMA_NODEENV_CACHE_DIR"
+BINARY_CACHE_DIR_ENV_VAR = "PRISMA_BINARY_CACHE_DIR"
+PRISMA_CLI_ENTRYPOINT = Path("node_modules", "prisma", "build", "index.js")
 
 DEFAULT_PRISMA_COMMAND_TIMEOUT = 60.0
 DEFAULT_PRISMA_BOOTSTRAP_TIMEOUT = 600.0
@@ -144,6 +146,33 @@ def nodeenv_cache_dir() -> Optional[Path]:
             "No resolvable home directory, cannot locate the Prisma nodeenv cache"
         )
         return None
+
+
+def prisma_cli_entrypoint() -> Path | None:
+    """The Node entrypoint of the Prisma CLI once it is npm-installed, or None if unknowable."""
+    override = os.getenv(BINARY_CACHE_DIR_ENV_VAR)
+    if override:
+        return Path(override) / PRISMA_CLI_ENTRYPOINT
+    if prisma_config is None:
+        return None
+    try:
+        return Path(prisma_config.binary_cache_dir) / PRISMA_CLI_ENTRYPOINT
+    except (OSError, ValueError) as e:
+        logger.warning("Could not read the Prisma binary cache dir: %s", e)
+        return None
+
+
+def toolchain_installed() -> bool:
+    """Whether the Prisma CLI and a Node binary to run it are both on disk, so the bootstrap has nothing to install."""
+    entrypoint = prisma_cli_entrypoint()
+    cache_dir = nodeenv_cache_dir()
+    try:
+        cli_installed = entrypoint is not None and entrypoint.is_file()
+        private_node = cache_dir is not None and node_binary_path(cache_dir).exists()
+    except OSError as e:
+        logger.warning("Could not inspect the Prisma CLI toolchain: %s", e)
+        return False
+    return cli_installed and (private_node or shutil.which("node") is not None)
 
 
 def node_binary_path(cache_dir: Path) -> Path:
@@ -256,6 +285,9 @@ def ensure_prisma_toolchain(
     caller can go on and let the real Prisma command produce the real error.
     """
     healed = heal_incomplete_nodeenv_cache()
+    if not healed and toolchain_installed():
+        logger.info("Prisma CLI toolchain already installed")
+        return ToolchainBootstrap(healed_incomplete_cache=False, ready=True)
     timeout = prisma_bootstrap_timeout()
     logger.info("Preparing the Prisma CLI toolchain (timeout %ss)", timeout)
     try:

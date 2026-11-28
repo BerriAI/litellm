@@ -99,6 +99,7 @@ def toolchain_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
     log_path = tmp_path / "prisma-calls.jsonl"
     bin_dir = _write_fake_prisma(tmp_path)
     monkeypatch.setenv("PRISMA_NODEENV_CACHE_DIR", str(cache_dir))
+    monkeypatch.setenv("PRISMA_BINARY_CACHE_DIR", str(tmp_path / "binaries"))
     monkeypatch.setenv("FAKE_PRISMA_LOG", str(log_path))
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.delenv(PRISMA_COMMAND_TIMEOUT_ENV_VAR, raising=False)
@@ -114,6 +115,57 @@ def _deploy_calls(log_path: Path) -> list[list[str]]:
 def _make_incomplete_cache(cache_dir: Path) -> None:
     (cache_dir / "lib").mkdir(parents=True)
     (cache_dir / "bin").mkdir()
+
+
+def _install_prisma_cli(tmp_path: Path) -> None:
+    entrypoint = tmp_path / "binaries" / "node_modules" / "prisma" / "build" / "index.js"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("")
+
+
+def _install_private_node(cache_dir: Path) -> None:
+    node = cache_dir / ("Scripts/node.exe" if os.name == "nt" else "bin/node")
+    node.parent.mkdir(parents=True)
+    node.write_text("")
+
+
+def test_bootstrap_does_not_run_prisma_when_the_toolchain_is_installed(
+    toolchain_env: tuple[Path, Path], tmp_path: Path
+) -> None:
+    cache_dir, log_path = toolchain_env
+    _install_prisma_cli(tmp_path)
+    _install_private_node(cache_dir)
+
+    result = ensure_prisma_toolchain(prisma_command="prisma", prisma_env=dict(os.environ))
+
+    assert result.ready is True
+    assert result.healed_incomplete_cache is False
+    assert _fake_prisma_calls(log_path) == []
+
+
+def test_bootstrap_runs_when_the_cli_is_installed_but_no_node_can_run_it(
+    toolchain_env: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, log_path = toolchain_env
+    _install_prisma_cli(tmp_path)
+    monkeypatch.setenv("PATH", str(tmp_path / "fakebin"))
+
+    result = ensure_prisma_toolchain(prisma_command="prisma", prisma_env=dict(os.environ))
+
+    assert result.ready is True
+    assert [call["args"] for call in _fake_prisma_calls(log_path)] == [["--version"]]
+
+
+def test_bootstrap_runs_when_node_is_installed_but_the_cli_is_not(
+    toolchain_env: tuple[Path, Path],
+) -> None:
+    cache_dir, log_path = toolchain_env
+    _install_private_node(cache_dir)
+
+    result = ensure_prisma_toolchain(prisma_command="prisma", prisma_env=dict(os.environ))
+
+    assert result.ready is True
+    assert [call["args"] for call in _fake_prisma_calls(log_path)] == [["--version"]]
 
 
 
