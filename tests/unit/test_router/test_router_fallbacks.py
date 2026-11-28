@@ -1788,6 +1788,7 @@ async def test_mid_stream_continuation_from_an_aws_hop_does_not_bring_the_caller
 
 _OPAQUE_CALLER_KEY: Final = "caller-destination-key"
 _SIGV4: Final = "AWS4-HMAC-SHA256 "
+_AWS_REGION_ONLY: Final = {"aws_region_name": "us-east-1"}
 
 
 @pytest.mark.asyncio
@@ -1797,10 +1798,11 @@ _SIGV4: Final = "AWS4-HMAC-SHA256 "
     ids=("anthropic-caller-key", "opaque-caller-key"),
 )
 @pytest.mark.parametrize(
-    ("target", "deployment_key", "env_bearers", "expected_authorization"),
+    ("target", "deployment_credentials", "deployment_key", "env_bearers", "expected_authorization"),
     (
         pytest.param(
             "bedrock",
+            _AWS_DEPLOYMENT_CREDENTIALS,
             "gateway-key",
             {},
             {"anthropic": "Bearer gateway-key", "opaque": f"Bearer {_OPAQUE_CALLER_KEY}"},
@@ -1808,6 +1810,7 @@ _SIGV4: Final = "AWS4-HMAC-SHA256 "
         ),
         pytest.param(
             "bedrock_mantle",
+            _AWS_DEPLOYMENT_CREDENTIALS,
             "gateway-key",
             {},
             {"anthropic": "Bearer gateway-key", "opaque": f"Bearer {_OPAQUE_CALLER_KEY}"},
@@ -1815,13 +1818,23 @@ _SIGV4: Final = "AWS4-HMAC-SHA256 "
         ),
         pytest.param(
             "bedrock",
+            _AWS_REGION_ONLY,
             None,
             {"AWS_BEARER_TOKEN_BEDROCK": "env-bearer"},
             {"anthropic": "Bearer env-bearer", "opaque": f"Bearer {_OPAQUE_CALLER_KEY}"},
             id="bedrock-env-bearer",
         ),
         pytest.param(
+            "bedrock",
+            _AWS_DEPLOYMENT_CREDENTIALS,
+            None,
+            {"AWS_BEARER_TOKEN_BEDROCK": "env-bearer"},
+            {"anthropic": _SIGV4, "opaque": _SIGV4},
+            id="bedrock-own-keys-outrank-the-env-bearer",
+        ),
+        pytest.param(
             "bedrock_mantle",
+            _AWS_DEPLOYMENT_CREDENTIALS,
             None,
             {"BEDROCK_MANTLE_API_KEY": "env-bearer"},
             {"anthropic": "Bearer env-bearer", "opaque": f"Bearer {_OPAQUE_CALLER_KEY}"},
@@ -1829,6 +1842,7 @@ _SIGV4: Final = "AWS4-HMAC-SHA256 "
         ),
         pytest.param(
             "bedrock_mantle",
+            _AWS_DEPLOYMENT_CREDENTIALS,
             None,
             {"AWS_BEARER_TOKEN_BEDROCK": "env-bearer"},
             {"anthropic": "Bearer env-bearer", "opaque": f"Bearer {_OPAQUE_CALLER_KEY}"},
@@ -1836,6 +1850,7 @@ _SIGV4: Final = "AWS4-HMAC-SHA256 "
         ),
         pytest.param(
             "bedrock_mantle",
+            _AWS_DEPLOYMENT_CREDENTIALS,
             "",
             {"BEDROCK_MANTLE_API_KEY": "env-bearer"},
             {"anthropic": "Bearer env-bearer", "opaque": f"Bearer {_OPAQUE_CALLER_KEY}"},
@@ -1843,12 +1858,20 @@ _SIGV4: Final = "AWS4-HMAC-SHA256 "
         ),
         pytest.param(
             "bedrock",
+            _AWS_DEPLOYMENT_CREDENTIALS,
             "",
             {"AWS_BEARER_TOKEN_BEDROCK": "env-bearer"},
             {"anthropic": _SIGV4, "opaque": _SIGV4},
             id="bedrock-empty-key-is-iam",
         ),
-        pytest.param("bedrock_mantle", None, {}, {"anthropic": _SIGV4, "opaque": _SIGV4}, id="mantle-iam-only"),
+        pytest.param(
+            "bedrock_mantle",
+            _AWS_DEPLOYMENT_CREDENTIALS,
+            None,
+            {},
+            {"anthropic": _SIGV4, "opaque": _SIGV4},
+            id="mantle-iam-only",
+        ),
     ),
 )
 async def test_anthropic_fallback_onto_aws_uses_its_own_auth_unless_a_bearer_meets_an_opaque_caller_key(
@@ -1858,6 +1881,7 @@ async def test_anthropic_fallback_onto_aws_uses_its_own_auth_unless_a_bearer_mee
     caller_key: str,
     caller_kind: str,
     target: str,
+    deployment_credentials: dict[str, str],
     deployment_key: str | None,
     env_bearers: dict[str, str],
     expected_authorization: dict[str, str],
@@ -1866,7 +1890,7 @@ async def test_anthropic_fallback_onto_aws_uses_its_own_auth_unless_a_bearer_mee
         monkeypatch.setenv(name, value)
     aws_params: Final = {
         "model": _AWS_FALLBACK_TARGETS[target][0],
-        **_AWS_DEPLOYMENT_CREDENTIALS,
+        **deployment_credentials,
         **({"api_key": deployment_key} if deployment_key is not None else {}),
     }
     router: Final = Router(

@@ -582,19 +582,21 @@ def _sets_authorization_header(*sources: Mapping[str, object]) -> bool:
 
 def _aws_auth(deployment_params: Mapping[str, object]) -> Literal["sigv4", "bearer", "unknown"]:
     """How the AWS deployment, left to its own auth, authenticates: with the bearer its provider's resolver finds in
-    its ``api_key`` (with that provider's empty and missing key rules) or the provider's env bearer, else SigV4."""
+    its ``api_key`` (with that provider's empty and missing key rules) or the provider's env bearer, which a Bedrock
+    deployment's own AWS credentials turn off, else SigV4."""
     from litellm.llms.bedrock.base_aws_llm import bedrock_bearer_token
     from litellm.llms.bedrock_mantle.common_utils import resolve_mantle_bearer_token
+    from litellm.types.llms.bedrock import AwsAuthParams
 
     key: Final = deployment_params.get("api_key")
     if key is not None and not isinstance(key, str):
         return "unknown"
-    resolve: Final = (
-        resolve_mantle_bearer_token
+    bearer: Final = (
+        resolve_mantle_bearer_token(key)
         if deployment_provider(deployment_params) == LlmProviders.BEDROCK_MANTLE.value
-        else bedrock_bearer_token
+        else bedrock_bearer_token(key, AwsAuthParams.model_validate(deployment_params))
     )
-    return "sigv4" if resolve(key) is None else "bearer"
+    return "sigv4" if bearer is None else "bearer"
 
 
 def forwarded_client_headers(request: Mapping[str, object]) -> ForwardedClientHeaders | None:
