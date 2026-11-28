@@ -32,6 +32,40 @@ def encode_thinking_blocks(thinking_blocks: Sequence[Mapping[str, object]]) -> s
     return json.dumps(preserved, separators=(",", ":")) if preserved else None
 
 
+def encode_all_content_blocks(blocks: Sequence[Mapping[str, object]]) -> str | None:
+    """Encode both thinking and text blocks, preserving their interleaved order for Anthropic replay."""
+    preserved: Final = [
+        block
+        for block in blocks
+        if (block.get("type") == "text" and bool(block.get("text"))) or is_verifiable_thinking_block(block)
+    ]
+    return json.dumps(preserved, separators=(",", ":")) if preserved else None
+
+
+def decode_all_content_blocks(encrypted_content: object) -> tuple[Mapping[str, object], ...] | None:
+    """Decode the full interleaved block sequence (thinking + text).
+
+    Returns a tuple only when the content has BOTH thinking and text blocks.
+    Returns None for thinking-only content, so callers fall back to decode_thinking_blocks.
+    """
+    members: Final = _json_members(encrypted_content)
+    if not members:
+        return None
+    blocks: Final = tuple(
+        b
+        for m in members
+        if (b := _json_object(m)) is not None
+        and (
+            (b.get("type") == "text" and bool(b.get("text"))) or is_verifiable_thinking_block(b)
+        )
+    )
+    if not blocks:
+        return None
+    has_text: Final = any(b.get("type") == "text" for b in blocks)
+    has_thinking: Final = any(b.get("type") in ("thinking", "redacted_thinking") for b in blocks)
+    return blocks if (has_text and has_thinking) else None
+
+
 def _json_object(member: object) -> Mapping[str, object] | None:
     try:
         return _JSON_OBJECT.validate_python(member)

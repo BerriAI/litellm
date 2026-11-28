@@ -200,7 +200,13 @@ from .custom_tools import (
     validated_tool_search_execution,
     without_malformed_tool_flags,
 )
-from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
+from .reasoning_items import (
+    decode_all_content_blocks,
+    decode_thinking_blocks,
+    encode_all_content_blocks,
+    encode_thinking_blocks,
+    mint_reasoning_item_id,
+)
 from .tool_search import (
     CompletionRoute,
     ToolSearchRouting,
@@ -2182,17 +2188,71 @@ class LiteLLMCompletionResponsesConfig:
                 return msg.get("tool_calls")
             return getattr(msg, "tool_calls", None)
 
+        def _interleaved_blocks(msg: object) -> list[Mapping[str, object]] | None:
+            psf: object
+            if isinstance(msg, dict):
+                psf = msg.get("provider_specific_fields")
+            else:
+                psf = getattr(msg, "provider_specific_fields", None)
+            if not isinstance(psf, dict):
+                return None
+            blocks: Final = psf.get("interleaved_content_blocks")
+            return list(blocks) if isinstance(blocks, list) and blocks else None  # mutable-ok: copy
+
         def _apply_pending(
             msg: object,
             pending_items: Sequence[
                 tuple[
                     str | None,
                     tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None,
+                    list[Mapping[str, object]] | None,
                 ]
             ],
         ) -> None:
-            pending_texts: Final = tuple(text for text, _ in pending_items if text)
-            pending_blocks: Final = tuple(block for _, blocks in pending_items for block in blocks or ())
+            pending_content_lists: Final = tuple(cl for _, _, cl in pending_items if cl is not None)
+            if pending_content_lists:
+                full_content: Final = pending_content_lists[-1]
+                current_content: Final = _content(msg)
+                stored_text: Final = "".join(
+                    str(b.get("text", "")) for b in full_content if isinstance(b, Mapping) and b.get("type") == "text"
+                )
+                current_text: Final = (
+                    current_content
+                    if isinstance(current_content, str)
+                    else "".join(
+                        str(b.get("text", ""))
+                        for b in current_content
+                        if isinstance(b, Mapping) and b.get("type") in ("text", "output_text")
+                    )
+                    if isinstance(current_content, list)
+                    else ""
+                )
+                if stored_text == current_text:
+                    # Stored text matches the message item: safe to replace with the full
+                    # interleaved block list, restoring the original Anthropic block order
+                    # for signature verification. Skip when they differ (client edited the
+                    # message) so the client's text is not silently discarded.
+                    if isinstance(msg, dict):
+                        cast(dict[str, object], msg)["content"] = full_content  # cast-ok: mutable reasoning carrier
+                    else:
+                        setattr(msg, "content", full_content)  # noqa: B010  # attribute name is fixed, not dynamic
+                    return
+                # Text was edited by the caller: fall through to the thinking_blocks path so
+                # the caller's content is kept and thinking blocks still replay in order.
+                pending_thinking: Final = tuple(
+                    cast(ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, b)
+                    for b in full_content
+                    if isinstance(b, Mapping) and b.get("type") in ("thinking", "redacted_thinking")
+                )
+                if pending_thinking:
+                    replayed_interleaved: Final = list(pending_thinking + (_thinking_blocks(msg) or ()))
+                    if isinstance(msg, dict):
+                        cast(dict[str, object], msg)["thinking_blocks"] = replayed_interleaved  # cast-ok: mutable reasoning carrier
+                    else:
+                        setattr(msg, "thinking_blocks", replayed_interleaved)  # noqa: B010  # attribute name is fixed, not dynamic
+                return
+            pending_texts: Final = tuple(text for text, _, _ in pending_items if text)
+            pending_blocks: Final = tuple(block for _, blocks, _ in pending_items for block in blocks or ())
             if pending_texts:
                 existing_text: Final = _reasoning_text(msg)
                 combined: Final = "\n".join(pending_texts + ((existing_text,) if existing_text else ()))
@@ -2208,6 +2268,7 @@ class LiteLLMCompletionResponsesConfig:
                     setattr(msg, "thinking_blocks", replayed)  # noqa: B010  # attribute name is fixed, not dynamic
 
         _standalone: Final = LiteLLMCompletionResponsesConfig._reasoning_only_assistant_message
+        _with_interleaved: Final = LiteLLMCompletionResponsesConfig._reasoning_with_interleaved_blocks
 
         merged: list[  # mutable-ok: accumulator  # rebind-ok: accumulator
             AllMessageValues
@@ -2219,17 +2280,19 @@ class LiteLLMCompletionResponsesConfig:
             tuple[
                 str | None,
                 tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...] | None,
+                list[Mapping[str, object]] | None,
             ]
         ] = []
 
         for msg in messages:
+            il = _interleaved_blocks(msg)  # rebind-ok: re-computed per iteration
             if (
                 _role(msg) == "assistant"
                 and _content(msg) is None
                 and not _tool_calls(msg)
-                and (_reasoning_text(msg) is not None or _thinking_blocks(msg) is not None)
+                and (_reasoning_text(msg) is not None or _thinking_blocks(msg) is not None or il is not None)
             ):
-                pending.append((_reasoning_text(msg), _thinking_blocks(msg)))
+                pending.append((_reasoning_text(msg), _thinking_blocks(msg), il))
                 continue
 
             if pending and _role(msg) == "assistant":
@@ -2238,12 +2301,22 @@ class LiteLLMCompletionResponsesConfig:
             elif pending:
                 # Not followed by an assistant message — keep the reasoning
                 # standalone instead of dropping it.
-                merged.extend([_standalone(text, blocks) for text, blocks in pending])
+                merged.extend(
+                    [
+                        _with_interleaved(cl) if cl is not None else _standalone(text, blocks)
+                        for text, blocks, cl in pending
+                    ]
+                )
                 pending = []
 
             merged.append(msg)
 
-        merged.extend([_standalone(text, blocks) for text, blocks in pending])
+        merged.extend(
+            [
+                _with_interleaved(cl) if cl is not None else _standalone(text, blocks)
+                for text, blocks, cl in pending
+            ]
+        )
 
         return merged
 
@@ -2813,6 +2886,11 @@ class LiteLLMCompletionResponsesConfig:
                         ),
                     )
                 ]
+            interleaved_blocks: Final = LiteLLMCompletionResponsesConfig._decode_interleaved_blocks_from_input_item(
+                input_item
+            )
+            if interleaved_blocks is not None:
+                return [LiteLLMCompletionResponsesConfig._reasoning_with_interleaved_blocks(interleaved_blocks)]
             reasoning_text = LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(  # rebind-ok: extraction result
                 input_item
             )
@@ -2923,6 +3001,28 @@ class LiteLLMCompletionResponsesConfig:
         return LiteLLMCompletionResponsesConfig._reasoning_text_from_content(
             input_item
         ) or LiteLLMCompletionResponsesConfig._reasoning_text_from_summary(input_item)
+
+    @staticmethod
+    def _decode_interleaved_blocks_from_input_item(
+        input_item: Mapping[str, object],
+    ) -> tuple[Mapping[str, object], ...] | None:
+        """Decode interleaved thinking+text blocks from encrypted_content, or None for thinking-only."""
+        encrypted_content: Final = input_item.get("encrypted_content")
+        unwrapped: Final = (
+            ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(encrypted_content)[1]
+            if isinstance(encrypted_content, str)
+            else encrypted_content
+        )
+        return decode_all_content_blocks(unwrapped)
+
+    @staticmethod
+    def _reasoning_with_interleaved_blocks(
+        interleaved_blocks: Sequence[Mapping[str, object]],
+    ) -> ChatCompletionResponseMessage:
+        """Build an assistant message that carries interleaved thinking+text blocks for Anthropic replay."""
+        message: Final = ChatCompletionResponseMessage(role="assistant", content=None)
+        message["provider_specific_fields"] = {"interleaved_content_blocks": list(interleaved_blocks)}
+        return message
 
     @staticmethod
     def _decode_thinking_blocks_from_input_item(
@@ -4162,6 +4262,15 @@ class LiteLLMCompletionResponsesConfig:
 
     @staticmethod
     def _encode_thinking_blocks(message: Message) -> str | None:
+        psf: Final = getattr(message, "provider_specific_fields", None)
+        if isinstance(psf, dict):
+            anthropic_content_blocks: Final = psf.get("anthropic_content_blocks")
+            if isinstance(anthropic_content_blocks, list) and anthropic_content_blocks:
+                encoded: Final = encode_all_content_blocks(
+                    [b for b in anthropic_content_blocks if isinstance(b, Mapping)]
+                )
+                if encoded is not None:
+                    return encoded
         thinking_blocks: Final[Sequence[Mapping[str, object]]] = getattr(message, "thinking_blocks", None) or ()
         return encode_thinking_blocks(thinking_blocks)
 

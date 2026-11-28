@@ -3,7 +3,9 @@ import json
 import pytest
 
 from litellm.responses.litellm_completion_transformation.reasoning_items import (
+    decode_all_content_blocks,
     decode_thinking_blocks,
+    encode_all_content_blocks,
     encode_thinking_blocks,
     is_litellm_minted_reasoning_item,
     is_minted_reasoning_item_id,
@@ -143,3 +145,40 @@ def test_signed_thinking_survives_the_model_id_wrap_on_its_way_back_to_the_chat_
     assert [message.get("thinking_blocks") for message in messages if message["role"] == "assistant"] == [
         [SIGNED_BLOCK]
     ]
+
+
+SIGNED_BLOCK_2 = {"type": "thinking", "thinking": "More thoughts.", "signature": "sig-more"}
+TEXT_BLOCK_A = {"type": "text", "text": "First part."}
+TEXT_BLOCK_B = {"type": "text", "text": "Second part."}
+
+
+def test_encode_all_content_blocks_preserves_interleaved_thinking_and_text():
+    encoded = encode_all_content_blocks([SIGNED_BLOCK, TEXT_BLOCK_A, SIGNED_BLOCK_2, TEXT_BLOCK_B])
+    assert encoded is not None
+    decoded = decode_all_content_blocks(encoded)
+    assert decoded == (SIGNED_BLOCK, TEXT_BLOCK_A, SIGNED_BLOCK_2, TEXT_BLOCK_B)
+
+
+def test_encode_all_content_blocks_drops_unsigned_thinking():
+    unsigned = {"type": "thinking", "thinking": "no sig"}
+    encoded = encode_all_content_blocks([unsigned, TEXT_BLOCK_A, SIGNED_BLOCK])
+    assert encoded is not None
+    decoded = decode_all_content_blocks(encoded)
+    assert decoded == (TEXT_BLOCK_A, SIGNED_BLOCK)
+
+
+def test_decode_all_content_blocks_returns_none_for_thinking_only():
+    thinking_only = encode_thinking_blocks([SIGNED_BLOCK])
+    assert thinking_only is not None
+    assert decode_all_content_blocks(thinking_only) is None
+
+
+def test_decode_all_content_blocks_returns_none_for_text_only():
+    text_only = json.dumps([TEXT_BLOCK_A])
+    assert decode_all_content_blocks(text_only) is None
+
+
+def test_decode_all_content_blocks_returns_none_for_empty_or_opaque():
+    assert decode_all_content_blocks(None) is None
+    assert decode_all_content_blocks("") is None
+    assert decode_all_content_blocks("gAAAAABo-opaque-blob") is None
