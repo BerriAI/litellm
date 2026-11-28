@@ -1171,6 +1171,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
     "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
+    "https://obscurify.ai/v1",
 ]
 
 
@@ -1245,6 +1246,7 @@ openai_compatible_providers: Final[list[str]] = [
     "ragflow",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "openinfer",
+    "obscurify",
     "darkbloom",
     "vispark",
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider

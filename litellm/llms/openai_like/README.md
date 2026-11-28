@@ -73,7 +73,10 @@ That's it! The provider will be automatically loaded and available.
     // nearest level in the model's reasoning_effort_levels cost map row, and
     // drops a level the row does not declare under drop_params
     "special_handling": {
-      "convert_content_list_to_string": true
+      "convert_content_list_to_string": true,
+      // fail when the provider's own key is missing instead of
+      // falling back to OPENAI_API_KEY / litellm.api_key
+      "require_api_key": true
     },
 
     // Optional: Capabilities every model of this provider has, used when a

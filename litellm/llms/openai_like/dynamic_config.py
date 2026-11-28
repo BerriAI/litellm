@@ -480,6 +480,14 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             api_key: Final = litellm_params.api_key or provider.api_key_from(get_secret_str)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
+            elif provider.special_handling.get("require_api_key"):
+                from litellm.exceptions import AuthenticationError
+
+                raise AuthenticationError(
+                    message=f"Set {provider.api_key_env} or pass api_key",
+                    llm_provider=provider.slug,
+                    model=model,
+                )
             return headers
 
         def get_complete_url(
