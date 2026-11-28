@@ -27,6 +27,7 @@ use crate::anthropic::{
 };
 use crate::base_llm::messages::{
     context::{MessagesModelCapabilities, MessagesShapeOptions, MessagesTransformContext},
+    dropped,
     tools::ToolCustomField,
 };
 use crate::{
@@ -41,8 +42,9 @@ use crate::{
         is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
         is_anthropic_tool_use_id_pattern_error, is_claude_strict_tools_rejection,
         is_tool_search_used, map_messages, map_messages_rejecting_emptied, merge_beta_headers,
-        messages_with_renamed_tool_use_ids, minted_oauth_environment,
-        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
+        messages_with_renamed_tool_use_ids, minted_oauth_environment, non_string_system_text_path,
+        non_string_user_text_path, optionally_handle_anthropic_oauth,
+        requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
         strip_raw_encrypted_reasoning_blocks, strip_raw_unsigned_thinking_blocks,
         strip_thinking_blocks_from_anthropic_messages_request, strip_unsigned_thinking_blocks,
@@ -465,6 +467,26 @@ fn without_content_the_provider_rejects(
     request: MessagesRequest,
 ) -> Result<MessagesRequest, Error> {
     let params = request.params;
+    if params
+        .output_format
+        .as_ref()
+        .is_some_and(|sent| !sent.is_object())
+    {
+        dropped::note("output_format");
+    }
+    if params
+        .context_management
+        .as_ref()
+        .is_some_and(|sent| map_openai_context_management_to_anthropic(sent).is_none())
+    {
+        dropped::note("context_management");
+    }
+    if let Some(path) = non_string_system_text_path(params.system.as_ref()) {
+        dropped::note(&path);
+    }
+    if let Some(path) = non_string_user_text_path(&request.messages) {
+        dropped::note(&path);
+    }
     let params = MessagesOptionalParams {
         output_format: params.output_format.filter(Value::is_object),
         context_management: params
@@ -815,6 +837,7 @@ pub fn drop_unsupported_params(
                     param.hint(),
                 ));
             }
+            dropped::note(param.name());
             if let Some(note) = param.drop_note() {
                 tracing::warn!(
                     "Dropping unsupported `{}` for model={} (drop_params=True). {note}",
@@ -863,7 +886,12 @@ pub(crate) fn drop_sampling_params_removed_by_version(
     Ok(MessagesRequest {
         params: SAMPLING_PARAMS
             .iter()
-            .fold(request.params, |params, param| param.without(params)),
+            .fold(request.params, |params, param| {
+                if param.sent(&params).is_some() {
+                    dropped::note(param.name());
+                }
+                param.without(params)
+            }),
         ..request
     })
 }
@@ -1266,6 +1294,68 @@ mod tests {
         #[case] expected: Value,
     ) {
         assert_eq!(transform(fields, capabilities, true), Ok(body(expected)));
+    }
+
+    #[rstest]
+    #[case::each_param_the_model_takes_no_value_of(
+        sampling_removed(),
+        json!({"speed": "fast", "temperature": 0.5, "top_p": 0.9, "top_k": 5}),
+        &["speed", "temperature", "top_p", "top_k"]
+    )]
+    #[case::only_the_params_sent(sampling_removed(), json!({"top_k": 5}), &["top_k"])]
+    #[case::nothing_the_model_takes(fast_mode(), json!({"speed": "fast", "temperature": 0.5}), &[])]
+    #[case::a_reasoning_effort_tier_the_model_lacks(
+        adaptive_without_xhigh(),
+        json!({"reasoning_effort": "xhigh"}),
+        &["reasoning_effort"]
+    )]
+    #[case::an_output_config_effort_tier_the_model_lacks(
+        adaptive_without_xhigh(),
+        json!({"output_config": {"effort": "xhigh", "format": {"type": "json_schema"}}}),
+        &["output_config.effort"]
+    )]
+    #[case::content_the_provider_rejects(
+        unmapped(),
+        json!({
+            "output_format": "json",
+            "context_management": [],
+            "system": [{"type": "text", "text": 5}],
+            "messages": [{"role": "user", "content": [user_text(json!(5)), user_text(json!("Hello"))]}]
+        }),
+        &["output_format", "context_management", "system.0.text", "messages.0.content.0.text"]
+    )]
+    fn a_drop_under_drop_params_is_noted_as_the_field_the_caller_sent(
+        #[case] capabilities: MessagesModelCapabilities,
+        #[case] fields: Value,
+        #[case] expected: &[&str],
+    ) {
+        let (transformed, noted) = dropped::dropped_by(|| transform(fields, capabilities, true));
+        assert!(transformed.is_ok());
+        assert_eq!(noted, expected);
+    }
+
+    #[rstest]
+    #[case::every_sampling_param(
+        json!({"temperature": 0.3, "top_p": 0.9, "top_k": 40}),
+        &["temperature", "top_p", "top_k"]
+    )]
+    #[case::only_the_param_sent(json!({"top_k": 40, "stream": true}), &["top_k"])]
+    #[case::none_sent(json!({"stream": true}), &[])]
+    fn a_sampling_param_an_api_version_removed_is_noted_when_dropped(
+        #[case] fields: Value,
+        #[case] expected: &[&str],
+    ) {
+        let version = [("anthropic-version", "2026-10-21")];
+        let (sent, noted) = dropped::dropped_by(|| {
+            ANTHROPIC_MESSAGES_CONFIG.request_body(
+                request(fields),
+                &headers(&version),
+                "https://api.anthropic.com/v1/messages",
+                true,
+            )
+        });
+        assert!(sent.is_ok());
+        assert_eq!(noted, expected);
     }
 
     #[rstest]

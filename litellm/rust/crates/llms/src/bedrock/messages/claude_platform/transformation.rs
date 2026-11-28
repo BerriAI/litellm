@@ -17,6 +17,7 @@ use serde::de::Error as _;
 use serde_json::Value;
 
 use crate::anthropic::messages::handler::shape_anthropic_messages_request;
+use crate::base_llm::messages::dropped;
 use crate::{
     Error, ErrorDetail,
     anthropic::messages::transformation::{
@@ -323,6 +324,7 @@ fn without_params(request: MessagesRequest, names: &[&str]) -> Result<MessagesRe
         .into_iter()
         .partition(|(name, _)| names.contains(&name.as_str()));
     if !dropped.is_empty() {
+        dropped.iter().for_each(|(name, _)| dropped::note(name));
         tracing::warn!(
             "bedrock/claude_platform: dropping unsupported Messages API param(s) {} from the request body; the Claude Platform on AWS endpoint rejects unknown fields. The request will proceed without them.",
             python_tuple(dropped.iter().map(|(name, _)| name.as_str()))
@@ -593,21 +595,25 @@ mod tests {
     }
 
     #[rstest]
-    #[case::default_drops_context_management(json!({}), false, true)]
-    #[case::override_keeps_it(json!({"claude_platform_unsupported_params": []}), true, true)]
-    #[case::override_drops_temperature(json!({"claude_platform_unsupported_params": ["temperature"]}), true, false)]
-    #[case::non_list_override_is_ignored(json!({"claude_platform_unsupported_params": "temperature"}), false, true)]
+    #[case::default_drops_context_management(json!({}), false, true, &["context_management"])]
+    #[case::override_keeps_it(json!({"claude_platform_unsupported_params": []}), true, true, &[])]
+    #[case::override_drops_temperature(json!({"claude_platform_unsupported_params": ["temperature"]}), true, false, &["temperature"])]
+    #[case::non_list_override_is_ignored(json!({"claude_platform_unsupported_params": "temperature"}), false, true, &["context_management"])]
     fn the_endpoint_s_rejected_params_are_dropped(
         #[case] fields: Value,
         #[case] keeps_context_management: bool,
         #[case] keeps_temperature: bool,
+        #[case] noted: &[&str],
     ) {
-        let filtered = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
-            .without_rejected_params(
-                request(json!({"temperature": 0.5, "context_management": {"edits": []}})),
-                &params(fields),
-            )
-            .unwrap();
+        let (filtered, dropped) = dropped::dropped_by(|| {
+            BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+                .without_rejected_params(
+                    request(json!({"temperature": 0.5, "context_management": {"edits": []}})),
+                    &params(fields),
+                )
+                .unwrap()
+        });
+        assert_eq!(dropped, noted);
         let body = serde_json::to_value(filtered).unwrap();
         assert_eq!(
             body.get("context_management").is_some(),

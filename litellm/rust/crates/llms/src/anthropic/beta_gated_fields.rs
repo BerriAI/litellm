@@ -12,6 +12,7 @@ use litellm_llms_types::{
 };
 use serde_json::{Map, Value};
 
+use crate::base_llm::messages::dropped;
 use crate::base_llm::messages::mid_conversation_system::{is_system_role_message, message_role};
 
 const ASSISTANT_ROLE: &str = "assistant";
@@ -139,6 +140,7 @@ fn log_beta_gated_strips(gated: &BTreeSet<GatedField>, model: &str, provider: im
     if gated.is_empty() {
         return;
     }
+    gated.iter().for_each(|field| dropped::note(field.name()));
     tracing::warn!(
         "Dropped {} for model={model} provider={provider} because drop_params is on and the provider would reject them on this request, either since this provider leg does not send that anthropic-beta (see anthropic_beta_headers_config.json) or since the model turns mid-conversation system messages into user messages.",
         gated
@@ -617,6 +619,26 @@ mod tests {
                 messages(conversation(json!({"role": "system", "content": "note"})))
             )
         );
+    }
+
+    #[rstest]
+    #[case::drop_params(
+        true,
+        &["messages[].system.clear_at", "thinking.block_binding", "thinking.display=updates"]
+    )]
+    #[case::no_drop_params(false, &[])]
+    fn each_field_stripped_for_a_missing_beta_is_noted(
+        #[case] drops_unsupported_params: bool,
+        #[case] expected: &[&str],
+    ) {
+        let sent = thinking_request(
+            json!({"type": "adaptive", "display": "updates", "block_binding": {}}),
+            json!({"role": "system", "content": "note", "clear_at": {"type": "turns"}}),
+        );
+        let (_, noted) = crate::base_llm::messages::dropped::dropped_by(|| {
+            strip_beta_gated_request(sent, &BetaSet::default(), drops_unsupported_params, "test")
+        });
+        assert_eq!(noted, expected);
     }
 
     #[rstest]
