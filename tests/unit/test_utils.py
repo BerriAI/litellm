@@ -12035,6 +12035,30 @@ def test_function_to_dict_parses_numpy_docstring_schema() -> None:
     assert schema["parameters"]["required"] == ["location", "unit"]
 
 
+def test_function_to_dict_without_numpydoc_raises_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    monkeypatch.setitem(sys.modules, "numpydoc", None)
+    monkeypatch.setitem(sys.modules, "numpydoc.docscrape", None)
+
+    def simple_calculator(a: int, b: int = 0) -> int:
+        """Add two numbers together.
+
+        Detailed notes.
+        """
+        return a + b
+
+    with pytest.raises(ImportError, match=r"pip install 'litellm\[utils\]'"):
+        litellm.utils.function_to_dict(simple_calculator)
+
+
+def test_function_to_dict_non_callable_raises_type_error() -> None:
+    with pytest.raises(TypeError, match="Expected a callable function"):
+        litellm.utils.function_to_dict({"not": "a function"})  # type: ignore[arg-type]
+
+
 def test_duration_in_seconds_one_month_uses_the_fixed_calendar_interval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
