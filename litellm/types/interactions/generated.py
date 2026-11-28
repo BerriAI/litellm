@@ -1145,6 +1145,7 @@ class InteractionsAPIStreamingResponse(BaseLiteLLMOpenAIResponseObject):
     steps: list[dict[str, builtins.object]] | None = None
     usage: dict[str, builtins.object] | None = None
     delta: dict[str, builtins.object] | None = None
+    error: Error | None = None
     # New schema streaming fields
     index: int | None = None
     step: dict[str, builtins.object] | None = None
