@@ -1916,8 +1916,9 @@ class _OrgMembershipRows:
 
 
 class _OrgMemberDeleteTx:
-    def __init__(self, db: SimpleNamespace) -> None:
+    def __init__(self, db: SimpleNamespace, locked_rosters: Mapping[str, Sequence[object] | None]) -> None:
         self._db = db
+        self._locked_rosters = locked_rosters
 
     def __getattr__(self, table_name: str) -> object:
         return getattr(self._db, table_name)
@@ -1927,6 +1928,9 @@ class _OrgMemberDeleteTx:
 
         if sql == TEAM_ADVISORY_LOCK_SQL:
             return []
+        if team_id in self._locked_rosters:
+            roster = self._locked_rosters[team_id]
+            return [] if roster is None else [{"members_with_roles": roster}]
         team = self._db.litellm_teamtable.rows.get(team_id)
         return [] if team is None else [{"members_with_roles": team["members_with_roles"]}]
 
@@ -1954,19 +1958,19 @@ class _OrgMemberDeletePrisma:
             litellm_organizationmembership=_OrgMembershipRows(org_memberships),
         )
         self.writer_db = self.db
+        self.locked_rosters: dict[str, Sequence[object] | None] = {}
 
     def lag_replica_teams(self, teams: Sequence[Mapping[str, object]]) -> None:
         self.db = SimpleNamespace(**{**vars(self.writer_db), "litellm_teamtable": _TeamRows(teams)})
 
     @asynccontextmanager
     async def tx(self, timeout: object = None) -> AsyncIterator[_OrgMemberDeleteTx]:
-        yield _OrgMemberDeleteTx(self.writer_db)
+        yield _OrgMemberDeleteTx(self.writer_db, self.locked_rosters)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("member", [{"user_id": "dev"}, {"user_email": "dev@example.com"}])
 async def test_organization_member_delete_removes_the_user_from_every_team_of_that_organization(
-    monkeypatch, rust_auth_stores: RustAuthStores, member: Mapping[str, str]
+    monkeypatch, rust_auth_stores: RustAuthStores
 ):
     """Team membership inside an organization is granted through the organization, so removing the
     user from the organization has to take them off its teams the way /team/member_delete would, or
@@ -2017,7 +2021,7 @@ async def test_organization_member_delete_removes_the_user_from_every_team_of_th
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
 
     removed: Final = await organization_member_delete(
-        data=OrganizationMemberDeleteRequest(organization_id="org-eng", **member),
+        data=OrganizationMemberDeleteRequest(organization_id="org-eng", user_id="dev"),
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
 
@@ -2041,3 +2045,89 @@ async def test_organization_member_delete_removes_the_user_from_every_team_of_th
     assert cache.get_cache(key=AuthObject.virtual_key(org_team_key.token)) is None
     assert cache.get_cache(key=AuthObject.team("team-ext")) == {"cached": True}
     assert cache.get_cache(key=AuthObject.virtual_key(personal_key.token)) == {"cached": True}
+
+
+def _org_with_a_team_whose_roster_changes_under_the_lock(
+    locked_roster: Sequence[object] | None,
+) -> tuple[_OrgMemberDeletePrisma, Mapping[str, object]]:
+    lead: Final = {"user_id": "lead", "user_email": None, "role": "admin"}
+    dev: Final = {"user_id": "dev", "user_email": None, "role": "user"}
+    prisma: Final = _OrgMemberDeletePrisma(
+        teams=(
+            {"team_id": "team-eng", "organization_id": "org-eng", "members_with_roles": [lead, dev]},
+            {"team_id": "team-raced", "organization_id": "org-eng", "members_with_roles": [lead, dev]},
+        ),
+        users=({"user_id": "dev", "user_email": "dev@example.com", "teams": ["team-eng"]},),
+        team_memberships=(("team-eng", "dev"),),
+        keys=(),
+        org_memberships=(("dev", "org-eng"),),
+    )
+    prisma.locked_rosters["team-raced"] = locked_roster
+    return prisma, lead
+
+
+async def _remove_dev_from_org_eng(monkeypatch, prisma: _OrgMemberDeletePrisma) -> object:
+    from litellm.proxy._types import LitellmUserRoles, OrganizationMemberDeleteRequest, UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.organization_endpoints import organization_member_delete
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    return await organization_member_delete(
+        data=OrganizationMemberDeleteRequest(organization_id="org-eng", user_id="dev"),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+
+@pytest.mark.asyncio
+async def test_organization_member_delete_finishes_when_a_team_already_lost_the_user(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
+    prisma, lead = _org_with_a_team_whose_roster_changes_under_the_lock([{"user_id": "lead", "role": "admin"}])
+
+    await _remove_dev_from_org_eng(monkeypatch, prisma)
+
+    assert prisma.writer_db.litellm_organizationmembership.rows == set()
+    assert prisma.writer_db.litellm_teamtable.rows["team-eng"]["members_with_roles"] == [lead]
+    assert prisma.writer_db.litellm_usertable.rows["dev"]["teams"] == []
+
+
+@pytest.mark.asyncio
+async def test_organization_member_delete_keeps_the_membership_when_a_team_step_fails_otherwise(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
+    from fastapi import HTTPException
+
+    prisma, _ = _org_with_a_team_whose_roster_changes_under_the_lock(None)
+
+    with pytest.raises(HTTPException) as raised:
+        await _remove_dev_from_org_eng(monkeypatch, prisma)
+
+    assert raised.value.detail == {"error": "Team id=team-raced does not exist in db"}
+    assert prisma.writer_db.litellm_organizationmembership.rows == {("dev", "org-eng")}
+
+
+@pytest.mark.asyncio
+async def test_organization_member_delete_by_unknown_email_touches_nothing(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LitellmUserRoles, OrganizationMemberDeleteRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import organization_member_delete
+
+    prisma, _ = _org_with_a_team_whose_roster_changes_under_the_lock([{"user_id": "lead", "role": "admin"}])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+
+    with pytest.raises(HTTPException) as raised:
+        await organization_member_delete(
+            data=OrganizationMemberDeleteRequest(organization_id="org-eng", user_email="nobody@example.com"),
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-admin", user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
+        )
+
+    assert raised.value.status_code == 400
+    assert prisma.writer_db.litellm_organizationmembership.rows == {("dev", "org-eng")}
+    assert prisma.writer_db.litellm_usertable.rows["dev"]["teams"] == ["team-eng"]

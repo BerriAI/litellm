@@ -1721,8 +1721,6 @@ async def _remove_user_from_organization_teams(
 ) -> None:
     """Membership in an organization's teams is granted through the organization, so leaving it takes the user off
     every one of its teams."""
-    from litellm.proxy.management_endpoints.team_endpoints import team_member_delete
-
     organization_teams: Final = await TeamRepository(prisma_client, use_writer=True).find_by_organization_id(
         organization_id
     )
@@ -1732,10 +1730,21 @@ async def _remove_user_from_organization_teams(
         if any(member.user_id == user_id for member in team.members_with_roles)
     )
     for team_id in member_team_ids:
+        await _remove_user_from_team_unless_already_gone(team_id, user_id, user_api_key_dict)
+
+
+async def _remove_user_from_team_unless_already_gone(
+    team_id: str, user_id: str, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import UserNotInTeamError, team_member_delete
+
+    try:
         await team_member_delete(
             data=TeamMemberDeleteRequest(team_id=team_id, user_id=user_id),
             user_api_key_dict=user_api_key_dict,
         )
+    except UserNotInTeamError:
+        return
 
 
 async def add_member_to_organization(

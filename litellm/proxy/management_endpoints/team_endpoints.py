@@ -4177,6 +4177,11 @@ def cleanup_members_with_roles(
 _cleanup_members_with_roles: Final = cleanup_members_with_roles
 
 
+class UserNotInTeamError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(status_code=400, detail={"error": "User not found in team"})
+
+
 @router.post(
     "/team/member_delete",
     tags=["team management"],
@@ -4318,7 +4323,7 @@ async def _team_member_delete(
         user_ids_to_delete: Final = addressed_user_ids.union(user.user_id for user in cleanup_user_rows if user.user_id)
 
         if not removed_team_members and not stale_user_rows:
-            raise HTTPException(status_code=400, detail={"error": "User not found in team"})
+            raise UserNotInTeamError()
 
         ## DELETE KEYS CREATED BY USER FOR THIS TEAM
         # Fetch keys before deletion so their audit records can be persisted alongside the delete.
