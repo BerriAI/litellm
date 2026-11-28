@@ -20,6 +20,7 @@ use crate::{
     },
 };
 
+use crate::base_llm::messages::dropped;
 use crate::bedrock::common_utils::{
     clamp_effort, ensure_bedrock_anthropic_messages_tool_names, is_int,
     normalize_bedrock_opus_output_config_effort, normalize_custom_field_on_tools,
@@ -491,6 +492,7 @@ fn drop_compaction_without_beta(body: &mut Body, betas: &[String]) {
         && !(body.get("compaction").is_some_and(Value::is_object)
             && betas.iter().any(|beta| beta == "compact-2026-09-04"))
     {
+        dropped::note("compaction");
         tracing::debug!(
             "Bedrock Invoke: dropping `compaction`; compact-2026-09-04 is not served on this route"
         );
@@ -504,6 +506,7 @@ fn pop_unsupported_output_config(body: &mut Body, drop_params: bool, supports_ef
         Some(Value::Object(output_config)) if output_config.keys().any(|key| key != "format")
     );
     if drop_params && has_non_format_keys && !supports_effort {
+        dropped::note("output_config");
         tracing::warn!("Bedrock Invoke: dropping `output_config` the model does not accept");
         body.shift_remove("output_config");
     }
@@ -886,11 +889,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::popped_under_drop_params(true, None)]
-    #[case::kept_without_it(false, Some(json!({"effort": "high"})))]
+    #[case::popped_under_drop_params(true, None, &["output_config"])]
+    #[case::kept_without_it(false, Some(json!({"effort": "high"})), &[])]
     fn drop_params_pops_an_output_config_the_model_takes_no_effort_in(
         #[case] drop_params: bool,
         #[case] sent: Option<Value>,
+        #[case] noted: &[&str],
     ) {
         let capabilities = MessagesModelCapabilities {
             supports_output_config: true,
@@ -900,16 +904,19 @@ mod tests {
             },
             ..MessagesModelCapabilities::default()
         };
-        let wire = transformed_with(
-            hello(
-                "anthropic.claude-3-haiku-20240307-v1:0",
-                json!({"output_config": {"effort": "high"}}),
-            ),
-            &MessagesTransformContext::new(capabilities, drop_params),
-            Vec::new(),
-        )
-        .unwrap()
-        .0;
+        let (wire, dropped) = dropped::dropped_by(|| {
+            transformed_with(
+                hello(
+                    "anthropic.claude-3-haiku-20240307-v1:0",
+                    json!({"output_config": {"effort": "high"}}),
+                ),
+                &MessagesTransformContext::new(capabilities, drop_params),
+                Vec::new(),
+            )
+            .unwrap()
+            .0
+        });
+        assert_eq!(dropped, noted);
         assert_eq!(wire.get("output_config").cloned(), sent);
     }
 

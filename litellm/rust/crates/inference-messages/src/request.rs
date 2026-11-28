@@ -30,6 +30,7 @@ use litellm_host::interceptors::{Interceptors, ProviderIdentity, RequestContext,
 use litellm_http::request::without_headers;
 use litellm_inference::context::CallContext;
 use litellm_llms::anthropic::messages::transformation::is_claude_model;
+use litellm_llms::base_llm::messages::dropped;
 use litellm_llms::base_llm::{
     auth::{
         AuthScheme, AzureAdTokenHosts, Headers, LoggedIn, ValidatedEnvironment, prepare_auth,
@@ -488,6 +489,7 @@ fn requested_optional_params(
         return Ok(request);
     }
     if request.params.service_tier.is_some() {
+        dropped::note("service_tier");
         tracing::warn!(
             "Dropping `service_tier` for model={} on provider={}. Only the Anthropic API routes accept it.",
             request.model,

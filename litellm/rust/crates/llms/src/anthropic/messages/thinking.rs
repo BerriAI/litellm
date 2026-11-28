@@ -23,6 +23,7 @@ use serde_json::Value;
 use crate::base_llm::messages::context::{
     MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
 };
+use crate::base_llm::messages::dropped;
 use crate::{
     Error,
     anthropic::common_utils::{accepts_effort, supports_effort_param},
@@ -85,6 +86,7 @@ fn warn_dropped_reasoning(
     reason: &str,
     drop_params_gated: bool,
 ) {
+    dropped::note(param);
     let gate = if drop_params_gated {
         " (drop_params=True)"
     } else {
@@ -313,6 +315,7 @@ fn translate_reasoning_effort(
         });
     }
     let Some(budget) = fit_budget_to_max_tokens(budget, request.params.max_tokens.as_ref())? else {
+        dropped::note("reasoning_effort");
         tracing::warn!(
             "Dropping `thinking` mapped from reasoning_effort={} for model={}: max_tokens={} is too small to fit the minimum thinking budget.",
             <&'static str>::from(effort),
@@ -346,6 +349,7 @@ fn drop_disabled_thinking(request: MessagesRequest, context: &ThinkingContext) -
     {
         return request;
     }
+    dropped::note("thinking");
     if context.warns_dropped_disabled_thinking {
         tracing::warn!(
             "Dropping `thinking={{'type': 'disabled'}}` for model={}: thinking is always on for this model and cannot be disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain thinking blocks, and those thinking tokens are billed as output tokens.",
@@ -511,6 +515,7 @@ fn translate_adaptive_effort_for_non_adaptive_model(
         None => None,
     };
     if thinking.is_none() {
+        dropped::note("thinking");
         tracing::warn!(
             "Dropping adaptive `thinking`/`output_config.effort` for model={}: the model does not support extended thinking, or max_tokens is too small to fit the minimum thinking budget.",
             request.model
@@ -541,6 +546,12 @@ pub(crate) fn drop_unsupported_effort(
     let drops_output_effort = supports_effort_param(capabilities)
         && !reshaped_to_budget
         && matches!(known_effort(&request), Some(Recognized::Known(level)) if rejected(*level));
+    if drops_reasoning_effort {
+        dropped::note("reasoning_effort");
+    }
+    if drops_output_effort {
+        dropped::note("output_config.effort");
+    }
     MessagesRequest {
         params: MessagesOptionalParams {
             reasoning_effort: request
@@ -579,6 +590,7 @@ fn drop_incompatible_temperature_for_thinking(
     if !pinned || !droppable {
         return request;
     }
+    dropped::note("temperature");
     tracing::warn!(
         model = %request.model,
         "Dropping `temperature` other than 1 since thinking is on and the model only takes temperature=1 with it."
