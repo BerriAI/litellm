@@ -2275,6 +2275,12 @@ class LiteLLMCompletionResponsesConfig:
         new_content: Final = new_message.get("content")
         if new_content is None:
             return None
+        # Empty trailing assistant turns (tool-only Responses replays) must not
+        # be wrapped as {"type":"text","text":""} when merged onto prior text.
+        if new_content == "":
+            return cast(  # cast-ok: trailing assistant unchanged
+                ChatCompletionAssistantMessage, last_message
+            )
         previous_content: Final = last_message.get("content")
         previous_cache_control: Final = _input_item_cache_control(last_message)
         new_cache_control: Final = _input_item_cache_control(new_message)
@@ -3152,7 +3158,8 @@ class LiteLLMCompletionResponsesConfig:
             content_list: Final[list[str | dict[str, object]]] = []
             for item in content:
                 if isinstance(item, str):
-                    content_list.append(item)
+                    if item:
+                        content_list.append(item)
                 elif (
                     isinstance(item, dict)
                     and (
@@ -3164,7 +3171,7 @@ class LiteLLMCompletionResponsesConfig:
                     is not None
                 ):
                     content_list.append(part)
-            return content_list
+            return content_list if content_list else ""
         else:
             raise ValueError(f"Invalid content type: {type(content)}")
 
@@ -3192,7 +3199,7 @@ class LiteLLMCompletionResponsesConfig:
                 else dict(OpenAIChatCompletionTextObject(type="text", text=str(encrypted_content)))
             )
         text_value: Final = fields.get("text")
-        if text_value is None:
+        if text_value is None or text_value == "":
             return None
         return {
             "type": LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type(
