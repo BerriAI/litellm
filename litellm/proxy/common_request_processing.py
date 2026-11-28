@@ -57,7 +57,6 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     IMAGE_CALL_TYPES,
     LITELLM_CLIENT_DISCONNECT_DETAIL,
-    LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
     MAX_LITELLM_CALL_ID_LENGTH,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
@@ -67,6 +66,7 @@ from litellm.constants import (
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
+    is_detailed_timing_enabled,
 )
 from litellm.google_genai.streaming_iterator import BaseGoogleGenAIGenerateContentStreamingIterator
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
@@ -3108,7 +3108,7 @@ class ProxyBaseLLMRequestProcessing:
                     "x-litellm-timing-post-processing-ms": str(hidden_params.get("timing_post_processing_ms", None)),
                     "x-litellm-timing-message-copy-ms": str(hidden_params.get("timing_message_copy_ms", None)),
                 }
-                if LITELLM_DETAILED_TIMING
+                if is_detailed_timing_enabled()
                 else {}
             ),
             "x-litellm-fastest_response_batch_completion": (
