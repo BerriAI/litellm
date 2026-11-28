@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH failed AS (\n    SELECT delivery.delivery_id\n    FROM \"LiteLLM_SpendLogDelivery\" AS delivery\n    JOIN jsonb_to_recordset($1::jsonb) AS claimed(delivery_id text, attempts integer)\n      ON claimed.delivery_id = delivery.delivery_id AND claimed.attempts = delivery.attempts\n    WHERE delivery.state = 'pending'\n    ORDER BY delivery.delivery_id\n    FOR UPDATE OF delivery\n)\nUPDATE \"LiteLLM_SpendLogDelivery\" AS delivery\nSET attempts = attempts + 1, last_error = $2,\n    next_attempt_at = (NOW() AT TIME ZONE 'UTC') + make_interval(\n        secs => LEAST(300, power(2, LEAST(attempts, 8)) * (0.5 + random()))\n    ),\n    state = CASE WHEN $3::boolean THEN 'parked' ELSE 'pending' END::\"AccountingDeliveryState\"\nFROM failed\nWHERE delivery.delivery_id = failed.delivery_id\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d9ac76186dc4062ad4f63d77e43a3ac2d7a3e0bf5dc4299c243e94032e478db8"
+}

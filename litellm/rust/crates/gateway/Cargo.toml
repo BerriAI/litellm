@@ -25,6 +25,7 @@ thiserror.workspace = true
 futures-util.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-gateway-auth-core.workspace = true
+chrono.workspace = true
 jiff.workspace = true
 litellm-callbacks.workspace = true
 litellm-callbacks-spend-logger.workspace = true
@@ -76,7 +77,6 @@ tower-http = { version = "0.6.11", features = ["catch-panic", "cors", "decompres
 uuid.workspace = true
 
 [dev-dependencies]
-chrono.workspace = true
 litellm-gateway = { workspace = true, features = ["test-support"] }
 litellm-gateway-inference = { workspace = true, features = ["test-support"] }
 litellm-redis-testing.workspace = true

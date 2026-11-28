@@ -4,12 +4,97 @@
 //! mirroring the Python ledger writer (`SpendLogsRepository._insert_ledger`).
 
 use chrono::NaiveDateTime;
+use serde::Serialize;
 use serde_json::{Value, value::RawValue};
 use sqlx::{PgExecutor, types::Json};
 
 use litellm_db::Error;
 
 use super::SpendLogOwner;
+
+#[derive(Serialize)]
+pub(super) struct ClaimedDelivery {
+    pub(super) delivery_id: String,
+    pub(super) attempts: i32,
+    #[serde(skip)]
+    pub(super) accounting_payload: Value,
+}
+
+pub(super) async fn claim_deliveries(
+    executor: impl PgExecutor<'_>,
+    limit: i32,
+    retry: bool,
+) -> Result<Vec<ClaimedDelivery>, Error> {
+    Ok(sqlx::query_file_as!(
+        ClaimedDelivery,
+        "src/spend_log/queries/claim_accounting_deliveries.sql",
+        limit,
+        retry,
+    )
+    .fetch_all(executor)
+    .await?)
+}
+
+pub(super) async fn mark_applied(
+    executor: impl PgExecutor<'_>,
+    ids: &[String],
+) -> Result<(), Error> {
+    sqlx::query_file!(
+        "src/spend_log/queries/mark_accounting_deliveries_applied.sql",
+        ids
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn park_undecodable(
+    executor: impl PgExecutor<'_>,
+    ids: &[String],
+) -> Result<(), Error> {
+    sqlx::query_file!(
+        "src/spend_log/queries/park_undecodable_accounting_deliveries.sql",
+        ids
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn record_retry(
+    executor: impl PgExecutor<'_>,
+    claimed: &Value,
+    error: &str,
+    park: bool,
+) -> Result<(), Error> {
+    sqlx::query_file!(
+        "src/spend_log/queries/retry_accounting_deliveries.sql",
+        claimed,
+        error,
+        park
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn current_window_spend(
+    executor: impl PgExecutor<'_>,
+    entity_type: &str,
+    id: &str,
+    duration: &str,
+    expected_start: NaiveDateTime,
+) -> Result<Option<f64>, Error> {
+    Ok(sqlx::query_file_scalar!(
+        "src/spend_log/queries/find_current_window_spend.sql",
+        entity_type,
+        id,
+        duration,
+        expected_start,
+    )
+    .fetch_optional(executor)
+    .await?)
+}
 
 macro_rules! window_spend_sql {
     ($column:literal) => {
@@ -101,9 +186,12 @@ mod tests {
 
     use chrono::NaiveDateTime;
     use rstest::rstest;
+    use serde_json::json;
     use sqlx::{PgPool, Postgres, Transaction};
 
-    use super::{SpendLogOwner, window_spend};
+    use super::{
+        SpendLogOwner, claim_deliveries, mark_applied, park_undecodable, record_retry, window_spend,
+    };
     use crate::test_support::database_pool;
 
     /// One log owned by `owner` in the column under test, with `other` in the other two owner columns. The column
@@ -231,6 +319,74 @@ mod tests {
         assert_eq!(
             window_spend(&mut *tx, column, "window-missing-owner", since).await?,
             0.0
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::applied("applied", 0, None)]
+    #[case::undecodable("parked", 1, Some("UndecodablePayload"))]
+    #[case::retry("pending", 1, Some("DataRejected"))]
+    #[case::attempts_exhausted("parked", 1, Some("DataRejected"))]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn a_claimed_delivery_gets_its_terminal_state_or_backoff(
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+        #[case] expected_state: &str,
+        #[case] expected_attempts: i32,
+        #[case] expected_error: Option<&str>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        let id = format!("accounting-claim-{}", uuid::Uuid::new_v4());
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Fixture inserts are outside the compile-checked query set"
+        )]
+        sqlx::query(
+            r#"INSERT INTO "LiteLLM_SpendLogDelivery"
+                (delivery_id, request_id, accounting_payload, is_batch, next_attempt_at)
+                VALUES ($1, $1, '{}', false, '1900-01-01')"#,
+        )
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+
+        let claims = claim_deliveries(&mut *tx, 1, false).await?;
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].delivery_id, id);
+        assert_eq!(claims[0].accounting_payload, json!({}));
+        match expected_error {
+            None => mark_applied(&mut *tx, std::slice::from_ref(&id)).await?,
+            Some("UndecodablePayload") => {
+                park_undecodable(&mut *tx, std::slice::from_ref(&id)).await?;
+            }
+            Some(error) => {
+                record_retry(&mut *tx, &json!(claims), error, expected_state == "parked").await?;
+            }
+        }
+
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Fixture assertions are outside the compile-checked query set"
+        )]
+        let state = sqlx::query_as::<_, (String, i32, Option<String>, bool, bool)>(
+            r#"SELECT state::text, attempts, last_error, applied_at IS NOT NULL,
+                   next_attempt_at > (NOW() AT TIME ZONE 'UTC')
+               FROM "LiteLLM_SpendLogDelivery" WHERE delivery_id = $1"#,
+        )
+        .bind(&id)
+        .fetch_one(&mut *tx)
+        .await?;
+        assert_eq!(
+            state,
+            (
+                expected_state.to_owned(),
+                expected_attempts,
+                expected_error.map(str::to_owned),
+                expected_state == "applied",
+                expected_error == Some("DataRejected"),
+            )
         );
         Ok(())
     }

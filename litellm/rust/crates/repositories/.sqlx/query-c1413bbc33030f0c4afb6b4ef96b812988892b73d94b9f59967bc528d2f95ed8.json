@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_SpendLogDelivery\"\nSET state = 'parked', attempts = attempts + 1, last_error = 'UndecodablePayload'\nWHERE delivery_id = ANY($1::text[]) AND state = 'pending'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c1413bbc33030f0c4afb6b4ef96b812988892b73d94b9f59967bc528d2f95ed8"
+}

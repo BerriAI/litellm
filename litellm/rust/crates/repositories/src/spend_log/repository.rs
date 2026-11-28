@@ -29,6 +29,12 @@ const WINDOW_SPEND: Call = Call {
     operation: Some("group_by"),
 };
 
+const CURRENT_WINDOW_SPEND: Call = Call {
+    call_type: "find_unique",
+    table: Some("LiteLLM_BudgetWindowSpend"),
+    operation: Some("find_unique"),
+};
+
 const INSERT_SPEND_LOGS: Call = Call {
     call_type: "insert_spend_logs",
     table: Some("LiteLLM_SpendLogs"),
@@ -70,6 +76,45 @@ impl SpendLogRepository {
                 queries::window_spend(session.executor(), owner, owner_id, since).await
             })
             .await
+    }
+
+    /// The Redis seed for a window. A current maintained row takes precedence over the log scan.
+    pub async fn window_seed(
+        &self,
+        owner: Option<SpendLogOwner>,
+        entity_type: &str,
+        owner_id: &str,
+        duration: Option<&str>,
+        since: DateTime<Utc>,
+    ) -> Result<Option<f64>, Error> {
+        if let Some(duration) = duration {
+            let maintained = self
+                .database
+                .run(CURRENT_WINDOW_SPEND, || async {
+                    let mut session = self.database.session(Side::Read).await?;
+                    queries::current_window_spend(
+                        session.executor(),
+                        entity_type,
+                        owner_id,
+                        duration,
+                        since.naive_utc(),
+                    )
+                    .await
+                })
+                .await;
+            match maintained {
+                Ok(Some(spend)) => return Ok(Some(spend)),
+                Ok(None) if owner.is_none() => return Ok(Some(0.0)),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::warn!(%error, "Could not read maintained budget window spend")
+                }
+            }
+        }
+        match owner {
+            Some(owner) => self.window_spend(owner, owner_id, since).await.map(Some),
+            None => Ok(None),
+        }
     }
 
     /// Writes one statement's worth of requests as one reported operation: logs with no delivery

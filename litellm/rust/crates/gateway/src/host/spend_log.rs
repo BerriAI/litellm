@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use chrono::DateTime;
 use futures_util::future::{BoxFuture, join_all};
 use litellm_callbacks::{HostCall, HostFault, HostReply};
 use litellm_callbacks_budgets::RowSpend;
@@ -21,8 +22,9 @@ use litellm_callbacks_spend_logger::host::{
 use litellm_redis_store::spend_counters::SpendCounter;
 use litellm_repositories::{
     Database, EndUserRecord, EndUserRepository, KeyRepository, Organization,
-    OrganizationRepository, Project, ProjectRepository, Side, SignIn, Team, TeamMembership,
-    TeamMembershipRepository, TeamRepository, User, UserRepository,
+    OrganizationRepository, Project, ProjectRepository, Side, SignIn, SpendLogOwner,
+    SpendLogRepository, Team, TeamMembership, TeamMembershipRepository, TeamRepository, User,
+    UserRepository,
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -57,8 +59,15 @@ struct Sources {
 #[derive(Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case")]
 enum StoredCounter {
-    Entity { counter_key: String },
-    Window {},
+    Entity {
+        counter_key: String,
+    },
+    Window {
+        entity_type: String,
+        entity_id: String,
+        window_duration: Option<String>,
+        window_start: String,
+    },
 }
 
 #[derive(Deserialize)]
@@ -87,6 +96,7 @@ pub struct Rows {
     orgs: OrganizationRepository,
     projects: ProjectRepository,
     end_users: EndUserRepository,
+    spend_logs: SpendLogRepository,
 }
 
 impl Rows {
@@ -98,7 +108,8 @@ impl Rows {
             members: TeamMembershipRepository::new(database.clone()),
             orgs: OrganizationRepository::new(database.clone()),
             projects: ProjectRepository::new(database.clone()),
-            end_users: EndUserRepository::new(database),
+            end_users: EndUserRepository::new(database.clone()),
+            spend_logs: SpendLogRepository::new(database),
         }
     }
 
@@ -173,13 +184,44 @@ impl RustSpendLogHost {
     }
 
     async fn stored(&self, counter: StoredCounter) -> Option<f64> {
-        let StoredCounter::Entity { counter_key } = counter else {
-            return None;
-        };
-        self.rows
-            .as_ref()?
-            .spend(&SpendCounter::parse(&counter_key).ok()?)
-            .await
+        let rows = self.rows.as_ref()?;
+        match counter {
+            StoredCounter::Entity { counter_key } => {
+                rows.spend(&SpendCounter::parse(&counter_key).ok()?).await
+            }
+            StoredCounter::Window {
+                entity_type,
+                entity_id,
+                window_duration,
+                window_start,
+            } => {
+                let (entity_type, owner) = match entity_type.as_str() {
+                    "Key" => ("key", Some(SpendLogOwner::Key)),
+                    "Team" => ("team", Some(SpendLogOwner::Team)),
+                    "User" => ("user", Some(SpendLogOwner::User)),
+                    "customer_org"
+                    | "customer_team"
+                    | "customer_member"
+                    | "app"
+                    | "app_customer_org"
+                    | "app_customer_member"
+                    | "app_group"
+                    | "app_group_customer_org" => (entity_type.as_str(), None),
+                    _ => return None,
+                };
+                rows.spend_logs
+                    .window_seed(
+                        owner,
+                        entity_type,
+                        &entity_id,
+                        window_duration.as_deref(),
+                        DateTime::parse_from_rfc3339(&window_start).ok()?.to_utc(),
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+            }
+        }
     }
 
     async fn reply(&self, call: &'static str, request: Value) -> HostReply {
@@ -439,7 +481,13 @@ mod tests {
         let request = json!({"counters": counters
             .iter()
             .map(|counter_key| json!({"source": "entity", "counter_key": counter_key}))
-            .chain([json!({"source": "window"})])
+            .chain([json!({
+                "source": "window",
+                "entity_type": "customer_member",
+                "entity_id": "missing",
+                "window_duration": null,
+                "window_start": "2026-01-02T00:00:00Z",
+            })])
             .collect::<Vec<_>>()});
         let member = SpendCounter::parse("spend:team_member:user:team").unwrap();
 
@@ -452,6 +500,41 @@ mod tests {
                 json!([1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, null, null, null, null]),
                 Some(4.5),
             )
+        );
+    }
+
+    #[rstest]
+    #[case::maintained("Team", "2026-01-02T00:00:00Z", 9.5)]
+    #[case::stale("Team", "2026-01-03T00:00:00Z", 3.5)]
+    #[case::missing_customer("customer_member", "2026-01-03T00:00:00Z", 0.0)]
+    #[tokio::test]
+    async fn a_window_reseeds_from_its_current_row_or_the_spend_logs(
+        #[case] entity_type: &str,
+        #[case] window_start: &str,
+        #[case] spend: f64,
+    ) {
+        let held = Held::holding(TOKEN, json!({})).await;
+        held.execute(r#"
+            INSERT INTO "LiteLLM_BudgetWindowSpend"
+                (entity_type, entity_id, window_duration, window_start, spend, updated_at)
+            VALUES ('team', 'team', '1d', '2026-01-02', 9.5, '2026-01-02');
+            INSERT INTO "LiteLLM_SpendLogs"
+                (request_id, call_type, api_key, team_id, spend, "startTime", "endTime", updated_at)
+            VALUES ('window', 'messages', 'key', 'team', 3.5, '2026-01-03', '2026-01-03', '2026-01-03');
+        "#).await;
+        let host = RustSpendLogHost::new(Some(Arc::new(Rows::new(held.database()))));
+
+        let request = json!({"counters": [{
+            "source": "window",
+            "entity_type": entity_type,
+            "entity_id": "team",
+            "window_duration": "1d",
+            "window_start": window_start,
+        }]});
+
+        assert_eq!(
+            host.reply(STORED_SPEND, request).await.unwrap(),
+            json!([spend])
         );
     }
 
