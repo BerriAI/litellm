@@ -167,6 +167,21 @@ class SessionRotatedPublicKey(LiteLLMBaseModel):
         return value
 
 
+@lru_cache(maxsize=8)
+def _validated_rsa_private_key(private_key_pem: str) -> rsa.RSAPrivateKey:
+    try:
+        loaded: Final = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
+    except (ValueError, TypeError, UnsupportedAlgorithm) as exc:
+        raise ValueError(f"private_key_pem is not a loadable unencrypted PEM private key: {exc}") from exc
+    if not isinstance(loaded, rsa.RSAPrivateKey):
+        raise ValueError(  # noqa: TRY004  # preserve the pydantic validation error contract
+            "private_key_pem must be an unencrypted RSA private key in PEM format"
+        )
+    if loaded.key_size < _MIN_RSA_KEY_BITS:
+        raise ValueError(f"private_key_pem must be an RSA key of at least {_MIN_RSA_KEY_BITS} bits")
+    return loaded
+
+
 class AsymmetricSessionKeys(LiteLLMBaseModel):
     """Injected RS256 key material: the issuer-held RSA private key and the stable ``kid``
     stamped into every minted token's JOSE header, plus the public halves of previously
@@ -182,14 +197,7 @@ class AsymmetricSessionKeys(LiteLLMBaseModel):
     @field_validator("private_key_pem")
     @classmethod
     def _pem_is_a_strong_rsa_private_key(cls, value: SecretStr) -> SecretStr:
-        try:
-            loaded: Final = serialization.load_pem_private_key(value.get_secret_value().encode(), password=None)
-        except (ValueError, TypeError, UnsupportedAlgorithm) as exc:
-            raise ValueError(f"private_key_pem is not a loadable unencrypted PEM private key: {exc}") from exc
-        if not isinstance(loaded, rsa.RSAPrivateKey):
-            raise ValueError("private_key_pem must be an unencrypted RSA private key in PEM format")  # noqa: TRY004  # pydantic validators must raise ValueError
-        if loaded.key_size < _MIN_RSA_KEY_BITS:
-            raise ValueError(f"private_key_pem must be an RSA key of at least {_MIN_RSA_KEY_BITS} bits")
+        _validated_rsa_private_key(value.get_secret_value())
         return value
 
     @model_validator(mode="after")
@@ -210,7 +218,7 @@ HS256 secret, or operator-configured RS256 RSA keys."""
 
 @lru_cache(maxsize=8)
 def _public_key_pem_from_private(private_key_pem: str) -> str:
-    loaded: Final = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
+    loaded: Final = _validated_rsa_private_key(private_key_pem)
     return (
         loaded.public_key()
         .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -452,7 +460,7 @@ def _sign_claims(claims: _SessionClaims, keys: SessionSigningKeys) -> str:
     if isinstance(keys, AsymmetricSessionKeys):
         return jwt.encode(
             payload,
-            keys.private_key_pem.get_secret_value(),
+            _validated_rsa_private_key(keys.private_key_pem.get_secret_value()),
             algorithm=_SESSION_RSA_ALGORITHM,
             headers={"kid": keys.kid},
         )
