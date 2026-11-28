@@ -9424,7 +9424,10 @@ def speech(
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model, custom_llm_provider=custom_llm_provider, api_base=caller_api_base
     )
-    provider_api_key: Final = None if dynamic_api_key in PLACEHOLDER_API_KEYS else dynamic_api_key
+    provider_host_resolved: Final = api_base is not None
+    provider_api_key: Final = (
+        dynamic_api_key if provider_host_resolved and dynamic_api_key not in PLACEHOLDER_API_KEYS else None
+    )
     kwargs.pop("tags", [])
     stream_audio: Final = stream is True
 
@@ -9534,7 +9537,7 @@ def speech(
             or litellm.api_key
             or litellm.openai_key
             or get_secret("OPENAI_API_KEY")
-            or dynamic_api_key
+            or (dynamic_api_key if provider_host_resolved else None)
         )
 
         organization = (
