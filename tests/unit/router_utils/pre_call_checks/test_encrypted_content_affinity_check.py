@@ -91,6 +91,27 @@ def _extract_encoded_item_id(response) -> str:
     return ""
 
 
+def _bridge_replayed_anthropic_messages(minted_by: str) -> list:
+    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA_turn_one", minted_by)
+    return [
+        {"role": "user", "content": "Solve the zebra puzzle"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Anthropic minted this one", "signature": "ErcCCpIBCBEYAipA"},
+                {"type": "redacted_thinking", "data": f"litellm_encrypted_reasoning:{wrapped}"},
+                {
+                    "type": "thinking",
+                    "thinking": "The bridge packed this one",
+                    "signature": f"litellm_encrypted_reasoning:{wrapped}",
+                },
+                {"type": "text", "text": "The zebra owner lives in the green house."},
+            ],
+        },
+        {"role": "user", "content": "And who drinks water?"},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Unit tests for encoding / decoding utilities
 # ---------------------------------------------------------------------------
@@ -301,6 +322,44 @@ class TestRestoreEncryptedContentItemIds:
         assert result[0]["id"] == "msg_plain"
 
 
+def test_extract_model_id_from_input_prefers_newest_marker():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    old_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-old", "rs_old")
+    new_id = ResponsesAPIRequestUtils._build_encrypted_item_id("deployment-new", "rs_new")
+    request_input = [
+        {"type": "message", "role": "user", "content": "first"},
+        {"type": "reasoning", "id": old_id, "encrypted_content": "ciphertext-old"},
+        {"type": "message", "role": "assistant", "id": "msg_old", "content": "reply 1"},
+        {"type": "message", "role": "user", "content": "second"},
+        {"type": "reasoning", "id": new_id, "encrypted_content": "ciphertext-new"},
+        {"type": "message", "role": "assistant", "id": "msg_new", "content": "reply 2"},
+    ]
+    assert EncryptedContentAffinityCheck._extract_model_id_from_input(request_input) == "deployment-new"
+
+    # Also verify with wrapped encrypted_content (e.g. Codex) without item IDs
+    old_wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("c1", "codex-old")
+    new_wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("c2", "codex-new")
+    wrapped_input = [
+        {"type": "reasoning", "encrypted_content": old_wrapped},
+        {"type": "reasoning", "encrypted_content": new_wrapped},
+    ]
+    assert EncryptedContentAffinityCheck._extract_model_id_from_input(wrapped_input) == "codex-new"
+
+
+def test_extract_model_id_from_anthropic_messages_prefers_newest_marker():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    messages = _bridge_replayed_anthropic_messages(minted_by="anthropic-old") + _bridge_replayed_anthropic_messages(
+        minted_by="anthropic-new"
+    )
+    assert EncryptedContentAffinityCheck._extract_model_id_from_anthropic_messages(messages) == "anthropic-new"
+
+
 # ---------------------------------------------------------------------------
 # Integration tests (router-level)
 # ---------------------------------------------------------------------------
@@ -413,6 +472,91 @@ async def test_encrypted_content_affinity_tracks_and_routes():
         assert second_model_id == first_model_id, (
             f"Expected affinity to route to {first_model_id}, but got {second_model_id}"
         )
+
+
+@pytest.mark.asyncio
+async def test_affinity_pins_to_newest_turn_deployment_after_overflow():
+    """
+    Issue #51930: In a multi-turn conversation, an earlier turn was served by
+    deployment-a (which later entered cooldown) and the subsequent turn overflowed
+    to deployment-b. On the next turn, affinity must follow the newest marker
+    (deployment-b) rather than the oldest (deployment-a).
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "azure-gpt",
+                "litellm_params": {
+                    "model": "azure/gpt-5.1-codex",
+                    "api_base": "https://swedencentral.openai.azure.com/",
+                    "api_key": "key-sweden",
+                },
+                "model_info": {"id": "dep-sweden"},
+            },
+            {
+                "model_name": "azure-gpt",
+                "litellm_params": {
+                    "model": "azure/gpt-5.1-codex",
+                    "api_base": "https://eastus.openai.azure.com/",
+                    "api_key": "key-eastus",
+                },
+                "model_info": {"id": "dep-eastus"},
+            },
+        ],
+        optional_pre_call_checks=["encrypted_content_affinity"],
+        num_retries=0,
+    )
+    # Put dep-sweden into cooldown to simulate overflow
+    router.cooldown_cache.add_deployment_to_cooldown(
+        model_id="dep-sweden",
+        original_exception=RuntimeError("Rate limit exceeded"),
+        exception_status=429,
+        cooldown_time=60.0,
+    )
+
+    sweden_id = ResponsesAPIRequestUtils._build_encrypted_item_id("dep-sweden", "rs-sweden")
+    eastus_id = ResponsesAPIRequestUtils._build_encrypted_item_id("dep-eastus", "rs-eastus")
+    sweden_wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-sweden", "dep-sweden")
+    eastus_wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-eastus", "dep-eastus")
+
+    # History contains older turn from sweden, newest turn from eastus
+    request_input = [
+        {"type": "message", "role": "user", "content": "turn 1"},
+        {
+            "type": "reasoning",
+            "id": sweden_id,
+            "encrypted_content": sweden_wrapped,
+            "summary": [{"type": "summary_text", "text": "sweden reasoning"}],
+        },
+        {"type": "message", "role": "assistant", "id": "msg_1", "content": "turn 1 answer"},
+        {"type": "message", "role": "user", "content": "turn 2"},
+        {
+            "type": "reasoning",
+            "id": eastus_id,
+            "encrypted_content": eastus_wrapped,
+            "summary": [{"type": "summary_text", "text": "eastus reasoning"}],
+        },
+        {"type": "message", "role": "assistant", "id": "msg_2", "content": "turn 2 answer"},
+        {"type": "message", "role": "user", "content": "turn 3"},
+    ]
+    request_kwargs = {"input": request_input, "store": False}
+
+    try:
+        deployment = await router.async_get_available_deployment(
+            model="azure-gpt", request_kwargs=request_kwargs, input=request_kwargs["input"]
+        )
+        # Pins to dep-eastus (the newest marker) despite dep-sweden being in cooldown
+        assert deployment["model_info"]["id"] == "dep-eastus"
+
+        # eastus reasoning is preserved because it pinned to dep-eastus
+        eastus_reasoning = next(
+            item
+            for item in request_kwargs["input"]
+            if isinstance(item, dict) and item.get("summary") == [{"type": "summary_text", "text": "eastus reasoning"}]
+        )
+        assert eastus_reasoning.get("encrypted_content") == eastus_wrapped
+    finally:
+        router.discard()
 
 
 @pytest.mark.asyncio
@@ -1894,27 +2038,6 @@ async def test_encrypted_content_affinity_pins_anthropic_messages_replayed_throu
     assert request_kwargs["_encrypted_content_affinity_pinned"] is True
 
 
-def _bridge_replayed_anthropic_messages(minted_by: str) -> list:
-    wrapped = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("gAAAAA_turn_one", minted_by)
-    return [
-        {"role": "user", "content": "Solve the zebra puzzle"},
-        {
-            "role": "assistant",
-            "content": [
-                {"type": "thinking", "thinking": "Anthropic minted this one", "signature": "ErcCCpIBCBEYAipA"},
-                {"type": "redacted_thinking", "data": f"litellm_encrypted_reasoning:{wrapped}"},
-                {
-                    "type": "thinking",
-                    "thinking": "The bridge packed this one",
-                    "signature": f"litellm_encrypted_reasoning:{wrapped}",
-                },
-                {"type": "text", "text": "The zebra owner lives in the green house."},
-            ],
-        },
-        {"role": "user", "content": "And who drinks water?"},
-    ]
-
-
 @pytest.mark.asyncio
 async def test_encrypted_content_affinity_strips_bridge_reasoning_from_messages_routed_to_another_group():
     """
@@ -2058,17 +2181,17 @@ async def test_real_router_selection_keeps_origin_reasoning_and_strips_foreign_o
         {"type": "message", "role": "user", "content": "first question"},
         {
             "type": "reasoning",
-            "id": openai_item_id,
-            "encrypted_content": openai_wrapped,
-            "summary": [{"type": "summary_text", "text": "openai summary"}],
+            "id": azure_item_id,
+            "encrypted_content": azure_wrapped,
+            "summary": [{"type": "summary_text", "text": "azure summary"}],
         },
         {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "first answer"}]},
         {"type": "message", "role": "user", "content": "second question"},
         {
             "type": "reasoning",
-            "id": azure_item_id,
-            "encrypted_content": azure_wrapped,
-            "summary": [{"type": "summary_text", "text": "azure summary"}],
+            "id": openai_item_id,
+            "encrypted_content": openai_wrapped,
+            "summary": [{"type": "summary_text", "text": "openai summary"}],
         },
         {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "second answer"}]},
         {"type": "message", "role": "user", "content": "third question"},
@@ -2087,15 +2210,15 @@ async def test_real_router_selection_keeps_origin_reasoning_and_strips_foreign_o
             {"type": "message", "role": "user", "content": "first question"},
             {
                 "type": "reasoning",
-                "id": openai_item_id,
-                "encrypted_content": openai_wrapped,
-                "summary": [{"type": "summary_text", "text": "openai summary"}],
+                "summary": [{"type": "summary_text", "text": "azure summary"}],
             },
             {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "first answer"}]},
             {"type": "message", "role": "user", "content": "second question"},
             {
                 "type": "reasoning",
-                "summary": [{"type": "summary_text", "text": "azure summary"}],
+                "id": openai_item_id,
+                "encrypted_content": openai_wrapped,
+                "summary": [{"type": "summary_text", "text": "openai summary"}],
             },
             {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "second answer"}]},
             {"type": "message", "role": "user", "content": "third question"},
@@ -2194,12 +2317,12 @@ async def test_affinity_keeps_mixed_origins_on_the_same_encryption_boundary():
     }
     request_kwargs = {
         "input": [
+            d2_item.copy(),
             {
                 "type": "reasoning",
                 "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id("blob-d1", "d1"),
                 "summary": [{"type": "summary_text", "text": "first origin"}],
             },
-            d2_item.copy(),
         ]
     }
     mock_ctx.registry.return_value.deployment.side_effect = lambda model_id: origin_d2 if model_id == "d2" else None
@@ -2213,7 +2336,7 @@ async def test_affinity_keeps_mixed_origins_on_the_same_encryption_boundary():
     )
 
     assert result == [deployment_d1]
-    assert request_kwargs["input"][1] == d2_item
+    assert request_kwargs["input"][0] == d2_item
 
 
 @pytest.mark.asyncio
@@ -2238,16 +2361,16 @@ async def test_boundary_pin_strips_reasoning_from_a_different_origin():
             {
                 "type": "reasoning",
                 "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-                    "blob-origin-a", "origin-a"
+                    "blob-origin-b", "origin-b"
                 ),
-                "summary": [{"type": "summary_text", "text": "origin A summary"}],
+                "summary": [{"type": "summary_text", "text": "origin B summary"}],
             },
             {
                 "type": "reasoning",
                 "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-                    "blob-origin-b", "origin-b"
+                    "blob-origin-a", "origin-a"
                 ),
-                "summary": [{"type": "summary_text", "text": "origin B summary"}],
+                "summary": [{"type": "summary_text", "text": "origin A summary"}],
             },
         ]
     }
@@ -2262,6 +2385,7 @@ async def test_boundary_pin_strips_reasoning_from_a_different_origin():
 
     assert result == [peer_a]
     assert request_kwargs["input"] == [
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "origin B summary"}]},
         {
             "type": "reasoning",
             "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
@@ -2269,7 +2393,6 @@ async def test_boundary_pin_strips_reasoning_from_a_different_origin():
             ),
             "summary": [{"type": "summary_text", "text": "origin A summary"}],
         },
-        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "origin B summary"}]},
     ]
 
 
@@ -2297,7 +2420,7 @@ async def test_affinity_keeps_only_anthropic_reasoning_from_the_pinned_origin():
     messages = _bridge_replayed_anthropic_messages(minted_by="origin-a")
     foreign_messages = _bridge_replayed_anthropic_messages(minted_by="origin-b")
     assistant_content = messages[1]["content"]
-    assistant_content.insert(3, foreign_messages[1]["content"][1])
+    assistant_content.insert(1, foreign_messages[1]["content"][1])
     check = EncryptedContentAffinityCheck(ctx=mock_ctx)
 
     result = await check.async_filter_deployments(
@@ -2351,7 +2474,6 @@ async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_con
     }
     request_kwargs = {
         "input": [
-            openai_item.copy(),
             {
                 "type": "reasoning",
                 "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
@@ -2359,6 +2481,7 @@ async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_con
                 ),
                 "summary": [{"type": "summary_text", "text": "removed origin"}],
             },
+            openai_item.copy(),
             {
                 "type": "reasoning",
                 "encrypted_content": "raw-encrypted-content",
@@ -2377,8 +2500,8 @@ async def test_affinity_strips_unknown_origins_but_leaves_unmarked_encrypted_con
 
     assert result == [deployment_a]
     assert request_kwargs["input"] == [
-        openai_item,
         {"type": "reasoning", "summary": [{"type": "summary_text", "text": "removed origin"}]},
+        openai_item,
         {
             "type": "reasoning",
             "encrypted_content": "raw-encrypted-content",
@@ -3728,16 +3851,16 @@ async def test_routing_tag_strips_reasoning_only_a_rejected_boundary_peer_could_
             input=[
                 {
                     "type": "reasoning",
-                    "summary": [{"type": "summary_text", "text": "from a"}],
+                    "summary": [{"type": "summary_text", "text": "from c"}],
                     "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-                        "blob-from-a", "a"
+                        "blob-from-c", "c"
                     ),
                 },
                 {
                     "type": "reasoning",
-                    "summary": [{"type": "summary_text", "text": "from c"}],
+                    "summary": [{"type": "summary_text", "text": "from a"}],
                     "encrypted_content": ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
-                        "blob-from-c", "c"
+                        "blob-from-a", "a"
                     ),
                 },
                 {"role": "user", "content": "follow-up"},
@@ -3747,7 +3870,7 @@ async def test_routing_tag_strips_reasoning_only_a_rejected_boundary_peer_could_
     forwarded: Final = handler.await_args.kwargs["input"]
 
     assert response._hidden_params["model_id"] == "b"
-    assert [item.get("encrypted_content") for item in forwarded[:2]] == ["blob-from-a", None]
+    assert [item.get("encrypted_content") for item in forwarded[:2]] == [None, "blob-from-a"]
 
 
 def _boundary_peer(name: str, tags: list[str], model_info: Mapping[str, object]) -> dict[str, object]:
