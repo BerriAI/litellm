@@ -15,6 +15,7 @@ from functools import partial
 from http.client import responses
 from types import MappingProxyType
 from typing import Annotated, Final, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import ConfigDict
@@ -143,6 +144,8 @@ async def _forward_to_lens(
         "x-litellm-team-id": auth.team_id,
         "x-litellm-org-id": auth.org_id,
         "x-litellm-user-id": auth.user_id,
+        "x-litellm-key-alias": quote(auth.key_alias, safe="") if auth.key_alias else None,
+        "x-litellm-user-email": quote(auth.user_email, safe="") if auth.user_email else None,
         "content-type": content_type or "application/x-protobuf",
         "content-encoding": request.headers.get("content-encoding"),
     }
