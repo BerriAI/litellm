@@ -12,6 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
+from litellm._internal_context import reporting_nested_tool_call_failure
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import flush_post_call_redis_batches
 from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED, BILLED_RETRY_ATTEMPT_METADATA_KEY
@@ -36,6 +37,7 @@ from litellm.proxy.auth.auth_checks import (
     get_key_object,
     get_team_object,
 )
+from litellm.proxy.auth.auth_utils import is_authentication_failure
 from litellm.proxy.auth.customer_spend import settle_customer_spend
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
@@ -493,6 +495,8 @@ def tracks_failure_spend(
     user_api_key_dict: UserAPIKeyAuth,
     completed_cost: bool,
 ) -> bool:
+    if is_authentication_failure(original_exception):
+        return False
     request_route: Final = user_api_key_dict.request_route
     request_fields: Final = _str_keyed_fields(request_data)
     # The endpoint already wrote its own failure row.
@@ -684,7 +688,7 @@ class _ProxyDBLogger(CustomLogger):
         )
         tracking_disabled: Final = ProxyUpdateSpend.disable_spend_updates()
         try:
-            if not completed_cost or tracking_disabled:
+            if (not completed_cost or tracking_disabled) and not reporting_nested_tool_call_failure():
                 await _release_budget_reservation(budget_reservation=user_api_key_dict.budget_reservation)
         except Exception:
             verbose_proxy_logger.exception("Failed to release budget reservation during failure handling")

@@ -91,13 +91,14 @@ def test_payment_required_error_uses_bad_request_retries():
 
 @pytest.mark.parametrize("default_retries", (None, 0, 3))
 @pytest.mark.parametrize("bad_request_retries", (0, 5))
-def test_unsupported_endpoint_preserves_the_connection_error_retry_budget(
-    default_retries: int | None, bad_request_retries: int
+@pytest.mark.parametrize("exception_type", (litellm.UnsupportedEndpointError, litellm.DocumentFetchError))
+def test_a_retried_bad_request_preserves_the_connection_error_retry_budget(
+    exception_type: type[litellm.BadRequestError], default_retries: int | None, bad_request_retries: int
 ) -> None:
     policy: Final = RetryPolicy(BadRequestErrorRetries=bad_request_retries, DefaultRetries=default_retries)
 
     assert get_num_retries_from_retry_policy(
-        exception=_error(litellm.UnsupportedEndpointError), retry_policy=policy
+        exception=_error(exception_type), retry_policy=policy
     ) == get_num_retries_from_retry_policy(exception=_error(litellm.APIConnectionError), retry_policy=policy)
 
 

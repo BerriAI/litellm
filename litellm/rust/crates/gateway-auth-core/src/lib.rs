@@ -33,7 +33,7 @@ pub use error::{
 };
 pub use host::{
     AgentRow, AuthHost, EndUserRow, KeyRow, MembershipRow, ObjectPermissionRow, OperatorHooks,
-    OrgRow, ProjectRow, Row, Rows, TeamRow, UserRow,
+    OrgRow, ProjectRow, Refreshed, Row, Rows, TeamRow, UserRow,
 };
 pub use outcome::{Identity, KeyOutcome, Outcome, Refused};
 pub use public::{ErrorType, PublicDenial};

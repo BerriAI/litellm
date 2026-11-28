@@ -25,12 +25,12 @@ class AzureFoundryGPTImageEditConfig(AzureImageEditConfig):
 
     def validate_environment(
         self,
-        headers: Mapping[str, str],
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:  # mutable-ok: llm_http_handler adds extra_headers to the returned dict in place
+    ) -> dict[str, object]:  # mutable-ok: llm_http_handler adds extra_headers to the returned dict in place
         params: Final = GenericLiteLLMParams(**(litellm_params or {}))
         return {
             **headers,

@@ -38,6 +38,10 @@ class RouterSessionPinStore:
     def __init__(self, handle: RouterSessionPinsHandle) -> None:
         self._handle: Final = handle
 
+    def flush_local(self) -> None:
+        """Drops everything this process holds in memory and leaves Redis alone, for test harnesses that reuse a process."""
+        self._handle.flush_local()
+
     @property
     def has_redis(self) -> bool:
         return self._handle.has_redis

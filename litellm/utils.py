@@ -3570,7 +3570,7 @@ def decode(
     tokens: Sequence[int] = (),
     custom_tokenizer: dict | None = None,
     skip_special_tokens: bool = True,
-):
+) -> str:
     """
     Decodes token ids using the selected tokenizer.
 
@@ -11915,6 +11915,12 @@ class ProviderConfigManager:
             from litellm.llms.minimax.image_generation import MinimaxImageGenerationConfig
 
             return MinimaxImageGenerationConfig()
+        elif LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.image_generation import (
+                VolcEngineImageGenerationConfig,
+            )
+
+            return VolcEngineImageGenerationConfig()
         return None
 
     @staticmethod
@@ -12119,6 +12125,12 @@ class ProviderConfigManager:
             from litellm.llms.minimax.image_edit import MinimaxImageEditConfig
 
             return MinimaxImageEditConfig()
+        elif LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.image_edit.transformation import (
+                VolcEngineImageEditConfig,
+            )
+
+            return VolcEngineImageEditConfig()
         return None
 
     @staticmethod

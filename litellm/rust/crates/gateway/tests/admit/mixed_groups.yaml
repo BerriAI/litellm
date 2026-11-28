@@ -86,6 +86,11 @@ requests:
     expect: python
     reason: body
 
+  - name: an end user, which the proxy reads no row for without a database
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-1}}
+    expect: rust
+
   - name: metadata object
     headers: {authorization: Bearer gateway-key}
     body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: {session_id: abc}}}

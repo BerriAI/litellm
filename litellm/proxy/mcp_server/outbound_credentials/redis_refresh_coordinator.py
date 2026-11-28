@@ -26,11 +26,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import KW_ONLY, dataclass
 from enum import Enum
-from typing import Final, Protocol
-
-from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
-    OAuthToken,
-)
+from typing import Final, Generic, Protocol, TypeVar
 
 
 class LockAcquisition(Enum):
@@ -59,8 +55,11 @@ class DistributedLock(Protocol):
     async def is_held(self, key: str) -> bool: ...
 
 
+OutcomeT = TypeVar("OutcomeT")
+
+
 @dataclass(frozen=True, slots=True)
-class RedisRefreshCoordinator:
+class RedisRefreshCoordinator(Generic[OutcomeT]):
     lock: DistributedLock
     _: KW_ONLY
     key_prefix: str = "mcp:refresh_lock:"
@@ -86,9 +85,9 @@ class RedisRefreshCoordinator:
         self,
         user_id: str,
         server_id: str,
-        refresh: Callable[[], Awaitable[OAuthToken | None]],
-        reread: Callable[[], Awaitable[OAuthToken | None]],
-    ) -> OAuthToken | None:
+        refresh: Callable[[], Awaitable[OutcomeT]],
+        reread: Callable[[], Awaitable[OutcomeT]],
+    ) -> OutcomeT:
         key: Final = self._key(user_id, server_id)
         token: Final = self.new_token()
         match await self.lock.acquire(key, token, self.lock_ttl_seconds):
@@ -111,8 +110,8 @@ class RedisRefreshCoordinator:
         self,
         key: str,
         token: str,
-        refresh: Callable[[], Awaitable[OAuthToken | None]],
-    ) -> OAuthToken | None:
+        refresh: Callable[[], Awaitable[OutcomeT]],
+    ) -> OutcomeT:
         refresh_task: Final = asyncio.ensure_future(refresh())
         renewal_task: Final = asyncio.create_task(self._renew_lease_until_done(key, token, refresh_task))
         try:
@@ -127,7 +126,7 @@ class RedisRefreshCoordinator:
         self,
         key: str,
         token: str,
-        refresh_task: asyncio.Future[OAuthToken | None],
+        refresh_task: asyncio.Future[OutcomeT],
     ) -> None:
         budget_deadline: Final = self.clock() + self.refresh_budget_seconds
         while not refresh_task.done() and self.clock() < budget_deadline:

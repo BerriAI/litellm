@@ -79,12 +79,6 @@ pub struct Keyed<K> {
     pub row: K,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct CachedTeam<T> {
-    pub refreshed_at: Option<Timestamp>,
-    pub row: T,
-}
-
 /// What the credential proved, before anything is read about who holds it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Verified<R: Rows> {

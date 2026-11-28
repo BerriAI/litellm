@@ -2,6 +2,7 @@
 
 use litellm_gateway_inference::messages::REQUEST_SETTINGS;
 use litellm_llms_types::formats::messages::MessagesOptionalParams;
+use litellm_python_compat::unicode::isspace;
 use serde_json::{Map, Value};
 
 use super::{Admit, Reason, Refused};
@@ -53,6 +54,14 @@ fn names_a_hosted_tool(fields: &Map<String, Value>) -> bool {
         .flatten()
         .filter_map(|tool| tool.get("type")?.as_str())
         .any(|kind| HOSTED_TOOLS.contains(&kind))
+}
+
+/// The end user a body's `metadata.user_id` names (`get_end_user_id_from_request_body`), trimmed
+/// of whitespace (`isspace`), and nobody when nothing is left. Every other place the proxy reads an
+/// end user from is a key or a header an earlier check sends to Python.
+pub(in crate::admit) fn end_user_id(fields: &Map<String, Value>) -> Option<&str> {
+    let named = fields.get("metadata")?.get("user_id")?.as_str()?;
+    Some(named.trim_matches(isspace)).filter(|end_user_id| !end_user_id.is_empty())
 }
 
 /// Any other `metadata` is in a shape the proxy rewrites before the provider sees it.
@@ -117,6 +126,24 @@ mod tests {
     )]
     fn a_body_with_something_the_proxy_reads_is_named(#[case] rest: &str, #[case] over: &str) {
         assert_eq!(asking(rest).as_deref(), Some(over));
+    }
+
+    #[rstest]
+    #[case::text(r#"{"user_id":"eu-1"}"#, Some("eu-1"))]
+    #[case::text_inside_whitespace(
+        r#"{"user_id":" \u001c\u0085eu-1\u3000\n"}"#,
+        Some("eu-1")
+    )]
+    #[case::space_alone(r#"{"user_id":" \u001f\t"}"#, None)]
+    #[case::empty_text(r#"{"user_id":""}"#, None)]
+    #[case::no_user_id("{}", None)]
+    fn the_end_user_is_the_user_id_trimmed_of_whitespace(
+        #[case] metadata: &str,
+        #[case] end_user: Option<&str>,
+    ) {
+        let sent: Map<String, Value> =
+            serde_json::from_str(&format!(r#"{{"metadata":{metadata}}}"#)).unwrap();
+        assert_eq!(end_user_id(&sent), end_user);
     }
 
     #[rstest]

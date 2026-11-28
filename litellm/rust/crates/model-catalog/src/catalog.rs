@@ -123,11 +123,38 @@ impl IntegrityLimits {
         min_reference_ratio: 0.0,
     };
 
+    /// What every host uses unless its operator sets otherwise: at least 50 models and half the bundled count
+    pub const DEFAULT: Self = Self {
+        min_model_count: 50,
+        min_reference_ratio: 0.5,
+    };
+
+    pub fn min_model_count(&self) -> usize {
+        self.min_model_count
+    }
+
+    pub fn min_reference_ratio(&self) -> f64 {
+        self.min_reference_ratio
+    }
+
     pub fn new(min_model_count: usize, min_reference_ratio: f64) -> Option<Self> {
         (0.0..=1.0).contains(&min_reference_ratio).then_some(Self {
             min_model_count,
             min_reference_ratio,
         })
+    }
+
+    /// `DEFAULT` with the limits a host's operator set over it, or the ratio outside 0 to 1 that was refused
+    pub fn over_default(
+        min_model_count: Option<usize>,
+        min_reference_ratio: Option<f64>,
+    ) -> Result<Self, f64> {
+        let ratio = min_reference_ratio.unwrap_or(Self::DEFAULT.min_reference_ratio);
+        Self::new(
+            min_model_count.unwrap_or(Self::DEFAULT.min_model_count),
+            ratio,
+        )
+        .ok_or(ratio)
     }
 }
 
@@ -645,6 +672,32 @@ mod tests {
             Catalog::problems(body)
                 .iter()
                 .any(|problem| problem.kind() == crate::ErrorKind::NoFallbackRules)
+        );
+    }
+
+    #[rstest]
+    #[case::nothing_set(None, None, Ok(IntegrityLimits::DEFAULT))]
+    #[case::only_the_count(Some(7), None, Ok(IntegrityLimits::new(7, 0.5).unwrap()))]
+    #[case::only_the_ratio(None, Some(0.25), Ok(IntegrityLimits::new(50, 0.25).unwrap()))]
+    #[case::both(Some(7), Some(0.25), Ok(IntegrityLimits::new(7, 0.25).unwrap()))]
+    #[case::a_ratio_above_one(Some(7), Some(1.5), Err(1.5))]
+    #[case::a_negative_ratio(None, Some(-0.1), Err(-0.1))]
+    fn limits_an_operator_set_go_over_the_defaults(
+        #[case] min_model_count: Option<usize>,
+        #[case] min_reference_ratio: Option<f64>,
+        #[case] limits: Result<IntegrityLimits, f64>,
+    ) {
+        assert_eq!(
+            IntegrityLimits::over_default(min_model_count, min_reference_ratio),
+            limits
+        );
+    }
+
+    #[rstest]
+    fn the_default_limits_are_fifty_models_and_half_the_bundled_count() {
+        assert_eq!(
+            IntegrityLimits::DEFAULT,
+            IntegrityLimits::new(50, 0.5).unwrap()
         );
     }
 }

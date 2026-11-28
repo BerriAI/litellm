@@ -15,48 +15,55 @@ use crate::{RawJson, utc_timestamp};
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(Serialize)]
 pub struct User {
-    pub(super) user_id: String,
-    pub(super) user_alias: Option<String>,
-    pub(super) team_id: Option<String>,
-    pub(super) sso_user_id: Option<String>,
-    pub(super) organization_id: Option<String>,
-    pub(super) object_permission_id: Option<String>,
-    pub(super) password_reset_required: Option<bool>,
+    pub user_id: String,
+    pub user_alias: Option<String>,
+    pub team_id: Option<String>,
+    pub sso_user_id: Option<String>,
+    pub organization_id: Option<String>,
+    pub object_permission_id: Option<String>,
+    pub password_reset_required: Option<bool>,
     #[serde(with = "utc_timestamp::option")]
-    pub(super) last_breach_check_at: Option<NaiveDateTime>,
-    pub(super) teams: Vec<String>,
-    pub(super) user_role: Option<String>,
-    pub(super) max_budget: Option<f64>,
+    pub last_breach_check_at: Option<NaiveDateTime>,
+    pub teams: Vec<String>,
+    pub user_role: Option<String>,
+    pub max_budget: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) rollover_max_budget: Option<f64>,
+    pub rollover_max_budget: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) rollover_credit: Option<f64>,
-    pub(super) budget_limits: Option<RawJson>,
-    pub(super) spend: f64,
-    pub(super) user_email: Option<String>,
-    pub(super) models: Vec<String>,
-    pub(super) metadata: RawJson,
-    pub(super) max_parallel_requests: Option<i32>,
-    pub(super) tpm_limit: Option<i64>,
-    pub(super) rpm_limit: Option<i64>,
-    pub(super) budget_duration: Option<String>,
+    pub rollover_credit: Option<f64>,
+    pub budget_limits: Option<RawJson>,
+    pub spend: f64,
+    pub user_email: Option<String>,
+    pub models: Vec<String>,
+    pub metadata: RawJson,
+    pub max_parallel_requests: Option<i32>,
+    pub tpm_limit: Option<i64>,
+    pub rpm_limit: Option<i64>,
+    pub budget_duration: Option<String>,
     #[serde(with = "utc_timestamp::option")]
-    pub(super) budget_reset_at: Option<NaiveDateTime>,
-    pub(super) allowed_cache_controls: Vec<String>,
-    pub(super) policies: Vec<String>,
-    pub(super) model_spend: RawJson,
-    pub(super) model_max_budget: RawJson,
+    pub budget_reset_at: Option<NaiveDateTime>,
+    pub allowed_cache_controls: Vec<String>,
+    pub policies: Vec<String>,
+    pub model_spend: RawJson,
+    pub model_max_budget: RawJson,
     #[serde(with = "utc_timestamp::option")]
-    pub(super) created_at: Option<NaiveDateTime>,
+    pub created_at: Option<NaiveDateTime>,
     #[serde(with = "utc_timestamp::option")]
-    pub(super) updated_at: Option<NaiveDateTime>,
-    pub(super) organization_memberships: Json<Vec<OrganizationMembership>>,
+    pub updated_at: Option<NaiveDateTime>,
+    pub organization_memberships: Json<Vec<OrganizationMembership>>,
+}
+
+impl User {
+    /// The `spend` column, what a budget counter for this row is seeded and floored from.
+    pub fn spend(&self) -> f64 {
+        self.spend
+    }
 }
 
 /// One `LiteLLM_OrganizationMembership` row, as a user row includes it
 #[macro_rules_attribute::apply(crate::db_row)]
 #[derive(Deserialize, Serialize)]
-pub(super) struct OrganizationMembership {
+pub struct OrganizationMembership {
     pub user_id: String,
     pub organization_id: String,
     pub user_role: Option<String>,
@@ -163,6 +170,43 @@ pub(super) async fn backfill_user_email(
     .await?)
 }
 
+/// Sets `user_email` on `user_id` while it has none, unless another user holds it and `links_any_user` is off; the
+/// row as stored, stamped in UTC, or `None` when this statement filled nothing
+pub(super) async fn fill_missing_user_email(
+    executor: impl PgExecutor<'_>,
+    user_id: &str,
+    user_email: &str,
+    links_any_user: bool,
+) -> Result<Option<User>, Error> {
+    Ok(sqlx::query_file_as!(
+        User,
+        "src/user/queries/fill_missing_user_email.sql",
+        user_id,
+        user_email,
+        links_any_user
+    )
+    .fetch_optional(executor)
+    .await?)
+}
+
+/// The row of `user_id` when it holds an email and no other user holds `user_email` or `links_any_user` is on
+pub(super) async fn find_user_with_stored_email(
+    executor: impl PgExecutor<'_>,
+    user_id: &str,
+    user_email: &str,
+    links_any_user: bool,
+) -> Result<Option<User>, Error> {
+    Ok(sqlx::query_file_as!(
+        User,
+        "src/user/queries/find_user_with_stored_email.sql",
+        user_id,
+        user_email,
+        links_any_user
+    )
+    .fetch_optional(executor)
+    .await?)
+}
+
 /// A user to create. `email_may_be_shared` stores the email even when another user holds it
 pub(super) struct NewUser<'a> {
     pub user_id: &'a str,
@@ -238,7 +282,9 @@ mod tests {
     use crate::Side;
     use crate::database::Connections;
     use crate::test_support::{OneTransaction, database_pool, insert_budget, leave_utc};
-    use crate::user::repository::{NewUserDefaults, SignIn, insert_once, resolve_once};
+    use crate::user::repository::{
+        NewUserDefaults, SignIn, backfill_once, insert_once, resolve_once,
+    };
 
     async fn insert_user(
         tx: &mut Transaction<'_, Postgres>,
@@ -598,6 +644,115 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
+    #[case::fills_a_missing_email(
+        "user-repository-null",
+        "new@example.com",
+        false,
+        Some("new@example.com")
+    )]
+    #[case::keeps_a_stored_email(
+        "user-repository-set",
+        "new@example.com",
+        false,
+        Some("set@example.com")
+    )]
+    #[case::refuses_an_email_another_user_holds(
+        "user-repository-null",
+        "Owner@example.com",
+        false,
+        None
+    )]
+    #[case::returns_nothing_for_a_stored_email_another_user_holds(
+        "user-repository-set",
+        "owner@example.com",
+        false,
+        None
+    )]
+    #[case::links_any_user_takes_a_held_email(
+        "user-repository-null",
+        "owner@example.com",
+        true,
+        Some("owner@example.com")
+    )]
+    #[case::missing_row("user-repository-missing", "new@example.com", false, None)]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn email_backfill_returns_the_row_as_stored(
+        #[case] user_id: &str,
+        #[case] user_email: &str,
+        #[case] links_any_user: bool,
+        #[case] expected: Option<&str>,
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        insert_user(&mut tx, "user-repository-null", None, None).await?;
+        insert_user(
+            &mut tx,
+            "user-repository-set",
+            Some("set@example.com"),
+            None,
+        )
+        .await?;
+        insert_user(
+            &mut tx,
+            "user-repository-owner",
+            Some("owner@example.com"),
+            None,
+        )
+        .await?;
+        insert_membership(&mut tx, "user-repository-null").await?;
+
+        let returned = backfill_once(
+            &mut OneTransaction(&mut tx),
+            user_id,
+            user_email,
+            links_any_user,
+        )
+        .await?;
+        let stored = super::find_user(&mut *tx, Some(user_id), None).await?;
+
+        assert_eq!(
+            returned
+                .as_ref()
+                .and_then(|user| user.user_email.as_deref()),
+            expected
+        );
+        if returned.is_some() {
+            assert_eq!(returned, stored);
+        }
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn email_backfill_stamps_the_row_it_fills_in_utc(
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        insert_user(&mut tx, "user-repository-null", None, None).await?;
+        leave_utc(&mut tx).await?;
+
+        backfill_once(
+            &mut OneTransaction(&mut tx),
+            "user-repository-null",
+            "new@example.com",
+            false,
+        )
+        .await?
+        .ok_or("no row came back")?;
+
+        let (_, updated_at_drift) = seconds_from_utc_now(&mut tx, "user-repository-null").await?;
+        assert!(
+            updated_at_drift < 1.0,
+            "updated_at is {updated_at_drift}s from UTC now"
+        );
+        Ok(())
+    }
+
     fn sign_in(
         user_id: &str,
         sso_user_id: Option<&str>,
@@ -626,64 +781,80 @@ mod tests {
     #[rstest]
     #[case::by_id_links_its_own_id(
         sign_in("own", Some("own"), None, None, false),
+        true,
         Some("own"),
         Some("own"),
         None
     )]
     #[case::by_id_leaves_a_foreign_sso_id(
         sign_in("own", Some("sso-x"), None, None, false),
+        false,
         Some("own"),
         None,
         None
     )]
     #[case::by_id_under_links_any_user_does_not_link(
         sign_in("own", Some("own"), None, None, true),
+        false,
         Some("own"),
         None,
         None
     )]
     #[case::by_sso_id(
         sign_in("new", Some("sso-linked"), Some("shared@example.com"), None, false),
+        false,
         Some("linked"),
         Some("sso-linked"),
         None
     )]
     #[case::by_email_links_the_sso_id(
         sign_in("new", Some("sso-new"), Some("Shared@Example.com"), Some(true), false),
+        true,
         Some("unlinked"),
         Some("sso-new"),
         None
     )]
     #[case::unverified_email_is_skipped(
         sign_in("new", Some("sso-new"), Some("shared@example.com"), Some(false), false),
+        false,
         None,
         None,
         None
     )]
     #[case::unverified_email_under_links_any_user(
         sign_in("new", None, Some("shared@example.com"), Some(false), true),
+        false,
         Some("unlinked"),
         None,
         None
     )]
     #[case::linked_email_is_skipped(
         sign_in("new", Some("sso-new"), Some("taken@example.com"), None, false),
+        false,
         None,
         None,
         None
     )]
     #[case::email_without_sso_id(
         sign_in("new", None, Some("taken@example.com"), None, false),
+        false,
         Some("taken"),
         Some("sso-taken"),
         None
     )]
-    #[case::links_any_user_links_later(sign_in("new", Some("sso-new"), Some("taken@example.com"), None, true), Some("taken"), Some("sso-taken"), Some(("taken", "sso-new")))]
-    #[case::no_email(sign_in("new", Some("sso-new"), None, None, false), None, None, None)]
+    #[case::links_any_user_links_later(sign_in("new", Some("sso-new"), Some("taken@example.com"), None, true), false, Some("taken"), Some("sso-taken"), Some(("taken", "sso-new")))]
+    #[case::no_email(
+        sign_in("new", Some("sso-new"), None, None, false),
+        false,
+        None,
+        None,
+        None
+    )]
     #[tokio::test]
     #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
     async fn resolve(
         #[case] sign_in: SignIn,
+        #[case] linked: bool,
         #[case] expected: Option<&str>,
         #[case] stored_sso_user_id: Option<&str>,
         #[case] link_later: Option<(&str, &str)>,
@@ -702,9 +873,15 @@ mod tests {
         };
 
         assert_eq!(
-            (user_ids(resolved.user), resolved.link_later, stored),
+            (
+                user_ids(resolved.user),
+                resolved.linked,
+                resolved.link_later,
+                stored
+            ),
             (
                 expected.map(str::to_owned),
+                linked,
                 link_later.map(|(user_id, sso)| (user_id.to_owned(), sso.to_owned())),
                 stored_sso_user_id.map(str::to_owned),
             )

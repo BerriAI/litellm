@@ -4,7 +4,7 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/
 import { AlertPresentation, dateLabel, metricValue } from "./alertPresentation";
 
 export default function AlertChart({ alert, compact = false }: { alert: AlertPresentation; compact?: boolean }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   if (!alert.history?.length)
     return compact ? null : (
       <p className="py-8 text-sm text-muted-foreground">{t("alerts.unified.chart.unavailable")}</p>
@@ -43,7 +43,7 @@ export default function AlertChart({ alert, compact = false }: { alert: AlertPre
             tick={{ fill: "var(--muted-foreground)" }}
             minTickGap={16}
             tickFormatter={(date: string) =>
-              new Date(`${date}T00:00:00Z`).toLocaleDateString(undefined, {
+              new Date(`${date}T00:00:00Z`).toLocaleDateString(i18n.language, {
                 month: "short",
                 day: "numeric",
                 timeZone: "UTC",

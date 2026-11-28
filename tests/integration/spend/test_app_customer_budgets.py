@@ -582,6 +582,9 @@ def _group(scenario: Scenario, budget: Mapping[str, JsonValue]) -> str:
         assert scenario.gateway.database_url is not None
         with psycopg.connect(scenario.gateway.database_url) as connection:
             connection.execute(
+                sql.SQL('SELECT 1 FROM "LiteLLM_AppGroupTable" WHERE app_group_id=%s FOR UPDATE'), (identity,)
+            )
+            connection.execute(
                 sql.SQL('UPDATE "LiteLLM_AppTable" SET app_group_id=NULL WHERE app_group_id=%s'), (identity,)
             )
             connection.execute(sql.SQL('DELETE FROM "LiteLLM_AppGroupTable" WHERE app_group_id=%s'), (identity,))

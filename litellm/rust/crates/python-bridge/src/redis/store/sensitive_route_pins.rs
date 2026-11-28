@@ -46,4 +46,8 @@ impl NativeSensitiveRoutePins {
             store.set(&tenant, &session_id, &model, ttl).await
         })
     }
+
+    fn flush_local(&self) -> PyResult<()> {
+        self.0.flush_local().map_err(kind_error)
+    }
 }

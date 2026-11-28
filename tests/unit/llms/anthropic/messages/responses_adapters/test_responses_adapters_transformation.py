@@ -7,7 +7,7 @@ import copy
 import json
 import os
 from collections.abc import Mapping, Sequence
-from typing import Any, Dict, Final, List, Literal
+from typing import Any, Dict, Final, List, Literal, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -1400,6 +1400,7 @@ _TOOL_RESULT_SPLIT_FROM_TEXT: Final = (
     {"role": "user", "content": "Keep it short."},
 )
 _LOW_BUDGET: Final = {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET}
+_MEDIUM_BUDGET: Final = {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET}
 
 
 @pytest.mark.parametrize(
@@ -1456,6 +1457,16 @@ _LOW_BUDGET: Final = {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFO
         pytest.param({"type": "adaptive"}, {"effort": "xhigh"}, _FRESH_TURN, {"effort": "xhigh"}, id="adaptive-effort"),
         pytest.param({"type": "adaptive"}, None, _FRESH_TURN, {"effort": "medium"}, id="adaptive-default"),
         pytest.param(_LOW_BUDGET, {"effort": "high"}, _FRESH_TURN, {"effort": "low"}, id="enabled-budget-wins"),
+        pytest.param(
+            _MEDIUM_BUDGET, {"effort": "low"}, _FRESH_TURN, {"effort": "low"}, id="enabled-lower-effort-wins"
+        ),
+        pytest.param(
+            _MEDIUM_BUDGET,
+            cast(AnthropicOutputConfig, {"effort": "turbo"}),
+            _FRESH_TURN,
+            {"effort": "turbo"},
+            id="enabled-unknown-effort-goes-to-the-target",
+        ),
         pytest.param(None, None, _FRESH_TURN, None, id="nothing-set"),
         pytest.param({"type": "future"}, None, _FRESH_TURN, None, id="unknown-type-alone"),
     ],

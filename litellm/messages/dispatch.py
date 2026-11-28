@@ -7,6 +7,7 @@ from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.messages.deferred_tools import usable_deferred_tools_mode
 from litellm.llms.anthropic.messages.native import handler as main
+from litellm.llms.anthropic.messages.native.utils import provider_messages_config
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import catalog, detectors
 from litellm.rust_bridge.catalog import Feature, Route, RouteContext, Target
@@ -106,7 +107,7 @@ def _route_target(
     api_base: str | None,
     compacting: bool,
 ) -> Target:
-    if main._provider_messages_config(model, provider, api_base) is not None:  # pyright: ignore[reportPrivateUsage]  # the handler's own config lookup
+    if provider_messages_config(model, provider, api_base) is not None:
         return Target.MESSAGES
     if main._deployment_passes_through_anthropic_messages(model_info):  # pyright: ignore[reportPrivateUsage]  # the handler's own passthrough opt-in
         return Target.MESSAGES_PASSTHROUGH

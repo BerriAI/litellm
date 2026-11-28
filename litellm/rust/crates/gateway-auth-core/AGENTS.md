@@ -37,10 +37,8 @@ These are target invariants. Where the code still lags them, the Notion page lis
 - The role is derived here, by `Caller::role`. Admin is a role and never a kind of credential, so a host never reads it off how the caller authenticated or off a permission it holds
 - A key's id is the hash its row is stored under, `Caller::hash`, read from the `KeyRecord` the host's key row keeps through `StoredKey`. The key path refuses a key whose record has none, so a caller that is a key always has one and only the master key has none. It is never the hash of the token the request presented, which a key a JWT maps to does not have
 - For access, the host supplies the layers it read (the key's, the team's and so on) and the core decides. A host that did not read a layer a key has must have declined that key at authentication, so no decision is ever made on a layer that is missing
-  - `authz::authorize` in `authz/models.rs` is the one model rule. It takes each list as a `Layer` with the `ModelAsk` the host's router resolved the name to (the name asked for, its model group and that group's access groups), and a request has to be reached by every layer. No layer, as the master key has, reaches every model
-  - A list reaches a model when it is empty, holds `*` or `all-proxy-models`, or names the model, its group or one of its access groups
-  - An entry the rule does not read, a provider pattern such as `anthropic/*`, `all-team-models` or `no-default-models`, is the host's to decline at authentication. Reading one means porting it here, never matching it in a host
-  - A team's or a user's list is a new `Layer` variant with its own `DeniedList` case, fed by the host method that yields the layers. A route never names a row type and never compares a list itself
+  - `authz::authorize` in `authz/models/` is the one model rule, and `authz/AGENTS.md` holds its invariants. It takes each list as a `Layer` named by the row that holds it, with the `ModelAsk` the host resolved the name to, and a request has to be reached by every layer. No layer, as the master key has, reaches every model
+  - A route never names a row type and never compares a list itself
 
 ## No Python semantics
 

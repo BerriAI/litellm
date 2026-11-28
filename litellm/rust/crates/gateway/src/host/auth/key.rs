@@ -2,94 +2,25 @@
 //! apart by name, so a field added to the cached key does not compile here until it is honored,
 //! left to a host step or named as one no step is asked about.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use jiff::{Timestamp, civil::DateTime, tz::TimeZone};
 use litellm_gateway_auth_core::{
     KeyHash, StoredKey,
     authn::key::{KeyRecord, Keyed},
+    authz::ModelList,
+    record::Budget,
 };
-use litellm_python_compat::{Value, json};
-use litellm_redis_store::auth_cache::{Bag, CachedKey, CachedObjectPermission, Lists};
-use serde::Deserialize;
+use litellm_redis_store::auth_cache::KeyEntry;
 
+use super::{
+    carried::{Carried, carried, newer},
+    metadata::Metadata,
+};
 use crate::callbacks::parallel_request_limiter::{KeyLimits, ModelLimits};
-
-/// The name of the first of `fields` that holds something.
-macro_rules! carried {
-    ($($field:ident),+ $(,)?) => {
-        [$((stringify!($field), Carried::is_carried($field)),)+]
-            .into_iter()
-            .find(|(_, carried)| *carried)
-            .map(|(field, _)| field)
-    };
-}
 
 /// The key type the proxy gives a key generated without one, which reaches every route.
 const DEFAULT_KEY_TYPE: &str = "default";
-
-/// The `models` entries the proxy reads through a team or a user, which a key with neither does
-/// not have.
-const OWNER_MODELS: [&str; 2] = ["all-team-models", "no-default-models"];
-
-/// Whether the auth core's model rule reads a `models` entry as the proxy does: a name, an
-/// access group or `*`. A pattern like `anthropic/*` the proxy matches against providers is not read.
-fn is_read(model: &str) -> bool {
-    !OWNER_MODELS.contains(&model) && (model == "*" || !model.contains('*'))
-}
-
-pub(super) trait Carried {
-    fn is_carried(&self) -> bool;
-}
-
-impl Carried for bool {
-    fn is_carried(&self) -> bool {
-        *self
-    }
-}
-
-/// A value the key holds, whatever it is: a limit of zero and an empty owner are still set.
-macro_rules! carried_when_held {
-    ($($held:ty),+) => {
-        $(impl Carried for $held {
-            fn is_carried(&self) -> bool {
-                true
-            }
-        })+
-    };
-}
-
-carried_when_held!(String, i64, f64, Timestamp, CachedObjectPermission);
-
-impl<T> Carried for Vec<T> {
-    fn is_carried(&self) -> bool {
-        !self.is_empty()
-    }
-}
-
-impl Carried for Bag {
-    fn is_carried(&self) -> bool {
-        !self.is_empty()
-    }
-}
-
-impl Carried for Lists {
-    fn is_carried(&self) -> bool {
-        !self.0.is_empty()
-    }
-}
-
-impl Carried for Value {
-    fn is_carried(&self) -> bool {
-        !matches!(self, Self::None)
-    }
-}
-
-impl<T: Carried> Carried for Option<T> {
-    fn is_carried(&self) -> bool {
-        self.as_ref().is_some_and(Carried::is_carried)
-    }
-}
 
 /// The team the core reads no team row for, so no step declines a key in it.
 const UI_TEAM: &str = "litellm-dashboard";
@@ -107,8 +38,16 @@ pub struct Key {
     priority: Option<Arc<str>>,
     /// The key's `key_alias`, which its calls are logged under.
     alias: Option<Arc<str>>,
-    /// The first budget column the row holds, which `key_budgets` declines.
+    /// The key's `key_name`, its masked text, which names it when it is over budget.
+    name: Option<Arc<str>>,
+    /// The key's own budget, which its budget counter is planned from.
+    own_budget: Budget,
+    /// The first budget column the row holds that the native app never enforces, which
+    /// `key_budgets` declines.
     pub(super) budget: Option<&'static str>,
+    /// The first of the key's own budget columns the row holds, which `BudgetCheck` enforces and
+    /// `key_budgets` declines while the budget reservation is on.
+    pub(super) checked_budget: Option<&'static str>,
     /// The row maps model names, which `normalize_model` declines.
     pub(super) aliased: bool,
 }
@@ -135,29 +74,49 @@ impl Key {
     pub(crate) fn alias(&self) -> Option<&str> {
         self.alias.as_deref()
     }
+
+    pub(crate) fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub(crate) fn budget(&self) -> Budget {
+        self.own_budget
+    }
 }
 
-/// The `metadata` the native app honors: the key's own limit for each model it names one for,
-/// which `/key/generate` stores from `model_rpm_limit` and `model_tpm_limit`, and the priority
-/// class `dynamic_rate_limiter_v3` counts the key under, when it is written as text.
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Metadata {
-    #[serde(default)]
-    model_rpm_limit: BTreeMap<String, i64>,
-    #[serde(default)]
-    model_tpm_limit: BTreeMap<String, i64>,
-    priority: Option<String>,
-}
-
-impl Metadata {
-    /// `None` when `metadata` holds anything else, or a limit that is not a whole number.
-    fn read(metadata: &Bag) -> Option<Self> {
-        if metadata.is_empty() {
-            return Some(Self::default());
+#[cfg(test)]
+impl Key {
+    pub(crate) fn stored(hash: &str, alias: Option<&str>) -> Self {
+        Self {
+            record: KeyRecord {
+                token: Some(KeyHash::new(hash)),
+                ..KeyRecord::default()
+            },
+            models: Arc::from([]),
+            limits: KeyLimits::default(),
+            priority: None,
+            alias: alias.map(Arc::from),
+            name: None,
+            own_budget: Budget::default(),
+            budget: None,
+            checked_budget: None,
+            aliased: false,
         }
-        let text = json::dumps(&Value::Dict(metadata.entries().to_vec())).ok()?;
-        serde_json::from_str(&text).ok()
+    }
+
+    pub(crate) fn with_budget(self, own_budget: Budget) -> Self {
+        Self { own_budget, ..self }
+    }
+
+    pub(crate) fn with_limits(self, limits: KeyLimits) -> Self {
+        Self { limits, ..self }
+    }
+
+    pub(crate) fn with_name(self, name: &str) -> Self {
+        Self {
+            name: Some(Arc::from(name)),
+            ..self
+        }
     }
 }
 
@@ -166,19 +125,23 @@ struct Held {
     /// The first column that holds something no host step is asked about.
     unasked: Option<&'static str>,
     budget: Option<&'static str>,
+    checked_budget: Option<&'static str>,
     aliased: bool,
 }
 
 /// The native app honors a key's expiry, its block, its model list, its `rpm_limit`, `tpm_limit`
 /// and `max_parallel_requests`, and the per-model limits in its metadata. Its `tpd_limit` only
 /// counts a batch, which no native route serves. The owner, the team and the project are the
-/// core's to ask the host for, the budgets and the aliases are steps the host declines, and every
-/// other field that holds something is one no step is asked about. The team, organization and
+/// core's to ask the host for. Its `max_budget` is checked at read time, and `budget_duration` and
+/// `budget_reset_at` only say when Python's reset job zeroes the spend that check reads, so the
+/// three are served while the budget reservation is disabled. The other budgets and the aliases
+/// are steps the host declines, and every other field that holds something is one no step is
+/// asked about. The team, organization and
 /// project fields are only filled for a key that names one, and the last group
 /// only describes the key or the request that cached it. A field this build does not name, which
 /// a newer pod wrote, is not asked about either unless that pod wrote it empty.
-fn held(key: &CachedKey) -> Held {
-    let CachedKey {
+fn held(key: &KeyEntry) -> Held {
+    let KeyEntry {
         token: _,
         key_name: _,
         key_alias: _,
@@ -288,9 +251,9 @@ fn held(key: &CachedKey) -> Held {
     let other_key_type = key_type
         .as_deref()
         .is_some_and(|key_type| key_type != DEFAULT_KEY_TYPE);
-    let unread_models = models.iter().any(|model| !is_read(model));
+    let unread_models = ModelList::read(models) == ModelList::Unread;
     let ui_team = team_id.as_deref() == Some(UI_TEAM);
-    let unread = &unread.iter().any(|(_, value)| value.is_carried());
+    let unread = &newer(unread);
     Held {
         unasked: other_key_type
             .then_some("key_type")
@@ -336,15 +299,13 @@ fn held(key: &CachedKey) -> Held {
             }),
         budget: carried![
             soft_budget_cooldown,
-            max_budget,
             soft_budget,
-            budget_duration,
-            budget_reset_at,
             budget_limits,
             budget_fallbacks,
             budget_id,
             model_max_budget,
         ],
+        checked_budget: carried![max_budget, budget_duration, budget_reset_at],
         aliased: aliases.is_carried(),
     }
 }
@@ -363,11 +324,12 @@ fn expiry(text: &str) -> Result<Timestamp, &'static str> {
 
 /// `key` as the core takes it. `Err` names a field that holds something no host step is asked
 /// about. A blocked key is the core's to deny, whatever else it holds.
-pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
+pub(super) fn read(key: &KeyEntry) -> Result<Keyed<Key>, &'static str> {
     let blocked = key.blocked == Some(true);
     let Held {
         unasked,
         budget,
+        checked_budget,
         aliased,
     } = held(key);
     let metadata = Metadata::read(&key.metadata);
@@ -402,7 +364,13 @@ pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
             },
             priority: metadata.priority.map(Arc::from),
             alias: key.key_alias.as_deref().map(Arc::from),
+            name: key.key_name.as_deref().map(Arc::from),
+            own_budget: Budget {
+                max: key.max_budget,
+                spend: key.spend,
+            },
             budget,
+            checked_budget,
             aliased,
         },
     })
@@ -456,13 +424,13 @@ mod tests {
     }"#;
 
     /// The cached key with `change` set on it.
-    fn cached(change: Fields) -> CachedKey {
+    fn cached(change: Fields) -> KeyEntry {
         let mut entry: Fields = serde_json::from_str(CACHED).unwrap();
         entry
             .as_object_mut()
             .unwrap()
             .extend(change.as_object().unwrap().clone());
-        CachedKey::from_value(&json::loads(&entry.to_string()).unwrap()).unwrap()
+        KeyEntry::from_value(&json::loads(&entry.to_string()).unwrap()).unwrap()
     }
 
     #[rstest]
@@ -542,6 +510,44 @@ mod tests {
         #[case] field: &str,
     ) {
         assert_eq!(read(&cached(change)).err(), Some(field));
+    }
+
+    #[rstest]
+    #[case::a_max_budget_alone(json!({"max_budget": 5.0}), None, Some("max_budget"))]
+    #[case::a_budget_of_zero(json!({"max_budget": 0.0}), None, Some("max_budget"))]
+    #[case::a_budget_reset(json!({"max_budget": 5.0, "budget_duration": "30d"}), None, Some("max_budget"))]
+    #[case::a_reset_alone(json!({"budget_duration": "30d"}), None, Some("budget_duration"))]
+    #[case::a_reset_time_alone(json!({"budget_reset_at": "2100-01-01T00:00:00Z"}), None, Some("budget_reset_at"))]
+    #[case::a_soft_budget(json!({"max_budget": 5.0, "soft_budget": 4.0}), Some("soft_budget"), Some("max_budget"))]
+    #[case::a_soft_budget_alert_cooldown(json!({"max_budget": 5.0, "soft_budget_cooldown": true}), Some("soft_budget_cooldown"), Some("max_budget"))]
+    #[case::a_budget_window(json!({"max_budget": 5.0, "budget_limits": [{"budget_duration": "1d", "max_budget": 1.0}]}), Some("budget_limits"), Some("max_budget"))]
+    #[case::a_budget_fallback(json!({"max_budget": 5.0, "budget_fallbacks": {"claude": ["haiku"]}}), Some("budget_fallbacks"), Some("max_budget"))]
+    #[case::a_budget_row(json!({"budget_id": "budget"}), Some("budget_id"), None)]
+    #[case::a_per_model_budget(json!({"max_budget": 5.0, "model_max_budget": {"claude": {"budget_limit": 1.0}}}), Some("model_max_budget"), Some("max_budget"))]
+    fn only_a_keys_own_budget_is_one_the_read_time_check_enforces(
+        #[case] change: Fields,
+        #[case] declined: Option<&str>,
+        #[case] checked: Option<&str>,
+    ) {
+        let key = read(&cached(change)).unwrap();
+
+        assert_eq!(
+            (key.row.budget, key.row.checked_budget),
+            (declined, checked)
+        );
+    }
+
+    #[rstest]
+    #[case::tags(json!({"tags": ["paid"]}))]
+    #[case::a_temporary_budget_increase(json!({"temp_budget_increase": 5.0, "temp_budget_expiry": "2100-01-01T00:00:00Z"}))]
+    #[case::throttling_once_over_budget(json!({"throttle_on_budget_exceeded": true}))]
+    fn a_budget_feature_in_the_metadata_beside_a_max_budget_is_named_as_the_metadata(
+        #[case] metadata: Fields,
+    ) {
+        assert_eq!(
+            read(&cached(json!({"max_budget": 5.0, "metadata": metadata}))).err(),
+            Some("metadata")
+        );
     }
 
     #[rstest]

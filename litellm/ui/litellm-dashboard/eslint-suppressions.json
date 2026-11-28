@@ -244,11 +244,8 @@
     }
   },
   "src/app/(dashboard)/guardrails/_components/custom_code/CustomCodeModal.tsx": {
-    "max-lines": {
-      "count": 1
-    },
     "no-nested-ternary": {
-      "count": 6
+      "count": 5
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -279,9 +276,6 @@
       "count": 1
     },
     "local/no-complex-jsx-arrow": {
-      "count": 1
-    },
-    "max-lines": {
       "count": 1
     },
     "max-params": {
@@ -538,9 +532,6 @@
   "src/app/(dashboard)/mcp-servers/_components/mcp_connect.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "react-hooks/static-components": {
-      "count": 4
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_connection_status.tsx": {
@@ -594,9 +585,6 @@
     },
     "no-nested-ternary": {
       "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_tool_configuration.tsx": {
@@ -606,9 +594,6 @@
   },
   "src/app/(dashboard)/mcp-servers/_components/mcp_tools.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "local/no-complex-jsx-arrow": {
       "count": 1
     },
     "no-nested-ternary": {
@@ -830,7 +815,7 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 10
+      "count": 8
     },
     "react-hooks/immutability": {
       "count": 1
@@ -882,7 +867,7 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 2
+      "count": 1
     }
   },
   "src/app/(dashboard)/policies/_components/policy_info.tsx": {
@@ -1013,9 +998,6 @@
       "count": 1
     },
     "no-nested-ternary": {
-      "count": 1
-    },
-    "prefer-const": {
       "count": 1
     }
   },
@@ -1201,11 +1183,6 @@
   },
   "src/components/GuardrailsMonitor/LogViewer.tsx": {
     "no-nested-ternary": {
-      "count": 1
-    }
-  },
-  "src/components/ModelInfoEditForm.tsx": {
-    "max-lines": {
       "count": 1
     }
   },
@@ -1569,9 +1546,6 @@
   "src/components/email_settings.tsx": {
     "local/filename-pascal-case": {
       "count": 1
-    },
-    "prefer-const": {
-      "count": 1
     }
   },
   "src/components/key_info_utils.tsx": {
@@ -1705,7 +1679,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 3
+      "count": 2
     },
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -1828,7 +1802,7 @@
       "count": 1
     },
     "prefer-const": {
-      "count": 2
+      "count": 1
     }
   },
   "src/components/routing_groups/index.tsx": {

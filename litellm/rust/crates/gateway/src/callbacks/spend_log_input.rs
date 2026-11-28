@@ -32,10 +32,11 @@ const CACHE_OFF: &str = "Cache OFF";
 ///   read, so admit cannot see it, but it only reaches background Responses jobs, which this
 ///   route never serves.
 /// - `end_user_max_budget` and `window_resets`: none. `host/auth` declines any key with a team,
-///   owner, end user, budget or access group, so only the master key or a bare key is served.
+///   owner, budget or access group and any end user whose row holds a budget, so only the master
+///   key or a bare key is served, for nobody or for an end user that holds no budget.
 /// - `batch_accounting`: false. `/v1/messages` is the only route served, and it runs no batch.
 /// - `response` and `kwargs_response_cost`: none. The gateway builds no logging payload yet, and
-///   the cost comes from `Field::Cost`, which nothing on the native route fills yet.
+///   the cost comes from `Field::Cost`, which the served attempt's settled cost fills.
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum SpendLogInput<'a> {
@@ -53,6 +54,10 @@ enum SpendLogInput<'a> {
 struct Identity<'a> {
     token: Option<&'a str>,
     user_id: Option<&'a str>,
+    team_id: Option<&'a str>,
+    org_id: Option<&'a str>,
+    project_id: Option<&'a str>,
+    end_user_id: Option<&'a str>,
     key_alias: Option<&'a str>,
 }
 
@@ -95,6 +100,13 @@ struct Metadata<'a> {
     user_api_key_hash: Option<&'a str>,
     user_api_key_alias: Option<&'a str>,
     user_api_key_user_id: Option<&'a str>,
+    user_api_key_team_id: Option<&'a str>,
+    user_api_key_team_alias: Option<&'a str>,
+    user_api_key_org_id: Option<&'a str>,
+    user_api_key_org_alias: Option<&'a str>,
+    user_api_key_project_id: Option<&'a str>,
+    user_api_key_project_alias: Option<&'a str>,
+    user_api_key_end_user_id: Option<&'a str>,
     user_api_key_request_route: &'static str,
     model_group: &'a str,
     model_info: ModelInfo<'a>,
@@ -175,6 +187,16 @@ pub(super) fn success(served: &Served<'_>) -> Option<serde_json::Value> {
             user_api_key_hash: charged.key_hash.as_deref(),
             user_api_key_alias: charged.key_alias.as_deref(),
             user_api_key_user_id: charged.user_id.as_deref(),
+            user_api_key_team_id: charged.team.as_ref().map(|team| team.id.as_str()),
+            user_api_key_team_alias: charged.team.as_ref().and_then(|team| team.alias.as_deref()),
+            user_api_key_org_id: charged.org.as_ref().map(|org| org.id.as_str()),
+            user_api_key_org_alias: charged.org.as_ref().and_then(|org| org.alias.as_deref()),
+            user_api_key_project_id: charged.project.as_ref().map(|project| project.id.as_str()),
+            user_api_key_project_alias: charged
+                .project
+                .as_ref()
+                .and_then(|project| project.alias.as_deref()),
+            user_api_key_end_user_id: charged.end_user_id.as_deref(),
             user_api_key_request_route: served.route,
             model_group: &served.call.model_group,
             model_info: ModelInfo {
@@ -200,6 +222,10 @@ pub(super) fn success(served: &Served<'_>) -> Option<serde_json::Value> {
         identity: Identity {
             token: charged.key_hash.as_deref(),
             user_id: charged.user_id.as_deref(),
+            team_id: charged.team.as_ref().map(|team| team.id.as_str()),
+            org_id: charged.org.as_ref().map(|org| org.id.as_str()),
+            project_id: charged.project.as_ref().map(|project| project.id.as_str()),
+            end_user_id: charged.end_user_id.as_deref(),
             key_alias: charged.key_alias.as_deref(),
         },
         call_type: served.call_type.into(),
@@ -216,6 +242,7 @@ mod tests {
 
     use litellm_callbacks_spend_log::{RowConfig, RowInput, SpendLogRowBuilder, SpendLogStatus};
     use litellm_callbacks_spend_logger::SpendLogInput as Parsed;
+    use litellm_gateway_auth_core::record::Label;
     use litellm_llms_types::formats::chat_completions::PromptTokensDetails;
     use litellm_redaction::TokenRedactor;
     use litellm_router_core::{Deployment, DeploymentSpec};
@@ -265,7 +292,7 @@ mod tests {
         Charged {
             key_hash: Some("a".repeat(64)),
             key_alias: Some("ci".to_owned()),
-            user_id: None,
+            ..Charged::default()
         }
     }
 
@@ -384,11 +411,62 @@ mod tests {
             key_hash: Some("litellm_proxy_master_key".to_owned()),
             key_alias: None,
             user_id: Some("default_user_id".to_owned()),
+            ..Charged::default()
         };
         let row = row(&input(&charged, &call(None), false));
         assert_eq!(
             (row.api_key.as_str(), row.user.as_str()),
             ("litellm_proxy_master_key", "default_user_id")
+        );
+    }
+
+    #[rstest]
+    fn a_call_is_logged_and_charged_under_the_team_org_project_and_end_user_it_names() {
+        let charged = Charged {
+            team: Some(Label {
+                id: "t1".to_owned(),
+                alias: Some("team one".to_owned()),
+            }),
+            org: Some(Label {
+                id: "o1".to_owned(),
+                alias: None,
+            }),
+            project: Some(Label {
+                id: "p1".to_owned(),
+                alias: None,
+            }),
+            end_user_id: Some("e1".to_owned()),
+            ..key()
+        };
+        let input = input(&charged, &call(None), false);
+        let Parsed::Success(success) = serde_json::from_value(input.clone()).unwrap() else {
+            panic!("a served call is a success")
+        };
+        let row = row(&input);
+        let metadata: Value = serde_json::from_str(&row.metadata).unwrap();
+        assert_eq!(
+            (
+                (
+                    success.identity.team_id.as_deref(),
+                    success.identity.org_id.as_deref(),
+                    success.identity.project_id.as_deref(),
+                    success.identity.end_user_id.as_deref(),
+                ),
+                (
+                    row.team_id.as_str(),
+                    row.organization_id.as_str(),
+                    row.end_user.as_str(),
+                ),
+                (
+                    metadata["user_api_key_team_alias"].as_str(),
+                    metadata["user_api_key_project_id"].as_str(),
+                ),
+            ),
+            (
+                (Some("t1"), Some("o1"), Some("p1"), Some("e1")),
+                ("t1", "o1", "e1"),
+                (Some("team one"), Some("p1")),
+            )
         );
     }
 }

@@ -10,7 +10,7 @@ use std::{
 };
 
 use futures_util::{StreamExt, stream::BoxStream};
-use litellm_redis_client::RedisClient;
+use litellm_redis_client::{CallTag, RedisClient, current_tag, tagged};
 use tokio::{runtime::Handle, sync::Semaphore};
 
 pub use self::keys::channel;
@@ -61,11 +61,19 @@ impl CacheInvalidation {
     /// `publish_cache_invalidation`: one `PUBLISH` in the background. `false` when it was
     /// dropped because too many publishes are already waiting.
     pub fn publish(&self, invalidation: &Invalidation) -> bool {
+        self.publish_with_tag(invalidation, current_tag())
+    }
+
+    pub fn publish_tagged(&self, invalidation: &Invalidation, tag: CallTag) -> bool {
+        self.publish_with_tag(invalidation, Some(tag))
+    }
+
+    fn publish_with_tag(&self, invalidation: &Invalidation, tag: Option<CallTag>) -> bool {
         let payload = invalidation.encode().into_bytes();
         let client = self.client.clone();
         let channel = self.channel.clone();
         let cache_key = invalidation.cache_key().to_owned();
-        self.spawn(1, async move {
+        self.spawn(1, tag, async move {
             if let Err(error) = client.publish(&channel, &[payload]).await {
                 tracing::warn!("auth cache invalidation publish for {cache_key:?} failed: {error}");
             }
@@ -85,7 +93,7 @@ impl CacheInvalidation {
         let client = self.client.clone();
         let channel = self.channel.clone();
         let count = cache_keys.len();
-        let Some(task) = self.spawn(count, async move {
+        let Some(task) = self.spawn(count, current_tag(), async move {
             if let Err(error) = client.publish(&channel, &payloads).await {
                 tracing::warn!("auth cache invalidation publish for {count} keys failed: {error}");
             }
@@ -107,6 +115,7 @@ impl CacheInvalidation {
     fn spawn(
         &self,
         keys: usize,
+        tag: Option<CallTag>,
         publish: impl Future<Output = ()> + Send + 'static,
     ) -> Option<tokio::task::JoinHandle<()>> {
         let pending = self.pending.fetch_add(1, Ordering::AcqRel);
@@ -126,7 +135,10 @@ impl CacheInvalidation {
             &self.runtime,
             async move {
                 if let Ok(_permit) = in_flight.acquire_owned().await {
-                    publish.await;
+                    match tag {
+                        Some(tag) => tagged(tag, publish).await,
+                        None => publish.await,
+                    }
                 }
                 waiting.fetch_sub(1, Ordering::AcqRel);
             },
@@ -135,20 +147,31 @@ impl CacheInvalidation {
 }
 
 /// What a message does to this worker's native caches: an eviction drops the auth cache's copy, and
-/// both kinds reach the spend counters, which own only the `spend:*` keys.
+/// both kinds reach the spend counters, which own the `spend:*` keys and the `spend_db_floor:`
+/// marker a spend reset sets beside each, as main's subscriber writes both into
+/// `spend_counter_cache`'s memory.
 pub fn apply(invalidation: &Invalidation, auth_cache: &AuthCache, spend_counters: &SpendCounters) {
+    let cache_key = invalidation.cache_key();
+    let counter = SpendCounter::parse(cache_key).ok();
+    let floor = SpendCounter::parse_floor(cache_key).ok();
     let applied = match invalidation {
-        Invalidation::Evict(cache_key) => auth_cache.delete_local(cache_key).and_then(|()| {
-            SpendCounter::parse(cache_key)
-                .map_or(Ok(()), |counter| spend_counters.delete_local(&counter))
-        }),
-        Invalidation::Set {
-            cache_key,
-            value,
-            ttl,
-        } => SpendCounter::parse(cache_key).map_or(Ok(()), |counter| {
-            spend_counters.set_local(&counter, *value, Invalidation::memory_ttl(*ttl))
-        }),
+        Invalidation::Evict(_) => {
+            auth_cache
+                .delete_local(cache_key)
+                .and_then(|()| match (&counter, &floor) {
+                    (Some(counter), _) => spend_counters.delete_local(counter),
+                    (None, Some(floor)) => spend_counters.delete_floor(floor),
+                    (None, None) => Ok(()),
+                })
+        }
+        Invalidation::Set { value, ttl, .. } => {
+            let ttl = Invalidation::memory_ttl(*ttl);
+            match (&counter, &floor) {
+                (Some(counter), _) => spend_counters.set_local(counter, *value, ttl),
+                (None, Some(floor)) => spend_counters.set_floor(floor, *value, ttl),
+                (None, None) => Ok(()),
+            }
+        }
     };
     if let Err(error) = applied {
         tracing::warn!(%error, cache_key = invalidation.cache_key(), "applying an auth cache invalidation failed");

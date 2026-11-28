@@ -118,8 +118,9 @@ fn spelled(config: &Config, key: Box<str>) -> Box<str> {
     config.origins.variable(&key).map_or(key, Box::from)
 }
 
-/// The variables the proxy reads that no config key sets. A variable config.yaml can also set is
-/// judged once, as the key it fills.
+/// Names the environment variables the gateway cannot serve, among those the proxy reads that no config
+/// key sets. A field bound as `field: _` is honored by the gateway, every other set field is unhandled. A
+/// variable config.yaml can also set is judged once, as the key it fills.
 fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<> {
     let Environment {
         litellm_cors_origins: _,
@@ -136,6 +137,8 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         spend_log_queue_max_bytes: _,
         spend_log_write_batch_max_bytes: _,
         spend_log_write_batch_max_rows: _,
+        anthropic_messages_detached_stream_drain_timeout_seconds: _,
+        anthropic_messages_max_detached_stream_drains: _,
         legacy_multi_instance_rate_limiting,
         use_aws_kms,
         litellm_ssl_ciphers,
@@ -151,6 +154,11 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         default_cooldown_time_seconds,
         default_cooldown_redis_read_interval_seconds: _,
         default_max_redis_batch_cache_size: _,
+        litellm_local_model_cost_map: _,
+        litellm_offline_mode: _,
+        model_cost_map_min_model_count: _,
+        model_cost_map_max_shrink_ratio: _,
+        aws_region_name: _,
     } = environment;
     set!(
         "",
@@ -171,6 +179,15 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         ]
     )
     .map(|field| field.to_uppercase().into())
+}
+
+/// Python fetches the cost map at import from `LITELLM_MODEL_COST_MAP_URL`, as the native app
+/// does at boot, and reads `litellm_settings.model_cost_map_url` from config.yaml only on a reload.
+fn set_by_its_variable(config: &Config) -> bool {
+    config
+        .origins
+        .variable("litellm_settings.model_cost_map_url")
+        .is_some()
 }
 
 /// The database settings are read as the proxy reads them, and what the proxy holds in its
@@ -213,6 +230,7 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         allowed_routes: _,
         use_x_forwarded_for: _,
         allowed_ips: _,
+        disable_budget_reservation: _,
         completion_model,
         max_in_flight_requests_per_worker,
         max_queued_requests_per_worker,
@@ -416,7 +434,6 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             success_callback,
             failure_callback,
             anthropic_prompt_caching_ttl,
-            model_cost_map_url,
             anthropic_beta_headers_url,
         ],
         on: [cache, modify_params, enable_anthropic_prompt_caching],
@@ -424,6 +441,7 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             callbacks => other_callbacks,
             priority_reservation_settings => borrows,
             request_timeout => |_| unkept(config),
+            model_cost_map_url => |url: &Option<_>| url.is_some() && !set_by_its_variable(config)
         ]
     )
     .chain(unknown("litellm_settings.", additional_fields))
@@ -528,6 +546,18 @@ mod tests {
     #[case::a_pre_call_check_the_host_runs(
         "router_settings:\n  optional_pre_call_checks: [enforce_model_rate_limits, prompt_caching]\n",
         "router_settings.optional_pre_call_checks"
+    )]
+    #[case::a_default_end_user_budget(
+        "litellm_settings:\n  max_end_user_budget_id: b-1\n",
+        "litellm_settings.max_end_user_budget_id"
+    )]
+    #[case::end_users_checked_against_the_database(
+        "litellm_settings:\n  validate_end_user_id_in_db: true\n",
+        "litellm_settings.validate_end_user_id_in_db"
+    )]
+    #[case::end_user_cost_tracking_turned_off(
+        "litellm_settings:\n  disable_end_user_cost_tracking: true\n",
+        "litellm_settings.disable_end_user_cost_tracking"
     )]
     #[case::a_section_the_config_types_do_not_name("future_section: {}\n", "future_section")]
     #[case::a_callback_beside_the_dynamic_rate_limiter(
@@ -642,6 +672,23 @@ mod tests {
             found(&set_by(variable, value)),
             named.into_iter().collect::<Vec<_>>()
         );
+    }
+
+    #[rstest]
+    #[case::by_its_variable(
+        set_by("LITELLM_MODEL_COST_MAP_URL", "https://cost-map.test/map.json"),
+        &[]
+    )]
+    #[case::in_the_config(
+        Config::from_yaml("litellm_settings:\n  model_cost_map_url: https://cost-map.test/map.json\n")
+            .unwrap(),
+        &["litellm_settings.model_cost_map_url"]
+    )]
+    fn the_cost_map_url_is_honored_only_where_the_proxy_fetches_at_boot_from(
+        #[case] config: Config,
+        #[case] named: &[&str],
+    ) {
+        assert_eq!(found(&config), named);
     }
 
     #[rstest]

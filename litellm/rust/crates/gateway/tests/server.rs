@@ -72,7 +72,8 @@ fn without_stores(inference: Inference) -> AppState {
         inference: inference.gateway,
         redis: RedisClients::default(),
         database: None,
-        keys: None,
+        database_unread: false,
+        auth_store: None,
         spend_logs: None,
         entitlements: Arc::new(Entitlements::Community),
         environment: Arc::new(litellm_env::ProcessEnvironment),
@@ -1344,6 +1345,17 @@ async fn a_deployment_param_from_the_environment_reaches_the_provider_resolved(
     let forwarded = forwarded_body(deployment_params, json!({})).await;
 
     assert_eq!(forwarded.pointer(pointer), Some(&expected));
+}
+
+#[tokio::test]
+async fn a_param_the_model_does_not_support_is_dropped_under_the_global_drop_params() {
+    let forwarded = forwarded_body(
+        "litellm_settings:\n  drop_params: true\n",
+        json!({"speed": "fast"}),
+    )
+    .await;
+
+    assert_eq!(forwarded.get("speed"), None);
 }
 
 #[rstest]

@@ -17,8 +17,8 @@ use axum::{
 use litellm_config::{Config, Environment};
 use litellm_env::Lookup;
 use litellm_gateway::{
-    Admit, AppState, Live, Loaded, Poller, Refused, Resources, Served, Source, StoredConfig,
-    middleware::InFlight,
+    Admit, AppState, CostMapRefresh, Live, Loaded, Poller, Refused, Resources, Served, Source,
+    StoredConfig, middleware::InFlight,
 };
 use litellm_tracing::{KeyLength, Level, Logger, Metadata, Record, Scrubbed, Sink};
 use serde_json::json;
@@ -110,6 +110,7 @@ async fn standalone(
     let state = AppState::build(&config, environment).await?;
     scrub_at_the_configs_key_length(key_length, &*state.environment);
     let admit = Arc::new(Admit::new(&config, &state, stored));
+    refresh_cost_map(environment, &state, &config)?;
     let in_flight = InFlight::new();
     let live = Arc::new(Live::new(served(
         state,
@@ -265,6 +266,9 @@ async fn in_front_of_python(
         source,
     } = native_state(loaded, environment).await?;
     scrub_at_the_configs_key_length(key_length, &*state.environment);
+    if admit.is_some() {
+        refresh_cost_map(environment, &state, &config)?;
+    }
     let in_flight = InFlight::new();
     let live = Arc::new(Live::new(served(
         state,
@@ -340,6 +344,18 @@ fn served(
 ) -> Served {
     let native = native(state.clone(), config, environment, in_flight);
     Served::new(state, admit, native)
+}
+
+/// Installs the remote cost map in the background once it is read, as Python's import does.
+fn refresh_cost_map(
+    environment: &Environment,
+    state: &AppState,
+    config: &Config,
+) -> Result<(), litellm_gateway::Error> {
+    if let Some(refresh) = CostMapRefresh::new(config, environment, state)? {
+        litellm_call_scope::spawn_detached(refresh.run(state.clone()));
+    }
+    Ok(())
 }
 
 /// The native app, which both modes build here so they cannot differ in its layers. `admit` goes

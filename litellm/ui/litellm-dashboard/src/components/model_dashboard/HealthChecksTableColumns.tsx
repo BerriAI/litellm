@@ -1,5 +1,6 @@
 "use client";
 
+import { displayTimestamp } from "@/i18n/displayDate";
 import { ColumnDef } from "@tanstack/react-table";
 import type { ParseKeys, TFunction } from "i18next";
 import { Info, Play, RefreshCw } from "lucide-react";
@@ -62,7 +63,7 @@ const sentinelLabel = (value: string, t: TFunction): string =>
 
 const checkTimeLabel = (value: string, t: TFunction): string => {
   const checkedAt = new Date(value);
-  return Number.isNaN(checkedAt.getTime()) ? sentinelLabel(value, t) : checkedAt.toLocaleString();
+  return Number.isNaN(checkedAt.getTime()) ? sentinelLabel(value, t) : displayTimestamp(checkedAt);
 };
 
 function HealthStatusBadge({ status }: { status: string }) {

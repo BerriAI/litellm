@@ -574,4 +574,8 @@ impl NativeRateLimits {
         self.0
             .increment_many_post_call(&request.0, &all(increments));
     }
+
+    fn flush_local(&self) -> PyResult<()> {
+        self.0.flush_local().map_err(kind_error)
+    }
 }

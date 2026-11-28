@@ -67,6 +67,7 @@ from litellm.images.fan_out import (
     settle_image_answers,
     split_outcomes,
 )
+from litellm.images.retries import async_retried, retried
 from litellm.images.streaming import (
     AsyncImageStream,
     ImageStream,
@@ -107,8 +108,10 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     callable_of,
     float_of,
+    iter_items,
     require_attributes,
     set_provider_response_headers_in_hidden_params,
+    str_param,
 )
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
@@ -592,8 +595,8 @@ def _ascii_image_edit_stream_body(data: object, files: object) -> str | None:
 
 
 def _image_edit_stream_headers(
-    headers: Mapping[str, str], body: str
-) -> dict[str, str]:  # mutable-ok: HTTPHandler.post and AsyncHTTPHandler.post require dict headers
+    headers: Mapping[str, object], body: str
+) -> dict[str, object]:  # mutable-ok: HTTPHandler.post and AsyncHTTPHandler.post require dict headers
     return {
         **{key: value for key, value in headers.items() if key.lower() not in ("content-length", "transfer-encoding")},
         "Content-Length": str(len(body)),
@@ -617,7 +620,7 @@ class _MediaUploadKwargs(TypedDict, total=False):
 class _AsyncFilesEnvironmentValidator(Protocol):
     async def avalidate_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        headers: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         model: str,
         messages: list[AllMessageValues],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
@@ -630,7 +633,7 @@ class _AsyncFilesEnvironmentValidator(Protocol):
 async def _avalidate_files_environment(
     provider_config: BaseFilesConfig | BaseBatchesConfig,
     *,
-    headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    headers: dict[str, str] | dict[str, object],  # mutable-ok: dict-typed callees take it
     model: str,
     messages: list[AllMessageValues],  # mutable-ok: mirrors the sync validate_environment contract this overrides
     optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
@@ -1115,7 +1118,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseConfig,
         api_base: str,
         headers: dict[str, object],
-        data: dict,
+        data: dict[str, object],
         timeout: float | httpx.Timeout,
         model: str,
         model_response: ModelResponse,
@@ -1534,7 +1537,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseConfig,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
-        data: dict,
+        data: dict[str, object],
         litellm_params: dict[str, object],
         optional_params: dict[str, object],
         fake_stream: bool = False,
@@ -2454,7 +2457,7 @@ class BaseLLMHTTPHandler:
         if client is None or not isinstance(client, HTTPHandler):
             client = get_httpx_client()
 
-        json_data: Final = data if files is None and isinstance(data, dict) else None
+        json_data: Final[dict[str, object] | None] = data if files is None and isinstance(data, dict) else None
 
         try:
             response: Final = client.post(
@@ -2526,7 +2529,7 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        json_data: Final = data if files is None and isinstance(data, dict) else None
+        json_data: Final[dict[str, object] | None] = data if files is None and isinstance(data, dict) else None
 
         try:
             response: Final = await async_httpx_client.post(
@@ -2592,7 +2595,7 @@ class BaseLLMHTTPHandler:
         )
 
         # Transform the request
-        data: Final = provider_config.transform_search_request(
+        data: Final[dict[str, object] | list[dict[str, object]]] = provider_config.transform_search_request(
             query=query,
             optional_params=optional_params,
         )
@@ -2688,7 +2691,7 @@ class BaseLLMHTTPHandler:
         )
 
         # Transform the request first
-        data: Final = await run_off_loop_if_aws(
+        data: Final[dict[str, object] | list[dict[str, object]]] = await run_off_loop_if_aws(
             provider_config,
             provider_config.transform_search_request,
             query=query,
@@ -2862,7 +2865,8 @@ class BaseLLMHTTPHandler:
         from litellm.utils import supports_httpx_timeout
 
         stream_timeout: Final = litellm_params.get("stream_timeout") if stream else None
-        model_timeout: Final = litellm_params.get("timeout")
+        timeout_param: Final = litellm_params.get("timeout")
+        model_timeout: Final = timeout_param if isinstance(timeout_param, (int, float, str, httpx.Timeout)) else None
         request_timeout: Final = litellm_params.get("request_timeout")
         global_timeout: Final = get_configured_request_timeout()
         if stream_timeout is None and model_timeout is None and request_timeout is None and global_timeout is None:
@@ -2921,7 +2925,7 @@ class BaseLLMHTTPHandler:
         )
         request_params: Final = reduce(
             delete_nested_value,
-            litellm_params.get("additional_drop_params") or (),
+            (path for path in iter_items(litellm_params.get("additional_drop_params") or ()) if isinstance(path, str)),
             anthropic_messages_optional_request_params,
         )
         filters_beta_headers: Final = anthropic_messages_provider_config.should_filter_anthropic_beta_headers()
@@ -3358,7 +3362,7 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        provider_headers: Final[dict[str, object]] = (  # mutable-ok: provider configs return a header dict
+        provider_headers: Final[dict[str, str]] = (  # mutable-ok: provider configs return a header dict
             responses_api_provider_config.validate_environment(
                 headers=(
                     _client_request_headers(response_api_optional_request_params, extra_headers)
@@ -3563,7 +3567,7 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        provider_headers: Final[dict[str, object]] = (  # mutable-ok: provider configs return a header dict
+        provider_headers: Final[dict[str, str]] = (  # mutable-ok: provider configs return a header dict
             await asyncio.to_thread(
                 responses_api_provider_config.validate_environment,
                 headers=(
@@ -3628,6 +3632,7 @@ class BaseLLMHTTPHandler:
                 fake_stream=fake_stream,
             )
 
+        headers: dict[str, object]  # mutable-ok: the callee's own dict
         headers, signed_body = await run_off_loop_if_aws(
             responses_api_provider_config,
             responses_api_provider_config.sign_request,
@@ -4307,7 +4312,7 @@ class BaseLLMHTTPHandler:
         create_file_data: CreateFileRequest,
         litellm_params: dict[str, object],
         provider_config: BaseFilesConfig,
-        headers: dict,
+        headers: dict[str, str],  # mutable-ok: dict-typed callees take it
         api_base: str | None,
         api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
@@ -4491,7 +4496,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None,
         timeout: float | httpx.Timeout | None,
     ) -> OpenAIFileObject:
-        validated_headers: Final = await _avalidate_files_environment(
+        validated_headers: Final[dict[str, str]] = await _avalidate_files_environment(
             provider_config,
             headers=headers,
             model="",
@@ -4535,7 +4540,7 @@ class BaseLLMHTTPHandler:
         transformed_request: Union[bytes, str, dict, "TwoStepFileUploadConfig"],
         litellm_params: dict[str, object],
         provider_config: BaseFilesConfig,
-        headers: dict,
+        headers: dict[str, str],  # mutable-ok: dict-typed callees take it
         api_base: str,
         logging_obj: LiteLLMLoggingObj,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -4755,7 +4760,7 @@ class BaseLLMHTTPHandler:
         create_batch_data: "CreateBatchRequest",
         litellm_params: dict[str, object],
         provider_config: "BaseBatchesConfig",
-        headers: dict,
+        headers: dict[str, str],  # mutable-ok: dict-typed callees take it
         api_base: str | None,
         api_key: str | None,
         logging_obj: "LiteLLMLoggingObj",
@@ -4863,7 +4868,7 @@ class BaseLLMHTTPHandler:
         batch_id: str,
         litellm_params: dict[str, object],
         provider_config: "BaseBatchesConfig",
-        headers: dict,
+        headers: dict[str, str] | dict[str, object],  # mutable-ok: dict-typed callees take it
         api_base: str | None,
         api_key: str | None,
         logging_obj: "LiteLLMLoggingObj",
@@ -4949,7 +4954,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None,
         model: str,
     ) -> "LiteLLMBatch":
-        validated_headers: Final = await _avalidate_files_environment(
+        validated_headers: Final[dict[str, object]] = await _avalidate_files_environment(
             provider_config,
             headers=headers,
             model=model,
@@ -4991,10 +4996,10 @@ class BaseLLMHTTPHandler:
 
     async def async_create_batch(
         self,
-        transformed_request: bytes | str | dict,
+        transformed_request: bytes | str | dict[str, object],  # mutable-ok: dict-typed callees take it
         litellm_params: Mapping[str, object],
         provider_config: "BaseBatchesConfig",
-        headers: dict,
+        headers: dict[str, object],  # mutable-ok: dict-typed callees take it
         api_base: str,
         logging_obj: "LiteLLMLoggingObj",
         client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
@@ -5065,10 +5070,10 @@ class BaseLLMHTTPHandler:
 
     async def async_retrieve_batch(
         self,
-        transformed_request: bytes | str | dict,
+        transformed_request: bytes | str | dict[str, object],  # mutable-ok: dict-typed callees take it
         litellm_params: dict[str, object],
         provider_config: "BaseBatchesConfig",
-        headers: dict,
+        headers: dict[str, str] | dict[str, object],  # mutable-ok: dict-typed callees take it
         api_base: str | None,
         logging_obj: "LiteLLMLoggingObj",
         client: Union["HTTPHandler", "AsyncHTTPHandler"] | None = None,
@@ -5431,6 +5436,7 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
+        headers: dict[str, object]  # mutable-ok: the callee's own dict
         headers, signed_body = await run_off_loop_if_aws(
             responses_api_provider_config,
             responses_api_provider_config.sign_request,
@@ -5473,7 +5479,7 @@ class BaseLLMHTTPHandler:
         file_id: str,
         provider_config: BaseFilesConfig,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, str] | dict[str, object],  # mutable-ok: dict-typed callees take it
         logging_obj: LiteLLMLoggingObj,
         _is_async: bool = False,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -5499,6 +5505,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         # Get URL and params from provider config
+        params: dict[str, object]  # mutable-ok: the callee's own dict
         url, params = provider_config.transform_retrieve_file_request(
             file_id=file_id,
             optional_params={},
@@ -5543,7 +5550,7 @@ class BaseLLMHTTPHandler:
         file_id: str,
         provider_config: BaseFilesConfig,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, str] | dict[str, object],  # mutable-ok: dict-typed callees take it
         logging_obj: LiteLLMLoggingObj,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         timeout: float | httpx.Timeout | None = None,
@@ -5557,6 +5564,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Get URL and params from provider config
+        params: dict[str, object]  # mutable-ok: the callee's own dict
         url, params = await run_off_loop_if_aws(
             provider_config,
             provider_config.transform_retrieve_file_request,
@@ -5604,7 +5612,7 @@ class BaseLLMHTTPHandler:
         file_id: str,
         provider_config: BaseFilesConfig,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, str] | dict[str, object],  # mutable-ok: dict-typed callees take it
         logging_obj: LiteLLMLoggingObj,
         _is_async: bool = False,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -5630,6 +5638,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         # Get URL and params from provider config
+        params: dict[str, object]  # mutable-ok: the callee's own dict
         url, params = provider_config.transform_delete_file_request(
             file_id=file_id,
             optional_params={},
@@ -5672,7 +5681,7 @@ class BaseLLMHTTPHandler:
         file_id: str,
         provider_config: BaseFilesConfig,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, str] | dict[str, object],  # mutable-ok: dict-typed callees take it
         logging_obj: LiteLLMLoggingObj,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         timeout: float | httpx.Timeout | None = None,
@@ -5686,6 +5695,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Get URL and params from provider config
+        params: dict[str, object]  # mutable-ok: the callee's own dict
         url, params = await run_off_loop_if_aws(
             provider_config,
             provider_config.transform_delete_file_request,
@@ -5731,7 +5741,7 @@ class BaseLLMHTTPHandler:
         purpose: str | None,
         provider_config: BaseFilesConfig,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, str] | dict[str, object],  # mutable-ok: dict-typed callees take it
         logging_obj: LiteLLMLoggingObj,
         _is_async: bool = False,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -5757,6 +5767,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         # Get URL and params from provider config
+        params: dict[str, object]  # mutable-ok: the callee's own dict
         url, params = provider_config.transform_list_files_request(
             purpose=purpose,
             optional_params={},
@@ -5799,7 +5810,7 @@ class BaseLLMHTTPHandler:
         purpose: str | None,
         provider_config: BaseFilesConfig,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, str] | dict[str, object],  # mutable-ok: dict-typed callees take it
         logging_obj: LiteLLMLoggingObj,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         timeout: float | httpx.Timeout | None = None,
@@ -5813,6 +5824,7 @@ class BaseLLMHTTPHandler:
             async_httpx_client = client
 
         # Get URL and params from provider config
+        params: dict[str, object]  # mutable-ok: the callee's own dict
         url, params = await run_off_loop_if_aws(
             provider_config,
             provider_config.transform_list_files_request,
@@ -5859,7 +5871,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseFilesConfig,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict[str, object],  # mutable-ok: handed to the files contract, which types it as a dict
-        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        headers: dict[str, str] | dict[str, object],  # mutable-ok: dict-typed callees take it
         client: HTTPHandler,
         timeout: float | httpx.Timeout | None,
     ) -> Iterator[list[OpenAIFileObject]]:  # mutable-ok: each page arrives as the list the files contract returns
@@ -5887,7 +5899,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseFilesConfig,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict[str, object],  # mutable-ok: handed to the files contract, which types it as a dict
-        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        headers: dict[str, str] | dict[str, object],  # mutable-ok: dict-typed callees take it
         client: AsyncHTTPHandler,
         timeout: float | httpx.Timeout | None,
     ) -> AsyncIterator[list[OpenAIFileObject]]:  # mutable-ok: each page arrives as the list the files contract returns
@@ -5914,7 +5926,7 @@ class BaseLLMHTTPHandler:
     def _next_listing_page_headers(
         self,
         provider_config: BaseFilesConfig,
-        headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
+        headers: dict[str, object],  # mutable-ok: handed to validate_environment, which types it as a dict
         litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
     ) -> dict[str, object]:  # mutable-ok: validate_environment returns the header dict the files contract types
         return provider_config.validate_environment(
@@ -7925,6 +7937,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
         api_key: str | None = None,
+        max_retries: int = 0,
     ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
         """
         Handles image generation requests.
@@ -7947,6 +7960,7 @@ class BaseLLMHTTPHandler:
                 fake_stream=fake_stream,
                 litellm_metadata=litellm_metadata,
                 api_key=api_key,
+                max_retries=max_retries,
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -7954,7 +7968,7 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = image_generation_provider_config.validate_environment(
+        headers: Final[dict[str, object]] = image_generation_provider_config.validate_environment(
             api_key=api_key,
             headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
             model=model,
@@ -8015,7 +8029,7 @@ class BaseLLMHTTPHandler:
                     model,
                     image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
                 ),
-                send,
+                retried(send, max_retries),
             )
         )
         served, unserved = partition_outcomes(
@@ -8057,6 +8071,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         litellm_metadata: dict[str, object] | None = None,
         api_key: str | None = None,
+        max_retries: int = 0,
     ) -> ImageResponse:
         """
         Async version of the image generation handler.
@@ -8070,7 +8085,7 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = image_generation_provider_config.validate_environment(
+        headers: Final[dict[str, object]] = image_generation_provider_config.validate_environment(
             api_key=api_key,
             headers=image_generation_optional_request_params.get("extra_headers", {}) or {},
             model=model,
@@ -8129,8 +8144,9 @@ class BaseLLMHTTPHandler:
             model,
             image_generation_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
+        retrying_send: Final = async_retried(send, max_retries)
         responses, failure = split_outcomes(
-            await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
+            await asyncio.gather(*(retrying_send() for _ in range(request_count)), return_exceptions=True)
         )
         served, unserved = partition_outcomes(
             await asyncio.gather(
@@ -8205,8 +8221,8 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = video_generation_provider_config.validate_environment(
-            api_key=api_key or litellm_params.get("api_key", None),
+        headers: Final[dict[str, object]] = video_generation_provider_config.validate_environment(
+            api_key=api_key or str_param(litellm_params, "api_key"),
             headers=video_generation_optional_request_params.get("extra_headers", {}) or {},
             model=model,
             litellm_params=litellm_params,
@@ -8217,10 +8233,11 @@ class BaseLLMHTTPHandler:
 
         api_base = video_generation_provider_config.get_complete_url(
             model=model,
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
+        data: dict[str, object]  # mutable-ok: the callee's own dict
         (
             data,
             files,
@@ -8312,9 +8329,9 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = await asyncio.to_thread(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(  # mutable-ok: the callee's own dict
             video_generation_provider_config.validate_environment,
-            api_key=api_key or litellm_params.get("api_key", None),
+            api_key=api_key or str_param(litellm_params, "api_key"),
             headers=video_generation_optional_request_params.get("extra_headers", {}) or {},
             model=model,
             litellm_params=litellm_params,
@@ -8325,10 +8342,11 @@ class BaseLLMHTTPHandler:
 
         api_base = video_generation_provider_config.get_complete_url(
             model=model,
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
+        data: dict[str, object]  # mutable-ok: the callee's own dict
         (
             data,
             files,
@@ -8440,11 +8458,12 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_content_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
+        data: dict[str, object]  # mutable-ok: the callee's own dict
         url, data = video_content_provider_config.transform_video_content_request(
             video_id=video_id,
             api_base=api_base,
@@ -8521,11 +8540,12 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_content_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
+        data: dict[str, object]  # mutable-ok: the callee's own dict
         url, data = video_content_provider_config.transform_video_content_request(
             video_id=video_id,
             api_base=api_base,
@@ -8607,7 +8627,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client = client
 
         headers: Final = video_remix_provider_config.validate_environment(
-            api_key=api_key or litellm_params.get("api_key", None),
+            api_key=api_key or str_param(litellm_params, "api_key"),
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -8618,11 +8638,12 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_remix_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
+        data: dict[str, object]  # mutable-ok: the callee's own dict
         url, data = video_remix_provider_config.transform_video_remix_request(
             video_id=video_id,
             prompt=prompt,
@@ -8691,7 +8712,7 @@ class BaseLLMHTTPHandler:
 
         headers: Final = await asyncio.to_thread(
             video_remix_provider_config.validate_environment,
-            api_key=api_key or litellm_params.get("api_key", None),
+            api_key=api_key or str_param(litellm_params, "api_key"),
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -8702,11 +8723,12 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_remix_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
+        data: dict[str, object]  # mutable-ok: the callee's own dict
         url, data = video_remix_provider_config.transform_video_remix_request(
             video_id=video_id,
             prompt=prompt,
@@ -8781,8 +8803,8 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = video_provider_config.validate_environment(
-            api_key=api_key or litellm_params.get("api_key", None),
+        headers: Final[dict[str, object]] = video_provider_config.validate_environment(
+            api_key=api_key or str_param(litellm_params, "api_key"),
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -8792,7 +8814,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -8853,9 +8875,9 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = await asyncio.to_thread(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(  # mutable-ok: the callee's own dict
             video_provider_config.validate_environment,
-            api_key=api_key or litellm_params.get("api_key", None),
+            api_key=api_key or str_param(litellm_params, "api_key"),
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -8865,7 +8887,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -8936,8 +8958,8 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = video_provider_config.validate_environment(
-            api_key=api_key or litellm_params.get("api_key", None),
+        headers: Final[dict[str, object]] = video_provider_config.validate_environment(
+            api_key=api_key or str_param(litellm_params, "api_key"),
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -8947,7 +8969,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -8994,9 +9016,9 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = await asyncio.to_thread(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(  # mutable-ok: the callee's own dict
             video_provider_config.validate_environment,
-            api_key=api_key or litellm_params.get("api_key", None),
+            api_key=api_key or str_param(litellm_params, "api_key"),
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -9006,7 +9028,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -9070,8 +9092,8 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = video_provider_config.validate_environment(
-            api_key=api_key or litellm_params.get("api_key", None),
+        headers: Final[dict[str, object]] = video_provider_config.validate_environment(
+            api_key=api_key or str_param(litellm_params, "api_key"),
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -9081,7 +9103,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -9093,6 +9115,7 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
         if prefetch_params is not None:
+            prefetch_body: dict[str, object]  # mutable-ok: the callee's own dict
             prefetch_url, prefetch_body = prefetch_params
             try:
                 prefetch_resp: Final = sync_httpx_client.post(
@@ -9167,9 +9190,9 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = await asyncio.to_thread(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(  # mutable-ok: the callee's own dict
             video_provider_config.validate_environment,
-            api_key=api_key or litellm_params.get("api_key", None),
+            api_key=api_key or str_param(litellm_params, "api_key"),
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -9179,7 +9202,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -9191,6 +9214,7 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
         if prefetch_params is not None:
+            prefetch_body: dict[str, object]  # mutable-ok: the callee's own dict
             prefetch_url, prefetch_body = prefetch_params
             try:
                 prefetch_resp: Final = await async_httpx_client.post(
@@ -9279,8 +9303,8 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = video_provider_config.validate_environment(
-            api_key=api_key or litellm_params.get("api_key", None),
+        headers: Final[dict[str, object]] = video_provider_config.validate_environment(
+            api_key=api_key or str_param(litellm_params, "api_key"),
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -9290,7 +9314,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -9354,9 +9378,9 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = await asyncio.to_thread(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(  # mutable-ok: the callee's own dict
             video_provider_config.validate_environment,
-            api_key=api_key or litellm_params.get("api_key", None),
+            api_key=api_key or str_param(litellm_params, "api_key"),
             headers=extra_headers or {},
             model="",
             litellm_params=litellm_params,
@@ -9366,7 +9390,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -9500,11 +9524,12 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_list_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
+        params: dict[str, object]  # mutable-ok: the callee's own dict
         url, params = video_list_provider_config.transform_video_list_request(
             api_base=api_base,
             litellm_params=litellm_params,
@@ -9582,7 +9607,7 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_delete_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -9674,11 +9699,12 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_status_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
+        data: dict[str, object]  # mutable-ok: the callee's own dict
         (
             url,
             data,
@@ -9767,11 +9793,12 @@ class BaseLLMHTTPHandler:
 
         api_base: Final = video_status_provider_config.get_complete_url(
             model="",
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
+        data: dict[str, object]  # mutable-ok: the callee's own dict
         (
             url,
             data,
@@ -9857,7 +9884,7 @@ class BaseLLMHTTPHandler:
         # Validate environment and get headers
         headers: Final = container_provider_config.validate_environment(
             headers=extra_headers or {},
-            api_key=litellm_params.get("api_key", None),
+            api_key=str_param(litellm_params, "api_key"),
             litellm_params=litellm_params,
         )
 
@@ -9869,7 +9896,7 @@ class BaseLLMHTTPHandler:
 
         # Get the complete URL for the request
         api_base: Final = container_provider_config.get_complete_url(
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -9937,7 +9964,7 @@ class BaseLLMHTTPHandler:
         headers: Final = await asyncio.to_thread(
             container_provider_config.validate_environment,
             headers=extra_headers or {},
-            api_key=litellm_params.get("api_key", None),
+            api_key=str_param(litellm_params, "api_key"),
             litellm_params=litellm_params,
         )
 
@@ -9949,7 +9976,7 @@ class BaseLLMHTTPHandler:
 
         # Get the complete URL for the request
         api_base: Final = container_provider_config.get_complete_url(
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -10031,7 +10058,7 @@ class BaseLLMHTTPHandler:
         # Validate environment and get headers
         headers: Final = container_provider_config.validate_environment(
             headers=extra_headers or {},
-            api_key=litellm_params.get("api_key", None),
+            api_key=str_param(litellm_params, "api_key"),
             litellm_params=litellm_params,
         )
 
@@ -10040,7 +10067,7 @@ class BaseLLMHTTPHandler:
 
         # Get the complete URL for the request
         api_base: Final = container_provider_config.get_complete_url(
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -10112,7 +10139,7 @@ class BaseLLMHTTPHandler:
         headers: Final = await asyncio.to_thread(
             container_provider_config.validate_environment,
             headers=extra_headers or {},
-            api_key=litellm_params.get("api_key", None),
+            api_key=str_param(litellm_params, "api_key"),
             litellm_params=litellm_params,
         )
 
@@ -10121,7 +10148,7 @@ class BaseLLMHTTPHandler:
 
         # Get the complete URL for the request
         api_base: Final = container_provider_config.get_complete_url(
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -10201,7 +10228,7 @@ class BaseLLMHTTPHandler:
         # Validate environment and get headers
         headers: Final = container_provider_config.validate_environment(
             headers=extra_headers or {},
-            api_key=litellm_params.get("api_key", None),
+            api_key=str_param(litellm_params, "api_key"),
             litellm_params=litellm_params,
         )
 
@@ -10210,11 +10237,12 @@ class BaseLLMHTTPHandler:
 
         # Get the complete URL for the request
         api_base: Final = container_provider_config.get_complete_url(
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
+        params: dict[str, object]  # mutable-ok: the callee's own dict
         url, params = container_provider_config.transform_container_retrieve_request(
             container_id=container_id,
             api_base=api_base,
@@ -10282,7 +10310,7 @@ class BaseLLMHTTPHandler:
         headers: Final = await asyncio.to_thread(
             container_provider_config.validate_environment,
             headers=extra_headers or {},
-            api_key=litellm_params.get("api_key", None),
+            api_key=str_param(litellm_params, "api_key"),
             litellm_params=litellm_params,
         )
 
@@ -10291,11 +10319,12 @@ class BaseLLMHTTPHandler:
 
         # Get the complete URL for the request
         api_base: Final = container_provider_config.get_complete_url(
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
+        params: dict[str, object]  # mutable-ok: the callee's own dict
         url, params = container_provider_config.transform_container_retrieve_request(
             container_id=container_id,
             api_base=api_base,
@@ -10373,7 +10402,7 @@ class BaseLLMHTTPHandler:
         # Validate environment and get headers
         headers: Final = container_provider_config.validate_environment(
             headers=extra_headers or {},
-            api_key=litellm_params.get("api_key", None),
+            api_key=str_param(litellm_params, "api_key"),
             litellm_params=litellm_params,
         )
 
@@ -10382,11 +10411,12 @@ class BaseLLMHTTPHandler:
 
         # Get the complete URL for the request
         api_base: Final = container_provider_config.get_complete_url(
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
+        params: dict[str, object]  # mutable-ok: the callee's own dict
         url, params = container_provider_config.transform_container_delete_request(
             container_id=container_id,
             api_base=api_base,
@@ -10454,7 +10484,7 @@ class BaseLLMHTTPHandler:
         headers: Final = await asyncio.to_thread(
             container_provider_config.validate_environment,
             headers=extra_headers or {},
-            api_key=litellm_params.get("api_key", None),
+            api_key=str_param(litellm_params, "api_key"),
             litellm_params=litellm_params,
         )
 
@@ -10463,11 +10493,12 @@ class BaseLLMHTTPHandler:
 
         # Get the complete URL for the request
         api_base: Final = container_provider_config.get_complete_url(
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
         # Transform the request using the provider config
+        params: dict[str, object]  # mutable-ok: the callee's own dict
         url, params = container_provider_config.transform_container_delete_request(
             container_id=container_id,
             api_base=api_base,
@@ -10550,7 +10581,7 @@ class BaseLLMHTTPHandler:
         # Validate environment and get headers
         headers: Final = container_provider_config.validate_environment(
             headers=extra_headers or {},
-            api_key=litellm_params.get("api_key", None),
+            api_key=str_param(litellm_params, "api_key"),
             litellm_params=litellm_params,
         )
 
@@ -10559,7 +10590,7 @@ class BaseLLMHTTPHandler:
 
         # Get the complete URL for container files
         api_base: Final = container_provider_config.get_complete_url(
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -10633,7 +10664,7 @@ class BaseLLMHTTPHandler:
         headers: Final = await asyncio.to_thread(
             container_provider_config.validate_environment,
             headers=extra_headers or {},
-            api_key=litellm_params.get("api_key", None),
+            api_key=str_param(litellm_params, "api_key"),
             litellm_params=litellm_params,
         )
 
@@ -10642,7 +10673,7 @@ class BaseLLMHTTPHandler:
 
         # Get the complete URL for container files
         api_base: Final = container_provider_config.get_complete_url(
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -10722,7 +10753,7 @@ class BaseLLMHTTPHandler:
         # Validate environment and get headers
         headers: Final = container_provider_config.validate_environment(
             headers=extra_headers or {},
-            api_key=litellm_params.get("api_key", None),
+            api_key=str_param(litellm_params, "api_key"),
             litellm_params=litellm_params,
         )
 
@@ -10731,7 +10762,7 @@ class BaseLLMHTTPHandler:
 
         # Get the complete URL for container files
         api_base: Final = container_provider_config.get_complete_url(
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -10802,7 +10833,7 @@ class BaseLLMHTTPHandler:
         headers: Final = await asyncio.to_thread(
             container_provider_config.validate_environment,
             headers=extra_headers or {},
-            api_key=litellm_params.get("api_key", None),
+            api_key=str_param(litellm_params, "api_key"),
             litellm_params=litellm_params,
         )
 
@@ -10811,7 +10842,7 @@ class BaseLLMHTTPHandler:
 
         # Get the complete URL for container files
         api_base: Final = container_provider_config.get_complete_url(
-            api_base=litellm_params.get("api_base", None),
+            api_base=str_param(litellm_params, "api_base"),
             litellm_params=dict(litellm_params),
         )
 
@@ -11260,7 +11291,7 @@ class BaseLLMHTTPHandler:
 
         vector_store_provider_config.validate_create_vector_store()
 
-        headers: Final = await asyncio.to_thread(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(  # mutable-ok: the callee's own dict
             vector_store_provider_config.validate_environment,
             headers=extra_headers or {},
             litellm_params=litellm_params,
@@ -11334,7 +11365,7 @@ class BaseLLMHTTPHandler:
 
         vector_store_provider_config.validate_create_vector_store()
 
-        headers: Final = vector_store_provider_config.validate_environment(
+        headers: Final[dict[str, object]] = vector_store_provider_config.validate_environment(
             headers=extra_headers or {}, litellm_params=litellm_params
         )
 
@@ -11393,7 +11424,7 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = await asyncio.to_thread(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(  # mutable-ok: the callee's own dict
             vector_store_provider_config.validate_environment,
             headers=extra_headers or {},
             litellm_params=litellm_params,
@@ -11460,7 +11491,7 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = vector_store_provider_config.validate_environment(
+        headers: Final[dict[str, object]] = vector_store_provider_config.validate_environment(
             headers=extra_headers or {}, litellm_params=litellm_params
         )
 
@@ -11517,7 +11548,7 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = await asyncio.to_thread(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(  # mutable-ok: the callee's own dict
             vector_store_provider_config.validate_environment,
             headers=extra_headers or {},
             litellm_params=litellm_params,
@@ -11598,7 +11629,7 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = vector_store_provider_config.validate_environment(
+        headers: Final[dict[str, object]] = vector_store_provider_config.validate_environment(
             headers=extra_headers or {}, litellm_params=litellm_params
         )
 
@@ -11661,7 +11692,7 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = await asyncio.to_thread(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(  # mutable-ok: the callee's own dict
             vector_store_provider_config.validate_environment,
             headers=extra_headers or {},
             litellm_params=litellm_params,
@@ -11742,7 +11773,7 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = vector_store_provider_config.validate_environment(
+        headers: Final[dict[str, object]] = vector_store_provider_config.validate_environment(
             headers=extra_headers or {}, litellm_params=litellm_params
         )
 
@@ -11808,7 +11839,7 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = await asyncio.to_thread(
+        headers: Final[dict[str, object]] = await asyncio.to_thread(  # mutable-ok: the callee's own dict
             vector_store_provider_config.validate_environment,
             headers=extra_headers or {},
             litellm_params=litellm_params,
@@ -11872,7 +11903,7 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = vector_store_provider_config.validate_environment(
+        headers: Final[dict[str, object]] = vector_store_provider_config.validate_environment(
             headers=extra_headers or {}, litellm_params=litellm_params
         )
 
@@ -13066,7 +13097,7 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        headers: Final = text_to_speech_provider_config.validate_environment(
+        headers: Final[dict[str, object]] = text_to_speech_provider_config.validate_environment(
             api_key=litellm_params.get("api_key"),
             headers=extra_headers or {},
             model=model,
@@ -13172,7 +13203,7 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
-        headers: Final = text_to_speech_provider_config.validate_environment(
+        headers: Final[dict[str, object]] = text_to_speech_provider_config.validate_environment(
             api_key=litellm_params.get("api_key"),
             headers=extra_headers or {},
             model=model,

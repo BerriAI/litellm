@@ -59,11 +59,11 @@ class WebIQSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],  # mutable-ok: BaseSearchConfig interface
+        headers: dict[str, object],  # mutable-ok: BaseSearchConfig interface
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig interface
-    ) -> dict[str, str]:  # mutable-ok: HTTP handler requires a dict
+    ) -> dict[str, object]:  # mutable-ok: HTTP handler requires a dict
         if urlsplit(api_base or self.DEFAULT_API_BASE).scheme != "https":
             raise ValueError("Microsoft Web IQ search requires an HTTPS api_base")
         resolved_key: Final = self.resolve_server_api_key(

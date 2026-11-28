@@ -9,6 +9,7 @@ repository.workspace = true
 test-support = []
 
 [dependencies]
+arc-swap.workspace = true
 litellm-call-scope.workspace = true
 litellm-secret-value.workspace = true
 litellm-cache-response.workspace = true
@@ -30,10 +31,13 @@ litellm-host-http.workspace = true
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
+litellm-model-catalog.workspace = true
 litellm-router-core.workspace = true
 litellm-redis-store.workspace = true
 litellm-cache.workspace = true
 litellm-core-utils.workspace = true
+litellm-cost.workspace = true
+jiff = { version = "0.2.37", default-features = false, features = ["std"] }
 litellm-router-types.workspace = true
 litellm-secrets.workspace = true
 parking_lot.workspace = true

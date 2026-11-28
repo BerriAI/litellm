@@ -75,4 +75,9 @@ impl DeploymentHealth {
     pub async fn set(&self, states: HealthStates, ttl: Duration) -> Result<(), Error> {
         self.states.set_str(keys::STATES, states, Some(ttl)).await
     }
+
+    /// Drops everything this process holds in memory and leaves Redis alone.
+    pub fn flush_local(&self) -> Result<(), Error> {
+        Ok(self.states.memory().flush()?)
+    }
 }

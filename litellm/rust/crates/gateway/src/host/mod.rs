@@ -6,24 +6,26 @@
 pub mod auth;
 mod boot;
 mod capacity;
+mod free;
 mod model_info;
 mod precall;
-mod prompt_estimate;
 mod router;
 mod spend_log;
 
+#[cfg(test)]
+pub(crate) use auth::Key;
 pub use auth::NativeRows;
 pub use boot::NativeBootHost;
 pub use capacity::NativeCapacityHost;
+pub use free::FreeModels;
 pub use precall::ContextWindows;
 pub use router::NativeRouterHost;
-pub use spend_log::RustSpendLogHost;
+pub use spend_log::{Rows, RustSpendLogHost};
 
 use std::{collections::BTreeSet, sync::Arc};
 
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{
-    Credential,
     authz::Layer,
     body::{self, Credentials},
 };
@@ -31,17 +33,6 @@ use litellm_gateway_inference::routing::{Host, RouteAttempt};
 use tokio::sync::OnceCell;
 
 use crate::{Gateway, callbacks, callbacks::Callbacks};
-
-/// The model lists the native host read for `identity`: a key's own, and none for the master
-/// key. A key that names a team, an owner or anything else that carries a list was declined when
-/// it was authenticated.
-pub(crate) fn layers(identity: &Authenticated<NativeRows>) -> impl Iterator<Item = Layer<'_>> {
-    let key = match &identity.credential {
-        Credential::MasterKey => None,
-        Credential::Key { key } => Some(Layer::Key(key.models())),
-    };
-    key.into_iter()
-}
 
 /// The host the gateway's routes are served through, over each deployment's context window as
 /// read at boot.
@@ -66,7 +57,11 @@ impl Host for NativeHost {
         &self,
         identity: &'a Authenticated<NativeRows>,
     ) -> impl Iterator<Item = Layer<'a>> {
-        layers(identity)
+        auth::layers(identity)
+    }
+
+    fn allowed_models(&self, identity: &Authenticated<NativeRows>) -> Vec<String> {
+        auth::allowed_models(identity)
     }
 
     async fn credentials(

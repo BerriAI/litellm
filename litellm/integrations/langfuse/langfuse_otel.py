@@ -211,20 +211,40 @@ def _as_trace_root(span: ReadableSpan) -> ReadableSpan:
     parent: Final = span.parent
     if context is None or parent is None or parent.span_id != _anchor_span_id(context.trace_id, joins=False):
         return span
-    return ReadableSpan(
-        name=span.name,
-        context=context,
-        parent=None,
-        resource=span.resource,
-        attributes=span.attributes,
-        events=span.events,
-        links=span.links,
-        kind=span.kind,
-        status=span.status,
-        start_time=span.start_time,
-        end_time=span.end_time,
-        instrumentation_scope=span.instrumentation_scope,
-    )
+    return _TraceRoot(span, context)
+
+
+class _TraceRoot(ReadableSpan):
+    """``inner`` with no parent, reporting the dropped counts ``inner`` reports."""
+
+    def __init__(self, inner: ReadableSpan, context: trace.SpanContext) -> None:
+        super().__init__(
+            name=inner.name,
+            context=context,
+            parent=None,
+            resource=inner.resource,
+            attributes=inner.attributes,
+            events=inner.events,
+            links=inner.links,
+            kind=inner.kind,
+            status=inner.status,
+            start_time=inner.start_time,
+            end_time=inner.end_time,
+            instrumentation_scope=inner.instrumentation_scope,
+        )
+        self._dropped_counts: Final = (inner.dropped_attributes, inner.dropped_events, inner.dropped_links)
+
+    @property
+    def dropped_attributes(self) -> int:
+        return self._dropped_counts[0]
+
+    @property
+    def dropped_events(self) -> int:
+        return self._dropped_counts[1]
+
+    @property
+    def dropped_links(self) -> int:
+        return self._dropped_counts[2]
 
 
 @dataclass(frozen=True, slots=True)

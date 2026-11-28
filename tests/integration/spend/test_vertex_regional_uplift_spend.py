@@ -440,7 +440,7 @@ def test_flex_tier_on_a_regional_endpoint_is_uplifted_with_the_rest(gateway: Gat
         prices: Final = _published_prices(gateway, global_model)
         assert global_spend == pytest.approx(
             _PROMPT_TOKENS * _rate(prices, "input_cost_per_token_flex")
-            + _IMAGE_TOKENS * _rate(prices, "output_cost_per_image_token")
+            + _IMAGE_TOKENS * _rate(prices, "output_cost_per_image_token_flex")
         )
         assert global_spend < _standard_cost(prices)
         assert regional_spend == pytest.approx(global_spend * _uplift(_published_prices(gateway, regional_model), _US))
