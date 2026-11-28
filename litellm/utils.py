@@ -8694,7 +8694,7 @@ def validate_environment(
         custom_llm_provider = None
 
     if custom_llm_provider:
-        if custom_llm_provider == "openai":
+        if custom_llm_provider in ("openai", "text-completion-openai"):
             if "OPENAI_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
@@ -8709,7 +8709,7 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("ANTHROPIC_API_KEY")
-        elif custom_llm_provider == "cohere":
+        elif custom_llm_provider in ("cohere", "cohere_chat"):
             if "COHERE_API_KEY" in os.environ:
                 keys_in_environment = True
             else:
