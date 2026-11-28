@@ -588,9 +588,14 @@ def test_identity_binding_round_trips_and_validates_partial_updates(gateway: Gat
         assert (
             next(row for row in listed.json() if row["server_id"] == server_id)["oauth_identity_binding"] == configured
         )
-        viewer: Final = scenario.key(object_permission={"mcp_servers": [server_id]})
-        detail: Final = gateway.request("GET", path, key=viewer)
-        assert detail.status_code == 200 and detail.json().get("oauth_identity_binding") is None
+        for routes in ([], ["/v1/mcp/server", path]):
+            viewer: Final = scenario.key(object_permission={"mcp_servers": [server_id]}, allowed_routes=routes)
+            detail: Final = gateway.request("GET", path, key=viewer)
+            assert detail.status_code == 200 and detail.json().get("oauth_identity_binding") is None
+            listing: Final = gateway.request("GET", "/v1/mcp/server", key=viewer)
+            assert listing.status_code == 200, listing.text
+            visible: Final = next(row for row in listing.json() if row["server_id"] == server_id)
+            assert visible.get("oauth_identity_binding") is None
         unrelated: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": server_id, "instructions": "read"})
         assert unrelated.status_code == 202, unrelated.text
         assert _response_object(unrelated)["oauth_identity_binding"] == configured
@@ -598,7 +603,9 @@ def test_identity_binding_round_trips_and_validates_partial_updates(gateway: Gat
             "PUT", "/v1/mcp/server", {"server_id": server_id, "oauth2_flow": "client_credentials"}
         )
         assert invalid.status_code == 400, invalid.text
-        assert gateway.get(path)["oauth_identity_binding"] == configured
+        after_rejection: Final = gateway.get(path)
+        assert after_rejection["oauth_identity_binding"] == configured
+        assert after_rejection["oauth2_flow"] == saved["oauth2_flow"]
         cleared: Final = gateway.request(
             "PUT", "/v1/mcp/server", {"server_id": server_id, "oauth_identity_binding": None}
         )

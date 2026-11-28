@@ -5807,7 +5807,8 @@ async def test_store_mcp_oauth_user_credential_returns_status():
 
 
 @pytest.mark.asyncio
-async def test_store_mcp_oauth_user_credential_blocked_when_identity_binding_enforced():
+@pytest.mark.parametrize("source", ("api", "yaml"))
+async def test_store_mcp_oauth_user_credential_blocked_when_identity_binding_enforced(source: str) -> None:
     """The direct opaque-token POST must be closed for enforce-mode identity-bound servers,
     otherwise it bypasses the token-relay principal check."""
     from litellm.proxy._types import MCPOAuthUserCredentialRequest
@@ -5835,25 +5836,26 @@ async def test_store_mcp_oauth_user_credential_blocked_when_identity_binding_enf
             audiences=["litellm-client"],
         ),
     )
+    row: Final = LiteLLM_MCPServerTable(
+        server_id=server_id,
+        transport="http",
+        auth_type=MCPAuth.oauth2,
+        oauth_identity_binding=bound_server.oauth_identity_binding,
+    )
+    prisma: Final = _make_prisma_client()
+    prisma.writer_db.litellm_mcpservertable.find_unique = AsyncMock(return_value=row if source == "api" else None)
+    caller: Final = UserAPIKeyAuth(user_id="user-123", user_role=LitellmUserRoles.PROXY_ADMIN)
     store_mock = AsyncMock(return_value=None)
 
     with (
         patch(  # test-quality-ok: mirrors the existing store-credential tests in this file
             "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
-            return_value=_make_prisma_client(),
-        ),
-        patch(  # test-quality-ok: mirrors the existing store-credential tests in this file
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(  # test-quality-ok: mirrors the existing store-credential tests in this file
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.user_api_key_has_admin_view",
-            return_value=True,
+            return_value=prisma,
         ),
         patch.object(  # test-quality-ok: registry is a module-level singleton; injecting it would change the endpoint signature
             manager_module.global_mcp_server_manager,
             "get_mcp_server_by_id",
-            return_value=bound_server,
+            return_value=bound_server if source == "yaml" else None,
         ),
         patch(  # test-quality-ok: asserting the DB write is never reached is the point of the test
             "litellm.proxy.management_endpoints.mcp_management_endpoints.store_user_oauth_credential",
@@ -5864,7 +5866,7 @@ async def test_store_mcp_oauth_user_credential_blocked_when_identity_binding_enf
             await store_mcp_oauth_user_credential(
                 server_id=server_id,
                 payload=MCPOAuthUserCredentialRequest(access_token="opaque-tok", expires_in=3600),
-                user_api_key_dict=_make_user_auth("user-123"),
+                user_api_key_dict=caller,
             )
 
     assert exc_info.value.status_code == 403

@@ -12,7 +12,7 @@ from litellm.proxy._types import (
 from litellm.proxy.management_endpoints.mcp_management_endpoints import (
     _redact_mcp_credentials,
     does_mcp_server_exist,
-    raise_mcp_identifier_conflict,
+    raise_mcp_write_failure,
     validate_and_normalize_mcp_server_payload,
 )
 from litellm.proxy.mcp_server.db import McpIdentifierConflict
@@ -53,7 +53,7 @@ def test_create_duplicate_mcp_server_returns_conflict_error() -> None:
     )
 
     with pytest.raises(HTTPException) as error:
-        raise_mcp_identifier_conflict(conflict)
+        raise_mcp_write_failure(conflict)
 
     assert error.value.status_code == 400
     assert error.value.detail == {

@@ -213,6 +213,8 @@ if MCP_AVAILABLE:
     from litellm.proxy.mcp_server.contracts import TargetCatalog
     from litellm.proxy.mcp_server.db import (
         McpIdentifierConflict,
+        McpInvalidIdentityBinding,
+        McpServerWriteFailure,
         approve_mcp_server,
         create_draft_mcp_server,
         create_mcp_server_if_identifier_free,
@@ -339,11 +341,13 @@ if MCP_AVAILABLE:
             "MCP server names and aliases must be unique, case-insensitive."
         )
 
-    def raise_mcp_identifier_conflict(conflict: McpIdentifierConflict) -> NoReturn:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": mcp_identifier_conflict_message(conflict)},
+    def raise_mcp_write_failure(failure: McpServerWriteFailure) -> NoReturn:
+        detail: Final = (
+            {"error": mcp_identifier_conflict_message(failure)}
+            if isinstance(failure, McpIdentifierConflict)
+            else failure.detail
         )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
     def warn_if_id_jag_server_outruns_sso(server_id: str | None, auth_type: MCPAuth | str | None) -> None:
         """Registering an ``oauth2_id_jag`` server under an SSO provider that captures no IdP
@@ -1662,8 +1666,8 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": f"Error registering mcp server: {e}"},
             )
-        if isinstance(new_mcp_server, McpIdentifierConflict):
-            raise_mcp_identifier_conflict(new_mcp_server)
+        if isinstance(new_mcp_server, McpServerWriteFailure):
+            raise_mcp_write_failure(new_mcp_server)
         # Do NOT add to runtime registry — pending servers are not active
         return _redact_mcp_credentials(new_mcp_server)
 
@@ -2094,16 +2098,14 @@ if MCP_AVAILABLE:
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
-        except HTTPException:
-            raise
         except Exception as e:
             verbose_proxy_logger.exception("Error creating mcp server: %s", e)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": f"Error creating mcp server: {e}"},
             )
-        if isinstance(new_mcp_server, McpIdentifierConflict):
-            raise_mcp_identifier_conflict(new_mcp_server)
+        if isinstance(new_mcp_server, McpServerWriteFailure):
+            raise_mcp_write_failure(new_mcp_server)
 
         warn_if_id_jag_server_outruns_sso(new_mcp_server.server_id, new_mcp_server.auth_type)
 
@@ -2195,6 +2197,8 @@ if MCP_AVAILABLE:
             except Exception as e:  # noqa: BLE001  # any create failure must become a per-entry error, not a 500
                 verbose_proxy_logger.exception("Error importing mcp server %s: %s", conversion.name, e)
                 return MCPConnectorImportFailure(name=conversion.name, error=str(e))
+            if isinstance(created, McpInvalidIdentityBinding):
+                return MCPConnectorImportFailure(name=conversion.name, error=created.detail)
             if isinstance(created, McpIdentifierConflict):
                 return MCPConnectorImportSkipped(name=conversion.name, reason=mcp_identifier_conflict_message(created))
             try:
@@ -3320,8 +3324,8 @@ if MCP_AVAILABLE:
             fields_set=payload_fields_set,
         )
 
-        if isinstance(mcp_server_record_updated, McpIdentifierConflict):
-            raise_mcp_identifier_conflict(mcp_server_record_updated)
+        if isinstance(mcp_server_record_updated, McpServerWriteFailure):
+            raise_mcp_write_failure(mcp_server_record_updated)
 
         if mcp_server_record_updated is None:
             raise HTTPException(

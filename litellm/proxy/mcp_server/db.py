@@ -105,6 +105,20 @@ class McpIdentifierConflict:
     server_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class McpInvalidIdentityBinding:
+    detail: str
+
+
+McpServerWriteFailure: TypeAlias = McpIdentifierConflict | McpInvalidIdentityBinding
+
+
+class _RollbackInvalidBinding(Exception):
+    def __init__(self, failure: McpInvalidIdentityBinding) -> None:
+        super().__init__(failure.detail)
+        self.failure = failure
+
+
 _AUTH_FLOW_SCOPED_FIELDS: Final["frozenset[str]"] = frozenset(
     {
         "issuer",
@@ -745,7 +759,8 @@ async def _mcp_server_write_if_identifier_free(
     exclude_server_id: str | None,
     write: "Callable[[TableActions[prisma_db_models.LiteLLM_MCPServerTable]], Awaitable[prisma_db_models.LiteLLM_MCPServerTable | None]]",
     lock_server_id: str | None = None,
-) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
+    validate_binding: bool = False,
+) -> "prisma_db_models.LiteLLM_MCPServerTable | McpServerWriteFailure | None":
     """Run ``write`` only when no other live row owns ``server_name``/``alias``.
 
     The conflict check and the write share a transaction guarded by per-identifier
@@ -753,22 +768,28 @@ async def _mcp_server_write_if_identifier_free(
     pass the check and both insert.
     """
     lock_keys: Final = _mcp_identifier_lock_keys(server_name, alias)
-    async with _db_transaction_manager(prisma_client) as tx:
-        for lock_key in lock_keys:
-            await tx.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
-        conflict: Final = await _find_mcp_server_identifier_conflict(
-            tx.litellm_mcpservertable,
-            server_name=server_name,
-            alias=alias,
-            exclude_server_id=exclude_server_id,
-        )
-        if conflict is not None:
-            return conflict
-        if lock_server_id is not None:
-            await tx.execute_raw(
-                'SELECT server_id FROM "LiteLLM_MCPServerTable" WHERE server_id=$1 FOR UPDATE', lock_server_id
+    try:
+        async with _db_transaction_manager(prisma_client) as tx:
+            for lock_key in lock_keys:
+                await tx.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
+            conflict: Final = await _find_mcp_server_identifier_conflict(
+                tx.litellm_mcpservertable,
+                server_name=server_name,
+                alias=alias,
+                exclude_server_id=exclude_server_id,
             )
-        return await write(tx.litellm_mcpservertable)
+            if conflict is not None:
+                return conflict
+            if lock_server_id is not None:
+                await tx.execute_raw(
+                    'SELECT server_id FROM "LiteLLM_MCPServerTable" WHERE server_id=$1 FOR UPDATE', lock_server_id
+                )
+            row: Final = await write(tx.litellm_mcpservertable)
+            if validate_binding and row is not None and (failure := _stored_binding_failure(row)):
+                raise _RollbackInvalidBinding(failure)
+            return row
+    except _RollbackInvalidBinding as exc:
+        return exc.failure
 
 
 async def _db_find_mcp_server_rows(
@@ -1165,13 +1186,13 @@ _BINDING_FLOW_FIELDS: Final = frozenset(
 )
 
 
-def _validate_stored_binding(row: "prisma_db_models.LiteLLM_MCPServerTable") -> None:
+def _stored_binding_failure(row: "prisma_db_models.LiteLLM_MCPServerTable") -> McpInvalidIdentityBinding | None:
     if row.oauth_identity_binding is None:
-        return
+        return None
     server: Final = LiteLLM_MCPServerTable.model_validate(row.model_dump())
     binding: Final = server.oauth_identity_binding
     if binding is None or binding.mode == "disabled":
-        return
+        return None
     credentials: Final[MCPCredentials] = (
         decrypt_credentials(server.credentials.copy()) if server.credentials and server.oauth2_flow is None else {}
     )
@@ -1187,12 +1208,13 @@ def _validate_stored_binding(row: "prisma_db_models.LiteLLM_MCPServerTable") -> 
         per_user=server.auth_type == "oauth2" and flow != "client_credentials",
         delegated=server.delegate_auth_to_upstream,
     ):
-        raise HTTPException(status_code=400, detail=error)
+        return McpInvalidIdentityBinding(error)
+    return None
 
 
 async def create_mcp_server_if_identifier_free(
     prisma_client: PrismaClient, data: NewMCPServerRequest, touched_by: str
-) -> LiteLLM_MCPServerTable | McpIdentifierConflict:
+) -> LiteLLM_MCPServerTable | McpServerWriteFailure:
     """Create the row only when no other live server owns ``server_name``/``alias``.
 
     Returns the McpIdentifierConflict instead of inserting when the collision
@@ -1209,9 +1231,7 @@ async def create_mcp_server_if_identifier_free(
     async def _create(
         table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
     ) -> "prisma_db_models.LiteLLM_MCPServerTable | None":
-        row: Final = await table.create(data=data_dict)
-        _validate_stored_binding(row)
-        return row
+        return await table.create(data=data_dict)
 
     written: Final = await _mcp_server_write_if_identifier_free(
         prisma_client,
@@ -1219,8 +1239,9 @@ async def create_mcp_server_if_identifier_free(
         alias=_identifier_field(data_dict, "alias"),
         exclude_server_id=None,
         write=_create,
+        validate_binding=True,
     )
-    if isinstance(written, McpIdentifierConflict):
+    if isinstance(written, McpServerWriteFailure):
         return written
     if written is None:
         raise RuntimeError("inserted MCP server row missing")
@@ -1346,7 +1367,7 @@ async def _update_mcp_server_row(
     server_id: str,
     data_dict: Mapping[str, object],
     expected_updated_at: datetime | None = None,
-) -> "prisma_db_models.LiteLLM_MCPServerTable | McpIdentifierConflict | None":
+) -> "prisma_db_models.LiteLLM_MCPServerTable | McpServerWriteFailure | None":
     identifier_write: Final = any(field in data_dict for field in ("server_name", "alias"))
     protocol_write: Final = bool({"transport", "mcp_info"}.intersection(data_dict))
 
@@ -1370,14 +1391,6 @@ async def _update_mcp_server_row(
 
     binding_write: Final = not _BINDING_FLOW_FIELDS.isdisjoint(data_dict)
 
-    async def _validated_update(
-        table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable]",
-    ) -> "prisma_db_models.LiteLLM_MCPServerTable | None":
-        row: Final = await _update(table)
-        if row is not None and binding_write:
-            _validate_stored_binding(row)
-        return row
-
     if not identifier_write and not protocol_write and not binding_write:
         return await _update(_mcp_server_table_actions(prisma_client))
     if "alias" in data_dict and not data_dict["alias"] and "server_name" not in data_dict:
@@ -1391,16 +1404,18 @@ async def _update_mcp_server_row(
             server_name=existing.server_name,
             alias=None,
             exclude_server_id=server_id,
-            write=_validated_update,
+            write=_update,
             lock_server_id=server_id if protocol_write or binding_write else None,
+            validate_binding=binding_write,
         )
     return await _mcp_server_write_if_identifier_free(
         prisma_client,
         server_name=_identifier_field(data_dict, "server_name"),
         alias=_identifier_field(data_dict, "alias"),
         exclude_server_id=server_id,
-        write=_validated_update,
+        write=_update,
         lock_server_id=server_id if protocol_write or binding_write else None,
+        validate_binding=binding_write,
     )
 
 
@@ -1410,7 +1425,7 @@ async def update_mcp_server(
     touched_by: str,
     fields_set: set[str] | None = None,
     expected_updated_at: datetime | None = None,
-) -> LiteLLM_MCPServerTable | McpIdentifierConflict | None:
+) -> LiteLLM_MCPServerTable | McpServerWriteFailure | None:
     """
     Update a new mcp server record in the db
 
@@ -1567,7 +1582,7 @@ async def update_mcp_server(
         expected_updated_at=expected_updated_at,
     )
 
-    if isinstance(updated_mcp_server, McpIdentifierConflict):
+    if isinstance(updated_mcp_server, McpServerWriteFailure):
         return updated_mcp_server
     _decrypt_env_vars_on_returned_row(updated_mcp_server)
     return LiteLLM_MCPServerTable.model_validate(updated_mcp_server.model_dump()) if updated_mcp_server else None
