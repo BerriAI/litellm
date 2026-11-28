@@ -137,6 +137,17 @@ impl Held {
         statements.execute(self.postgres.pool()).await.unwrap();
     }
 
+    /// Every `LiteLLM_UserTable` row, each as an object of its columns.
+    pub async fn users(&self) -> Vec<Value> {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Fixture statements are outside the compile-checked query set"
+        )]
+        let rows =
+            sqlx::query_scalar(r#"SELECT to_jsonb(u) FROM "LiteLLM_UserTable" u ORDER BY user_id"#);
+        rows.fetch_all(self.postgres.pool()).await.unwrap()
+    }
+
     /// A transaction that holds `table` locked, so every read of it waits until it ends.
     pub async fn locking(&self, table: &str) -> sqlx::Transaction<'static, sqlx::Postgres> {
         let mut transaction = self.postgres.pool().begin().await.unwrap();

@@ -2,7 +2,11 @@
 //! request names, read through the auth cache like the proxy's `get_key_object` and its siblings:
 //! the cache, then the database on a miss, which caches the row in the shape every pod reads, for
 //! every pod when the cache has the shared Redis attached. Nothing guards that write against an
-//! eviction that lands during the database read.
+//! eviction that lands during the database read. A user is the one row written here: a sign-in
+//! links its SSO id, fills its email and under `user_id_upsert` creates it, like
+//! `get_user_object`, through the repository Python writes through. Authentication only reads
+//! the user (`found`), and the sign-in is made (`signed_in`) once the request is certain to be
+//! served here.
 
 use std::{
     future::Future,
@@ -12,7 +16,7 @@ use std::{
 
 use litellm_auth_store::{
     AliasMatch, EndUserDatabase, Error, KeyDatabase, OrganizationDatabase, ProjectDatabase,
-    TeamDatabase, TeamMembershipDatabase, UserDatabase,
+    SignedIn, TeamDatabase, TeamMembershipDatabase, UserDatabase,
 };
 use litellm_gateway_auth_core::{KeyHash, authn::jwt::MappedClaim};
 use litellm_redis_store::{
@@ -24,14 +28,22 @@ use litellm_redis_store::{
     },
 };
 use litellm_repositories::{
-    Database, EndUserRepository, JwtKeyMappingRepository, KeyRepository,
-    ObjectPermissionRepository, OrganizationRepository, ProjectRepository, Side,
+    Database, EndUserRepository, Inserted, JwtKeyMappingRepository, KeyRepository, NewUserDefaults,
+    ObjectPermissionRepository, OrganizationRepository, ProjectRepository, Side, SignIn,
     TeamMembershipRepository, TeamRepository, UserRepository,
 };
 use serde_json::Value;
 use tokio::sync::Mutex;
 
 const ORG_CACHE_TTL: Duration = Duration::from_secs(5);
+
+/// How long Python waits before it asks again whether a user may take an email, its
+/// `db_cache_expiry`.
+const EMAIL_ASKED_FOR: Duration = Duration::from_secs(5);
+
+/// How many of those answers Python remembers, the size of its `email_in_use_checked_at`.
+const EMAILS_ASKED_FOR: u64 = 1000;
+
 /// `END_USER_RESTRICTED_REGISTRY_MAX_SIZE`.
 const RESTRICTED_IDS_MAX: usize = 5000;
 /// `REGISTRY_ERROR_NEGATIVE_CACHE_TTL`.
@@ -49,6 +61,8 @@ pub struct AuthStore {
     memberships: TeamMembershipDatabase,
     users: UserDatabase,
     mappings: JwtKeyMappingRepository,
+    /// The users and emails a backfill was tried for within [`EMAIL_ASKED_FOR`].
+    emails_asked_for: moka::future::Cache<(String, String), ()>,
     end_users: EndUserDatabase,
     /// Lets one request at a time load the restricted end-user ids (`_END_USER_REGISTRY_LOAD_LOCK`).
     restricted_ids_loading: Mutex<()>,
@@ -87,6 +101,10 @@ impl AuthStore {
             ))),
             users: UserDatabase::new(Arc::new(UserRepository::new(database.clone()))),
             mappings: JwtKeyMappingRepository::new(database.clone()),
+            emails_asked_for: moka::future::Cache::builder()
+                .max_capacity(EMAILS_ASKED_FOR)
+                .time_to_live(EMAIL_ASKED_FOR)
+                .build(),
             end_users: EndUserDatabase::new(Arc::new(EndUserRepository::new(database))),
             restricted_ids_loading: Mutex::new(()),
             lookup_deadline: LOOKUP_DEADLINE,
@@ -145,14 +163,24 @@ impl AuthStore {
         }
     }
 
-    /// The key the database holds for `hash`, cached. A key the cache did not take is returned
-    /// all the same.
+    /// The key the database holds for `hash`, cached for the cache's own TTL, as
+    /// `get_management_object_ttl` names `default_in_memory_ttl`. A key the cache did not take is
+    /// returned all the same.
     pub async fn loaded(&self, hash: &KeyHash) -> Result<Option<KeyEntry>, Error> {
         let Some(key) = Box::pin(self.keys.read(hash, Side::Read)).await? else {
             return Ok(None);
         };
         self.write(&object(hash), key.clone(), None).await;
         Ok(Some(key))
+    }
+
+    /// `_resize_the_auth_cache` on a reload: `entries` in each partition from the next write on,
+    /// with the TTL startup set kept.
+    pub(crate) fn resize(&self, entries: usize) {
+        self.cache.reconfigure(Settings {
+            memory_entries: entries,
+            ..self.cache.settings()
+        });
     }
 
     /// `get_team_object`: the cached team, else the database's, cached with `last_refreshed_at`
@@ -251,25 +279,100 @@ impl AuthStore {
         Ok(membership)
     }
 
-    /// `get_user_object` for a user read by its id: the cached user, else the database's, cached
-    /// only when `settled`. Python links a sign-in or backfills an email only on its own database
-    /// read, so a row it still owes a write must not become its cache hit.
-    pub async fn user(
-        &self,
-        user_id: &str,
-        settled: impl FnOnce(&UserEntry) -> bool,
-    ) -> Result<Option<UserEntry>, Error> {
-        let object = AuthObject::User(user_id.to_owned());
-        if let Some(user) = self.read(&object).await {
-            return Ok(Some(user));
+    /// The user a sign-in names, read like `get_user_object` and with nothing written: the
+    /// one cached under the id the sign-in names, else the one the database resolves the sign-in
+    /// to. A user the sign-in would write to is not cached, so the write is still made by the
+    /// pod that makes the sign-in, Python or [`Self::signed_in`].
+    pub async fn found(&self, sign_in: &SignIn) -> Result<Found, Error> {
+        let object = AuthObject::User(sign_in.user_id.clone());
+        if let Some(user) = self.read::<UserEntry>(&object).await {
+            return Ok(match self.owes_email(&user, sign_in) {
+                true => Found::Owing(user),
+                false => Found::Settled(user),
+            });
         }
-        let Some(user) = self.users.user(user_id, Side::Read).await? else {
-            return Ok(None);
+        let Some(user) = self.users.found(sign_in, Side::Read).await? else {
+            return Ok(Found::Absent);
         };
-        if settled(&user) {
-            self.write(&object, user.clone(), None).await;
+        if owes_link(&user, sign_in) || self.owes_email(&user, sign_in) {
+            return Ok(Found::Owing(user));
         }
+        self.write(&object, user.clone(), None).await;
+        Ok(Found::Settled(user))
+    }
+
+    /// Whether the sign-in carries an email `user` lacks and has not been asked about within
+    /// [`EMAIL_ASKED_FOR`].
+    fn owes_email(&self, user: &UserEntry, sign_in: &SignIn) -> bool {
+        sign_in.user_email.as_deref().is_some_and(|email| {
+            user.user_email.is_none() && !self.emails_asked_for.contains_key(&asked(user, email))
+        })
+    }
+
+    /// `get_user_object`: the user cached under the id the sign-in names, else the one the
+    /// database resolves the sign-in to, by id, then SSO id, then email, with its SSO id linked,
+    /// else under `upsert` the one it creates. Either is given the sign-in's email when it has
+    /// none, and a user from the database is cached under the id the sign-in names, as the
+    /// resolve read it. A sign-in that loses its insert to another gets the user that won.
+    ///
+    /// The insert stores no `default_internal_user_params`, since `admit` sends every request of
+    /// a config that sets them to Python.
+    pub async fn signed_in(
+        &self,
+        sign_in: &SignIn,
+        upsert: bool,
+    ) -> Result<Option<UserEntry>, Error> {
+        Box::pin(self.resolved(&self.users, sign_in, upsert)).await
+    }
+
+    async fn resolved(
+        &self,
+        users: &UserDatabase,
+        sign_in: &SignIn,
+        upsert: bool,
+    ) -> Result<Option<UserEntry>, Error> {
+        let object = AuthObject::User(sign_in.user_id.clone());
+        if let Some(user) = self.read::<UserEntry>(&object).await {
+            return self.with_email(users, user, sign_in).await.map(Some);
+        }
+        let user = match users.sign_in(sign_in, Side::Read).await? {
+            Some(SignedIn { user, .. }) => user,
+            None if upsert => match users.insert(sign_in, &NewUserDefaults::default()).await? {
+                Inserted::Created(user) | Inserted::Conflict(Some(user)) => user,
+                Inserted::Conflict(None) => return Ok(None),
+            },
+            None => return Ok(None),
+        };
+        let user = self.with_email(users, user, sign_in).await?;
+        self.write(&object, user.clone(), None).await;
         Ok(Some(user))
+    }
+
+    /// `_backfill_null_user_email`: a user with no email is given the sign-in's, unless another
+    /// user holds it, and cached under its own id as stored. One user is asked about one email
+    /// once per [`EMAIL_ASKED_FOR`], whatever the answer was.
+    async fn with_email(
+        &self,
+        users: &UserDatabase,
+        user: UserEntry,
+        sign_in: &SignIn,
+    ) -> Result<UserEntry, Error> {
+        let Some(email) = sign_in.user_email.as_deref() else {
+            return Ok(user);
+        };
+        if !self.owes_email(&user, sign_in) {
+            return Ok(user);
+        }
+        self.emails_asked_for.insert(asked(&user, email), ()).await;
+        let stored = users
+            .backfill_email(&user.user_id, email, sign_in.links_any_user)
+            .await?;
+        let Some(stored) = stored else {
+            return Ok(user);
+        };
+        let object = AuthObject::User(stored.user_id.clone());
+        self.write(&object, stored.clone(), None).await;
+        Ok(stored)
     }
 
     /// `get_end_user_object`: the cached end user, else no row for an id the restricted ids leave
@@ -367,15 +470,6 @@ impl AuthStore {
         }
     }
 
-    /// `_resize_the_auth_cache` on a reload: `entries` in each partition from the next write on,
-    /// with the TTL startup set kept.
-    pub(crate) fn resize(&self, entries: usize) {
-        self.cache.reconfigure(Settings {
-            memory_entries: entries,
-            ..self.cache.settings()
-        });
-    }
-
     pub async fn cached_key_mapping(&self, claim: MappedClaim<'_>) -> Option<Value> {
         self.read::<String>(&mapping_object(claim))
             .await
@@ -402,12 +496,34 @@ impl AuthStore {
     }
 }
 
-/// The cached ids, or `None` when they overflowed and every end user is read by its id.
-fn usable(cached: RestrictedEndUsers) -> Option<Vec<String>> {
-    match cached {
-        RestrictedEndUsers::Ids(ids) => Some(ids),
-        RestrictedEndUsers::Overflow => None,
+/// What a sign-in finds before anything is written.
+#[derive(Debug, PartialEq)]
+pub enum Found {
+    /// A user the sign-in writes nothing to.
+    Settled(UserEntry),
+    /// A user the sign-in links its SSO id to or gives its email.
+    Owing(UserEntry),
+    /// No user, which the sign-in creates under `user_id_upsert`.
+    Absent,
+}
+
+/// Whether resolving `sign_in` links its SSO id to `user`, the user it found: one found by its
+/// own id that has no SSO id, or one found by its email. Under `links_any_user` only an email
+/// match is linked.
+fn owes_link(user: &UserEntry, sign_in: &SignIn) -> bool {
+    let Some(sso_user_id) = &sign_in.sso_user_id else {
+        return false;
+    };
+    match (user.user_id == sign_in.user_id, sign_in.links_any_user) {
+        (true, true) => false,
+        (true, false) => user.sso_user_id.is_none() && *sso_user_id == user.user_id,
+        (false, _) => user.sso_user_id.as_ref() != Some(sso_user_id),
     }
+}
+
+/// The user and email one backfill attempt is remembered under, as Python's `in_use_key`.
+fn asked(user: &UserEntry, email: &str) -> (String, String) {
+    (user.user_id.clone(), email.to_lowercase())
 }
 
 /// `time.time()`, which `cache_team_object` stamps a team with.
@@ -416,6 +532,14 @@ fn now() -> f64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs_f64()
+}
+
+/// The cached ids, or `None` when they overflowed and every end user is read by its id.
+fn usable(cached: RestrictedEndUsers) -> Option<Vec<String>> {
+    match cached {
+        RestrictedEndUsers::Ids(ids) => Some(ids),
+        RestrictedEndUsers::Overflow => None,
+    }
 }
 
 fn object(hash: &KeyHash) -> AuthObject {
@@ -437,6 +561,90 @@ mod tests {
 
     use super::*;
     use crate::host::auth::keys::{self, Held};
+
+    fn store(held: &Held) -> AuthStore {
+        AuthStore::new(keys::memory_cache(), held.database())
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_team_found_by_its_alias_is_cached_under_the_alias_and_its_id() {
+        let held = Held::start().await;
+        held.insert_named(
+            "LiteLLM_TeamTable",
+            &json!({"team_id": "team-1", "team_alias": "alpha"}),
+        )
+        .await;
+        let store = store(&held);
+        let id_of = |read: Result<AliasMatch<TeamEntry>, Error>| match read {
+            Ok(AliasMatch::Found(team)) => Some(team.team_id),
+            _ => None,
+        };
+
+        let from_database = id_of(store.team_by_alias("alpha").await);
+        held.execute(r#"DELETE FROM "LiteLLM_TeamTable""#).await;
+        let by_alias = id_of(store.team_by_alias("alpha").await);
+        let by_id = store.team("team-1").await.unwrap();
+
+        assert_eq!(
+            (from_database, by_alias, by_id.map(|team| team.team_alias)),
+            (
+                Some("team-1".to_owned()),
+                Some("team-1".to_owned()),
+                Some(Some("alpha".to_owned()))
+            )
+        );
+    }
+
+    const JOINED: &str =
+        r#"INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id) VALUES ('user-1', 'team-1')"#;
+    const LEFT: &str = r#"DELETE FROM "LiteLLM_TeamMembership""#;
+
+    #[rstest]
+    #[case::a_member(JOINED, LEFT, true)]
+    #[case::no_member(LEFT, JOINED, false)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_membership_is_cached_whether_or_not_the_user_is_a_member(
+        #[case] before: &'static str,
+        #[case] after: &'static str,
+        #[case] member: bool,
+    ) {
+        let held = Held::start().await;
+        held.execute(before).await;
+        let store = store(&held);
+        let read = async || {
+            let membership = store.team_membership("user-1", "team-1").await;
+            membership.unwrap().is_some()
+        };
+
+        let from_database = read().await;
+        held.execute(after).await;
+        let cached = read().await;
+
+        assert_eq!((from_database, cached), (member, member));
+    }
+
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_user_read_from_the_database_is_cached() {
+        let held = Held::start().await;
+        held.insert_named("LiteLLM_UserTable", &json!({"user_id": "user-1"}))
+            .await;
+        let store = store(&held);
+        let read = async || match store.found(&SignIn::by_id("user-1")).await.unwrap() {
+            Found::Settled(user) => Some(user.user_id),
+            Found::Owing(_) | Found::Absent => None,
+        };
+
+        let from_database = read().await;
+        held.execute(r#"DELETE FROM "LiteLLM_UserTable""#).await;
+        let cached = read().await;
+
+        assert_eq!(
+            (from_database, cached),
+            (Some("user-1".to_owned()), Some("user-1".to_owned()))
+        );
+    }
 
     const ROWS: &str = r#"INSERT INTO "LiteLLM_EndUserTable" (user_id, spend, blocked) VALUES
         ('eu-spent', 3, false), ('eu-spent-too', 4, false), ('eu-blocked', 0, true)"#;
@@ -545,90 +753,6 @@ mod tests {
                 spend(&store, "eu-spent").await
             ),
             (Err(()), Ok(Some(0.0)), Ok(Some(3.0)))
-        );
-    }
-
-    fn store(held: &Held) -> AuthStore {
-        AuthStore::new(keys::memory_cache(), held.database())
-    }
-
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_team_found_by_its_alias_is_cached_under_the_alias_and_its_id() {
-        let held = Held::start().await;
-        held.insert_named(
-            "LiteLLM_TeamTable",
-            &json!({"team_id": "team-1", "team_alias": "alpha"}),
-        )
-        .await;
-        let store = store(&held);
-        let id_of = |read: Result<AliasMatch<TeamEntry>, Error>| match read {
-            Ok(AliasMatch::Found(team)) => Some(team.team_id),
-            _ => None,
-        };
-
-        let from_database = id_of(store.team_by_alias("alpha").await);
-        held.execute(r#"DELETE FROM "LiteLLM_TeamTable""#).await;
-        let by_alias = id_of(store.team_by_alias("alpha").await);
-        let by_id = store.team("team-1").await.unwrap();
-
-        assert_eq!(
-            (from_database, by_alias, by_id.map(|team| team.team_alias)),
-            (
-                Some("team-1".to_owned()),
-                Some("team-1".to_owned()),
-                Some(Some("alpha".to_owned()))
-            )
-        );
-    }
-
-    const JOINED: &str =
-        r#"INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id) VALUES ('user-1', 'team-1')"#;
-    const LEFT: &str = r#"DELETE FROM "LiteLLM_TeamMembership""#;
-
-    #[rstest]
-    #[case::a_member(JOINED, LEFT, true)]
-    #[case::no_member(LEFT, JOINED, false)]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_membership_is_cached_whether_or_not_the_user_is_a_member(
-        #[case] before: &'static str,
-        #[case] after: &'static str,
-        #[case] member: bool,
-    ) {
-        let held = Held::start().await;
-        held.execute(before).await;
-        let store = store(&held);
-        let read = async || {
-            let membership = store.team_membership("user-1", "team-1").await;
-            membership.unwrap().is_some()
-        };
-
-        let from_database = read().await;
-        held.execute(after).await;
-        let cached = read().await;
-
-        assert_eq!((from_database, cached), (member, member));
-    }
-
-    #[rstest]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_user_read_from_the_database_is_cached() {
-        let held = Held::start().await;
-        held.insert_named("LiteLLM_UserTable", &json!({"user_id": "user-1"}))
-            .await;
-        let store = store(&held);
-        let read = async || {
-            let user = store.user("user-1", |_| true).await.unwrap();
-            user.map(|user| user.user_id)
-        };
-
-        let from_database = read().await;
-        held.execute(r#"DELETE FROM "LiteLLM_UserTable""#).await;
-        let cached = read().await;
-
-        assert_eq!(
-            (from_database, cached),
-            (Some("user-1".to_owned()), Some("user-1".to_owned()))
         );
     }
 }

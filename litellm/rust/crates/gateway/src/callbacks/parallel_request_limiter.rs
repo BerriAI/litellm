@@ -278,7 +278,7 @@ impl Caller {
             limits,
             user: user
                 .and_then(Named::stored)
-                .map(|user| user.limits)
+                .map(|user| user.record.limits)
                 .unwrap_or_default(),
             team: match team {
                 Some(Team::Row(team)) => team.limits,
@@ -766,6 +766,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::host::auth::UserRow;
     use crate::test_support::{key, master};
 
     fn limiter() -> Arc<KeyLimiter> {
@@ -803,14 +804,14 @@ mod tests {
             None,
             Affiliation {
                 holder: Holder::Member {
-                    user: Named::Stored(UserRecord {
+                    user: Named::Stored(UserRow::from(UserRecord {
                         user_id: "u1".to_owned(),
                         limits: MinuteLimits {
                             rpm: Some(1),
                             tpm: Some(10),
                         },
                         ..UserRecord::default()
-                    }),
+                    })),
                     team: Team::Row(TeamRecord {
                         team_id: "t1".to_owned(),
                         limits: MinuteLimits {

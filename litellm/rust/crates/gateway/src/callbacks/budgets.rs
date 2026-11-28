@@ -69,30 +69,31 @@ pub(crate) fn counters(
         Some(Team::Unstored(_) | Team::KeyCopy(_)) | None => None,
     };
     let is_team_key = holder.team().is_some();
-    let user = holder
-        .user()
-        .and_then(Named::stored)
-        .filter(|_| !is_team_key || settings.apply_user_budget_to_team_keys);
-    let member = team
-        .zip(holder.user().and_then(Named::stored))
-        .and_then(|(team, user)| {
-            let membership = holder.membership();
-            let budget = Budget {
-                max: membership
-                    .and_then(|membership| membership.budget.max)
-                    .or(team.member_max_budget),
-                spend: membership.map_or(0.0, |membership| membership.budget.spend),
-            };
-            planned(
-                SpendCounter::TeamMember {
-                    user_id: user.user_id.clone(),
-                    team_id: team.team_id.clone(),
-                },
-                "TeamMember",
-                format!("{}:{}", user.user_id, team.team_id),
-                budget,
-            )
-        });
+    let stored_user = || {
+        holder
+            .user()
+            .and_then(Named::stored)
+            .map(|user| &user.record)
+    };
+    let user = stored_user().filter(|_| !is_team_key || settings.apply_user_budget_to_team_keys);
+    let member = team.zip(stored_user()).and_then(|(team, user)| {
+        let membership = holder.membership();
+        let budget = Budget {
+            max: membership
+                .and_then(|membership| membership.budget.max)
+                .or(team.member_max_budget),
+            spend: membership.map_or(0.0, |membership| membership.budget.spend),
+        };
+        planned(
+            SpendCounter::TeamMember {
+                user_id: user.user_id.clone(),
+                team_id: team.team_id.clone(),
+            },
+            "TeamMember",
+            format!("{}:{}", user.user_id, team.team_id),
+            budget,
+        )
+    });
     [
         key.zip(token).and_then(|(key, token)| {
             planned(
@@ -173,17 +174,18 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::host::auth::UserRow;
     use crate::{host::Key, test_support::master};
 
-    fn user(max_budget: Option<f64>) -> UserRecord {
-        UserRecord {
+    fn user(max_budget: Option<f64>) -> UserRow {
+        UserRow::from(UserRecord {
             user_id: "u1".to_owned(),
             budget: Budget {
                 max: max_budget,
                 spend: 1.0,
             },
             ..UserRecord::default()
-        }
+        })
     }
 
     fn team(member_max_budget: Option<f64>) -> TeamRecord {

@@ -3,7 +3,8 @@
 //! sees in `x-litellm-gateway`, and may name the setting or trait it goes to Python `over`.
 //! A request that names `jwt` claims carries them signed by a provider whose JWKS
 //! `JWT_PUBLIC_KEY_URL` names, and `jwks` says what that URL answers. `mappings` lists the keys the
-//! database maps a JWT's claim to.
+//! database maps a JWT's claim to. `users_after` names what the database holds for a user once every
+//! request was answered, so a file shows that a request Python answers wrote nothing.
 
 mod jwt;
 mod keys;
@@ -32,6 +33,10 @@ struct Scenario {
     /// The users the database holds, each id with the columns set on its row.
     #[serde(default)]
     users: BTreeMap<String, Columns>,
+    /// What the database holds for each user once every request was answered: the columns named,
+    /// or nothing for a user it does not hold.
+    #[serde(default)]
+    users_after: BTreeMap<String, Option<Columns>>,
     /// The other rows the database holds, each under its table's name, stored in this order.
     #[serde(default)]
     rows: Vec<BTreeMap<String, serde_json::Value>>,
@@ -378,6 +383,8 @@ impl Sent {
 #[case::jwt_team_alias("jwt_team_alias")]
 #[case::jwt_team_id_upsert("jwt_team_id_upsert")]
 #[case::jwt_user_claim("jwt_user_claim")]
+#[case::jwt_user_id_upsert("jwt_user_id_upsert")]
+#[case::jwt_user_id_upsert_with_defaults("jwt_user_id_upsert_with_defaults")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
@@ -450,6 +457,24 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
         ));
     }
     state.close().await;
+    let users = match &held {
+        Some(held) => held.users().await,
+        None => Vec::new(),
+    };
+    let users_after: BTreeMap<_, _> = scenario
+        .users_after
+        .iter()
+        .map(|(user_id, columns)| {
+            let row = users.iter().find(|row| row["user_id"] == user_id.as_str());
+            let named = columns.iter().flat_map(Columns::keys);
+            let held = row.map(|row| {
+                named
+                    .map(|column| (column.clone(), row[column].clone()))
+                    .collect::<Columns>()
+            });
+            (user_id.clone(), held)
+        })
+        .collect();
 
     let expected: Vec<_> = scenario
         .requests
@@ -463,7 +488,7 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
             )
         })
         .collect();
-    assert_eq!(answered, expected);
+    assert_eq!((answered, users_after), (expected, scenario.users_after));
 }
 
 #[tokio::test(flavor = "multi_thread")]

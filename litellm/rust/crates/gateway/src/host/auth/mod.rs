@@ -15,6 +15,7 @@ mod jwt_io;
 mod key;
 mod metadata;
 mod models;
+mod sign_in;
 mod store;
 
 use std::{convert::Infallible, sync::Arc, time::Duration};
@@ -39,10 +40,11 @@ use litellm_gateway_auth_core::{
         },
         key::{KeyTeam, Owner},
     },
-    record::{EndUserRecord, MembershipRecord, OrgRecord, ProjectRecord, TeamRecord, UserRecord},
+    record::{EndUserRecord, MembershipRecord, OrgRecord, ProjectRecord, TeamRecord},
 };
 use litellm_gateway_inference::routing;
-use litellm_redis_store::auth_cache::{KeyEntry, UserEntry};
+use litellm_redis_store::auth_cache::KeyEntry;
+use litellm_repositories::SignIn;
 use litellm_router_core::{Router, resolve};
 use serde_json::Value;
 
@@ -53,7 +55,11 @@ pub(crate) use end_user::{end_user, unserved as unserved_end_user};
 pub use jwt_io::{JwtIo, client_config as jwt_client_config};
 pub use key::Key;
 pub(crate) use models::{allowed_models, layers};
+use sign_in::Owed;
+pub use sign_in::UserRow;
+pub(crate) use sign_in::owed;
 pub use store::AuthStore;
+use store::Found;
 
 /// The rows the native host hands the core: a key's, and a core record for each thing a caller
 /// belongs to. The host reads a key's team, owner, membership, organization and project, and a JWT's
@@ -66,7 +72,7 @@ pub struct NativeRows;
 
 impl Rows for NativeRows {
     type Key = Key;
-    type User = UserRecord;
+    type User = UserRow;
     type Team = TeamRecord;
     type EndUser = EndUserRecord;
     type ObjectPermission = Infallible;
@@ -92,6 +98,9 @@ pub struct NativeAuthHost {
     /// The router the native app serves through, which says what a model's name resolves to when
     /// a team's model list is judged. `None` on a host built with no router.
     router: Option<Router>,
+    /// `LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER`, which lets a sign-in's email find a user another
+    /// sign-in is linked to.
+    links_any_user: bool,
 }
 
 impl NativeAuthHost {
@@ -103,6 +112,7 @@ impl NativeAuthHost {
             own_budget: false,
             jwt_io: None,
             router: None,
+            links_any_user: false,
         }
     }
 
@@ -178,6 +188,22 @@ fn master_key(config: &Config) -> Option<&litellm_secret_value::SecretValue> {
         .filter(|key| !key.expose().trim().is_empty())
 }
 
+/// `read_email_verified`: some identity providers send the claim as the text `true` or `false`.
+fn email_verified(claim: &Value) -> Option<bool> {
+    match claim {
+        Value::Bool(verified) => Some(*verified),
+        Value::String(text) => litellm_python_compat::flags::str_to_bool(text),
+        _ => None,
+    }
+}
+
+/// `_email_fallback_links_any_user`, which reads the variable with `str_to_bool`.
+fn links_any_user(environment: &dyn Lookup) -> bool {
+    environment
+        .get("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER")
+        .is_some_and(|flag| litellm_python_compat::flags::str_to_bool(&flag) == Some(true))
+}
+
 /// What the core reads of this host beside `general_settings`. `database` is whether this host
 /// reads keys from one, and without one the core refuses every token but the master key before it
 /// asks for a key. `premium` is whether the proxy's license grants enterprise features such as
@@ -239,6 +265,7 @@ pub fn auth_over(
         own_budget: budgets_checked && config.general_settings.disable_budget_reservation,
         jwt_io,
         router,
+        links_any_user: links_any_user(environment),
     };
     let keys = CoreAuthenticator::new(host, settings, Arc::new(SystemClock));
     Auth::new(Arc::new(keys)).with_extractor(Arc::new(BearerOrXApiKey))
@@ -412,13 +439,18 @@ impl AuthHost for NativeAuthHost {
 
     /// A user id with no row is no owner, like the key path's `get_user_object`, which swallows
     /// `UserNotFoundError`.
-    async fn key_owner(&self, user_id: &str) -> Result<Option<Owner<UserRecord>>, Error> {
-        let read = self.store("key_owner")?.user(user_id, |_| true).await;
-        let Some(user) = unless_failed(read, "key_owner")? else {
-            return Ok(None);
+    async fn key_owner(&self, user_id: &str) -> Result<Option<Owner<UserRow>>, Error> {
+        let read = self
+            .store("key_owner")?
+            .found(&SignIn::by_id(user_id))
+            .await;
+        let user = match unless_failed(read, "key_owner")? {
+            Found::Settled(user) | Found::Owing(user) => user,
+            Found::Absent => return Ok(None),
         };
         affiliation::user(&user)
             .map(|user| {
+                let user = sign_in::carrying(user, None);
                 Some(Owner {
                     deactivated: user.deactivated,
                     row: user.row,
@@ -427,34 +459,31 @@ impl AuthHost for NativeAuthHost {
             .or_else(declined)
     }
 
-    /// A user read by its id. Python links the SSO id to a row that has none, backfills its
-    /// email and falls back to the SSO id and the email on a miss, so each of those declines.
-    async fn user(&self, lookup: &UserLookup<'_>) -> Result<UserRead<UserRecord>, Error> {
-        if lookup.upsert {
-            return declined("user_id_upsert");
-        }
-        let owed = |user: &UserEntry| {
-            if user.sso_user_id.is_none() && lookup.sso_user_id == Some(lookup.user_id) {
-                return Some("sso_user_id");
-            }
-            (user.user_email.is_none() && lookup.user_email.is_some()).then_some("user_email")
+    /// `get_user_object`, read only: the user a sign-in resolves to, or under `upsert` the one it
+    /// would create. Nothing is written here. A sign-in that links, fills an email or creates
+    /// the user is owed on the row it hands back, and `admit` makes it once the request is
+    /// served natively, so a row that holds what the native app does not honor declines with
+    /// nothing written.
+    async fn user(&self, lookup: &UserLookup<'_>) -> Result<UserRead<UserRow>, Error> {
+        let Some(store) = &self.store else {
+            return declined("user");
         };
-        let read = self
-            .store("user")?
-            .user(lookup.user_id, |user| owed(user).is_none())
-            .await;
-        let Some(user) = unless_failed(read, "user")? else {
-            return match lookup.sso_user_id.or(lookup.user_email) {
-                Some(_) => declined("user"),
-                None => Ok(UserRead::Absent),
-            };
+        let sign_in = SignIn {
+            user_id: lookup.user_id.to_owned(),
+            sso_user_id: lookup.sso_user_id.map(str::to_owned),
+            user_email: lookup.user_email.map(str::to_owned),
+            email_verified: lookup.email_verified.and_then(email_verified),
+            links_any_user: self.links_any_user,
         };
-        if let Some(write) = owed(&user) {
-            return declined(write);
-        }
-        affiliation::user(&user)
-            .map(UserRead::Found)
-            .or_else(declined)
+        let read = store.found(&sign_in).await;
+        let (user, owes) = match unless_failed(read, "user")? {
+            Found::Settled(user) => (affiliation::user(&user).or_else(declined)?, false),
+            Found::Owing(user) => (affiliation::user(&user).or_else(declined)?, true),
+            Found::Absent if lookup.upsert => (sign_in::created(&sign_in), true),
+            Found::Absent => return Ok(UserRead::Absent),
+        };
+        let owed = owes.then(|| Owed::new(store.clone(), sign_in, lookup.upsert, &user.user_id));
+        Ok(UserRead::Found(sign_in::carrying(user, owed)))
     }
 
     /// `GrantResolver.resolve_identity`: the user, then its membership of the team asked about,
@@ -507,7 +536,7 @@ impl AuthHost for NativeAuthHost {
         }
     }
 
-    /// The auth store only reads, so a team the request may create declines.
+    /// This host creates no team, so a team the request may create declines.
     async fn team(&self, team_id: &str, upsert: bool) -> Result<TeamRead<TeamRecord>, Error> {
         if upsert {
             return declined("team_id_upsert");
@@ -607,16 +636,16 @@ impl AuthHost for NativeAuthHost {
         Ok(())
     }
 
-    async fn set_user_role(&self, _: &UserRecord, _: LitellmRole) -> Result<UserRecord, Error> {
+    async fn set_user_role(&self, _: &UserRow, _: LitellmRole) -> Result<UserRow, Error> {
         declined("set_user_role")
     }
 
     async fn patch_team_membership(
         &self,
-        _: &UserRecord,
+        _: &UserRow,
         _: &[String],
         _: &[String],
-    ) -> Result<UserRecord, Error> {
+    ) -> Result<UserRow, Error> {
         declined("patch_team_membership")
     }
 
@@ -659,7 +688,7 @@ impl AuthHost for NativeAuthHost {
         })
     }
 
-    async fn team_member_budget(&self, _: &Key, _: Option<&UserRecord>) -> Result<(), Error> {
+    async fn team_member_budget(&self, _: &Key, _: Option<&UserRow>) -> Result<(), Error> {
         Ok(())
     }
 
@@ -667,7 +696,7 @@ impl AuthHost for NativeAuthHost {
     /// check is registered and the budget reservation is disabled.
     // TODO(#54354): serve it with the reservation on too once the gateway reserves against a budget
     // before the call, as Python does with it on
-    async fn key_budgets(&self, key: &Key, _: Option<&UserRecord>, _: bool) -> Result<(), Error> {
+    async fn key_budgets(&self, key: &Key, _: Option<&UserRow>, _: bool) -> Result<(), Error> {
         match key
             .budget
             .or(key.checked_budget.filter(|_| !self.own_budget))
@@ -681,7 +710,7 @@ impl AuthHost for NativeAuthHost {
     /// with a `model_max_budget`, and Python's check reads nothing else.
     async fn jwt_user_model_budget(
         &self,
-        _: &UserRecord,
+        _: &UserRow,
         _: &str,
         _: Option<&str>,
     ) -> Result<(), Error> {
@@ -742,6 +771,7 @@ mod tests {
     use litellm_gateway_auth_core::{
         Credential, Holder, JwtActor, JwtStamp, Model, Named, Team, Via,
         authz::{Layer, ModelList},
+        identity::jwt::User,
     };
     use litellm_python_compat::Value as PyValue;
     use litellm_redis_store::{
@@ -1340,7 +1370,7 @@ mod tests {
         let Some(Named::Stored(owner)) = caller.affiliation.holder.user() else {
             panic!("the key holds no owner row");
         };
-        assert_eq!(unserved_user(owner), Some(column));
+        assert_eq!(unserved_user(&owner.record), Some(column));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1359,10 +1389,10 @@ mod tests {
         };
         assert_eq!(
             (
-                owner.user_email.as_deref(),
-                owner.user_role.as_deref(),
-                owner.teams.as_slice(),
-                unserved_user(owner),
+                owner.record.user_email.as_deref(),
+                owner.record.user_role.as_deref(),
+                owner.record.teams.as_slice(),
+                unserved_user(&owner.record),
             ),
             (
                 Some("ada@example.com"),
@@ -2319,6 +2349,7 @@ router_settings:",
             own_budget: false,
             jwt_io: None,
             router: None,
+            links_any_user: false,
         }
     }
 
@@ -2339,112 +2370,293 @@ router_settings:",
         }
     }
 
+    /// A token whose `email_verified` claim says its email is not verified.
+    static UNVERIFIED: Value = Value::Bool(false);
+
+    /// The id, SSO id and email of a user, as its row or its cache entry holds them.
+    type Identified = (Option<String>, Option<String>, Option<String>);
+
+    fn identified(user: &Columns) -> Identified {
+        let text = |field: &str| user[field].as_str().map(str::to_owned);
+        (text("user_id"), text("sso_user_id"), text("user_email"))
+    }
+
+    /// What `cache` holds under `user-1`, the id every lookup here names.
+    async fn cached_user(cache: &AuthCache) -> Option<Identified> {
+        let entry = cache.get(None, &user_object()).await.unwrap()?;
+        let dumped = litellm_python_compat::json::dumps(&entry).unwrap();
+        Some(identified(&serde_json::from_str(&dumped).unwrap()))
+    }
+
+    fn ids(user_id: &str, sso_user_id: Option<&str>, user_email: Option<&str>) -> Identified {
+        (
+            Some(user_id.to_owned()),
+            sso_user_id.map(str::to_owned),
+            user_email.map(str::to_owned),
+        )
+    }
+
+    /// The user `host` finds for `lookup`, with the sign-in its row owes made when `settle`.
+    async fn signing_in(
+        host: &NativeAuthHost,
+        lookup: &UserLookup<'_>,
+        settle: bool,
+    ) -> Result<Option<User<UserRow>>, Error> {
+        let found = host.user(lookup).await?.found();
+        if let (true, Some(owed)) = (settle, found.as_ref().and_then(|user| user.row.owed())) {
+            assert!(owed.settle().await, "the sign-in was not made");
+        }
+        Ok(found)
+    }
+
     #[rstest]
-    #[case::a_linked_user_with_its_email(
-        Some(json!({"sso_user_id": "user-1", "user_email": EMAIL})),
+    #[case::a_linked_user_with_its_email_owes_nothing(
+        Some(json!({"user_id": "user-1", "sso_user_id": "user-1", "user_email": EMAIL})),
         looking_up(Some("user-1"), Some(EMAIL)),
-        Ok(true),
-        true
+        Ok(Some(("user-1", false))),
+        Some(ids("user-1", Some("user-1"), Some(EMAIL))),
+        Some(ids("user-1", Some("user-1"), Some(EMAIL)))
     )]
-    #[case::a_user_python_links_the_sso_id_to(
-        Some(json!({"user_email": EMAIL})),
+    #[case::a_user_with_no_sso_id_is_linked_and_cached_as_it_was_read(
+        Some(json!({"user_id": "user-1", "user_email": EMAIL})),
         looking_up(Some("user-1"), Some(EMAIL)),
-        Err(Error::HostDeclined),
-        false
+        Ok(Some(("user-1", true))),
+        Some(ids("user-1", Some("user-1"), Some(EMAIL))),
+        Some(ids("user-1", None, Some(EMAIL)))
     )]
-    #[case::a_user_python_backfills_the_email_of(
-        Some(json!({"sso_user_id": "user-1"})),
+    #[case::a_user_with_no_email_is_given_the_tokens(
+        Some(json!({"user_id": "user-1", "sso_user_id": "user-1"})),
         looking_up(Some("user-1"), Some(EMAIL)),
-        Err(Error::HostDeclined),
-        false
+        Ok(Some(("user-1", true))),
+        Some(ids("user-1", Some("user-1"), Some(EMAIL))),
+        Some(ids("user-1", Some("user-1"), Some(EMAIL)))
     )]
-    #[case::an_unlinked_user_the_token_is_no_sign_in_for(
-        Some(json!({"user_email": EMAIL})),
+    #[case::a_token_that_is_no_sign_in_owes_no_link(
+        Some(json!({"user_id": "user-1", "user_email": EMAIL})),
         looking_up(None, Some(EMAIL)),
-        Ok(true),
-        true
+        Ok(Some(("user-1", false))),
+        Some(ids("user-1", None, Some(EMAIL))),
+        Some(ids("user-1", None, Some(EMAIL)))
     )]
-    #[case::a_user_with_no_email_and_a_token_that_carries_none(
-        Some(json!({"sso_user_id": "user-1"})),
+    #[case::a_user_linked_to_another_sign_in_owes_no_link(
+        Some(json!({"user_id": "user-1", "sso_user_id": "another-sign-in"})),
         looking_up(Some("user-1"), None),
-        Ok(true),
-        true
+        Ok(Some(("user-1", false))),
+        Some(ids("user-1", Some("another-sign-in"), None)),
+        Some(ids("user-1", Some("another-sign-in"), None))
     )]
-    #[case::a_user_the_request_may_create(
-        Some(json!({"sso_user_id": "user-1", "user_email": EMAIL})),
+    #[case::a_user_the_database_lacks_is_created_under_upsert(
+        None,
         UserLookup { upsert: true, ..looking_up(Some("user-1"), Some(EMAIL)) },
-        Err(Error::HostDeclined),
-        false
+        Ok(Some(("user-1", true))),
+        Some(ids("user-1", Some("user-1"), Some(EMAIL))),
+        Some(ids("user-1", Some("user-1"), Some(EMAIL)))
     )]
-    #[case::a_user_with_other_metadata_python_still_reads_from_the_cache(
-        Some(json!({"sso_user_id": "user-1", "user_email": EMAIL, "metadata": {"department": "eng"}})),
-        looking_up(Some("user-1"), Some(EMAIL)),
-        Err(Error::HostDeclined),
-        true
-    )]
-    #[case::no_row_with_a_sign_in_python_falls_back_on(
+    #[case::a_user_the_database_lacks_is_absent_without_upsert(
         None,
+        looking_up(Some("user-1"), Some(EMAIL)),
+        Ok(None),
+        None,
+        None
+    )]
+    #[case::a_user_found_by_its_sso_id_is_cached_under_the_id_asked_for(
+        Some(json!({"user_id": "other", "sso_user_id": "user-1"})),
+        looking_up(Some("user-1"), None),
+        Ok(Some(("other", false))),
+        Some(ids("other", Some("user-1"), None)),
+        Some(ids("other", Some("user-1"), None))
+    )]
+    #[case::a_user_found_by_its_email_is_linked_and_cached_with_the_link(
+        Some(json!({"user_id": "other", "user_email": EMAIL})),
+        looking_up(Some("user-1"), Some(EMAIL)),
+        Ok(Some(("other", true))),
+        Some(ids("other", Some("user-1"), Some(EMAIL))),
+        Some(ids("other", Some("user-1"), Some(EMAIL)))
+    )]
+    #[case::an_unverified_email_finds_no_user(
+        Some(json!({"user_id": "other", "user_email": EMAIL})),
+        UserLookup { email_verified: Some(&UNVERIFIED), ..looking_up(Some("user-1"), Some(EMAIL)) },
+        Ok(None),
+        Some(ids("other", None, Some(EMAIL))),
+        None
+    )]
+    #[case::a_user_with_other_metadata_is_not_native_and_is_left_unlinked(
+        Some(json!({"user_id": "user-1", "metadata": {"department": "eng"}})),
         looking_up(Some("user-1"), None),
         Err(Error::HostDeclined),
-        false
+        Some(ids("user-1", None, None)),
+        None
     )]
-    #[case::no_row_with_an_email_python_falls_back_on(
-        None,
-        looking_up(None, Some(EMAIL)),
-        Err(Error::HostDeclined),
-        false
-    )]
-    #[case::no_row_and_nothing_to_fall_back_on(None, looking_up(None, None), Ok(false), false)]
     #[tokio::test]
-    async fn a_user_is_read_and_cached_natively_only_where_python_writes_nothing(
+    async fn a_user_is_only_read_until_its_sign_in_is_made_as_python_makes_it(
         #[case] row: Option<Columns>,
         #[case] lookup: UserLookup<'static>,
-        #[case] found: Result<bool, Error>,
-        #[case] cached: bool,
+        #[case] found: Result<Option<(&str, bool)>, Error>,
+        #[case] stored: Option<Identified>,
+        #[case] cached: Option<Identified>,
     ) {
         let held = Held::start().await;
-        if let Some(columns) = row {
-            let row = json!({"user_id": "user-1"})
-                .as_object()
-                .unwrap()
-                .clone()
-                .into_iter()
-                .chain(columns.as_object().unwrap().clone())
-                .collect();
-            held.insert_named("LiteLLM_UserTable", &Columns::Object(row))
-                .await;
+        if let Some(row) = &row {
+            held.insert_named("LiteLLM_UserTable", row).await;
         }
+        let seeded = held.users().await;
         let cache = keys::memory_cache();
+        let host = affiliated(&cache, &held);
 
-        let read = affiliated(&cache, &held).user(&lookup).await;
+        let signs_in_as = found
+            .as_ref()
+            .ok()
+            .map(|user| user.map(|(user_id, _)| user_id.to_owned()));
 
-        let object = AuthObject::User("user-1".to_owned());
+        let read = signing_in(&host, &lookup, false).await;
+        let untouched = held.users().await == seeded;
+        let settled = signing_in(&host, &lookup, true).await;
+
+        let read = read.map(|user| user.map(|user| (user.user_id, user.row.owed().is_some())));
         assert_eq!(
             (
-                read.map(|read| read.found().is_some()),
-                cache.get(None, &object).await.unwrap().is_some()
+                read,
+                untouched,
+                settled.map(|user| user.map(|user| user.user_id)).ok(),
+                held.users().await.first().map(identified),
+                cached_user(&cache).await
             ),
-            (found, cached)
+            (
+                found.map(|user| user.map(|(user_id, owes)| (user_id.to_owned(), owes))),
+                true,
+                signs_in_as,
+                stored,
+                cached
+            )
         );
     }
 
     #[tokio::test]
-    async fn a_membership_with_a_budget_is_not_native() {
+    async fn a_cached_user_with_no_email_is_given_the_tokens_and_cached_again() {
+        let held = Held::start().await;
+        let row = json!({"user_id": "user-1", "sso_user_id": "user-1"});
+        held.insert_named("LiteLLM_UserTable", &row).await;
+        let cache = keys::memory_cache();
+        let entry = litellm_python_compat::json::loads(&row.to_string()).unwrap();
+        cache.set(None, &user_object(), entry, None).await.unwrap();
+        let host = affiliated(&cache, &held);
+        let lookup = looking_up(Some("user-1"), Some(EMAIL));
+
+        let read = signing_in(&host, &lookup, true).await;
+
+        let user = ids("user-1", Some("user-1"), Some(EMAIL));
+        assert_eq!(
+            (
+                read.map(|user| user.is_some()),
+                held.users().await.first().map(identified),
+                cached_user(&cache).await
+            ),
+            (Ok(true), Some(user.clone()), Some(user))
+        );
+    }
+
+    #[tokio::test]
+    async fn an_email_another_user_holds_is_not_asked_for_again_within_pythons_interval() {
+        let held = Held::start().await;
+        held.insert_named(
+            "LiteLLM_UserTable",
+            &json!({"user_id": "holder", "user_email": EMAIL}),
+        )
+        .await;
+        held.insert_named(
+            "LiteLLM_UserTable",
+            &json!({"user_id": "user-1", "sso_user_id": "user-1"}),
+        )
+        .await;
+        let host = affiliated(&keys::memory_cache(), &held);
+        let lookup = looking_up(Some("user-1"), Some(EMAIL));
+        let owes = async || {
+            let read = signing_in(&host, &lookup, true).await;
+            read.map(|user| user.is_some_and(|user| user.row.owed().is_some()))
+        };
+
+        let refused = owes().await;
+        held.execute(r#"DELETE FROM "LiteLLM_UserTable" WHERE user_id = 'holder'"#)
+            .await;
+        let again = owes().await;
+
+        let email = held.users().await.first().map(identified);
+        assert_eq!(
+            (refused, again, email),
+            (
+                Ok(true),
+                Ok(false),
+                Some(ids("user-1", Some("user-1"), None))
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::only_an_unlinked_user_by_default(false, Ok(false))]
+    #[case::any_user_when_the_email_fallback_links_any_user(true, Ok(true))]
+    #[tokio::test]
+    async fn an_email_finds_a_user_another_sign_in_is_linked_to_only_when_the_operator_allows_it(
+        #[case] links_any_user: bool,
+        #[case] found: Result<bool, Error>,
+    ) {
+        let held = Held::start().await;
+        held.insert_named(
+            "LiteLLM_UserTable",
+            &json!({"user_id": "other", "sso_user_id": "another-sign-in", "user_email": EMAIL}),
+        )
+        .await;
+        let host = NativeAuthHost {
+            links_any_user,
+            ..affiliated(&keys::memory_cache(), &held)
+        };
+
+        let read = host.user(&looking_up(Some("user-1"), Some(EMAIL))).await;
+
+        assert_eq!(read.map(|read| read.found().is_some()), found);
+    }
+
+    #[rstest]
+    #[case::the_word_true(Some("true"), true)]
+    #[case::the_word_in_another_case_with_spaces(Some(" True "), true)]
+    #[case::the_word_false(Some("false"), false)]
+    #[case::a_word_python_reads_as_no_flag(Some("1"), false)]
+    #[case::unset(None, false)]
+    fn the_email_fallback_links_any_user_only_when_its_variable_says_true(
+        #[case] variable: Option<&'static str>,
+        #[case] links: bool,
+    ) {
+        let environment = move |name: &str| {
+            (name == "LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER")
+                .then(|| variable.map(str::to_owned))
+                .flatten()
+        };
+
+        assert_eq!(links_any_user(&environment), links);
+    }
+
+    #[tokio::test]
+    async fn a_membership_is_read_under_the_id_the_users_row_holds() {
         let held = Held::start().await;
         held.execute(PARENTS).await;
-        held.insert_named("LiteLLM_UserTable", &json!({"user_id": "user-1"}))
-            .await;
+        held.insert_named(
+            "LiteLLM_UserTable",
+            &json!({"user_id": "other", "sso_user_id": "user-1"}),
+        )
+        .await;
         held.insert_named(
             "LiteLLM_TeamMembership",
-            &json!({"user_id": "user-1", "team_id": "team", "budget_id": "budget"}),
+            &json!({"user_id": "other", "team_id": "team"}),
         )
         .await;
 
         let read = affiliated(&keys::memory_cache(), &held)
-            .load_team_membership("user-1", "team", AffiliationRead::Jwt)
+            .resolve_user_identity(&looking_up(Some("user-1"), None), Some("team"))
             .await;
 
-        assert_eq!(read, Err(Error::HostDeclined));
+        assert_eq!(
+            read.map(|read| read.membership.map(|membership| membership.user_id)),
+            Ok(Some("other".to_owned()))
+        );
     }
 
     #[rstest]

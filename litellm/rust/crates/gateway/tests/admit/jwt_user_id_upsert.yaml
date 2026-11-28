@@ -1,0 +1,64 @@
+# With `user_id_upsert` on, the user a JWT names is created when the database holds none, and
+# found by its email when it holds one under another id, but only once the request is served. A
+# request that goes to Python, for its model or for a team Python adds the user to, creates
+# nothing here and leaves the user for Python to create. `users_after` is what the database holds
+# for each user once every request was answered, `null` for one it does not hold.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      user_id_jwt_field: sub
+      user_email_jwt_field: email
+      team_ids_jwt_field: groups
+      user_id_upsert: true
+
+teams:
+  team-1: {}
+
+users:
+  user-1: {sso_user_id: user-1}
+  user-by-email: {user_email: known@example.com}
+
+users_after:
+  user-new: {sso_user_id: user-new, user_email: new@example.com}
+  user-by-email: {sso_user_id: sign-in-1}
+  user-forwarded: null
+  user-joiner: null
+
+requests:
+  - name: a JWT naming a user the database holds
+    jwt: {claims: {sub: user-1}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a JWT naming a user the database does not hold
+    jwt: {claims: {sub: user-new, email: new@example.com}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a JWT carrying the email of a user stored under another id
+    jwt: {claims: {sub: sign-in-1, email: known@example.com}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a JWT naming a new user for a model Python answers for
+    jwt: {claims: {sub: user-forwarded}}
+    body: {model: no-such-model, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: unknown_model
+
+  - name: a JWT naming a new user and listing a team Python adds it to
+    jwt: {claims: {sub: user-joiner, groups: [team-1]}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native

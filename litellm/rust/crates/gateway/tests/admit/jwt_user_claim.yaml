@@ -1,8 +1,10 @@
 # With a user claim configured, the user a JWT names is read natively, with its membership of the
-# team the JWT chooses. A user Python has nothing to write for is found, and its caller is served,
-# in its team when it also chooses one. A user that holds a budget, a user Python links the
-# sign-in to, a user the database does not hold, which Python looks up by its sign-in, and a team
-# Python adds the user to are not native.
+# team the JWT chooses, and its caller is served, in its team when it also chooses one. A user
+# with no SSO id is linked to the sign-in, but only once the request is served: one that goes to
+# Python for its model, or whose user holds a budget, is left as it was for Python to link. A user
+# the database does not hold is the core's to refuse, a proxy admin that names one is the admin
+# all the same, and a team Python adds the user to is not native. `users_after` is what the
+# database holds for each user once every request was answered.
 enterprise: true
 
 config:
@@ -27,6 +29,13 @@ users:
   user-capped: {sso_user_id: user-capped, max_budget: 10}
   user-member: {sso_user_id: user-member, teams: [team-1]}
   user-unlinked: {}
+  user-unlinked-forwarded: {}
+  user-capped-unlinked: {max_budget: 10}
+
+users_after:
+  user-unlinked: {sso_user_id: user-unlinked}
+  user-unlinked-forwarded: {sso_user_id: null}
+  user-capped-unlinked: {sso_user_id: null}
 
 requests:
   - name: a proxy admin JWT naming a user
@@ -43,9 +52,7 @@ requests:
   - name: a proxy admin JWT naming a user the database does not hold
     jwt: {claims: {scope: litellm_proxy_admin, sub: user-gone}}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: not_native
+    expect: rust
 
   - name: a proxy admin JWT naming no user
     jwt: {claims: {scope: litellm_proxy_admin}}
@@ -78,16 +85,28 @@ requests:
     reason: credential
     over: max_budget
 
-  - name: a user JWT naming a user Python links its sign-in to
+  - name: a user JWT naming a user its sign-in is not linked to yet
     jwt: {claims: {sub: user-unlinked}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: the same sign-in for a model Python answers for
+    jwt: {claims: {sub: user-unlinked-forwarded}}
+    body: {model: no-such-model, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: unknown_model
+
+  - name: the same sign-in for a user with a budget
+    jwt: {claims: {sub: user-capped-unlinked}}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
-    over: not_native
+    over: max_budget
 
   - name: a user JWT naming a user the database does not hold
     jwt: {claims: {sub: user-gone}}
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
-    over: not_native
+    over: invalid_token

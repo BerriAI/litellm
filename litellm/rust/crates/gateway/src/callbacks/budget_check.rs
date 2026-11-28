@@ -350,6 +350,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::host::auth::UserRow;
     use crate::{callbacks::Callbacks, host::Key};
 
     /// A caller's budgets have no rows, so each counter starts from the spend its plan read.
@@ -445,11 +446,11 @@ mod tests {
     }
 
     fn caller_with(key: Key, holds: Holds) -> Authenticated<NativeRows> {
-        let stored_user = Named::Stored(UserRecord {
+        let stored_user = Named::Stored(UserRow::from(UserRecord {
             user_id: "u1".to_owned(),
             budget: holds.user.unwrap_or_default(),
             ..UserRecord::default()
-        });
+        }));
         let holder = match holds.user {
             Some(_) => Holder::User(stored_user),
             None => Holder::Member {

@@ -91,7 +91,7 @@ fn unserved_held(holder: &Holder<NativeRows>) -> Option<&'static str> {
     holder
         .team()
         .and_then(unserved_team_column)
-        .or_else(|| user.and_then(unserved_user))
+        .or_else(|| user.and_then(|user| unserved_user(&user.record)))
         .or_else(|| holder.membership().and_then(unserved_membership))
 }
 
