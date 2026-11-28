@@ -9,6 +9,7 @@ export type LanguageStore = { readonly read: () => string | null; readonly write
 export const LANGUAGE_STORAGE_KEY = "litellm_language";
 
 export const LOCALES: Locales = new Map([
+  ["ru-RU", () => import("./locales/ru-RU.json").then((module) => module.default)],
   ["zh-CN", () => import("./locales/zh-CN.json").then((module) => module.default)],
 ]);
 
