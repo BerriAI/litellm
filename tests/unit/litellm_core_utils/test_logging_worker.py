@@ -6,12 +6,15 @@ import asyncio
 import contextvars
 import io
 import logging
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from prometheus_client import CollectorRegistry, Histogram
 
 from litellm.constants import LOGGING_WORKER_AGGRESSIVE_CLEAR_COOLDOWN_SECONDS
+from litellm.litellm_core_utils import callback_timing, logging_worker
 from litellm.litellm_core_utils.logging_worker import LoggingWorker
 
 
@@ -68,6 +71,52 @@ def test_exit_flush_bounds_optional_work_and_restores_callers_budget() -> None:
     assert observed.qsize() == 1
     assert 0 < observed.get_nowait() <= worker.timeout / 4
     assert optional_callback_budget(3.0) == 3.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", (True, False))
+@pytest.mark.parametrize("discard", (True, False))
+async def test_dispatch_wait_counts_only_dispatched_tasks(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool, discard: bool
+) -> None:
+    registry: Final = CollectorRegistry()
+    histogram: Final = Histogram("worker_dispatch_test_seconds", "Dispatch wait", registry=registry)
+    monkeypatch.setattr(callback_timing, "_load_dispatch_wait_histogram", lambda: histogram)
+    monkeypatch.setattr(logging_worker, "logging_worker_dispatch_timing_enabled", lambda: enabled)
+    clock: Final = SimpleNamespace(now=10.0)
+    monkeypatch.setattr(logging_worker, "monotonic", lambda: clock.now)
+
+    worker: Final = LoggingWorker(concurrency=1)
+    occupied: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    delivered: Final = asyncio.Event()
+
+    async def hold_slot() -> None:
+        occupied.set()
+        await release.wait()
+
+    async def deliver() -> None:
+        delivered.set()
+
+    try:
+        worker.ensure_initialized_and_enqueue(hold_slot())
+        await asyncio.wait_for(occupied.wait(), timeout=2)
+        worker.ensure_initialized_and_enqueue(deliver())
+        assert registry.get_sample_value("worker_dispatch_test_seconds_count") == int(enabled)
+
+        clock.now = 10.25
+        if discard:
+            await worker.stop(discard_pending=True)
+        else:
+            release.set()
+            await asyncio.wait_for(worker.flush(), timeout=2)
+
+        assert delivered.is_set() is not discard
+        assert registry.get_sample_value("worker_dispatch_test_seconds_count") == int(enabled) * (1 if discard else 2)
+        assert registry.get_sample_value("worker_dispatch_test_seconds_sum") == (0.25 if enabled and not discard else 0)
+    finally:
+        release.set()
+        await worker.stop(discard_pending=True)
 
 
 class _RecordCollector(logging.Handler):
