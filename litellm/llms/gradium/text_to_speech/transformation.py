@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, TypeAlias
 
 import httpx
 from httpx import Headers
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
@@ -13,7 +13,7 @@ from litellm.llms.base_llm.text_to_speech.transformation import (
     TextToSpeechRequestData,
 )
 
-from ..common_utils import GradiumException
+from ..common_utils import GradiumException, caller_json_config, gradium_api_key, gradium_api_url
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -21,9 +21,6 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj: TypeAlias = object
     HttpxBinaryResponseContent: TypeAlias = object
-
-
-_REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 class _GradiumSpeechRequest(BaseModel):
@@ -85,7 +82,6 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
 
     UNSUPPORTED_OPENAI_PARAMS: ClassVar[frozenset[str]] = frozenset({"speed", "instructions"})
     NO_OP_VALUES: ClassVar[Mapping[str, object]] = {"speed": 1.0}
-    CALLER_REQUEST_FIELDS: ClassVar[frozenset[str]] = frozenset({"json_config"})
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseTextToSpeechConfig declares list
         return ["voice", "response_format"]
@@ -114,18 +110,6 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return self.VOICE_MAPPINGS.get(candidate.lower(), candidate)
 
-    def _set_request_fields(
-        self, source: Mapping[str, object]
-    ) -> dict[str, object]:  # mutable-ok: merged into dict_body
-        return {key: source[key] for key in self.CALLER_REQUEST_FIELDS if source.get(key) is not None}
-
-    def _caller_request_fields(
-        self, kwargs: Mapping[str, object]
-    ) -> dict[str, object]:  # mutable-ok: merged into dict_body
-        extra_body: Final = kwargs.get("extra_body")
-        extra_fields: Final = _REQUEST_FIELDS.validate_python(extra_body) if isinstance(extra_body, Mapping) else {}
-        return {**self._set_request_fields(kwargs), **self._set_request_fields(extra_fields)}
-
     def map_openai_params(
         self,
         model: str,
@@ -144,6 +128,7 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
             if key in self.UNSUPPORTED_OPENAI_PARAMS and value not in (None, self.NO_OP_VALUES.get(key))
         ) + ((f"response_format={response_format!r}",) if unsupported_format else ())
         caller_kwargs: Final = kwargs or {}
+        json_config: Final = caller_json_config(caller_kwargs)
 
         if unsupported and not (drop_params or drops_unsupported_params(caller_kwargs.get("drop_params"))):
             format_hint: Final = (
@@ -158,7 +143,7 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
             )
 
         return mapped_voice, {
-            **self._caller_request_fields(caller_kwargs),
+            **({"json_config": json_config} if json_config is not None else {}),
             **({"output_format": output_format} if output_format is not None else {}),
         }
 
@@ -169,16 +154,9 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict[str, str]:  # mutable-ok: signature fixed by BaseTextToSpeechConfig
-        if not api_key:
-            raise litellm.AuthenticationError(
-                message="Gradium API key is required. Set `api_key` on the model.",
-                llm_provider="gradium",
-                model=model,
-            )
-
         return {
             **headers,
-            "x-api-key": api_key,
+            "x-api-key": gradium_api_key(api_key, model),
             "Content-Type": "application/json",
         }
 
@@ -196,15 +174,7 @@ class GradiumTextToSpeechConfig(BaseTextToSpeechConfig):
         api_base: str | None,
         litellm_params: dict[str, object],  # mutable-ok: signature fixed by BaseTextToSpeechConfig
     ) -> str:
-        if not api_base:
-            raise litellm.APIConnectionError(
-                message="Gradium API base is required. Set `api_base` on the model, e.g. https://eu.api.gradium.ai.",
-                llm_provider="gradium",
-                model=model,
-            )
-
-        root: Final = api_base.rstrip("/").removesuffix("/api")
-        return f"{root}{self.TTS_ENDPOINT_PATH}"
+        return gradium_api_url(api_base, model, self.TTS_ENDPOINT_PATH)
 
     def transform_text_to_speech_request(
         self,

@@ -21,7 +21,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, OpenAIAudioTranscriptionOptionalParams
 from litellm.types.utils import FileTypes, TranscriptionResponse, TranscriptionUsageDurationObject
 
-from ..common_utils import GradiumException
+from ..common_utils import GradiumException, caller_json_config, gradium_api_key, gradium_api_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,9 +201,7 @@ class GradiumAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     @staticmethod
     def _caller_json_config(model: str, optional_params: Mapping[str, object]) -> Mapping[str, object]:
-        extra_body: Final = optional_params.get("extra_body")
-        from_extra_body: Final = extra_body.get("json_config") if isinstance(extra_body, Mapping) else None
-        raw: Final = from_extra_body if from_extra_body is not None else optional_params.get("json_config")
+        raw: Final = caller_json_config(optional_params)
         if raw is None:
             return {}
         try:
@@ -250,13 +248,6 @@ class GradiumAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict[str, object],  # mutable-ok: signature fixed by BaseAudioTranscriptionConfig
         stream: bool | None = None,
     ) -> str:
-        if not api_base:
-            raise litellm.APIConnectionError(
-                message="Gradium API base is required. Set `api_base` on the model, e.g. https://eu.api.gradium.ai.",
-                llm_provider="gradium",
-                model=model,
-            )
-
         input_format: Final = self._requested_input_format(model, optional_params)
         query: Final = urlencode(
             {
@@ -265,8 +256,7 @@ class GradiumAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 **({"input_format": input_format} if input_format is not None else {}),
             }
         )
-        root: Final = api_base.rstrip("/").removesuffix("/api")
-        return f"{root}{self.ASR_ENDPOINT_PATH}?{query}"
+        return f"{gradium_api_url(api_base, model, self.ASR_ENDPOINT_PATH)}?{query}"
 
     def validate_environment(
         self,
@@ -278,14 +268,7 @@ class GradiumAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict[str, str]:  # mutable-ok: the handler sets Content-Type on the returned headers
-        if not api_key:
-            raise litellm.AuthenticationError(
-                message="Gradium API key is required. Set `api_key` on the model.",
-                llm_provider="gradium",
-                model=model,
-            )
-
-        return {**headers, "x-api-key": api_key}
+        return {**headers, "x-api-key": gradium_api_key(api_key, model)}
 
     def get_error_class(
         self,
