@@ -200,7 +200,7 @@ def proxies(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureReq
     directory: Final = tmp_path_factory.mktemp("affiliation-budget-parity")
     config: Final = directory / "proxy.yaml"
     variant: Final = getattr(request, "param", True)
-    uses_redis: Final = variant is not False
+    uses_redis: Final = variant not in (False, "postgres-fresh")
     default_end_user: Final = (
         f"  max_end_user_budget_id: {PROXY_END_USER_TIER}" if variant == "end-user-default" else ""
     )
@@ -514,7 +514,8 @@ def _affiliation_lifetime_outcome(
                 'INSERT INTO "LiteLLM_EndUserTable" (user_id, budget_id, spend) VALUES (%s, %s, %s)',
                 (identifier, identifier, spend),
             )
-    proxies.redis.set(counter, spend)
+    if proxies.uses_redis:
+        proxies.redis.set(counter, spend)
     _provider_response(proxies, identity)
     response: Final = _send(client, identity, end_user)
     expected: Final = 200 if expected_cost else 422
@@ -525,22 +526,35 @@ def _affiliation_lifetime_outcome(
         "end-user": 'SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id = %s',
     }[scope]
 
-    def settled() -> tuple[float, object]:
+    def settled() -> tuple[float | None, float]:
         rows: Final = read_rows(query, (identifier,), database_url=proxies.database)
         stored: Final = rows[0]["spend"]
         current: Final = proxies.redis.get(counter)
-        assert isinstance(stored, (int, float)) and isinstance(current, bytes)
-        return float(current), stored
+        assert isinstance(stored, (int, float)) and (current is None or isinstance(current, bytes))
+        return None if current is None else float(current), stored
 
     total: Final = spend + expected_cost
-    assert eventually(settled, lambda value: value == pytest.approx((total, total)), seconds=30) == pytest.approx(
-        (total, total)
-    )
+    expected_spend: Final = pytest.approx((total if proxies.uses_redis else None, total))
+    assert eventually(settled, lambda value: value == expected_spend, seconds=30) == expected_spend
     return response.status_code
 
 
-@pytest.mark.parametrize("scope", ["end-user", "project", "org"])
-@pytest.mark.parametrize("over", [False, True], ids=["under", "over"])
+@pytest.mark.parametrize(
+    "scope, over, proxies",
+    [
+        pytest.param(
+            scope,
+            over,
+            # Direct SQL inserts do not invalidate an existing process's registry without Redis.
+            "postgres-fresh" if not uses_redis and scope == "end-user" and over else uses_redis,
+            id=f"{'over' if over else 'under'}-{scope}-{'redis' if uses_redis else 'postgres'}",
+        )
+        for uses_redis in (True, False)
+        for over in (False, True)
+        for scope in ("end-user", "project", "org")
+    ],
+    indirect=["proxies"],
+)
 def test_affiliation_lifetime_budgets(proxies: Proxies, actual_cost: float, scope: str, over: bool) -> None:
     spend: Final = 1.5 if over else 0.25
     cost: Final = 0.0 if over else actual_cost
@@ -742,20 +756,22 @@ def test_per_model_budget_fallback_validates_target(
     assert outcome(proxies.rust) == outcome(proxies.python)
 
 
-def _outcome(client: httpx.Client, proxies: Proxies, case: Case, actual_cost: float) -> tuple[int, float, float]:
+def _outcome(client: httpx.Client, proxies: Proxies, case: Case, actual_cost: float) -> tuple[int, float | None, float]:
     identity: Final = _identity(proxies.database, case)
     _provider_response(proxies, identity)
-    proxies.redis.set(identity.counter, case.spend)
+    if proxies.uses_redis:
+        proxies.redis.set(identity.counter, case.spend)
     response: Final = _send(client, identity)
     assert response.status_code == case.status, response.text
     expected: Final = case.spend + (actual_cost if case.status == 200 else 0)
 
-    def counter() -> float:
+    def counter() -> float | None:
         value: Final = proxies.redis.get(identity.counter)
-        assert isinstance(value, bytes)
-        return float(value)
+        assert value is None or isinstance(value, bytes)
+        return None if value is None else float(value)
 
-    settled: Final = eventually(counter, lambda value: value == pytest.approx(expected))
+    expected_counter: Final = pytest.approx(expected) if proxies.uses_redis else None
+    settled: Final = eventually(counter, lambda value: value == expected_counter)
     persisted: Final = eventually(
         lambda: identity.persisted(proxies.database), lambda value: value == pytest.approx(expected), seconds=30
     )
@@ -783,6 +799,24 @@ def test_affiliation_budget_admission_and_settlement_match_python(
     python: Final = _outcome(proxies.python, proxies, case, actual_cost)
     native: Final = _outcome(proxies.rust, proxies, case, actual_cost)
     assert native == pytest.approx(python)
+
+
+@pytest.mark.parametrize("proxies", [pytest.param(False, id="postgres")], indirect=True)
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(Case(owner=True, spend=0.25), id="owner-under"),
+        pytest.param(Case(owner=True, spend=0.6, status=422), id="owner-over"),
+        pytest.param(Case(spend=0.25), id="member-under"),
+        pytest.param(Case(spend=0.6, status=422), id="member-over"),
+    ],
+)
+def test_owner_and_member_lifetime_budgets_without_redis(proxies: Proxies, case: Case, actual_cost: float) -> None:
+    with _paused_between_sweeps(proxies.rust_pid, proxies.redis):
+        python: Final = _outcome(proxies.python, proxies, case, actual_cost)
+    with _paused_between_sweeps(proxies.python_pid, proxies.redis):
+        rust: Final = _outcome(proxies.rust, proxies, case, actual_cost)
+    assert rust == pytest.approx(python)
 
 
 @pytest.mark.parametrize("case", [pytest.param(Case(owner=True), id="owner"), pytest.param(Case(), id="member")])

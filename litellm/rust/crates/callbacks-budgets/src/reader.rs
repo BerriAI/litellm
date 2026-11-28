@@ -313,6 +313,26 @@ mod tests {
         assert_eq!((read, in_redis(&server, &team()).await), (4.0, Some(4.0)));
     }
 
+    #[rstest]
+    #[case::persisted_spend(Some(4.0), 4.0, Some(Number::Float(4.0)))]
+    #[case::missing_row(None, 1.0, None)]
+    #[tokio::test]
+    async fn a_cold_team_counter_without_redis_reads_the_row_before_the_callers_spend(
+        #[case] row: Option<f64>,
+        #[case] expected: f64,
+        #[case] cached: Option<Number>,
+    ) {
+        let store = Arc::new(SpendCounters::new(None));
+        let reader = SpendReader::new(store.clone(), Rows::holding(&team(), row));
+
+        let read = reader.current(&team(), 1.0, Some(5.0)).await;
+
+        assert_eq!(
+            (read, store.get_local(&team()).unwrap()),
+            (expected, cached)
+        );
+    }
+
     /// `get_current_spend` answers the caller's spend for a counter with no row and writes
     /// nothing, as only `ensure_spend_counter_initialized` seeds a counter from it.
     #[rstest]
