@@ -421,7 +421,7 @@ it.each([AUTH_TYPE.OAUTH_DELEGATE, AUTH_TYPE.TRUE_PASSTHROUGH])(
   },
 );
 
-it.each([AUTH_TYPE.OAUTH_DELEGATE, AUTH_TYPE.TRUE_PASSTHROUGH])(
+it.each([AUTH_TYPE.OAUTH2, AUTH_TYPE.OAUTH_DELEGATE, AUTH_TYPE.TRUE_PASSTHROUGH])(
   "writes an explicit null when the admin removes every scope on a %s server",
   (authType) => {
     const values: EditServerFormValues = {
@@ -456,3 +456,47 @@ it.each([
   if (result.kind !== "ok") throw new Error("Expected valid MCP server payload");
   expect(result.payload.credentials).toEqual({ scopes: expected, client_id: null, client_secret: null });
 });
+
+it.each([[[]], [[""]], [["", null, undefined]]])(
+  "writes explicit scopes: null on an oauth2 M2M server when scopes is cleared to %j",
+  (scopes) => {
+    const values: EditServerFormValues = {
+      auth_type: AUTH_TYPE.OAUTH2,
+      oauth_flow_type: OAUTH_FLOW.M2M,
+      transport: "http",
+      credentials: { scopes },
+    };
+    const ui: EditServerUiState = {
+      ...baseUi,
+      mcpServer: {
+        ...baseUi.mcpServer,
+        auth_type: AUTH_TYPE.OAUTH2,
+        oauth2_flow: MCP_OAUTH2_FLOW_M2M,
+        credentials: { scopes: ["read", "write"] },
+      },
+    };
+    const result = buildEditServerPayload(values, ui);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("Expected valid MCP server payload");
+    expect(result.payload.credentials).toEqual({ scopes: null });
+  },
+);
+
+it.each([undefined, {}, { client_secret: "rotated" }, { scopes: undefined }, { scopes: null }])(
+  "preserves existing M2M scopes when the scopes field is absent or unmounted (%j)",
+  (credentials) => {
+    const values: EditServerFormValues = {
+      auth_type: AUTH_TYPE.OAUTH2,
+      oauth_flow_type: OAUTH_FLOW.M2M,
+      transport: "http",
+      credentials,
+    };
+    const result = buildEditServerPayload(values, baseUi);
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") throw new Error("Expected valid MCP server payload");
+    expect(result.payload.credentials?.scopes).toBeUndefined();
+    if (result.payload.credentials) {
+      expect(result.payload.credentials).not.toHaveProperty("scopes");
+    }
+  },
+);
