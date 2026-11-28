@@ -505,6 +505,7 @@ pub(crate) fn build(
         ),
     );
     clean.set("azure_spillover", stamps::azure_spillover(input));
+    clean.set("provider_request_ids", stamps::provider_request_ids(input));
     clean.set(
         "used_client_oauth_token",
         stamps::used_client_oauth_token(litellm_params, custom_llm_provider.as_deref()),

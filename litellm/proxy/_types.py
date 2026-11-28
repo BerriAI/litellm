@@ -4144,6 +4144,7 @@ class SpendLogsMetadata(TypedDict):
     litellm_gateway_injected_cache: ReadOnly[str | None]
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
     azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover
+    provider_request_ids: ReadOnly[Mapping[str, str] | None]  # None = the provider returned no request id
     used_client_oauth_token: ReadOnly[bool | None]  # None = row written before the flag existed
     claude_subscription_usage: NotRequired[ReadOnly[ClaudeSubscriptionUsage | None]]
 

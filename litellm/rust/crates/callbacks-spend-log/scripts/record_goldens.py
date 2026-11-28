@@ -255,6 +255,7 @@ def spend_tracking_utils_uuid():
 
 
 def _constants() -> dict[str, list[str]]:
+    from litellm import constants
     from litellm.accounting import snapshot
     from litellm.litellm_core_utils import batch_utils, redact_messages
     from litellm.proxy import _types
@@ -273,6 +274,7 @@ def _constants() -> dict[str, list[str]]:
         "VERTEX_AI_PROVIDER_METADATA_FIELDS": list(vertex_ai.VERTEX_AI_PROVIDER_METADATA_FIELDS),
         "BEDROCK_GUARDRAIL_TRACE_FIELDS": list(redact_messages.BEDROCK_GUARDRAIL_TRACE_FIELDS),
         "MESSAGE_REDACTION_ENABLE_HEADERS": list(redact_messages.MESSAGE_REDACTION_ENABLE_HEADERS),
+        "PROVIDER_REQUEST_ID_HEADERS": list(constants.PROVIDER_REQUEST_ID_HEADERS),
     }
     sets = {
         "_STAMPED_METADATA_KEYS": spend_tracking_utils._STAMPED_METADATA_KEYS,

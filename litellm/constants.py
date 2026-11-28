@@ -2320,6 +2320,9 @@ HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
     }
 )
 
+LLM_PROVIDER_HEADER_PREFIX: Final = "llm_provider-"
+MAX_PROVIDER_REQUEST_ID_LENGTH: Final = 256
+
 CREDENTIAL_HEADER_NAMES: Final[frozenset[str]] = frozenset(
     {
         "api-key",

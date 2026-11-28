@@ -6,7 +6,7 @@
 //! a pattern added to `SensitiveDataMasker`, a header added to the client IP list.
 
 /// `SpendLogsMetadata.__annotations__`, in order: the keys of the stored metadata JSON.
-pub(crate) const SPEND_LOGS_METADATA_FIELDS: [&str; 67] = [
+pub(crate) const SPEND_LOGS_METADATA_FIELDS: [&str; 68] = [
     "user_api_key_customer_org_id",
     "user_api_key_app_id",
     "user_api_key_app_group_id",
@@ -72,14 +72,16 @@ pub(crate) const SPEND_LOGS_METADATA_FIELDS: [&str; 67] = [
     "litellm_gateway_injected_cache",
     "router_metadata",
     "azure_spillover",
+    "provider_request_ids",
     "used_client_oauth_token",
     "claude_subscription_usage",
 ];
 
 /// `_STAMPED_METADATA_KEYS`: metadata keys the row stamps itself instead of copying.
-pub(crate) const STAMPED_METADATA_KEYS: [&str; 23] = [
+pub(crate) const STAMPED_METADATA_KEYS: [&str; 24] = [
     "router_metadata",
     "azure_spillover",
+    "provider_request_ids",
     "autorouter_savings",
     "autorouter_savings_estimate",
     "autorouter_baseline_observation",
@@ -189,6 +191,20 @@ pub(crate) const SCRUBBED_ERROR_TEXT_FIELDS: [&str; 2] = ["error_message", "trac
 /// The classifier audit fields of the logging payload, which the stored request carries.
 pub(crate) const CLASSIFIER_AUDIT_FIELDS: [&str; 2] =
     ["classifier_input", "originating_request_masked"];
+
+/// `PROVIDER_REQUEST_ID_HEADERS`: the provider response headers that carry the provider's own request id.
+pub(crate) const PROVIDER_REQUEST_ID_HEADERS: [&str; 7] = [
+    "x-amzn-requestid",
+    "x-request-id",
+    "request-id",
+    "x-ms-request-id",
+    "apim-request-id",
+    "x-goog-request-id",
+    "cf-ray",
+];
+
+/// `MAX_PROVIDER_REQUEST_ID_LENGTH`: a longer request id is not stored.
+pub(crate) const MAX_PROVIDER_REQUEST_ID_LENGTH: usize = 256;
 
 /// `_CLIENT_IP_HEADERS`.
 pub(crate) const CLIENT_IP_HEADERS: [&str; 18] = [
@@ -353,6 +369,10 @@ mod tests {
     #[case::message_redaction_enable_headers(
         "MESSAGE_REDACTION_ENABLE_HEADERS",
         &MESSAGE_REDACTION_ENABLE_HEADERS
+    )]
+    #[case::provider_request_id_headers(
+        "PROVIDER_REQUEST_ID_HEADERS",
+        &PROVIDER_REQUEST_ID_HEADERS
     )]
     fn ordered_tables_match_python(#[case] name: &str, #[case] table: &[&str]) {
         assert_eq!(recorded(name), table);

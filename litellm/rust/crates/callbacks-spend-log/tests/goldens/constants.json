@@ -65,6 +65,7 @@
   "litellm_gateway_injected_cache",
   "router_metadata",
   "azure_spillover",
+  "provider_request_ids",
   "used_client_oauth_token",
   "claude_subscription_usage"
  ],
@@ -115,6 +116,15 @@
   "litellm-enable-message-redaction",
   "x-litellm-enable-message-redaction"
  ],
+ "PROVIDER_REQUEST_ID_HEADERS": [
+  "x-amzn-requestid",
+  "x-request-id",
+  "request-id",
+  "x-ms-request-id",
+  "apim-request-id",
+  "x-goog-request-id",
+  "cf-ray"
+ ],
  "_STAMPED_METADATA_KEYS": [
   "autorouter_baseline_observation",
   "autorouter_savings",
@@ -125,6 +135,7 @@
   "is_silent_experiment",
   "kubernetes_pod_routing",
   "litellm_roi_estimator",
+  "provider_request_ids",
   "route_call_type",
   "router_metadata",
   "upstream_provider",

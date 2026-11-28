@@ -19,6 +19,9 @@ from litellm._uuid import uuid
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     DEFAULT_MAX_RECURSE_DEPTH,
+    LLM_PROVIDER_HEADER_PREFIX,
+    MAX_PROVIDER_REQUEST_ID_LENGTH,
+    PROVIDER_REQUEST_ID_HEADERS,
     SESSION_ID_GENERATED_METADATA_KEY,
     SESSION_ID_INHERITED_METADATA_KEY,
 )
@@ -141,7 +144,6 @@ _KWARGS_KEYS: Final = frozenset(
 )
 _STORED_PROMPT_KWARGS_KEYS: Final = frozenset({"realtime_tools", "realtime_tool_calls"})
 _SPILLOVER_HEADERS: Final = (AZURE_SPILLOVER_HEADER, AZURE_SPILLOVER_FROM_HEADER)
-_PROVIDER_SPILLOVER_HEADERS: Final = tuple(f"llm_provider-{header}" for header in _SPILLOVER_HEADERS)
 PYTHON_OBJECT_KEY: Final = "\x00python_object"
 
 
@@ -178,6 +180,23 @@ def _projected_headers(headers: object, names: Sequence[str] | frozenset[str]) -
     if found is None:
         return None
     return {name: _bounded(value) for name in names if (value := found.get(name)) is not None}
+
+
+def _projected_response_headers(headers: object, prefix: str = "") -> Mapping[str, object] | None:
+    """The spillover headers plus every provider request id header, lower-cased, for the row builder's stamps."""
+    projected: Final = _projected_headers(headers, tuple(f"{prefix}{name}" for name in _SPILLOVER_HEADERS))
+    found: Final = _str_mapping(headers)
+    if projected is None or found is None:
+        return projected
+    request_ids: Final = {
+        name: _bounded(value)
+        for raw_name, value in found.items()
+        if (name := raw_name.lower()).removeprefix(prefix) in PROVIDER_REQUEST_ID_HEADERS
+        and isinstance(value, str)
+        and value.isascii()
+        and 0 < len(value) <= MAX_PROVIDER_REQUEST_ID_LENGTH
+    }
+    return {**projected, **request_ids}
 
 
 def _request_metadata(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -390,7 +409,7 @@ def spend_log_row_input(
         },
         "kwargs": {
             **_projected(kwargs, _KWARGS_KEYS | _STORED_PROMPT_KWARGS_KEYS if stores_prompts else _KWARGS_KEYS),
-            "response_headers": _projected_headers(kwargs.get("response_headers"), _SPILLOVER_HEADERS),
+            "response_headers": _projected_response_headers(kwargs.get("response_headers")),
             "turn_off_message_logging": _bounded(dynamic_params.get("turn_off_message_logging"))
             if dynamic_params
             else None,
@@ -413,8 +432,8 @@ def spend_log_row_input(
                 {
                     "hidden_params": {
                         **_projected(hidden_params, _HIDDEN_PARAMS_KEYS),
-                        "additional_headers": _projected_headers(
-                            hidden_params.get("additional_headers"), _PROVIDER_SPILLOVER_HEADERS
+                        "additional_headers": _projected_response_headers(
+                            hidden_params.get("additional_headers"), LLM_PROVIDER_HEADER_PREFIX
                         ),
                     }
                 }

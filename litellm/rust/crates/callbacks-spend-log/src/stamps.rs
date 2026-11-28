@@ -4,7 +4,9 @@
 
 use litellm_python_compat::{Value, json};
 
-use crate::consts::CLASSIFIER_AUDIT_FIELDS;
+use crate::consts::{
+    CLASSIFIER_AUDIT_FIELDS, MAX_PROVIDER_REQUEST_ID_LENGTH, PROVIDER_REQUEST_ID_HEADERS,
+};
 use crate::input::{LitellmParams, RowInput, text_of};
 use crate::py::{Dict, NONE, get, get_or_none, has, text, to_str, truthy};
 
@@ -16,6 +18,7 @@ const POD_SELECTIONS: [&str; 3] = ["round_robin", "session_affinity", "session_a
 const ANTHROPIC_OAUTH_FORWARD_PROVIDERS: [&str; 1] = ["anthropic"];
 const AZURE_SPILLOVER_HEADER: &str = "x-ms-is-spilled-over";
 const AZURE_SPILLOVER_FROM_HEADER: &str = "x-ms-spillover-from-deployment";
+const LLM_PROVIDER_HEADER_PREFIX: &str = "llm_provider-";
 
 /// `get_end_user_id_for_cost_tracking(litellm_params)` for the spend log.
 pub(crate) fn end_user_id(input: &RowInput, disabled: bool) -> Option<String> {
@@ -169,6 +172,51 @@ pub(crate) fn azure_spillover(input: &RowInput) -> Value {
         return Value::Dict(vec![(text("from_deployment"), from_deployment)]);
     }
     Value::None
+}
+
+/// `provider_request_ids(response_headers, additional_headers)`: every provider request id the
+/// response carried, keyed by the provider's header name; `None` when it carried none. Reads the
+/// raw response headers, then the `llm_provider-` copies LiteLLM keeps for streaming calls.
+pub(crate) fn provider_request_ids(input: &RowInput) -> Value {
+    let additional = input
+        .payload
+        .as_ref()
+        .map(|payload| payload.hidden("additional_headers"));
+    let mut found: Vec<(Value, Value)> = Vec::new();
+    for (headers, prefix) in [
+        (input.kwargs.response_headers.as_ref(), ""),
+        (additional, LLM_PROVIDER_HEADER_PREFIX),
+    ] {
+        let Some(Value::Dict(entries)) = headers else {
+            continue;
+        };
+        for (name, value) in entries {
+            let (Value::Str(name), Value::Str(value)) = (name, value) else {
+                continue;
+            };
+            let lowered = name.to_lowercase();
+            let bare = lowered.strip_prefix(prefix).unwrap_or(&lowered);
+            if !PROVIDER_REQUEST_ID_HEADERS.contains(&bare)
+                || value.is_empty()
+                || !value.is_ascii()
+                || value.len() > MAX_PROVIDER_REQUEST_ID_LENGTH
+            {
+                continue;
+            }
+            match found
+                .iter_mut()
+                .find(|(key, _)| matches!(key, Value::Str(known) if known == bare))
+            {
+                Some(entry) => entry.1 = text(value),
+                None => found.push((text(bare), text(value))),
+            }
+        }
+    }
+    if found.is_empty() {
+        Value::None
+    } else {
+        Value::Dict(found)
+    }
 }
 
 /// `classifier_input_snapshot(value)`: a JSON object, given as one or as its JSON text.
