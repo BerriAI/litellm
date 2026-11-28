@@ -47,6 +47,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_batch_limits_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
+from litellm.proxy.auth.host.facts import deactivated
 from litellm.proxy.auth.password_policy import (
     validate_password_not_breached,
     validate_password_policy,
@@ -99,6 +100,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     set_object_permission,
 )
 from litellm.proxy.management_helpers.team_roster_sync import user_tx_db
+from litellm.proxy.management_helpers.user_key_blocking import set_user_keys_blocked
 from litellm.proxy.management_helpers.utils import (
     BUDGET_WINDOWS_ADAPTER,
     budget_windows_json,
@@ -542,6 +544,19 @@ async def _memberships_on_team_member_budget(
     )
 
 
+async def _raise_if_over_seat_limit(prisma_client: "PrismaClient", added_users: int) -> None:
+    from litellm.proxy.proxy_server import _license_check
+
+    if _license_check.user_seat_limit() is None:
+        return
+    billable_users: Final = await UserRepository(prisma_client).count_billable_users()
+    if _license_check.is_over_limit(total_users=billable_users + added_users):
+        raise HTTPException(
+            status_code=403,
+            detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
+        )
+
+
 def _default_team_membership(team: str | NewUserRequestTeam) -> NewUserRequestTeam:
     if isinstance(team, str):
         return NewUserRequestTeam(team_id=team)
@@ -647,7 +662,7 @@ async def new_user(
         validated_customer_key_metadata(data.metadata, None, actor)
     try:
         enforce_user_semantic_cache_admin(user_api_key_dict, attribute_or_none(data, "metadata"), None)
-        from litellm.proxy.proxy_server import _license_check, prisma_client
+        from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
             raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -658,13 +673,7 @@ async def new_user(
         await _check_duplicate_user_id(data.user_id, prisma_client)
         await _check_duplicate_user_email(data.user_email, prisma_client)
 
-        # Check if license is over limit
-        billable_users: Final = await UserRepository(prisma_client).count_billable_users()
-        if billable_users and _license_check.is_over_limit(total_users=billable_users):
-            raise HTTPException(
-                status_code=403,
-                detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
-            )
+        await _raise_if_over_seat_limit(prisma_client, added_users=0)
 
         # Only proxy admins can create administrative users
         # Check if user_api_key_dict is actually a UserAPIKeyAuth instance (not a Depends object)
@@ -1617,6 +1626,22 @@ async def _schedule_user_update_audit_log(
         verbose_proxy_logger.warning("Failed to create audit log for user %s: %s", response.get("user_id"), audit_error)
 
 
+_BLOCK_REQUIRES_PROXY_ADMIN: Final = "Only proxy admins can block or unblock users."
+
+
+def _scim_active_after(blocked: bool | None, was_deactivated: bool) -> bool | None:
+    if blocked is None or (not blocked and not was_deactivated):
+        return None
+    return not blocked
+
+
+def _with_scim_active(
+    metadata: Mapping[str, object], existing_metadata: Mapping[str, object], scim_active: bool | None
+) -> Mapping[str, object]:
+    carried: Final = {"scim_active": existing_metadata["scim_active"]} if "scim_active" in existing_metadata else {}
+    return {**carried, **metadata, **({} if scim_active is None else {"scim_active": scim_active})}
+
+
 def _check_user_update_authz(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1625,6 +1650,9 @@ def _check_user_update_authz(
     """Authorization checks for /user/update — raises HTTPException on failure."""
     if user_request.user_role is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
         raise HTTPException(status_code=403, detail="Only proxy admins can modify user roles.")
+
+    if user_request.blocked is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(status_code=403, detail=_BLOCK_REQUIRES_PROXY_ADMIN)
 
     if existing_user_row is not None:
         typed_row: Final = LiteLLM_UserTable.model_validate(existing_user_row.model_dump(exclude_none=True))
@@ -1766,7 +1794,7 @@ async def _update_single_user_helper(
         user_api_key_dict=user_api_key_dict,
     )
 
-    data_json: Final[dict[str, object]] = user_request.model_dump(exclude_unset=True)
+    data_json: Final[dict[str, object]] = user_request.model_dump(exclude_unset=True, exclude={"blocked"})
     non_default_values = _update_internal_user_params(data_json=data_json, data=user_request)
     await _hash_password_in_dict(
         non_default_values,
@@ -1854,6 +1882,14 @@ async def _update_single_user_helper(
         data=user_request,
         non_default_values=non_default_values,
         existing_metadata=existing_metadata or {},
+    )
+    was_deactivated: Final = isinstance(existing_user_row, LiteLLM_UserTable) and deactivated(existing_user_row)
+    if user_request.blocked is False and was_deactivated:
+        await _raise_if_over_seat_limit(prisma_client, added_users=1)
+    non_default_values["metadata"] = _with_scim_active(
+        _ADMIN_USER_ROW_ADAPTER.validate_python(non_default_values["metadata"]),
+        _ADMIN_USER_ROW_ADAPTER.validate_python(existing_metadata),
+        _scim_active_after(user_request.blocked, was_deactivated),
     )
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
@@ -1957,6 +1993,12 @@ async def _update_single_user_helper(
             user_api_key_cache=user_api_key_cache,
         )
 
+        if user_request.blocked is not None:
+            await set_user_keys_blocked(
+                user_id=TypeAdapter(str).validate_python(non_default_values["user_id"]),
+                blocked=user_request.blocked,
+            )
+
         if "object_permission_id" in non_default_values:
             await _invalidate_cached_user_entitlement(
                 user_id=non_default_values.get("user_id"),
@@ -2035,7 +2077,7 @@ async def user_update(
         - aliases: Optional[dict] - Model aliases for the user - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
         - config: Optional[dict] - [DEPRECATED PARAM] User-specific config.
         - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-
-        - blocked: Optional[bool] - [Not Implemented Yet] Whether the user is blocked.
+        - blocked: Optional[bool] - Proxy admin only. true disables the user: they stay listed, but every request authenticated as them is denied and their keys are blocked. false re-enables a disabled user and unblocks only the keys that disabling them blocked.
         - guardrails: Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user
         - policies: Optional[List[str]] - List of policy names to apply to the user. Policies define guardrails, conditions, and inheritance rules.
         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
@@ -2237,6 +2279,10 @@ async def bulk_user_update(
             status_code=403,
             detail="Only proxy admins can modify user roles.",
         )
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value and any(
+        user.blocked is not None for user in data.users or ()
+    ):
+        raise HTTPException(status_code=403, detail=_BLOCK_REQUIRES_PROXY_ADMIN)
 
     # Determine the list of users to update
     users_to_update: list[UpdateUserRequest] | list[UpdateUserRequestNoUserIDorEmail] = []
@@ -2256,6 +2302,14 @@ async def bulk_user_update(
                 )
             }
             raise HTTPException(status_code=400, detail=bulk_password_error)
+        if data.user_updates.blocked is not None:
+            bulk_blocked_error: Final[HTTPExceptionErrorDetail] = {
+                "error": (
+                    "Blocking or unblocking all users at once is not supported. "
+                    "Use per-user updates via the 'users' list instead."
+                )
+            }
+            raise HTTPException(status_code=400, detail=bulk_blocked_error)
         # Optimized path for updating all users directly in database
         all_users_in_db: Final = await _user_table(prisma_client).find_many(order={"created_at": "desc"})
 
