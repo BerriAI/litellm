@@ -299,6 +299,19 @@ def _jsonrpc_error(
     )
 
 
+_PARSE_ERROR: Final = (-32700, "Parse error")
+_NOT_AN_OBJECT_ERROR: Final = (-32600, "Invalid Request: body must be a JSON object")
+
+
+async def _unreadable_body_error(request: Request) -> tuple[int, str] | None:
+    """The JSON-RPC 2.0 error code and message for a body that is not a JSON object, or None for one that is."""
+    try:
+        decoded_body: Final = _DECODED_JSON.validate_python(await request.json())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return _PARSE_ERROR
+    return None if isinstance(decoded_body, dict) else _NOT_AN_OBJECT_ERROR
+
+
 class _JsonRpcRequestId(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -318,7 +331,11 @@ async def _jsonrpc_refusal(request: Request, refusal: ProxyException | HTTPExcep
     )
 
     error: Final = refusal if isinstance(refusal, ProxyException) else status_typed_proxy_exception(refusal)
-    _close_dangling_otel_server_span(request, int(error.code), exc=refusal)
+    status_code: Final = int(error.code)
+    _close_dangling_otel_server_span(request, status_code, exc=refusal)
+    if status_code == 400 and error.param == "request_body":
+        code, message = await _unreadable_body_error(request) or _PARSE_ERROR
+        return _jsonrpc_error(None, code, message)
     return JSONResponse(
         content={
             "jsonrpc": "2.0",
@@ -329,7 +346,7 @@ async def _jsonrpc_refusal(request: Request, refusal: ProxyException | HTTPExcep
                 "data": {"type": error.type, "param": error.param, "code": error.code},
             },
         },
-        status_code=int(error.code),
+        status_code=status_code,
         headers=error.headers if isinstance(refusal, ProxyException) else refusal.headers,
     )
 
@@ -830,6 +847,19 @@ async def invoke_agent_a2a(
     body: dict[str, Any] = {}
     request_data: dict[str, object] = body
     try:
+        unreadable_body_error: Final = await _unreadable_body_error(request)
+        if unreadable_body_error is not None:
+            code, message = unreadable_body_error
+            await _log_agent_rejection(
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_id=None,
+                method=None,
+                rejection=HTTPException(status_code=400, detail=message),
+                target_agent_id=agent_id,
+                model=f"a2a_agent/{agent_id}",
+            )
+            return _jsonrpc_error(None, code, message)
         body = await request.json()
         request_data = body
 
