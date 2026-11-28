@@ -11,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -421,6 +422,14 @@ class GrantMigrationResult(NamedTuple):
     missed: int
 
 
+def _readable_agent(db_agent: Mapping[str, object]) -> AgentResponse | None:
+    try:
+        return AgentResponse.model_validate(db_agent)
+    except ValidationError:
+        verbose_proxy_logger.warning("Skipping agent %s that this version cannot read", db_agent.get("agent_id"))
+        return None
+
+
 class AgentRegistry:
     def __init__(self):
         self.agent_list: list[AgentResponse] = []
@@ -524,12 +533,11 @@ class AgentRegistry:
         """
         self.reset_agent_list()
 
-        if db_agents:
-            for db_agent in db_agents:
-                if not isinstance(db_agent, dict):
-                    raise ValueError("db_agents must be a list of dictionaries")
-
-                self.register_agent(agent_config=AgentResponse.model_validate(db_agent))
+        for db_agent in db_agents or ():
+            if not isinstance(db_agent, dict):
+                raise ValueError("db_agents must be a list of dictionaries")
+            if (readable := _readable_agent(db_agent)) is not None:
+                self.register_agent(agent_config=readable)
 
         self.load_agents_from_config(agent_config if agent_config is not None else self.config_agents)
         return self.agent_list
