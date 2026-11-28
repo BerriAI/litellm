@@ -8,6 +8,7 @@ use axum::http::{
 use litellm_config::LiteLlmSettings;
 
 use super::{Admit, Reason, Refused, config::messages_only};
+use crate::callbacks::s3_log;
 
 const MESSAGES: &str = "/v1/messages";
 const CALL_ID: &str = "x-litellm-call-id";
@@ -23,14 +24,24 @@ pub(super) fn route(admit: &Admit, request: &Parts) -> Option<Reason> {
     messages_only(&admit.config).map(|over| Reason::new(Refused::Settings, over))
 }
 
-/// Under `allowed_ips`, the address Python checks is the one its server resolved, which reads
-/// `x-forwarded-for` from a peer the operator trusts. Only `use_x_forwarded_for` makes the proxy
-/// read the header itself, so with it off a request that sends one is left to Python.
+/// With `use_x_forwarded_for` off, the client's address is the one Python's server resolved, which
+/// reads `x-forwarded-for` from a peer the operator trusts, and the native app does not know that
+/// trust. So a request that sends the header is left to Python when its address decides
+/// anything: the address `allowed_ips` checks, or the `requester_ip_address` `s3_v2` logs.
 pub(super) fn forwarded_for(admit: &Admit, request: &Parts) -> Option<Reason> {
-    (admit.allowlists.client_addresses.reads_address()
-        && !admit.config.general_settings.use_x_forwarded_for
-        && request.headers.contains_key(FORWARDED_FOR))
-    .then(|| Reason::new(Refused::Headers, "general_settings.allowed_ips"))
+    if admit.config.general_settings.use_x_forwarded_for
+        || !request.headers.contains_key(FORWARDED_FOR)
+    {
+        return None;
+    }
+    if admit.allowlists.client_addresses.reads_address() {
+        return Some(Reason::new(
+            Refused::Headers,
+            "general_settings.allowed_ips",
+        ));
+    }
+    s3_log::is_named(&admit.config)
+        .then(|| Reason::new(Refused::Headers, "litellm_settings.callbacks"))
 }
 
 pub(super) fn headers(admit: &Admit, request: &Parts) -> Option<Reason> {
@@ -190,5 +201,41 @@ mod tests {
         let agent = [("user-agent", "claude-cli/2.1.0")];
 
         assert_eq!(messages(yaml, "/v1/messages", &agent).is_some(), named);
+    }
+
+    #[rstest]
+    #[case::allowed_ips(
+        "general_settings:\n  allowed_ips: [10.0.0.1]\n",
+        true,
+        Some("general_settings.allowed_ips")
+    )]
+    #[case::s3_v2_logging_the_requester(
+        "litellm_settings:\n  callbacks: [s3_v2]\n",
+        true,
+        Some("litellm_settings.callbacks")
+    )]
+    #[case::s3_v2_without_the_header("litellm_settings:\n  callbacks: [s3_v2]\n", false, None)]
+    #[case::s3_v2_reading_the_header_itself(
+        "general_settings:\n  use_x_forwarded_for: true\nlitellm_settings:\n  callbacks: [s3_v2]\n",
+        true,
+        None
+    )]
+    #[case::nothing_reads_the_address(DROP_PARAMS, true, None)]
+    fn a_forwarded_address_only_python_resolves_is_left_to_python_where_it_decides_anything(
+        #[case] yaml: &str,
+        #[case] forwarded: bool,
+        #[case] expected: Option<&str>,
+    ) {
+        let admit = Admit::over(&Config::from_yaml(yaml).unwrap(), vec![]);
+        let request = Request::post(MESSAGES);
+        let request = match forwarded {
+            true => request.header(FORWARDED_FOR, "203.0.113.9"),
+            false => request,
+        };
+        let request = request.body(()).unwrap().into_parts().0;
+        assert_eq!(
+            forwarded_for(&admit, &request).map(|reason| reason.over),
+            expected.map(Box::from)
+        );
     }
 }

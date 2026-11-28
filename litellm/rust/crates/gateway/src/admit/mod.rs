@@ -21,7 +21,7 @@ use litellm_router_core::{Router, registry::DeploymentFilter};
 use serde_json::{Map, Value};
 
 use crate::{
-    AppState, Gateway, StoredConfig,
+    AppState, Gateway, McpServers, StoredConfig,
     callbacks::parallel_request_limiter,
     host::{self, NativeHost, NativeRows, auth::AuthStore},
     middleware::request_allowlist,
@@ -89,6 +89,8 @@ pub struct Admit {
     /// The native app's inference, which tells whether a caller may call the model it asks for.
     /// `None` leaves every caller with a model list to Python.
     inference: Option<Arc<Gateway>>,
+    /// Whether a stored MCP server forwards a caller's header upstream.
+    mcp_servers: McpServers,
 }
 
 /// Where the end user a body names is read from.
@@ -152,6 +154,7 @@ impl Admit {
             },
             host: state.inference.host().clone(),
             inference: Some(state.inference.clone()),
+            mcp_servers: state.mcp_servers.clone(),
             ..Self::built(config, state.inference.router.clone(), deployed)
         }
     }
@@ -173,6 +176,7 @@ impl Admit {
             deployed,
             host: NativeHost::default(),
             inference: None,
+            mcp_servers: McpServers::default(),
         }
     }
 

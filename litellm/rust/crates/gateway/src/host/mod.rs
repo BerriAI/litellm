@@ -46,6 +46,11 @@ impl NativeHost {
     pub fn new(callbacks: Arc<Callbacks>, windows: Arc<ContextWindows>) -> Self {
         Self { callbacks, windows }
     }
+
+    /// Flushes what the callbacks still batch, once the gateway stops serving.
+    pub async fn flush_callbacks(&self) {
+        self.callbacks.flush().await;
+    }
 }
 
 impl Host for NativeHost {
