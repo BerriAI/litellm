@@ -55,6 +55,9 @@ _DATA_URI_BASE64_MARKER: Final = ";base64,"
 # pathological payloads. OpenAI message format is typically 3-4 levels deep.
 _MAX_TRUNCATION_DEPTH: Final = 20
 
+# Parents whose `data` child is bare base64: Gemini inline_data / inlineData, OpenAI input_audio.
+_BARE_BASE64_DATA_PARENTS: Final = frozenset({"inline_data", "inlineData", "input_audio"})
+
 
 def _base64_data_uri_replacer(match: re.Match[str]) -> str:
     """Replace a single base64 data-URI match with a size placeholder if too long."""
@@ -79,11 +82,12 @@ def _keep_text(text: str) -> str:
 def _truncate_dict_string(
     container: Mapping[str, object],
     key: str,
+    parent_key: str | None,
     value: str,
     truncate_data_uris: Callable[[str], str],
     truncate_source_data: Callable[[str], str],
 ) -> str:
-    if key == "data" and container.get("type") == "base64":
+    if key == "data" and (container.get("type") == "base64" or parent_key in _BARE_BASE64_DATA_PARENTS):
         return truncate_source_data(value)
     return truncate_data_uris(value)
 
@@ -104,12 +108,12 @@ def _truncate_base64_in_value(
     truncate_data_uris: Callable[[str], str],
     truncate_source_data: Callable[[str], str],
 ) -> str | dict[str, object] | list[object] | None:
-    """Iteratively truncate base64 data URIs and Anthropic base64 sources in a JSON-like value (str/list/dict).
+    """Iteratively truncate base64 data URIs and bare base64 media data in a JSON-like value (str/list/dict).
 
     Uses an explicit stack instead of recursion to satisfy the project's
     recursive-function detector and avoid stack-overflow on deep payloads.
     """
-    # Stack entries: (source_value, depth, parent_container, key_or_index)
+    # Stack entries: (container_copy, depth, key the container sits under in its nearest dict ancestor)
     # We mutate *copies* of dicts/lists in-place via parent references.
     if isinstance(value, str):
         return truncate_data_uris(value)
@@ -118,24 +122,28 @@ def _truncate_base64_in_value(
 
     # Shallow-copy the root so we don't mutate the caller's data.
     root: Final = {k: v for k, v in value.items()} if isinstance(value, dict) else list(value)
-    stack: Final[list[tuple[dict[str, object] | list[object], int]]] = [(root, 0)]  # mutable-ok: explicit stack
+    stack: Final[list[tuple[dict[str, object] | list[object], int, str | None]]] = [  # mutable-ok: explicit stack
+        (root, 0, None)
+    ]
 
     while stack:
-        container, depth = stack.pop()
+        container, depth, parent_key = stack.pop()
         if depth > _MAX_TRUNCATION_DEPTH:
             continue
         if isinstance(container, dict):
             for k, v in container.items():
                 if isinstance(v, str):
-                    container[k] = _truncate_dict_string(container, k, v, truncate_data_uris, truncate_source_data)
+                    container[k] = _truncate_dict_string(
+                        container, k, parent_key, v, truncate_data_uris, truncate_source_data
+                    )
                 elif isinstance(v, dict):
                     copy: dict[str, object] | list[object] = {ck: cv for ck, cv in v.items()}
                     container[k] = copy
-                    stack.append((copy, depth + 1))
+                    stack.append((copy, depth + 1, k))
                 elif (items := as_object_list(v)) is not None:
                     copy = list(items)
                     container[k] = copy
-                    stack.append((copy, depth + 1))
+                    stack.append((copy, depth + 1, k))
         else:
             for i, v in enumerate(container):
                 if isinstance(v, str):
@@ -143,11 +151,11 @@ def _truncate_base64_in_value(
                 elif isinstance(v, dict):
                     copy = {ck: cv for ck, cv in v.items()}
                     container[i] = copy
-                    stack.append((copy, depth + 1))
+                    stack.append((copy, depth + 1, parent_key))
                 elif (items := as_object_list(v)) is not None:
                     copy = list(items)
                     container[i] = copy
-                    stack.append((copy, depth + 1))
+                    stack.append((copy, depth + 1, parent_key))
 
     return root
 
@@ -156,8 +164,8 @@ def truncate_base64_in_messages(
     messages: str | list | dict | None,
 ) -> str | list[object] | dict[str, object] | None:
     """
-    Return a copy of *messages* with long base64 data-URI payloads and
-    Anthropic base64 source ``data`` replaced by human-readable size placeholders.
+    Return a copy of *messages* with long base64 data-URI payloads and bare base64 media
+    ``data`` (Anthropic sources, Gemini inline data, input audio) replaced by size placeholders.
     """
     if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
         return messages
@@ -165,7 +173,7 @@ def truncate_base64_in_messages(
 
 
 def truncate_base64_data_uris_in_messages(messages: Sequence[object]) -> object:
-    """Return a copy of *messages* with long base64 data URIs shortened and Anthropic base64 source ``data`` kept whole."""
+    """Return a copy of *messages* with long base64 data URIs shortened and bare base64 media ``data`` kept whole."""
     return _copy_messages(list(messages), _truncate_base64_in_string, _keep_text)
 
 
