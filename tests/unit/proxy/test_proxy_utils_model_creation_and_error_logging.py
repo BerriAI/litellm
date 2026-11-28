@@ -5165,6 +5165,21 @@ def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
     assert _is_client_error_exception(ValueError("x")) is False
 
 
+def test_an_error_that_hides_a_total_timeout_is_not_billed_for_it() -> None:
+    from litellm.litellm_core_utils.total_deadline import TotalTimeoutExpired
+    from litellm.proxy.utils import _provider_billed_the_failure
+
+    def _replace_the_timeout_error() -> None:
+        try:
+            raise TotalTimeoutExpired("the request ran out of time")
+        except TotalTimeoutExpired:
+            raise ValueError("the error shown to the caller") from None
+
+    with pytest.raises(ValueError, match="the error shown to the caller") as caught:
+        _replace_the_timeout_error()
+    assert _provider_billed_the_failure(caught.value) is False
+
+
 def test_image_answers_without_an_image_are_client_errors() -> None:
     from litellm.llms.gemini.empty_image_response import ImageRefusalError, UnservedImageError
     from litellm.proxy.utils import _is_client_error_exception
