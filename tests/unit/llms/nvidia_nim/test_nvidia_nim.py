@@ -486,3 +486,56 @@ def test_embedding_nvidia_nim_sends_extra_body_fields_without_an_extra_body_key(
     request_body: Final = transport.request_bodies[0]
     assert "extra_body" not in request_body
     assert (request_body["input_type"], request_body["truncate"]) == ("query", "END")
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "google/gemma-2-9b-it",
+        "nvidia/nemotron-4-340b-instruct",
+        "nvidia/nemotron-4-340b-reward",
+        "google/codegemma-1.1-7b",
+        "meta/llama3-70b-instruct",
+    ),
+)
+def test_max_retries_in_supported_params(model: str) -> None:
+    from litellm.llms.nvidia_nim.chat.transformation import NvidiaNimConfig
+
+    params = NvidiaNimConfig().get_supported_openai_params(model=model)
+    assert "max_retries" in params, f"max_retries must be supported for {model}; got: {params!r}"
+
+
+def test_map_openai_params_preserves_max_retries_zero() -> None:
+    from litellm.llms.nvidia_nim.chat.transformation import NvidiaNimConfig
+
+    result = NvidiaNimConfig().map_openai_params(
+        non_default_params={"max_retries": 0, "temperature": 0.7},
+        optional_params={},
+        model="meta/llama3-70b-instruct",
+        drop_params=False,
+    )
+    assert result.get("max_retries") == 0, f"map_openai_params must preserve max_retries=0; got: {result!r}"
+    assert result.get("temperature") == 0.7
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_nvidia_nim_max_retries_zero_sends_one_request(respx_mock) -> None:
+    from httpx import Response
+
+    url: Final = "https://nim.example/v1/chat/completions"
+    route: Final = respx_mock.post(url).mock(
+        return_value=Response(503, json={"error": {"message": "unavailable", "type": "server_error"}})
+    )
+
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with pytest.raises(litellm.ServiceUnavailableError):
+        completion(
+            model="nvidia_nim/meta/llama3-70b-instruct",
+            messages=[{"role": "user", "content": "hi"}],
+            api_base="https://nim.example/v1",
+            api_key="test",
+            max_retries=0,
+            timeout=1,
+        )
+
+    assert route.call_count == 1
