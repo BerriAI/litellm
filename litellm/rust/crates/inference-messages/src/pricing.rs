@@ -157,7 +157,7 @@ impl CallPricing {
             .usage
             .clone()
             .and_then(|usage| serde_json::from_value::<MessagesUsage>(usage).ok())
-            .and_then(|usage| metered(&usage, self.context(thinking)))
+            .and_then(|usage| metered(&usage, self.context(thinking)).ok())
             .and_then(|metered| self.priced(metered, Some(message.model.clone())))
             .map_or(Cost::Deferred, |priced| Cost::Priced(Box::new(priced)))
     }
@@ -344,7 +344,7 @@ impl StreamWatch {
         }
         let priced = serde_json::from_value::<MessagesUsage>(Value::Object(self.usage.clone()))
             .ok()
-            .and_then(|usage| metered(&usage, self.pricing.context(self.thinking)))
+            .and_then(|usage| metered(&usage, self.pricing.context(self.thinking)).ok())
             .and_then(|metered| {
                 self.pricing.priced(
                     Metered {
@@ -405,10 +405,12 @@ impl StreamWatch {
             return None;
         };
         let read = MessagesUsage::deserialize(usage_value).ok()?;
-        let priced = metered(&read, UsageContext::default()).and_then(|metered| {
-            self.pricing
-                .priced(metered, Some(self.pricing.request_model.clone()))
-        })?;
+        let priced = metered(&read, UsageContext::default())
+            .ok()
+            .and_then(|metered| {
+                self.pricing
+                    .priced(metered, Some(self.pricing.request_model.clone()))
+            })?;
         let cost = serde_json::Number::from_f64(priced.receipt.total)?;
         let usage: Map<String, Value> = usage
             .iter()

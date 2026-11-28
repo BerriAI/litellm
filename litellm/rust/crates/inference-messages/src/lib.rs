@@ -45,6 +45,7 @@ pub use types::{
     MessagesBody, MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping,
     VertexShaping, litellm_params, messages_body,
 };
+pub use usage::{Unpriced, unpriced};
 pub use workload_identity::WorkloadIdentity;
 
 #[derive(Clone)]
@@ -264,6 +265,46 @@ pub fn serves(model: &str, custom_llm_provider: Option<&str>) -> bool {
         .is_some()
 }
 
+/// Whether `pricing` holds a price for a call to `model` named and identified as the route names and identifies it
+/// when it prices the answer. A call it holds none for is left `Deferred`
+pub fn priced(
+    pricing: &dyn Pricing,
+    model: &str,
+    custom_llm_provider: Option<&str>,
+    identity: PricingIdentity,
+) -> bool {
+    let Some((provider, model)) = resolve_llm_provider(model, custom_llm_provider, "messages")
+        .ok()
+        .and_then(|resolved| {
+            Some((
+                messages_provider(resolved.provider, resolved.model)?,
+                resolved.model,
+            ))
+        })
+    else {
+        return false;
+    };
+    let one_token = litellm_cost::query::Modalities {
+        text: 1,
+        ..litellm_cost::query::Modalities::default()
+    };
+    pricing
+        .price(&PricedCall {
+            provider: provider.as_str().to_owned(),
+            request_model: provider.config().logged_model(model),
+            response_model: None,
+            identity,
+            usage: litellm_cost::query::TokenUsage {
+                prompt_tokens: 1,
+                input: one_token,
+                output: one_token,
+                ..litellm_cost::query::TokenUsage::default()
+            },
+            service_tier: None,
+        })
+        .is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -287,5 +328,37 @@ mod tests {
         #[case] served: bool,
     ) {
         assert_eq!(super::serves(model, custom_llm_provider), served);
+    }
+
+    struct PricesOnly(&'static str, &'static str);
+
+    impl super::Pricing for PricesOnly {
+        fn price(&self, call: &super::PricedCall) -> Option<litellm_cost::receipt::Receipt> {
+            (call.provider == self.0 && call.request_model == self.1)
+                .then(|| litellm_cost::receipt::Receipt::of_total(0.0))
+        }
+    }
+
+    #[rstest]
+    #[case::a_model_the_table_prices("anthropic/claude-opus-5-5", None, true)]
+    #[case::a_provider_named_beside_the_model("claude-opus-5-5", Some("anthropic"), true)]
+    #[case::a_model_the_table_does_not_price("anthropic/claude-unlisted-9", None, false)]
+    #[case::a_model_the_route_does_not_serve("openai/claude-opus-5-5", None, false)]
+    fn a_model_is_priced_only_when_the_table_prices_it_as_the_route_names_it(
+        #[case] model: &str,
+        #[case] custom_llm_provider: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        let pricing = PricesOnly("anthropic", "claude-opus-5-5");
+
+        assert_eq!(
+            super::priced(
+                &pricing,
+                model,
+                custom_llm_provider,
+                super::PricingIdentity::default()
+            ),
+            expected
+        );
     }
 }

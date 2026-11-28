@@ -1,8 +1,8 @@
 //! A key's own budget, served natively while `general_settings.disable_budget_reservation` is on:
 //! `admit` admits the key, and the read-time check refuses a call over its budget with Python's
-//! budget error before anything reaches the provider. Admission needs no price while the reservation
-//! is disabled, so a model group the cost map does not name is served and checked as paid. A served
-//! call charges the key the cost its route settled, so the key's own calls spend it past its budget.
+//! budget error before anything reaches the provider. A served call charges the key the cost its
+//! route settled, so the key's own calls spend it past its budget, and a call the route cannot price
+//! goes to Python, which prices it. A key without a budget is served such a call natively.
 
 mod keys;
 
@@ -82,13 +82,22 @@ impl Gateway {
 
     /// What one call from [`KEY`] gets.
     async fn send(&self) -> Answered {
+        self.send_with(json!({})).await
+    }
+
+    /// What one call from [`KEY`] gets when its body also carries each field of `extra`.
+    async fn send_with(&self, extra: Value) -> Answered {
+        let body = json!({"model": self.group, "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]})
+            .as_object()
+            .into_iter()
+            .flatten()
+            .chain(extra.as_object().into_iter().flatten())
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<serde_json::Map<_, _>>();
         let request = Request::post("/v1/messages")
             .header("authorization", format!("Bearer {KEY}"))
             .header("content-type", "application/json")
-            .body(Body::from(
-                json!({"model": self.group, "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]})
-                    .to_string(),
-            ))
+            .body(Body::from(Value::Object(body).to_string()))
             .unwrap();
         match self.admit.clone().admit(request).await {
             Err((_, reason)) => Answered::Python(<&str>::from(reason.why).to_owned()),
@@ -118,6 +127,16 @@ impl Gateway {
 /// What a call from [`KEY`], holding `columns`, to the model group named for `model` gets from a
 /// gateway in front of Python, and how many calls reached the provider.
 async fn answered(columns: Value, model: &str, reservation_disabled: bool) -> (Answered, usize) {
+    answered_with(columns, model, reservation_disabled, json!({})).await
+}
+
+/// [`answered`] for a call whose body also carries each field of `extra`.
+async fn answered_with(
+    columns: Value,
+    model: &str,
+    reservation_disabled: bool,
+    extra: Value,
+) -> (Answered, usize) {
     let gateway = Gateway::start(
         columns,
         model,
@@ -125,7 +144,7 @@ async fn answered(columns: Value, model: &str, reservation_disabled: bool) -> (A
         reservation_disabled,
     )
     .await;
-    let answered = gateway.send().await;
+    let answered = gateway.send_with(extra).await;
     (answered, gateway.close().await)
 }
 
@@ -158,11 +177,6 @@ fn over_budget(spend: &str) -> String {
     PRICED,
     "12.5"
 )]
-#[case::over_its_budget_on_a_model_the_cost_map_does_not_name(
-    json!({"max_budget": 10.0, "spend": 12.5}),
-    UNKNOWN,
-    "12.5"
-)]
 #[tokio::test(flavor = "multi_thread")]
 async fn a_key_at_or_over_its_budget_is_refused_natively_with_pythons_error(
     #[case] columns: Value,
@@ -175,21 +189,72 @@ async fn a_key_at_or_over_its_budget_is_refused_natively_with_pythons_error(
     );
 }
 
+fn web_search() -> Value {
+    json!({"tools": [{"type": "web_search_20250305", "name": "web_search"}]})
+}
+
 #[rstest]
-#[case::with_a_max_budget(json!({"max_budget": 10.0, "spend": 9.5}), PRICED)]
+#[case::with_a_max_budget(json!({"max_budget": 10.0, "spend": 9.5}), PRICED, json!({}))]
 #[case::with_a_budget_that_resets(
     json!({"max_budget": 10.0, "spend": 9.5, "budget_duration": "30d", "budget_reset_at": "2100-01-01T00:00:00"}),
-    PRICED
+    PRICED,
+    json!({})
 )]
-#[case::on_a_model_the_cost_map_does_not_name(json!({"max_budget": 10.0, "spend": 9.5}), UNKNOWN)]
+#[case::with_a_tool_it_runs_itself(
+    json!({"max_budget": 10.0, "spend": 9.5}),
+    PRICED,
+    json!({"tools": [{"name": "get_weather", "input_schema": {"type": "object"}}]})
+)]
+#[case::without_a_budget_on_a_model_the_cost_map_does_not_name(json!({}), UNKNOWN, json!({}))]
+#[case::without_a_budget_asking_for_web_search(json!({}), PRICED, web_search())]
 #[tokio::test(flavor = "multi_thread")]
-async fn a_key_under_its_budget_is_served_natively(#[case] columns: Value, #[case] model: &str) {
-    let (answered, sent) = answered(columns, model, true).await;
+async fn a_key_under_its_budget_is_served_natively(
+    #[case] columns: Value,
+    #[case] model: &str,
+    #[case] extra: Value,
+) {
+    let (answered, sent) = answered_with(columns, model, true, extra).await;
 
     assert_eq!(
         (matches!(answered, Answered::Native(200, _)), sent),
         (true, 1),
         "{answered:?}"
+    );
+}
+
+/// A budgeted key's call the native route would leave unpriced would charge it nothing, so it goes
+/// to Python before anything reaches the provider, whether or not the key is over its budget yet.
+#[rstest]
+#[case::asking_for_web_search(json!({"max_budget": 10.0, "spend": 9.5}), PRICED, web_search(), "body")]
+#[case::streaming_with_web_search(
+    json!({"max_budget": 10.0, "spend": 9.5}),
+    PRICED,
+    json!({"stream": true, "tools": [{"type": "web_search_20250305", "name": "web_search"}]}),
+    "body"
+)]
+#[case::asking_for_thinking(
+    json!({"max_budget": 10.0, "spend": 9.5}),
+    PRICED,
+    json!({"max_tokens": 2048, "thinking": {"type": "enabled", "budget_tokens": 1024}}),
+    "body"
+)]
+#[case::on_a_model_the_cost_map_does_not_name(json!({"max_budget": 10.0, "spend": 9.5}), UNKNOWN, json!({}), "model")]
+#[case::over_its_budget_on_a_model_the_cost_map_does_not_name(
+    json!({"max_budget": 10.0, "spend": 12.5}),
+    UNKNOWN,
+    json!({}),
+    "model"
+)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_budgeted_keys_call_the_gateway_cannot_price_goes_to_python(
+    #[case] columns: Value,
+    #[case] model: &str,
+    #[case] extra: Value,
+    #[case] reason: &str,
+) {
+    assert_eq!(
+        answered_with(columns, model, true, extra).await,
+        (Answered::Python(reason.to_owned()), 0)
     );
 }
 
