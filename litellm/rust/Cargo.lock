@@ -4235,6 +4235,7 @@ dependencies = [
  "litellm-callbacks-budgets",
  "litellm-callbacks-model-capacity",
  "litellm-callbacks-parallel-request-limiter",
+ "litellm-callbacks-s3-log",
  "litellm-callbacks-spend-log",
  "litellm-callbacks-spend-logger",
  "litellm-circuit-breaker",
@@ -4274,6 +4275,7 @@ dependencies = [
  "litellm-secret-value",
  "litellm-secrets",
  "litellm-spend-log-writer",
+ "litellm-standard-logging",
  "litellm-token-counter",
  "litellm-tracing",
  "litellm-yaml",
@@ -4407,6 +4409,7 @@ dependencies = [
  "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
+ "litellm-standard-logging",
  "parking_lot",
  "regex",
  "rstest",
@@ -5415,9 +5418,13 @@ dependencies = [
 name = "litellm-standard-logging"
 version = "0.1.0"
 dependencies = [
+ "litellm-python-compat",
+ "regex",
  "rstest",
  "serde",
  "serde_json",
+ "strum",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

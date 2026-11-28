@@ -110,9 +110,10 @@ impl<E> Interceptors<E> for Recorder {
     async fn before_provider_request(
         &self,
         wire: WireRequest,
-        _: RequestContext,
+        context: RequestContext,
     ) -> Result<WireRequest, E> {
         super::note(|record| record.record_sent(Some(wire.url.clone())));
+        super::write(|entries| entries.logged_request.gated(&context.optional_params));
         Ok(wire)
     }
 
@@ -140,7 +141,7 @@ impl<E> Interceptors<E> for Recorder {
 mod tests {
     use litellm_host::interceptors::{ProviderIdentity, ResponseHead};
     use rstest::rstest;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -188,7 +189,7 @@ mod tests {
     /// What `Recorder` left in the attempt in scope once the core told it of a request `sends`, a
     /// response head `responds` and a result from `source`.
     async fn seen(sends: bool, responds: bool, source: ResultSource) -> Seen {
-        let (_, record) = super::super::attempt(async {
+        let call = super::super::attempt(async {
             let recorder = &Recorder;
             if sends {
                 Interceptors::<()>::before_provider_request(recorder, wire(), context())
@@ -203,8 +204,8 @@ mod tests {
             Interceptors::<()>::result_ready(recorder, ready(source))
                 .await
                 .map_err(|()| Error::Internal)
-        })
-        .await;
+        });
+        let (_, record) = super::super::scope(super::super::CallRecord::new(), call).await;
         (
             record.url.clone(),
             record.wait.is_some() && record.head >= record.sent,
@@ -296,5 +297,33 @@ mod tests {
     ))]
     fn debug_hides_what_can_carry_credentials(#[case] debug: String) {
         assert!(!debug.contains("credential-value") && debug.contains("[REDACTED]"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_logged_params_leave_out_what_the_sent_request_dropped() {
+        let body = json!({"max_tokens": 8, "stream": true, "temperature": 0.5, "top_p": 0.9});
+        let Value::Object(body) = body else {
+            unreachable!()
+        };
+        let sent = RequestContext {
+            optional_params: json!({"max_tokens": 8, "stream": true}),
+            ..context()
+        };
+        let logged = super::super::scope(super::super::CallRecord::new(), async {
+            super::super::write(|entries| entries.logged_request.attempted(&body, &[], false, 64));
+            let _ = super::super::attempt(async {
+                Interceptors::<()>::before_provider_request(&Recorder, wire(), sent)
+                    .await
+                    .map_err(|()| Error::Internal)
+            })
+            .await;
+            super::super::read(|entries| entries.logged_request.model_parameters.clone())
+        })
+        .await;
+        assert_eq!(
+            logged.map(Value::Object),
+            Some(json!({"max_tokens": 8, "stream": true}))
+        );
     }
 }

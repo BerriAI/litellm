@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n    SELECT 1\n    FROM \"LiteLLM_MCPServerTable\" AS server, unnest(server.extra_headers) AS name\n    WHERE lower(name) <> 'authorization'\n) AS \"forwards!\"\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "forwards!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a617d1f75090acf4c874bd1237dd167d4d792bb76070922a1d159677c43a49bd"
+}

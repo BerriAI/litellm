@@ -8,7 +8,7 @@
 //! | [`literal`] | `ast.literal_eval(text)` |
 //! | [`repr`] | `repr(value)` and `str(value)`, also of one `str` |
 //! | [`reprlib`] | `reprlib.repr(value)` |
-//! | [`json`] | `json.dumps(value)`, compact `json.dumps`, `len(json.dumps(value))` of a serde value, `json.loads(text)`, `type(json.loads(text)).__name__`, and `str()` and `==` of loaded values |
+//! | [`json`] | `json.dumps(value)`, compact `json.dumps`, `json.dumps(value)` and `len(json.dumps(value))` of a serde value, `json.loads(text)`, `type(json.loads(text)).__name__`, and `str()` and `==` of loaded values |
 //! | [`pickle`] | `pickle.loads(data)` and `pickle.dumps(value)` for plain data |
 //! | [`truthy`] | `bool(value)`, also straight off a `serde_json` value, `a or b or ...` over optional text, and `first or second` |
 //! | [`dict`] | `dict` reads and `d[key] = value` writes, in insertion order |

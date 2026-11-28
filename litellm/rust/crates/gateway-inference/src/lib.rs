@@ -68,11 +68,35 @@ pub struct Gateway<H> {
     pub http: HttpClientConfig,
     /// What the request body check reads besides the request.
     body_check: BodyCheck,
+    /// `general_settings.use_x_forwarded_for`, which decides the requester address a call logs.
+    use_x_forwarded_for: bool,
+    /// `MAX_BASE64_LENGTH_FOR_LOGGING`, the longest base64 payload a call logs whole, 0 for no
+    /// limit.
+    max_base64_length_for_logging: usize,
 }
 
 impl<H: Host> Gateway<H> {
     pub fn with_body_check(self, body_check: BodyCheck) -> Self {
         Self { body_check, ..self }
+    }
+
+    pub fn with_use_x_forwarded_for(self, use_x_forwarded_for: bool) -> Self {
+        Self {
+            use_x_forwarded_for,
+            ..self
+        }
+    }
+
+    /// `configured` being the `MAX_BASE64_LENGTH_FOR_LOGGING` the environment sets, its default
+    /// when unset.
+    pub fn with_max_base64_length_for_logging(self, configured: Option<u64>) -> Self {
+        Self {
+            max_base64_length_for_logging: configured.map_or(
+                litellm_standard_logging::MAX_BASE64_LENGTH_FOR_LOGGING,
+                |limit| usize::try_from(limit).unwrap_or(usize::MAX),
+            ),
+            ..self
+        }
     }
 
     pub fn with_cache(self, cache: Arc<dyn litellm_cache_response::ResponseCacheService>) -> Self {
@@ -140,6 +164,8 @@ impl<H: Host> Gateway<H> {
             resources,
             http,
             body_check: BodyCheck::new(&litellm_config::GeneralSettings::default()),
+            use_x_forwarded_for: false,
+            max_base64_length_for_logging: litellm_standard_logging::MAX_BASE64_LENGTH_FOR_LOGGING,
         })
     }
 }
@@ -157,6 +183,9 @@ pub fn router<H: Host>(gateway: Arc<Gateway<H>>) -> Router {
             group_usage::told::<H>,
         ))
         .layer(axum::middleware::from_fn(headers::render_response_headers))
-        .layer(axum::middleware::from_fn(record::scoped))
+        .layer(axum::middleware::from_fn_with_state(
+            gateway.use_x_forwarded_for,
+            record::scoped,
+        ))
         .with_state(gateway)
 }

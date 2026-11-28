@@ -10,6 +10,7 @@ mod health;
 pub mod host;
 mod license;
 mod live;
+mod mcp_servers;
 pub mod middleware;
 mod periodic;
 mod prompt_estimate;
@@ -22,16 +23,18 @@ mod stored;
 mod test_support;
 pub use admit::{Admit, Reason, Refused};
 pub use callbacks::{
-    Callbacks, Registered, Unregistrable,
+    Callbacks, Registered, RetiredFlushes, Unregistrable,
     budget_check::BudgetCheck,
     model_capacity::{self, ModelCapacity},
     parallel_request_limiter::{self, KeyLimiter},
     spend_log::{SpendLog, SpendLogs},
+    standard_logging,
 };
 pub use cost_map::CostMapRefresh;
 pub use error::Error;
 pub use gateway_requests::{Category, GatewayRequests};
 pub use live::{Live, Served};
+pub use mcp_servers::McpServers;
 pub use periodic::PeriodicJob;
 pub use redis::RedisClients;
 pub use reload::{Poller, Source, reload_every};
@@ -95,8 +98,9 @@ const LICENSE: &str = "LITELLM_LICENSE";
 
 /// The inference routes of `config` with the callbacks the gateway runs around their calls, in
 /// the order the proxy runs them: with a `spend_log`, the caller's budget checks first, as Python
-/// runs them while it authenticates, then the config's `callbacks`, of which only the dynamic rate
-/// limiter is built, then the proxy's own key limiter. The keys' limits and the model groups'
+/// runs them while it authenticates, then the config's `callbacks` in the order it names them, of
+/// which only the dynamic rate limiter and `s3_v2` are built, then the proxy's own key limiter. The
+/// keys' limits and the model groups'
 /// capacity are counted in `redis`'s coordination client when there is one, and in this process's
 /// memory otherwise. `variables` holds the config's `environment_variables` in front of the
 /// process's, as the limiter reads its window from them on every call. With a `spend_log`, the
@@ -111,14 +115,26 @@ pub async fn build_inference(
 ) -> Result<Inference, Error> {
     let counters = parallel_request_limiter::counters(redis.coordination.clone());
     inference_over(
-        config, variables, resources, routing, redis, counters, spend_log,
+        config,
+        variables,
+        resources,
+        routing,
+        redis,
+        counters,
+        spend_log,
+        &RetiredFlushes::default(),
     )
     .await
 }
 
 /// [`build_inference`] over the routing state and the limiters' counters a previous config's
 /// inference counted in, and its spend log callback, so a new config keeps its cooldowns, rate
-/// limit windows and queued spend logs.
+/// limit windows and queued spend logs. The last flush of a batching callback this config
+/// registers is kept in `retired` once the config is replaced.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "what a new config keeps of the previous one"
+)]
 pub(crate) async fn inference_over(
     config: &Config,
     variables: &Environment,
@@ -127,6 +143,7 @@ pub(crate) async fn inference_over(
     redis: &RedisClients,
     counters: Arc<RateLimits>,
     spend_log: Option<&SpendLog>,
+    retired: &RetiredFlushes,
 ) -> Result<Inference, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
     let router = boot::router(config).await?;
@@ -144,15 +161,30 @@ pub(crate) async fn inference_over(
         ModelCapacity::new(read, counters, active, router.clone())
     });
     let budget_check = spend_log.map(|spend_log| spend_log.budget_check(free));
+    let s3_log = callbacks::s3_log::build(config, resources, variables, retired).await?;
+    let configured = in_config_order(
+        config,
+        model_capacity
+            .iter()
+            .map(|capacity| {
+                (
+                    litellm_callbacks_model_capacity::NAME,
+                    capacity.registered(),
+                )
+            })
+            .chain(s3_log.map(|s3_log| (litellm_callbacks_s3_log::NAME, s3_log)))
+            .collect(),
+    );
     let callbacks = Callbacks::new(
         budget_check
             .iter()
             .map(BudgetCheck::registered)
-            .chain(model_capacity.iter().map(|capacity| capacity.registered()))
+            .chain(configured)
             .chain([key_limiter.registered()])
             .chain(spend_log.map(SpendLog::registered))
             .collect(),
-    )?;
+    )?
+    .logging_over(router.clone());
     let gateway = Gateway::new(
         resources.core.clone(),
         resources.http.clone(),
@@ -164,11 +196,30 @@ pub(crate) async fn inference_over(
     )?
     .with_body_check(litellm_gateway_inference::BodyCheck::new(
         &config.general_settings,
-    ));
+    ))
+    .with_use_x_forwarded_for(config.general_settings.use_x_forwarded_for)
+    .with_max_base64_length_for_logging(variables.max_base64_length_for_logging);
     Ok(Inference {
         gateway: Arc::new(gateway),
         key_limiter,
     })
+}
+
+/// The config's callbacks the gateway built, each by its name, in the order `callbacks` names
+/// them, as `litellm.callbacks` holds them.
+fn in_config_order(config: &Config, mut built: Vec<(&str, Registered)>) -> Vec<Registered> {
+    let named: Vec<&str> = config
+        .litellm_settings
+        .callbacks
+        .iter()
+        .flatten()
+        .filter_map(litellm_config::Value::as_str)
+        .collect();
+    built.sort_by_key(|(name, _)| named.iter().position(|named| named == name));
+    built
+        .into_iter()
+        .map(|(_, registered)| registered)
+        .collect()
 }
 
 pub fn install_crypto_provider() {

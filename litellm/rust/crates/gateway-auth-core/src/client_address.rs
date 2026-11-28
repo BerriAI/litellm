@@ -1,6 +1,8 @@
 //! Which addresses may reach the proxy, decided before any credential is read. No host is asked
 //! anything, so every host gets the same answer from the same settings.
 
+use std::net::SocketAddr;
+
 use litellm_config::{AddressList, GeneralSettings};
 
 use crate::error::AddressNotAllowed;
@@ -58,11 +60,22 @@ pub struct Origin<'a> {
 impl<'a> Origin<'a> {
     /// `get_request_ip_address`: the forwarded header whole when the operator reads it and the
     /// request sent one, else the peer.
-    fn address(&self, use_x_forwarded_for: bool) -> &'a str {
+    pub fn address(&self, use_x_forwarded_for: bool) -> &'a str {
         match self.forwarded_for {
             Some(forwarded) if use_x_forwarded_for => forwarded,
             _ => self.peer.unwrap_or_default(),
         }
+    }
+}
+
+/// The peer as Python's `_restore_peer` writes it: the address alone, and an IPv6 one with its
+/// numeric scope.
+pub fn peer_address(peer: SocketAddr) -> String {
+    match peer {
+        SocketAddr::V6(peer) if peer.scope_id() != 0 => {
+            format!("{}%{}", peer.ip(), peer.scope_id())
+        }
+        _ => peer.ip().to_string(),
     }
 }
 

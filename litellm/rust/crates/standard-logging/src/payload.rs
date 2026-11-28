@@ -1,7 +1,9 @@
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::{Caller, ErrorInformation, GuardrailStatus, HiddenParams, Metadata, Status, wire};
+use crate::{
+    Caller, GuardrailStatus, HiddenParams, LoggedErrorInformation, Metadata, Status, wire,
+};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ModelInformation {
@@ -9,9 +11,19 @@ pub struct ModelInformation {
     pub model_map_value: Option<Value>,
 }
 
+/// The `ClassifierAudit` keys of litellm/types/utils.py, which `get_standard_logging_object_payload`
+/// logs only for an autorouter classifier call whose messages are not redacted, and each only when
+/// it has a value.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClassifierAudit {
+    pub classifier_input: Option<Map<String, Value>>,
+    pub originating_request_masked: Option<Map<String, Value>>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(into = "wire::Payload")]
 pub struct StandardLoggingPayload {
+    pub classifier_audit: ClassifierAudit,
     pub id: String,
     pub litellm_call_id: Option<String>,
     pub trace_id: String,
@@ -54,7 +66,7 @@ pub struct StandardLoggingPayload {
     pub hidden_params: HiddenParams,
     pub model_map_information: ModelInformation,
     pub error_str: Option<String>,
-    pub error_information: Option<ErrorInformation>,
+    pub error_information: Option<LoggedErrorInformation>,
     pub response_cost_failure_debug_info: Option<Value>,
     pub zero_cost_diagnostic: Option<Value>,
     pub guardrail_information: Option<Value>,

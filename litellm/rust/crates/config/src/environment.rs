@@ -1,6 +1,8 @@
+use std::ops::RangeInclusive;
+
 use litellm_env::Lookup;
 use litellm_python_compat::{
-    lenient::{FloatOrUnset, UintOrUnset},
+    lenient::{FloatOrUnset, LimitOrUnset, UintOrUnset},
     unicode::isspace,
 };
 use serde::{Deserialize, Deserializer};
@@ -43,6 +45,8 @@ pub struct Environment {
     #[serde_as(as = "UintOrUnset")]
     pub default_max_redis_batch_cache_size: Option<u64>,
     pub litellm_rate_limit_window_size: Option<i64>,
+    #[serde_as(as = "LimitOrUnset")]
+    pub max_base64_length_for_logging: Option<u64>,
     pub litellm_tpm_token_reservation_enabled: Option<Flag>,
     #[serde_as(as = "UintOrUnset")]
     pub proxy_batch_write_at: Option<u64>,
@@ -63,6 +67,38 @@ pub struct Environment {
     pub anthropic_messages_detached_stream_drain_timeout_seconds: Option<f64>,
     #[serde_as(as = "UintOrUnset")]
     pub anthropic_messages_max_detached_stream_drains: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub default_batch_size: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub default_flush_interval_seconds: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub default_s3_batch_size: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub default_s3_flush_interval_seconds: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub default_s3_max_concurrent_uploads: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub default_s3_max_adaptive_concurrency: Option<u64>,
+    #[serde_as(as = "UintOrUnset")]
+    pub s3_upload_attempt_timeout_seconds: Option<u64>,
+    pub aws_web_identity_token: Option<String>,
+    pub litellm_mcp_client_side_auth_header_name: Option<String>,
+}
+
+/// `DEFAULT_BATCH_SIZE`'s default in litellm/constants.py.
+const DEFAULT_BATCH_SIZE: u64 = 512;
+/// `DEFAULT_FLUSH_INTERVAL_SECONDS`'s default.
+const DEFAULT_FLUSH_INTERVAL_SECONDS: u64 = 5;
+/// `DEFAULT_S3_BATCH_SIZE`'s default.
+const DEFAULT_S3_BATCH_SIZE: u64 = 512;
+/// `DEFAULT_S3_FLUSH_INTERVAL_SECONDS`'s default.
+const DEFAULT_S3_FLUSH_INTERVAL_SECONDS: u64 = 10;
+/// The range `get_env_int_in_range` holds `S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS` to.
+const S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS: RangeInclusive<u64> = 1..=3600;
+
+/// Python's `value or fallback()` for a count.
+fn or_else(value: u64, fallback: impl FnOnce() -> u64) -> u64 {
+    if value == 0 { fallback() } else { value }
 }
 
 impl Environment {
@@ -75,6 +111,34 @@ impl Environment {
             Some((variable, value))
         });
         Ok(envy::from_iter(set)?)
+    }
+
+    /// `DEFAULT_S3_BATCH_SIZE or DEFAULT_BATCH_SIZE`, the batch size `S3Logger()` is built with.
+    pub fn s3_batch_size(&self) -> u64 {
+        or_else(
+            self.default_s3_batch_size.unwrap_or(DEFAULT_S3_BATCH_SIZE),
+            || self.default_batch_size.unwrap_or(DEFAULT_BATCH_SIZE),
+        )
+    }
+
+    /// `DEFAULT_S3_FLUSH_INTERVAL_SECONDS or DEFAULT_FLUSH_INTERVAL_SECONDS`, how often
+    /// `S3Logger()` flushes its queue.
+    pub fn s3_flush_interval_seconds(&self) -> u64 {
+        or_else(
+            self.default_s3_flush_interval_seconds
+                .unwrap_or(DEFAULT_S3_FLUSH_INTERVAL_SECONDS),
+            || {
+                self.default_flush_interval_seconds
+                    .unwrap_or(DEFAULT_FLUSH_INTERVAL_SECONDS)
+            },
+        )
+    }
+
+    /// `S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS` when it is within the range `get_env_int_in_range`
+    /// accepts, and unset when it is not.
+    pub fn s3_upload_attempt_timeout(&self) -> Option<u64> {
+        self.s3_upload_attempt_timeout_seconds
+            .filter(|seconds| S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS.contains(seconds))
     }
 }
 
@@ -171,6 +235,87 @@ mod tests {
     }
 
     #[rstest]
+    fn the_s3_logger_constants_are_read_by_variable_name() {
+        let environment = from_variables(&[
+            ("DEFAULT_BATCH_SIZE", "32"),
+            ("DEFAULT_FLUSH_INTERVAL_SECONDS", "7"),
+            ("DEFAULT_S3_BATCH_SIZE", " 64 "),
+            ("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", "3"),
+            ("DEFAULT_S3_MAX_CONCURRENT_UPLOADS", "4"),
+            ("DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY", "50"),
+            ("S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", "45"),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            environment,
+            Environment {
+                default_batch_size: Some(32),
+                default_flush_interval_seconds: Some(7),
+                default_s3_batch_size: Some(64),
+                default_s3_flush_interval_seconds: Some(3),
+                default_s3_max_concurrent_uploads: Some(4),
+                default_s3_max_adaptive_concurrency: Some(50),
+                s3_upload_attempt_timeout_seconds: Some(45),
+                ..Environment::default()
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::unset(&[], 512)]
+    #[case::configured(&[("DEFAULT_S3_BATCH_SIZE", "64")], 64)]
+    #[case::zero_falls_back_to_the_general_size(
+        &[("DEFAULT_S3_BATCH_SIZE", "0"), ("DEFAULT_BATCH_SIZE", "32")],
+        32
+    )]
+    #[case::zero_falls_back_to_the_general_default(&[("DEFAULT_S3_BATCH_SIZE", "0")], 512)]
+    #[case::not_a_number_is_the_default(&[("DEFAULT_S3_BATCH_SIZE", "many")], 512)]
+    fn the_s3_batch_size_is_read_like_the_proxy_reads_it(
+        #[case] variables: &[(&str, &str)],
+        #[case] expected: u64,
+    ) {
+        assert_eq!(from_variables(variables).unwrap().s3_batch_size(), expected);
+    }
+
+    #[rstest]
+    #[case::unset(&[], 10)]
+    #[case::configured(&[("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", "3")], 3)]
+    #[case::zero_falls_back_to_the_general_default(&[("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", "0")], 5)]
+    #[case::zero_falls_back_to_the_general_interval(
+        &[("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", "0"), ("DEFAULT_FLUSH_INTERVAL_SECONDS", "7")],
+        7
+    )]
+    fn the_s3_flush_interval_is_read_like_the_proxy_reads_it(
+        #[case] variables: &[(&str, &str)],
+        #[case] expected: u64,
+    ) {
+        assert_eq!(
+            from_variables(variables)
+                .unwrap()
+                .s3_flush_interval_seconds(),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::unset(&[], None)]
+    #[case::within_the_range(&[("S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", "45")], Some(45))]
+    #[case::below_the_range(&[("S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", "0")], None)]
+    #[case::above_the_range(&[("S3_UPLOAD_ATTEMPT_TIMEOUT_SECONDS", "3601")], None)]
+    fn an_s3_upload_timeout_out_of_range_is_unset(
+        #[case] variables: &[(&str, &str)],
+        #[case] expected: Option<u64>,
+    ) {
+        assert_eq!(
+            from_variables(variables)
+                .unwrap()
+                .s3_upload_attempt_timeout(),
+            expected
+        );
+    }
+
+    #[rstest]
     fn an_empty_environment_leaves_every_proxy_setting_unset() {
         assert_eq!(from_variables(&[]).unwrap(), Environment::default());
     }
@@ -190,6 +335,22 @@ mod tests {
         let environment = from_variables(&[("NON_LLM_CONNECTION_TIMEOUT", raw)]).unwrap();
 
         assert_eq!(environment.non_llm_connection_timeout, expected);
+    }
+
+    #[rstest]
+    #[case::blank("", None)]
+    #[case::words("long", None)]
+    #[case::zero_turns_truncation_off("0", Some(0))]
+    #[case::a_negative_limit_turns_it_off_too("-5", Some(0))]
+    #[case::padded(" 128 ", Some(128))]
+    #[case::past_u64("99999999999999999999999", Some(u64::MAX))]
+    fn the_base64_logging_limit_is_read_the_way_python_reads_it(
+        #[case] raw: &str,
+        #[case] expected: Option<u64>,
+    ) {
+        let environment = from_variables(&[("MAX_BASE64_LENGTH_FOR_LOGGING", raw)]).unwrap();
+
+        assert_eq!(environment.max_base64_length_for_logging, expected);
     }
 
     #[rstest]

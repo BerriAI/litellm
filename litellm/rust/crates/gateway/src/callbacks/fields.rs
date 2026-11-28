@@ -11,7 +11,8 @@ use litellm_callbacks::{
 };
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{
-    Affiliation, Caller, Credential, Named, StoredKey, Team, record::Label,
+    Affiliation, Caller, Credential, Named, StoredKey, Team,
+    record::{Budget, Label},
 };
 use litellm_gateway_inference::{
     CallType,
@@ -19,17 +20,27 @@ use litellm_gateway_inference::{
 };
 use litellm_host::interceptors::Cost as Settled;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
-use litellm_python_compat::datetime::UtcDateTime;
+use litellm_python_compat::datetime::{IsoDateTime, UtcDateTime};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 use super::{
     parallel_request_limiter::{MASTER_KEY_ALIAS, PROXY_ADMIN_NAME},
+    payloads::Logged,
     spend_log_input::{self, Served},
+    standard_logging::deployment_provider,
 };
 use crate::host::NativeRows;
 
 const MODEL: &str = "model";
+
+/// The fields read from the call's `StandardLoggingPayload`, which is built for a hook only when
+/// a callback on it reads one of them.
+pub const FROM_THE_PAYLOAD: FieldSet = FieldSet::of(&[
+    Field::StandardLoggingPayloadRef,
+    Field::StandardLoggingPayload,
+    Field::LogId,
+]);
 
 /// A patch operation the gateway has no place to write.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -50,7 +61,10 @@ pub enum Unwritable {
 
 /// Who `identity` is charged as: a key by the hash its row is stored under, its alias and its
 /// owner, and the master key by Python's alias for it and the proxy admin, each with the team,
-/// organization, project and end user it names. Only a stored row gives an alias.
+/// organization, project and end user it names. Only a stored row gives an alias. The spend,
+/// budget and metadata are what the proxy's `get_sanitized_user_information_from_key` logs of the
+/// `UserAPIKeyAuth`: the key row's own, and for the master key the defaults of the admin identity
+/// `return_user_api_key_auth_obj` builds, no spend, no budget and empty metadata.
 pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
     let Caller {
         credential,
@@ -62,16 +76,22 @@ pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
             },
         end_user,
     } = &**identity;
-    let (key_hash, key_alias, user_id) = match credential {
+    let (key_hash, key_alias, user_id, budget, budget_reset_at, metadata) = match credential {
         Credential::MasterKey => (
             Some(MASTER_KEY_ALIAS.to_owned()),
             None,
             Some(PROXY_ADMIN_NAME.to_owned()),
+            Budget::default(),
+            None,
+            Map::new(),
         ),
         Credential::Key { key } => (
             identity.hash().map(ToString::to_string),
             key.alias().map(str::to_owned),
             key.record().user_id.clone(),
+            key.budget(),
+            key.budget_reset_at().map(isoformat),
+            key.metadata().clone(),
         ),
     };
     Charged {
@@ -82,11 +102,20 @@ pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
         org: org.as_ref().map(Named::label),
         project: project.as_ref().map(Named::label),
         end_user_id: end_user.end_user_id.clone(),
+        spend: Some(budget.spend),
+        max_budget: budget.max,
+        budget_reset_at,
+        metadata: Some(metadata),
     }
 }
 
+/// `at.isoformat()` of the `datetime` Python reads a key's `budget_reset_at` as.
+fn isoformat(at: IsoDateTime) -> String {
+    at.datetime_isoformat()
+}
+
 /// The route a call came in on, as Python's `user_api_key_request_route` names it.
-fn route(call_type: CallType) -> &'static str {
+pub(super) fn route(call_type: CallType) -> &'static str {
     match call_type {
         CallType::AnthropicMessages => "/v1/messages",
         CallType::Aocr => "/v1/ocr",
@@ -148,18 +177,7 @@ fn deployment(entries: &CallState) -> Option<&litellm_router_core::Deployment> {
 /// The provider the served deployment was called through, as Python's `custom_llm_provider`
 /// names it.
 fn provider(entries: &CallState) -> Option<String> {
-    let deployment = deployment(entries)?;
-    deployment
-        .resolved_provider
-        .clone()
-        .or_else(|| deployment.params.custom_llm_provider.clone())
-        .or_else(|| {
-            deployment
-                .params
-                .model
-                .split_once('/')
-                .map(|(provider, _)| provider.to_owned())
-        })
+    deployment(entries).and_then(deployment_provider)
 }
 
 fn id(label: Option<&Label>) -> Option<Scalar> {
@@ -366,15 +384,41 @@ fn facts(entries: &CallState) -> CallFacts {
     }
 }
 
-/// What a callback that reads `reads` is handed on `hook`.
-pub fn input(entries: &CallState, hook: Hook, reads: FieldSet) -> HookInput {
-    let fields = reads
+/// The fields of [`FROM_THE_PAYLOAD`] that `reads` names, from the call's payload as the
+/// proxy's `payload_copy` and `log_id` derive them: the payload by reference, its wire JSON, and
+/// its `id`.
+fn from_the_payload(fields: &mut FieldValues, reads: FieldSet, logged: &Logged<'_>) {
+    if reads.contains(Field::StandardLoggingPayloadRef) {
+        fields.set_payload(logged.host.hold(logged.payload.clone()));
+    }
+    if reads.contains(Field::StandardLoggingPayload)
+        && let Some(document) = record(logged.payload)
+    {
+        fields.insert(Field::StandardLoggingPayload, document);
+    }
+    if reads.contains(Field::LogId) {
+        fields.insert(Field::LogId, Value::from(logged.payload.id.as_str()));
+    }
+}
+
+/// What a callback that reads `reads` is handed on `hook`. `logged` is the call's payload for
+/// the hook, which a call that has not ended has none of.
+pub fn input(
+    entries: &CallState,
+    hook: Hook,
+    reads: FieldSet,
+    logged: Option<Logged<'_>>,
+) -> HookInput {
+    let mut fields = reads
         .iter()
         .filter(|field| !field.by_reference())
         .filter_map(|field| Some((field, read(entries, field)?)))
         .fold(FieldValues::new(reads), |fields, (field, value)| {
             fields.with(field, value)
         });
+    if let Some(logged) = &logged {
+        from_the_payload(&mut fields, reads, logged);
+    }
     HookInput {
         hook,
         fields,
@@ -434,6 +478,8 @@ pub fn write(entries: &mut CallState, op: PatchOp) -> Result<(), Unwritable> {
 
 #[cfg(test)]
 mod tests {
+    use futures_util::FutureExt;
+    use litellm_callbacks::{RenderOptions, typed};
     use litellm_gateway_auth_core::{
         Holder, TeamCopy,
         record::{EndUserRecord, OrgRecord, ProjectRecord, TeamRecord, UserRecord},
@@ -446,6 +492,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::callbacks::payloads::LoggingPayloads;
 
     /// Runs `look` on a fresh record of a Messages call holding a body that names `claude`.
     fn on_a_call<R>(look: impl FnOnce(&mut CallState) -> R) -> R {
@@ -525,6 +572,36 @@ mod tests {
     }
 
     #[rstest]
+    fn the_master_key_is_charged_as_the_admin_identity_python_builds_for_it() {
+        assert_eq!(
+            charged(&crate::test_support::master()),
+            Charged {
+                key_hash: Some("litellm_proxy_master_key".to_owned()),
+                key_alias: None,
+                user_id: Some("default_user_id".to_owned()),
+                spend: Some(0.0),
+                max_budget: None,
+                budget_reset_at: None,
+                metadata: Some(Map::new()),
+                ..Charged::default()
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::whole_seconds("2030-01-02T00:00:00Z", "2030-01-02T00:00:00+00:00")]
+    #[case::with_a_fraction("2031-03-01T00:00:00.5Z", "2031-03-01T00:00:00.500000+00:00")]
+    #[case::at_its_own_offset("2031-03-01T08:00:00+08:00", "2031-03-01T08:00:00+08:00")]
+    #[case::naive("2031-03-01T00:00:00", "2031-03-01T00:00:00")]
+    fn a_budget_reset_is_logged_as_pythons_isoformat_of_it(
+        #[case] at: &str,
+        #[case] expected: &str,
+    ) {
+        let at = litellm_python_compat::datetime::fromisoformat(at).unwrap();
+        assert_eq!(isoformat(at), expected);
+    }
+
+    #[rstest]
     #[case::a_field_with_no_place(
         PatchOp::Set { field: Field::Metadata, value: json!({}) },
         Unwritable::Field(Field::Metadata)
@@ -557,7 +634,7 @@ mod tests {
     /// What a callback that reads the model is told of the call: the field, and the model and
     /// the stream flag among the call's facts.
     fn told(entries: &CallState, hook: Hook) -> (Option<Value>, String, bool) {
-        let input = input(entries, hook, FieldSet::of(&[Field::Model]));
+        let input = input(entries, hook, FieldSet::of(&[Field::Model]), None);
         let call = input.call.unwrap();
         (
             input.fields.raw(Field::Model).unwrap().cloned(),
@@ -648,10 +725,62 @@ mod tests {
                 entries,
                 Hook::AttemptEnded,
                 FieldSet::of(&[Field::SpendLogInput]),
+                None,
             )
         });
         let read = input.fields.raw(Field::SpendLogInput).unwrap();
         assert_eq!(read.and_then(|input| input["kind"].as_str()), kind);
+    }
+
+    #[rstest]
+    fn a_callback_that_reads_the_payload_is_handed_what_the_builder_built() {
+        let payloads = LoggingPayloads::default();
+        let (built, input) = on_a_call(|entries| {
+            entries.release();
+            entries.call_id = Some("call-1".to_owned());
+            entries.fail();
+            let built = payloads.build(entries).unwrap();
+            let logged = Logged {
+                payload: &built,
+                host: payloads.host(),
+            };
+            let input = input(entries, Hook::AttemptEnded, FROM_THE_PAYLOAD, Some(logged));
+            (built, input)
+        });
+        let rendered = input
+            .fields
+            .payload()
+            .unwrap()
+            .unwrap()
+            .render(RenderOptions::default())
+            .now_or_never()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                rendered,
+                input.fields.raw(Field::StandardLoggingPayload).unwrap(),
+                input.fields.get::<typed::LogId>().unwrap()
+            ),
+            (
+                litellm_python_compat::json::dumps_serde(&built).unwrap(),
+                Some(&serde_json::to_value(&built).unwrap()),
+                Some("call-1".to_owned())
+            )
+        );
+    }
+
+    #[rstest]
+    fn a_call_with_no_payload_hands_none_of_its_fields() {
+        let input = on_a_call(|entries| input(entries, Hook::PreCall, FROM_THE_PAYLOAD, None));
+        assert_eq!(
+            (
+                input.fields.payload().unwrap(),
+                input.fields.raw(Field::StandardLoggingPayload).unwrap(),
+                input.fields.raw(Field::LogId).unwrap()
+            ),
+            (None, None, None)
+        );
     }
 
     #[rstest]
@@ -768,6 +897,8 @@ mod tests {
                 alias: Some("project one".to_owned()),
             }),
             end_user_id: Some("e1".to_owned()),
+            spend: Some(0.0),
+            metadata: Some(Map::new()),
             ..Charged::default()
         }
     )]
@@ -787,6 +918,8 @@ mod tests {
                 id: "p1".to_owned(),
                 alias: None,
             }),
+            spend: Some(0.0),
+            metadata: Some(Map::new()),
             ..Charged::default()
         }
     )]
@@ -796,6 +929,8 @@ mod tests {
             key_hash: Some(MASTER_KEY_ALIAS.to_owned()),
             user_id: Some(PROXY_ADMIN_NAME.to_owned()),
             end_user_id: Some("e1".to_owned()),
+            spend: Some(0.0),
+            metadata: Some(Map::new()),
             ..Charged::default()
         }
     )]
@@ -814,6 +949,7 @@ mod tests {
                 entries,
                 Hook::AttemptEnded,
                 FieldSet::of(&[Field::KeyIdentity, Field::LoggedKeyIdentity]),
+                None,
             )
         });
         let read = |field| input.fields.raw(field).unwrap().unwrap().clone();

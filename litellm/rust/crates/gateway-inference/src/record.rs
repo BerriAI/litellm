@@ -8,6 +8,10 @@
 
 mod attempt;
 mod entries;
+mod failure;
+mod logged_request;
+mod request_facts;
+mod served_message;
 mod trace;
 
 use std::{
@@ -20,7 +24,7 @@ use std::{
 
 use axum::{
     body::{Body, Bytes, HttpBody},
-    extract::Request,
+    extract::{Request, State},
     middleware::Next,
     response::Response,
 };
@@ -33,6 +37,10 @@ use tokio::task::futures::TaskLocalFuture;
 pub use self::{
     attempt::{AttemptRecord, Recorder, ServedDeployment},
     entries::{CallState, Charged, Ended, ErrorResponse, HeadSent, unix},
+    failure::CallFailure,
+    logged_request::LoggedRequest,
+    request_facts::{RequestFacts, SentCallId},
+    served_message::ServedMessage,
 };
 
 tokio::task_local! {
@@ -131,10 +139,16 @@ fn missed(what: &str, error: impl std::fmt::Display) {
 }
 
 /// The layer outermost on the inference routes. It makes the request's record, under the trace
-/// its headers name, and runs the rest of the request with it, the response body included, since
-/// hyper polls the body after the handler returned.
-pub(crate) async fn scoped(request: Request, next: Next) -> Response {
+/// its headers name and with what the request tells of its caller, and runs the rest of the
+/// request with it, the response body included, since hyper polls the body after the handler
+/// returned.
+pub(crate) async fn scoped(
+    State(use_x_forwarded_for): State<bool>,
+    request: Request,
+    next: Next,
+) -> Response {
     let record = CallRecord::traced(trace::of(request.headers()));
+    record.0.lock().request_facts = RequestFacts::of(&request, use_x_forwarded_for);
     let response = scope(record.clone(), next.run(request)).await;
     response.map(|body| {
         Body::new(Scoped {
@@ -211,7 +225,7 @@ mod tests {
                     Body::from_stream(body)
                 }),
             )
-            .layer(axum::middleware::from_fn(scoped))
+            .layer(axum::middleware::from_fn_with_state(false, scoped))
     }
 
     #[rstest]
@@ -239,7 +253,7 @@ mod tests {
                 "/",
                 get(|| async { read(|entries| entries.trace_id.clone()).unwrap() }),
             )
-            .layer(axum::middleware::from_fn(scoped));
+            .layer(axum::middleware::from_fn_with_state(false, scoped));
         let request = Request::get("/")
             .header("x-claude-code-session-id", session)
             .body(Body::empty())

@@ -3,7 +3,8 @@
 //! them, and the [`Call`] of one request runs each hook the route tells it over them in that
 //! order, reading and patching the call's record (`litellm_gateway_inference::record`) by contract field
 //! through [`fields`]. [`Point`] names each hook the gateway runs and how it ends, and a hook it does not run
-//! yet is never told.
+//! yet is never told. A hook a callback reading the call's `StandardLoggingPayload` subscribes
+//! to builds the payload once from the record, for every such callback on it ([`payloads`]).
 
 pub mod budget_check;
 pub(crate) mod budgets;
@@ -11,10 +12,16 @@ mod fields;
 pub mod hosted;
 pub mod model_capacity;
 pub mod parallel_request_limiter;
+pub mod payloads;
+pub mod s3_log;
 pub mod spend_log;
 mod spend_log_input;
+pub mod standard_logging;
 
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::http::StatusCode;
 use litellm_callbacks::{
@@ -27,10 +34,18 @@ use litellm_gateway_inference::{
     CallHooks, HookError, Refusal, ServedCall,
     record::{self, CallState, Charged},
 };
+use litellm_router_core::Router;
+use litellm_standard_logging::StandardLoggingPayload;
+use parking_lot::Mutex;
 use serde_json::{Map, Value};
 use strum::VariantArray;
+use tokio::{sync::oneshot, task::JoinHandle};
 
-use self::hosted::Answers;
+use self::{
+    fields::FROM_THE_PAYLOAD,
+    hosted::Answers,
+    payloads::{Logged, LoggingPayloads},
+};
 use crate::host::NativeRows;
 
 /// A hook the gateway runs for a call.
@@ -111,6 +126,84 @@ pub struct Registered {
     from_caller: Option<FromCaller>,
     /// What answers the callback's host calls, for a callback that makes them.
     host: Option<Arc<dyn Answers>>,
+    /// The schedule a callback that batches what it logs is flushed on, for as long as it is
+    /// registered.
+    _flushing: Option<FlushLoop>,
+}
+
+/// Flushes a callback every interval from when it is made, and once more when it is dropped, so
+/// what the callback still holds of the calls of a config the gateway no longer serves is sent.
+/// That last flush is handed to `retired`, which shutdown waits out.
+struct FlushLoop {
+    stop: Option<oneshot::Sender<()>>,
+    flushing: Option<JoinHandle<()>>,
+    retired: RetiredFlushes,
+}
+
+impl FlushLoop {
+    fn start(callback: Arc<dyn ErasedCallback>, every: Duration, retired: RetiredFlushes) -> Self {
+        let (stop, mut stopped) = oneshot::channel::<()>();
+        let flushing = litellm_call_scope::spawn_detached(async move {
+            loop {
+                tokio::select! {
+                    () = tokio::time::sleep(every) => callback.flush().await,
+                    _ = &mut stopped => {
+                        callback.flush().await;
+                        return;
+                    }
+                }
+            }
+        });
+        Self {
+            stop: Some(stop),
+            flushing: Some(flushing),
+            retired,
+        }
+    }
+}
+
+impl Drop for FlushLoop {
+    fn drop(&mut self) {
+        drop(self.stop.take());
+        if let Some(flushing) = self.flushing.take() {
+            self.retired.retire(flushing);
+        }
+    }
+}
+
+/// How long shutdown waits for the last flushes of the callbacks a replaced config registered.
+const RETIRED_FLUSH_DEADLINE: Duration = Duration::from_secs(30);
+
+/// The last flushes of the callbacks of every config the gateway replaced, kept for the life of
+/// the process so shutdown waits for them as it waits for the current config's own flush.
+#[derive(Clone, Default)]
+pub struct RetiredFlushes(Arc<Mutex<Vec<JoinHandle<()>>>>);
+
+impl RetiredFlushes {
+    fn retire(&self, flushing: JoinHandle<()>) {
+        let mut retired = self.0.lock();
+        retired.retain(|flushing| !flushing.is_finished());
+        retired.push(flushing);
+    }
+
+    /// Waits for every retired flush to finish, for up to [`RETIRED_FLUSH_DEADLINE`].
+    pub async fn finish(&self) {
+        self.finish_within(RETIRED_FLUSH_DEADLINE).await;
+    }
+
+    async fn finish_within(&self, deadline: Duration) {
+        let retired = std::mem::take(&mut *self.0.lock());
+        let pending = retired.len();
+        if tokio::time::timeout(deadline, futures_util::future::join_all(retired))
+            .await
+            .is_err()
+        {
+            tracing::error!(
+                pending,
+                "shutdown gave up on the last flush of a replaced config's callbacks"
+            );
+        }
+    }
 }
 
 impl Registered {
@@ -119,6 +212,20 @@ impl Registered {
             callback,
             from_caller: None,
             host: Some(host),
+            _flushing: None,
+        }
+    }
+
+    /// `callback`, flushed every `every` while it is registered and once more after, as the
+    /// proxy's `CustomBatchLogger` runs `periodic_flush`. That last flush is kept in `retired`.
+    pub fn flushed_every(
+        callback: Arc<dyn ErasedCallback>,
+        every: Duration,
+        retired: &RetiredFlushes,
+    ) -> Self {
+        Self {
+            _flushing: Some(FlushLoop::start(callback.clone(), every, retired.clone())),
+            ..Self::from(callback)
         }
     }
 
@@ -131,6 +238,7 @@ impl Registered {
             callback,
             from_caller: Some(Box::new(move |identity| Arc::new(state(identity)))),
             host: None,
+            _flushing: None,
         }
     }
 }
@@ -141,6 +249,7 @@ impl From<Arc<dyn ErasedCallback>> for Registered {
             callback,
             from_caller: None,
             host: None,
+            _flushing: None,
         }
     }
 }
@@ -150,6 +259,8 @@ impl From<Arc<dyn ErasedCallback>> for Registered {
 #[derive(Default)]
 pub struct Callbacks {
     callbacks: Vec<Registered>,
+    /// What builds a call's `StandardLoggingPayload` for the callbacks that read it.
+    payloads: LoggingPayloads,
 }
 
 impl Callbacks {
@@ -176,7 +287,31 @@ impl Callbacks {
                 });
             }
         }
-        Ok(Self { callbacks })
+        Ok(Self {
+            callbacks,
+            payloads: LoggingPayloads::default(),
+        })
+    }
+
+    /// These callbacks, with the payload of a call that failed naming the deployment `router`
+    /// registers under the id it last ran on.
+    #[must_use]
+    pub fn logging_over(self, router: Router) -> Self {
+        Self {
+            payloads: LoggingPayloads::over(router),
+            ..self
+        }
+    }
+
+    /// Flushes what each callback still batches, as the proxy's shutdown runs
+    /// `flush_rust_loggers`.
+    pub async fn flush(&self) {
+        futures_util::future::join_all(
+            self.callbacks
+                .iter()
+                .map(|registered| registered.callback.flush()),
+        )
+        .await;
     }
 
     pub(crate) fn begin(self: &Arc<Self>, identity: &Authenticated<NativeRows>) -> Call {
@@ -237,6 +372,7 @@ impl Call {
 
     async fn run_turns(&self, point: Point) -> Result<(), HookError> {
         let hook = point.hook();
+        let mut logged: Option<Option<StandardLoggingPayload>> = None;
         for (registered, state) in self.callbacks.callbacks.iter().zip(&self.states) {
             let callback = &registered.callback;
             let manifest = callback.manifest();
@@ -244,7 +380,15 @@ impl Call {
                 continue;
             };
             let name = &manifest.selection.name;
-            let turn = self.turn(registered, name, subscription, state.as_ref());
+            let payload = match subscription.reads.intersection(FROM_THE_PAYLOAD).is_empty() {
+                true => None,
+                false => logged
+                    .get_or_insert_with(|| {
+                        record::read(|entries| self.callbacks.payloads.build(entries)).flatten()
+                    })
+                    .as_ref(),
+            };
+            let turn = self.turn(registered, name, subscription, state.as_ref(), payload);
             let ended = match turn.await {
                 Ok(None) => continue,
                 Ok(Some(abort)) => HookError::Refused(refusal(abort)),
@@ -265,18 +409,25 @@ impl Call {
     }
 
     /// One callback's turn on a hook. It is handed the fields its manifest reads as the
-    /// callbacks before it left them, what it returns is held to what its subscription declared,
-    /// its patch is written for the callbacks after it, and its abort is handed back.
+    /// callbacks before it left them, and the hook's `payload` of the call, what it returns is
+    /// held to what its subscription declared, its patch is written for the callbacks after it,
+    /// and its abort is handed back.
     async fn turn(
         &self,
         registered: &Registered,
         name: &str,
         subscription: &Subscription,
         state: Option<&RequestState>,
+        payload: Option<&StandardLoggingPayload>,
     ) -> Result<Option<Abort>, Cause> {
         let hook = subscription.hook;
-        let input = record::read(|entries| fields::input(entries, hook, subscription.reads))
-            .ok_or(Cause::NoRecord)?;
+        let logged = payload.map(|payload| Logged {
+            payload,
+            host: self.callbacks.payloads.host(),
+        });
+        let input =
+            record::read(|entries| fields::input(entries, hook, subscription.reads, logged))
+                .ok_or(Cause::NoRecord)?;
         let output = match &registered.host {
             Some(host) => {
                 let callback = registered.callback.clone();
@@ -349,7 +500,8 @@ mod tests {
 
     use futures_util::future::BoxFuture;
     use litellm_callbacks::{
-        Callback, Field, FieldSet, HookInput, HookOutput, Manifest, Patch, Selection,
+        Callback, Field, FieldSet, HookInput, HookOutput, Manifest, Patch, RenderOptions,
+        Selection, typed,
     };
     use parking_lot::Mutex;
     use rstest::rstest;
@@ -649,6 +801,126 @@ mod tests {
         );
     }
 
+    /// A callback that writes the payload it is handed on `AttemptEnded`, rendered, and the log
+    /// id beside it to the log.
+    struct Rendering {
+        manifest: Manifest,
+        log: Log,
+    }
+
+    fn rendering(name: &str, log: &Log) -> Arc<Rendering> {
+        Arc::new(Rendering {
+            manifest: Manifest {
+                selection: Selection::named(name),
+                subscriptions: vec![Subscription {
+                    reads: FROM_THE_PAYLOAD,
+                    ..Subscription::on(Hook::AttemptEnded)
+                }],
+                has_request_state: false,
+            },
+            log: log.clone(),
+        })
+    }
+
+    impl Callback for Rendering {
+        type State = ();
+
+        fn manifest(&self) -> &Manifest {
+            &self.manifest
+        }
+
+        fn handle<'a>(
+            &'a self,
+            input: &'a HookInput,
+            _: Option<&'a ()>,
+        ) -> BoxFuture<'a, HookOutput> {
+            Box::pin(async move {
+                let rendered = match input.fields.payload()? {
+                    Some(payload) => payload
+                        .render(RenderOptions::default())
+                        .await
+                        .map_err(CallbackError::Failed)?,
+                    None => b"-".to_vec(),
+                };
+                let id = input.fields.get::<typed::LogId>()?.unwrap_or_default();
+                self.log
+                    .lock()
+                    .push(format!("{id} {}", String::from_utf8_lossy(&rendered)));
+                Ok(None)
+            })
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_callbacks_that_read_the_payload_on_a_hook_render_the_one_built_for_it() {
+        let log = Log::default();
+        let callbacks = Arc::new(
+            Callbacks::new(vec![
+                Registered::from(rendering("first", &log) as Arc<dyn ErasedCallback>),
+                Registered::from(rendering("second", &log) as Arc<dyn ErasedCallback>),
+            ])
+            .unwrap(),
+        );
+        let call = callbacks.begin(&crate::test_support::master());
+        in_call(async {
+            record::write(|entries| {
+                entries.call_type = Some(litellm_gateway_inference::CallType::AnthropicMessages);
+                entries.call_id = Some("call-1".to_owned());
+            });
+            call.pre_call(body()).await.unwrap();
+            call.failed().await;
+        })
+        .await;
+
+        let logged = log.lock().clone();
+        let documents: Vec<Value> = logged
+            .iter()
+            .map(|line| serde_json::from_str(line.split_once(' ').unwrap().1).unwrap())
+            .collect();
+        assert_eq!(
+            (
+                logged
+                    .iter()
+                    .map(|line| line.split_once(' ').unwrap().0)
+                    .collect::<Vec<_>>(),
+                documents[0]["status"].clone(),
+                documents[0] == documents[1],
+                callbacks.payloads.host().held(),
+            ),
+            (vec!["call-1", "call-1"], json!("failure"), true, 0)
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_hook_of_a_call_that_has_not_ended_hands_no_payload() {
+        let log = Log::default();
+        let reading = Arc::new(Rendering {
+            manifest: Manifest {
+                selection: Selection::named("early"),
+                subscriptions: vec![Subscription {
+                    reads: FieldSet::of(&[Field::StandardLoggingPayloadRef, Field::LogId]),
+                    ..Subscription::on(Hook::PreCall)
+                }],
+                has_request_state: false,
+            },
+            log: log.clone(),
+        });
+        let callbacks = Arc::new(
+            Callbacks::new(vec![Registered::from(reading as Arc<dyn ErasedCallback>)]).unwrap(),
+        );
+        in_call(
+            callbacks
+                .begin(&crate::test_support::master())
+                .pre_call(body()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(log.lock().clone(), vec![" -".to_owned()]);
+    }
+
     #[rstest]
     fn a_callback_whose_manifest_its_hook_point_cannot_honor_is_never_registered() {
         let log = Log::default();
@@ -691,5 +963,68 @@ mod tests {
                 hook: Hook::PostCallFailure
             })
         );
+    }
+
+    /// A callback whose flush takes `takes` and then counts itself in `flushed`.
+    struct SlowFlush {
+        manifest: Manifest,
+        takes: Duration,
+        flushed: Arc<AtomicU32>,
+    }
+
+    impl Callback for SlowFlush {
+        type State = ();
+
+        fn manifest(&self) -> &Manifest {
+            &self.manifest
+        }
+
+        fn handle<'a>(
+            &'a self,
+            _input: &'a HookInput,
+            _state: Option<&'a ()>,
+        ) -> BoxFuture<'a, HookOutput> {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn flush(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async {
+                tokio::time::sleep(self.takes).await;
+                self.flushed.fetch_add(1, Ordering::SeqCst);
+            })
+        }
+    }
+
+    #[rstest]
+    #[case::within_the_deadline(Duration::from_millis(50), Duration::from_secs(5), 1)]
+    #[case::past_the_deadline(Duration::from_secs(5), Duration::from_millis(50), 0)]
+    #[tokio::test]
+    async fn shutdown_waits_out_the_last_flush_of_a_replaced_configs_callbacks(
+        #[case] takes: Duration,
+        #[case] deadline: Duration,
+        #[case] expected: u32,
+    ) {
+        let flushed = Arc::new(AtomicU32::new(0));
+        let callback: Arc<dyn ErasedCallback> = Arc::new(SlowFlush {
+            manifest: Manifest {
+                selection: Selection::named("slow"),
+                subscriptions: Vec::new(),
+                has_request_state: false,
+            },
+            takes,
+            flushed: flushed.clone(),
+        });
+        let retired = RetiredFlushes::default();
+        let replaced = Callbacks::new(vec![Registered::flushed_every(
+            callback,
+            Duration::from_secs(3600),
+            &retired,
+        )])
+        .unwrap();
+
+        drop(replaced);
+        retired.finish_within(deadline).await;
+
+        assert_eq!(flushed.load(Ordering::SeqCst), expected);
     }
 }

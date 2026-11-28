@@ -469,6 +469,18 @@ pub fn dumps_len<T: serde::Serialize + ?Sized>(value: &T) -> Result<usize, serde
     Ok(count.0)
 }
 
+/// `json.dumps(value)` of a value Rust serializes with serde, as bytes: Python's `", "` and
+/// `": "` separators, `ensure_ascii` escapes with surrogate pairs above the BMP, and float repr
+/// (`1e-06`, `0.0`). A non-finite float is written as serde's `null`.
+pub fn dumps_serde<T: serde::Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, serde_json::Error> {
+    let mut out = Vec::new();
+    value.serialize(&mut serde_json::Serializer::with_formatter(
+        &mut out,
+        PythonFormatter,
+    ))?;
+    Ok(out)
+}
+
 struct ByteCount(usize);
 
 impl std::io::Write for ByteCount {
@@ -623,7 +635,7 @@ pub fn write_string(out: &mut impl Sink, text: &str) {
 mod tests {
     use rstest::rstest;
 
-    use super::{dumps, dumps_compact, dumps_len, from_json, loads, type_name};
+    use super::{dumps, dumps_compact, dumps_len, dumps_serde, from_json, loads, type_name};
     use crate::{Error, Value, repr::repr};
 
     #[rstest]
@@ -651,6 +663,33 @@ mod tests {
         assert_eq!(
             dumps_len(&value).expect("counts"),
             dumps(&from_json(value)).expect("dumps").len()
+        );
+    }
+
+    // Expected values are CPython json.dumps(json.loads(text))
+    #[rstest]
+    #[case::separators(
+        r#"{"a":[1,2],"b":{"c":null},"d":[],"e":{}}"#,
+        r#"{"a": [1, 2], "b": {"c": null}, "d": [], "e": {}}"#
+    )]
+    #[case::ensure_ascii(
+        r#"{"m":"café 😀 \u007f"}"#,
+        r#"{"m": "caf\u00e9 \ud83d\ude00 \u007f"}"#
+    )]
+    #[case::escapes(
+        r#"["q \" b \\ n \n t \t \u0001 /"]"#,
+        r#"["q \" b \\ n \n t \t \u0001 /"]"#
+    )]
+    #[case::python_float_repr(
+        "[1e-06,0.0,1e16,1.5e+16,0.1,2.0,-0.0,3e-5,123456789.25]",
+        "[1e-06, 0.0, 1e+16, 1.5e+16, 0.1, 2.0, -0.0, 3e-05, 123456789.25]"
+    )]
+    #[case::ints("[0,-1,18446744073709551615]", "[0, -1, 18446744073709551615]")]
+    fn dumps_serde_writes_what_json_dumps_writes(#[case] text: &str, #[case] expected: &str) {
+        let value: serde_json::Value = serde_json::from_str(text).expect("parses");
+        assert_eq!(
+            String::from_utf8(dumps_serde(&value).expect("dumps")).expect("ascii"),
+            expected
         );
     }
 

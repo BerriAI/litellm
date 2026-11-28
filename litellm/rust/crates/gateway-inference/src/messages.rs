@@ -33,7 +33,7 @@ use crate::{
     hooks::CallType,
     model_restamp::{ReportedModel, Stamp},
     pricing,
-    record::{self, Recorder},
+    record::{self, Recorder, ServedMessage},
     routing::{self, Host, Prompt, RouteAttempt, RouteChunks},
     serve::{self, Call, Endpoint},
     stream_event::{Counts, Kind, Read, Reading},
@@ -55,6 +55,10 @@ const VERTEX_AI: &str = "vertex_ai";
 pub const REQUEST_SETTINGS: [&str; 2] = ["drop_params", "additional_drop_params"];
 
 pub async fn create<H: Host>(Checked { call, body }: Checked<H, JsonObject>) -> Response {
+    if let Ok(JsonObject(body)) = &body {
+        let max_base64_length = call.gateway.max_base64_length_for_logging;
+        record::write(|entries| entries.logged_request.sent(body, max_base64_length));
+    }
     serve::run(&call, body.map(|JsonObject(body)| body), |body| {
         MessagesAttempt::new(&call, body)
     })
@@ -144,6 +148,24 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
         gateway.messages_settings.request_timeout()
     }
 
+    fn keep_output(ran: &Self::Output) {
+        let body = match ran {
+            CallOutput::Complete(MessagesBody::Message(message)) => {
+                match serde_json::to_value(message) {
+                    Ok(Value::Object(body)) => body,
+                    _ => return,
+                }
+            }
+            CallOutput::Complete(MessagesBody::Unchecked(fields)) => fields.clone(),
+            CallOutput::Stream { .. } => return,
+        };
+        record::write(|entries| entries.served_message = Some(ServedMessage::Complete(body)));
+    }
+
+    fn keep_event(data: &str) {
+        record::write(|entries| ServedMessage::see(&mut entries.served_message, data));
+    }
+
     fn render(ran: Self::Output, reported: ReportedModel<'_>) -> Result<Response, Error> {
         let stream =
             Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
@@ -188,6 +210,7 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
                 shaping,
                 routing::attempt_body(&self.body, attempt),
                 self.headers,
+                self.gateway.max_base64_length_for_logging,
             )?
         };
         let machine = self.route.clone().machine(call, self.policy);
@@ -275,6 +298,7 @@ fn project(
     deployment_shaping: MessagesShaping,
     body: Map<String, Value>,
     headers: &HeaderMap,
+    max_base64_length: usize,
 ) -> Result<MessagesCall, Error> {
     let shaping = requested(deployment_shaping, &body);
     let tools = merged_tools(deployment, body.get(TOOLS)).map(|tools| (TOOLS.to_owned(), tools));
@@ -290,6 +314,14 @@ fn project(
         .chain(client_params)
         .chain(tools)
         .collect();
+    record::write(|entries| {
+        entries.logged_request.attempted(
+            &body,
+            &shaping.settings.additional_drop_params,
+            shaping.settings.reasoning_auto_summary,
+            max_base64_length,
+        );
+    });
     Ok(MessagesCall {
         body: messages_body(body)?,
         api_key: routing::api_key(deployment),

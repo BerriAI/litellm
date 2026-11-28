@@ -17,10 +17,11 @@ use litellm_router_core::Deployment;
 use serde_json::{Map, Value};
 
 use crate::{
-    Ended, Gateway, Host, record,
+    Ended, Gateway, Host,
+    record::{self, CallFailure},
     serve::Endpoint,
     stream_event::Counts,
-    stream_outcome::{self, Outcome},
+    stream_outcome::{self, Outcome, StreamFailure},
 };
 
 /// The route a call came in on, each named as Python's `call_type` for it.
@@ -95,8 +96,11 @@ pub struct ServedCall {
 /// - [`failed`](Self::failed) for a call that ends on an error, a refusal by a hook included
 ///   (`post_call_failure_hook`, then the failure log)
 ///
-/// A stream the client drops before its end tells neither `succeeded` nor `failed`, so a callback
-/// that holds something for the call gives it back when its state for the request is dropped.
+/// A stream the client drops after its first event tells `succeeded` once, with what it counted
+/// so far and the call's failure the client's disconnect, as the proxy dispatches the success
+/// handlers for a partial stream (`_bill_partial_streamed_spend_on_disconnect`). One dropped
+/// before its first event tells neither, so a callback that holds something for the call gives
+/// it back when its state for the request is dropped.
 /// Accepted difference: an attempt a retry or a fallback answered for is not logged as a
 /// failure, since the route only hears how its call ended.
 pub trait CallHooks: Send + Sync + 'static {
@@ -143,17 +147,19 @@ impl PostCall {
 /// Serves one call with the host's hooks around it: `serve` runs on the
 /// body the pre-call hook left, a complete answer is logged off the request, as the proxy logs
 /// it after it went out, and a call that ends on an error, a refusal by that hook included,
-/// tells the hooks it failed.
-pub(crate) async fn around<H, F, Fut>(
+/// tells the hooks it failed once `record_failure` has written how.
+pub(crate) async fn around<H, F, Fut, R>(
     gateway: &Gateway<H>,
     identity: &Authenticated<H::Rows>,
     body: Map<String, Value>,
     serve: F,
+    record_failure: R,
 ) -> Result<Response, Ended>
 where
     H: Host,
     F: FnOnce(Arc<H::Hooks>, Map<String, Value>) -> Fut,
     Fut: Future<Output = Result<HookResponse, Ended>>,
+    R: FnOnce(&mut Ended),
 {
     let hooks = Arc::new(gateway.host.hooks(identity));
     let served = match hooks.pre_call(body).await {
@@ -170,7 +176,8 @@ where
             }
             Ok(response)
         }
-        Err(ended) => {
+        Err(mut ended) => {
+            record_failure(&mut ended);
             hooks.failed().await;
             Err(ended)
         }
@@ -218,6 +225,7 @@ pub(crate) async fn post_call<E: Endpoint, K: CallHooks>(
         deployment,
     } = served;
     let Some((chunks, read)) = E::held(outcome) else {
+        E::keep_output(outcome);
         hooks.post_call_success().await?;
         hooks.response_headers().await;
         return Ok(PostCall {
@@ -235,19 +243,71 @@ pub(crate) async fn post_call<E: Endpoint, K: CallHooks>(
     let hooks = hooks.clone();
     let usage: fn(Counts) -> Option<ChatCompletionsUsage> = E::usage;
     let response_id: fn(&str) -> Option<String> = E::stream_response_id;
+    let keep_event: fn(&str) = E::keep_event;
     let seen = Arc::new(StreamSeen::default());
     let seeing = seen.clone();
     let unwatched = std::mem::replace(chunks, stream::empty().boxed())
         .inspect(move |block| {
             if let Ok(block) = block {
                 seeing.see(block, response_id);
+                if let Some(event) = &block.event {
+                    keep_event(&event.data);
+                }
             }
         })
         .boxed();
-    *chunks = stream_outcome::watched(
+    let provider = deployment
+        .as_ref()
+        .map(|deployment| deployment.provider().to_owned());
+    let left = {
+        let (hooks, model_group, deployment, seen) = (
+            hooks.clone(),
+            model_group.clone(),
+            deployment.clone(),
+            seen.clone(),
+        );
+        move |counts: Counts| {
+            let Some(first_event) = seen.first_event.get().copied() else {
+                return;
+            };
+            if tokio::runtime::Handle::try_current().is_err() {
+                return;
+            }
+            let served = ServedCall {
+                model_group,
+                deployment,
+                response_id: seen.response_id.get().cloned(),
+                usage: usage(counts),
+                first_event: record::read(|entries| entries.first_event)
+                    .flatten()
+                    .or(Some(first_event)),
+            };
+            litellm_call_scope::spawn_in_call(async move {
+                record::write(|entries| entries.failure = Some(CallFailure::ClientDisconnected));
+                hooks.succeeded(served).await;
+            });
+        }
+    };
+    *chunks = stream_outcome::watched_or_left(
         unwatched,
         read,
         stream_outcome::broke,
+        move |failure: StreamFailure<'_, _>| {
+            let failure = match failure {
+                StreamFailure::Event { status, answer } => CallFailure::error_event(status, answer),
+                StreamFailure::Broke(error) => {
+                    let timeout = record::read(|entries| {
+                        entries
+                            .served_deployment
+                            .as_ref()
+                            .and_then(|served| served.timeout)
+                    })
+                    .flatten();
+                    CallFailure::stream_broke(error, provider.as_deref(), timeout)
+                }
+            };
+            record::write(|entries| entries.failure = Some(failure));
+        },
         move |outcome: Outcome| {
             let (hooks, model_group, deployment, seen) = (
                 hooks.clone(),
@@ -273,6 +333,7 @@ pub(crate) async fn post_call<E: Endpoint, K: CallHooks>(
                 }
             }
         },
+        left,
     );
     Ok(post_call)
 }
