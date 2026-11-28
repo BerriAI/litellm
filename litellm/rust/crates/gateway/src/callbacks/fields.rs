@@ -11,7 +11,8 @@ use litellm_callbacks::{
 };
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{
-    Affiliation, Caller, Credential, Named, StoredKey, Team, record::Label,
+    Affiliation, Caller, Credential, Named, StoredKey, Team,
+    record::{Budget, Label},
 };
 use litellm_gateway_inference::{
     CallType,
@@ -19,7 +20,7 @@ use litellm_gateway_inference::{
 };
 use litellm_host::interceptors::Cost as Settled;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
-use litellm_python_compat::datetime::UtcDateTime;
+use litellm_python_compat::datetime::{IsoDateTime, UtcDateTime};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -50,7 +51,10 @@ pub enum Unwritable {
 
 /// Who `identity` is charged as: a key by the hash its row is stored under, its alias and its
 /// owner, and the master key by Python's alias for it and the proxy admin, each with the team,
-/// organization, project and end user it names. Only a stored row gives an alias.
+/// organization, project and end user it names. Only a stored row gives an alias. The spend,
+/// budget and metadata are what the proxy's `get_sanitized_user_information_from_key` logs of the
+/// `UserAPIKeyAuth`: the key row's own, and for the master key the defaults of the admin identity
+/// `return_user_api_key_auth_obj` builds, no spend, no budget and empty metadata.
 pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
     let Caller {
         credential,
@@ -62,16 +66,22 @@ pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
             },
         end_user,
     } = &**identity;
-    let (key_hash, key_alias, user_id) = match credential {
+    let (key_hash, key_alias, user_id, budget, budget_reset_at, metadata) = match credential {
         Credential::MasterKey => (
             Some(MASTER_KEY_ALIAS.to_owned()),
             None,
             Some(PROXY_ADMIN_NAME.to_owned()),
+            Budget::default(),
+            None,
+            Map::new(),
         ),
         Credential::Key { key } => (
             identity.hash().map(ToString::to_string),
             key.alias().map(str::to_owned),
             key.record().user_id.clone(),
+            key.budget(),
+            key.budget_reset_at().map(isoformat),
+            key.metadata().clone(),
         ),
     };
     Charged {
@@ -82,7 +92,16 @@ pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
         org: org.as_ref().map(Named::label),
         project: project.as_ref().map(Named::label),
         end_user_id: end_user.end_user_id.clone(),
+        spend: Some(budget.spend),
+        max_budget: budget.max,
+        budget_reset_at,
+        metadata: Some(metadata),
     }
+}
+
+/// `at.isoformat()` of the `datetime` Python reads a key's `budget_reset_at` as.
+fn isoformat(at: IsoDateTime) -> String {
+    at.datetime_isoformat()
 }
 
 /// The route a call came in on, as Python's `user_api_key_request_route` names it.
@@ -525,6 +544,36 @@ mod tests {
     }
 
     #[rstest]
+    fn the_master_key_is_charged_as_the_admin_identity_python_builds_for_it() {
+        assert_eq!(
+            charged(&crate::test_support::master()),
+            Charged {
+                key_hash: Some("litellm_proxy_master_key".to_owned()),
+                key_alias: None,
+                user_id: Some("default_user_id".to_owned()),
+                spend: Some(0.0),
+                max_budget: None,
+                budget_reset_at: None,
+                metadata: Some(Map::new()),
+                ..Charged::default()
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::whole_seconds("2030-01-02T00:00:00Z", "2030-01-02T00:00:00+00:00")]
+    #[case::with_a_fraction("2031-03-01T00:00:00.5Z", "2031-03-01T00:00:00.500000+00:00")]
+    #[case::at_its_own_offset("2031-03-01T08:00:00+08:00", "2031-03-01T08:00:00+08:00")]
+    #[case::naive("2031-03-01T00:00:00", "2031-03-01T00:00:00")]
+    fn a_budget_reset_is_logged_as_pythons_isoformat_of_it(
+        #[case] at: &str,
+        #[case] expected: &str,
+    ) {
+        let at = litellm_python_compat::datetime::fromisoformat(at).unwrap();
+        assert_eq!(isoformat(at), expected);
+    }
+
+    #[rstest]
     #[case::a_field_with_no_place(
         PatchOp::Set { field: Field::Metadata, value: json!({}) },
         Unwritable::Field(Field::Metadata)
@@ -768,6 +817,8 @@ mod tests {
                 alias: Some("project one".to_owned()),
             }),
             end_user_id: Some("e1".to_owned()),
+            spend: Some(0.0),
+            metadata: Some(Map::new()),
             ..Charged::default()
         }
     )]
@@ -787,6 +838,8 @@ mod tests {
                 id: "p1".to_owned(),
                 alias: None,
             }),
+            spend: Some(0.0),
+            metadata: Some(Map::new()),
             ..Charged::default()
         }
     )]
@@ -796,6 +849,8 @@ mod tests {
             key_hash: Some(MASTER_KEY_ALIAS.to_owned()),
             user_id: Some(PROXY_ADMIN_NAME.to_owned()),
             end_user_id: Some("e1".to_owned()),
+            spend: Some(0.0),
+            metadata: Some(Map::new()),
             ..Charged::default()
         }
     )]

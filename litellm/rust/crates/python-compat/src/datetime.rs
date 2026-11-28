@@ -149,6 +149,17 @@ impl IsoDateTime {
     /// What pydantic's JSON mode writes: `isoformat()` with a fraction only when there is one,
     /// `Z` for a zero offset and none for a naive `datetime`.
     pub fn isoformat(self) -> String {
+        self.written("Z")
+    }
+
+    /// `datetime.isoformat()`: a fraction only when there is one, `+00:00` for a zero offset and
+    /// none for a naive `datetime`.
+    pub fn datetime_isoformat(self) -> String {
+        self.written("+00:00")
+    }
+
+    /// `isoformat()` with `zero` written for a zero offset.
+    fn written(self, zero: &str) -> String {
         let (local, offset) = match self {
             Self::Naive(local) => (local, None),
             Self::Aware { utc, offset } => (utc + offset, Some(offset)),
@@ -163,7 +174,7 @@ impl IsoDateTime {
         };
         let zone = match offset {
             None => String::new(),
-            Some(0) => "Z".to_owned(),
+            Some(0) => zero.to_owned(),
             Some(offset) => {
                 let sign = if offset < 0 { '-' } else { '+' };
                 let seconds = offset.abs() / 1_000_000;
@@ -476,6 +487,30 @@ mod tests {
 
     use super::*;
     use crate::{number::round, repr::float_repr};
+
+    #[rstest]
+    #[case::zero_offset(
+        "2030-01-02T00:00:00Z",
+        "2030-01-02T00:00:00+00:00",
+        "2030-01-02T00:00:00Z"
+    )]
+    #[case::own_offset(
+        "2030-01-02T08:00:00.5+08:00",
+        "2030-01-02T08:00:00.500000+08:00",
+        "2030-01-02T08:00:00.500000+08:00"
+    )]
+    #[case::naive("2030-01-02T00:00:00", "2030-01-02T00:00:00", "2030-01-02T00:00:00")]
+    fn a_datetime_is_written_as_python_and_pydantic_write_it(
+        #[case] text: &str,
+        #[case] python: &str,
+        #[case] pydantic: &str,
+    ) {
+        let at = fromisoformat(text).unwrap();
+        assert_eq!(
+            (at.datetime_isoformat(), at.isoformat()),
+            (python.to_owned(), pydantic.to_owned())
+        );
+    }
 
     #[rstest]
     #[case::whole_milliseconds(Duration::from_millis(1500), "1500.0")]
