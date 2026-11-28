@@ -7,6 +7,7 @@
 use axum::http::Uri;
 use litellm_config::{LitellmParams, Model, Spelled};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
+use litellm_inference::provider::resolve_llm_provider;
 use litellm_model_catalog::Catalog;
 use litellm_router_core::{Reached, registry::DeploymentFilter};
 use serde_json::{Map, Value};
@@ -182,10 +183,28 @@ fn is_no_seconds(request_timeout: Option<&Value>) -> bool {
     })
 }
 
-/// `rpm` and `tpm` are honored as the shuffle's weights. A deployment with no `api_key` gets its
-/// credential from a flow the proxy can host and the gateway may not, as Entra and workload
-/// identity are.
+/// The providers whose native route signs or logs in from the deployment's own `aws_*` or
+/// `vertex_*` params and the environment, with no host, so they need no `api_key`.
+const CLOUD_CREDENTIAL_PROVIDERS: [LlmProviders; 3] = [
+    LlmProviders::Bedrock,
+    LlmProviders::BedrockMantle,
+    LlmProviders::VertexAi,
+];
+
+fn signs_itself(params: &LitellmParams) -> bool {
+    resolve_llm_provider(
+        &params.model,
+        params.custom_llm_provider.as_deref(),
+        "messages",
+    )
+    .is_ok_and(|resolved| CLOUD_CREDENTIAL_PROVIDERS.contains(&resolved.provider))
+}
+
+/// `rpm` and `tpm` are honored as the shuffle's weights. A deployment with no `api_key` outside
+/// the cloud credential providers gets its credential from a flow the proxy can host and the
+/// gateway may not, as Entra and workload identity are.
 fn params(params: &LitellmParams) -> Vec<Box<str>> {
+    let needs_api_key = !signs_itself(params);
     let LitellmParams {
         model: _,
         api_version: _,
@@ -222,7 +241,7 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
         extra,
     } = params;
     let unsent = [
-        ("api_key unset", api_key.is_none()),
+        ("api_key unset", needs_api_key && api_key.is_none()),
         (
             "api_base",
             api_base.as_deref().is_some_and(|base| !is_sendable(base)),
@@ -544,6 +563,23 @@ mod tests {
             one_deployment(written, anthropic(&["claude"])).as_deref(),
             Some("model_list.litellm_params.api_key unset")
         );
+    }
+
+    #[rstest]
+    #[case::vertex_ai(
+        "    litellm_params:\n      model: vertex_ai/claude-opus-5-5\n      vertex_project: project\n      vertex_location: us-east5\n"
+    )]
+    #[case::bedrock(
+        "    litellm_params:\n      model: bedrock/us.anthropic.claude-opus-5-5-v1:0\n      aws_region_name: us-west-2\n"
+    )]
+    #[case::bedrock_mantle(
+        "    litellm_params:\n      model: bedrock_mantle/anthropic.claude-opus-5-5\n      aws_role_name: arn:aws:iam::000000000000:role/mantle\n"
+    )]
+    #[case::provider_named_apart(
+        "    litellm_params:\n      model: claude-opus-5-5\n      custom_llm_provider: vertex_ai\n"
+    )]
+    fn a_cloud_deployment_signs_without_a_key(#[case] written: &str) {
+        assert_eq!(one_deployment(written, anthropic(&["claude"])), None);
     }
 
     #[rstest]
