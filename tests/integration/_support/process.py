@@ -268,7 +268,7 @@ class OwnedProxy:
 
     def worker_pids(self) -> frozenset[int]:
         try:
-            children: Final = psutil.Process(self.process.pid).children()
+            children: Final = psutil.Process(self.process.pid).children(recursive=True)
         except psutil.NoSuchProcess:
             return frozenset()
         return frozenset(child.pid for child in children if _is_serving_worker(child))
@@ -658,12 +658,12 @@ def _ready_worker_pid(member: psutil.Process) -> int | None:
 
 
 def _serves_all(launch: _Launch, phases: BootPhases, workers: int) -> bool:
-    if len(phases.ready_pids) < max(1, workers):
-        return False
-    members: Final = frozenset(
-        pid for member in group_members(launch.process.pid) if (pid := _ready_worker_pid(member)) is not None
-    )
-    return len(phases.ready_pids & members) >= max(1, workers)
+    members: Final = group_members(launch.process.pid)
+    alive: Final = frozenset(pid for member in members if (pid := _ready_worker_pid(member)) is not None)
+    if workers <= 1:
+        return bool(phases.ready_pids & alive)
+    serving: Final = frozenset(member.pid for member in members if _is_serving_worker(member))
+    return bool(phases.ready_pids & serving) and len(serving) >= workers
 
 
 def _wait_until_ready(launch: _Launch, workers: int = 1) -> BootPhases | None:

@@ -49,7 +49,7 @@ def rust_forward_mode(environ: Mapping[str, str]) -> RustForwardMode:
     supervised: Final = environ.get(SUPERVISED_ENV)
     if supervised is not None:
         return _SUPERVISED.validate_json(supervised)
-    return Mode.SUPERVISOR if switch.rust else Mode.DISABLED
+    return Mode.DISABLED if switch.rust is False else Mode.SUPERVISOR
 
 
 def _wait_for_eof(fd: int) -> None:
