@@ -1632,6 +1632,46 @@ async def test_reasoning_then_text_announces_message_item_before_text_events(
     assert announced_indexes_by_item_type["message"] != announced_indexes_by_item_type["reasoning"]
 
 
+def _wire(event: object) -> dict[str, object]:
+    return event.model_dump(mode="json", exclude_none=True, exclude_unset=True)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_streamed_reasoning_item_keeps_its_summary_fields_on_the_wire(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [_reasoning_chunk("let "), _reasoning_chunk("me think"), _chunk("Hi", finish_reason="stop")]
+    )
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    added: Final = next(
+        event
+        for event in events
+        if event.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and event.item.type == "reasoning"
+    )
+    # The proxy writes stream events with exclude_none and exclude_unset, so check that form.
+    assert _wire(added)["item"]["summary"] == []
+    reasoning_events: Final = [
+        event
+        for event in events
+        if getattr(event, "item_id", None) == added.item.id
+        and event.type
+        in (
+            ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
+            ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+            ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+        )
+    ]
+    assert reasoning_events[0].type == ResponsesAPIStreamEvents.RESPONSE_PART_ADDED
+    assert reasoning_events[-1].type == ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE
+    part_added: Final = reasoning_events[0]
+    assert (part_added.output_index, part_added.summary_index) == (added.output_index, 0)
+    assert events.index(added) < events.index(part_added)
+    assert all(_wire(event)["summary_index"] == 0 for event in reasoning_events)
+    assert [event.sequence_number for event in events] == list(range(len(events)))
+
+
 @pytest.mark.parametrize(
     "stream_chunks",
     [_reasoning_then_text_chunks, _reasoning_and_text_in_one_chunk, _signed_thinking_and_text_in_one_chunk],

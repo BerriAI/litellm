@@ -5662,8 +5662,11 @@ class TestEnsureOutputItemContentPartAdded:
         assert completed_event.response.status == "completed"
 
     def test_reasoning_item_does_not_emit_content_part_added(self):
-        """Reasoning items should not get a content_part.added event."""
-        from litellm.types.llms.openai import OutputItemAddedEvent
+        """Reasoning items open a summary part, not a content part."""
+        from litellm.types.llms.openai import (
+            OutputItemAddedEvent,
+            ResponsePartAddedEvent,
+        )
 
         iterator = self._make_iterator()
         chunk = self._make_reasoning_chunk()
@@ -5671,8 +5674,9 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._ensure_output_item_for_chunk(chunk)
 
         events = iterator._pending_response_events
-        assert len(events) == 1
+        assert len(events) == 2
         assert isinstance(events[0], OutputItemAddedEvent)
+        assert isinstance(events[1], ResponsePartAddedEvent)
         assert iterator.sent_content_part_added_event is False
 
     def test_only_emits_once(self):
