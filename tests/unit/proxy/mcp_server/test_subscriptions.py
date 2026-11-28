@@ -536,13 +536,15 @@ async def test_tools_listing_propagates_other_mcp_errors(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_upstream_targets_started_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
+    from collections.abc import Awaitable, Callable
+
+    from mcp import ClientSession
     from mcp.types import ServerCapabilities, ToolsCapability
 
-    from litellm.proxy import proxy_server
     from litellm.proxy.mcp_server import operations
 
     caller: Final = UserAPIKeyAuth(api_key="concurrent-key", user_id="alice")
-    servers = [
+    servers: Final = tuple(
         MCPServer(
             server_id=f"target-{i}",
             name=f"target-{i}",
@@ -551,41 +553,33 @@ async def test_upstream_targets_started_concurrently(monkeypatch: pytest.MonkeyP
             protocol_version="2026-07-28",
         )
         for i in range(3)
-    ]
-    monkeypatch.setattr(
-        proxy_server,
-        "proxy_logging_obj",
-        SimpleNamespace(enforce_mcp_server_rate_limits=AsyncMock()),
     )
-
     empty_gateway: Final = _ListingGateway(result=ListToolsResult(tools=[]))
     monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway)
-    monkeypatch.setattr(operations.global_mcp_server_manager, "registry", {s.server_id: s for s in servers})
-    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=servers))
 
-    all_started: Final = asyncio.Event()
+    started: Final = asyncio.Queue[int]()
     release: Final = asyncio.Event()
-    started_count = 0
 
     def make_client(idx: int) -> Mock:
-        upstream = Mock()
+        upstream: Final = Mock(spec=ClientSession)
         upstream.server_capabilities = ServerCapabilities(tools=ToolsCapability(list_changed=True))
         upstream.protocol_version = "2025-11-25"
         upstream.send_ping = AsyncMock()
 
-        async def run_with_session(connected, **_: object) -> None:
-            nonlocal started_count
-            started_count += 1
-            if started_count == len(servers):
-                all_started.set()
+        async def run_with_session(
+            connected: Callable[[ClientSession], Awaitable[None]],
+            on_notification: object = None,
+        ) -> None:
+            _ = on_notification
+            started.put_nowait(idx)
             await release.wait()
             await connected(upstream)
 
-        client = Mock(spec=MCPClient)
+        client: Final = Mock(spec=MCPClient)
         client.run_with_session = AsyncMock(side_effect=run_with_session)
         return client
 
-    targets = tuple(
+    targets: Final = tuple(
         subscriptions.SubscriptionTarget(s, make_client(i), f"fingerprint-{i}") for i, s in enumerate(servers)
     )
 
@@ -610,16 +604,11 @@ async def test_upstream_targets_started_concurrently(monkeypatch: pytest.MonkeyP
         )
     )
     try:
-        # Event barrier verification:
-        # All 3 targets must enter run_with_session concurrently to signal all_started.
-        # If startup were sequential, the first target would block on release.wait()
-        # and subsequent targets would never be scheduled, timing out here.
-        await asyncio.wait_for(all_started.wait(), timeout=5.0)
-        assert started_count == len(servers)
-
-        # Release barrier so all relays complete startup and signal ready
+        started_targets: Final = frozenset([await asyncio.wait_for(started.get(), timeout=5.0) for _ in servers])
+        assert started_targets == frozenset(range(len(servers)))
         release.set()
         await asyncio.wait_for(ready.wait(), timeout=5.0)
+        assert ready.is_set()
     finally:
         listener.cancel()
         await asyncio.gather(listener, return_exceptions=True)
@@ -629,13 +618,15 @@ async def test_upstream_targets_started_concurrently(monkeypatch: pytest.MonkeyP
 async def test_upstream_target_startup_failure_cancels_peers_and_releases_slots(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from collections.abc import Awaitable, Callable
+
+    from mcp import ClientSession
     from mcp.types import ServerCapabilities, ToolsCapability
 
-    from litellm.proxy import proxy_server
     from litellm.proxy.mcp_server import operations
 
     caller: Final = UserAPIKeyAuth(api_key="failure-key", user_id="alice")
-    servers = [
+    servers: Final = tuple(
         MCPServer(
             server_id=f"fail-target-{i}",
             name=f"fail-target-{i}",
@@ -644,46 +635,40 @@ async def test_upstream_target_startup_failure_cancels_peers_and_releases_slots(
             protocol_version="2026-07-28",
         )
         for i in range(3)
-    ]
-    monkeypatch.setattr(
-        proxy_server,
-        "proxy_logging_obj",
-        SimpleNamespace(enforce_mcp_server_rate_limits=AsyncMock()),
     )
-
     empty_gateway: Final = _ListingGateway(result=ListToolsResult(tools=[]))
     monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway)
-    monkeypatch.setattr(operations.global_mcp_server_manager, "registry", {s.server_id: s for s in servers})
-    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=servers))
 
-    cancelled_targets: list[int] = []
-    target_0_started = asyncio.Event()
+    cancelled_targets: Final = asyncio.Queue[int]()
+    target_0_started: Final = asyncio.Event()
 
     def make_client(idx: int) -> Mock:
-        upstream = Mock()
+        upstream: Final = Mock(spec=ClientSession)
         upstream.server_capabilities = ServerCapabilities(tools=ToolsCapability(list_changed=True))
         upstream.protocol_version = "2025-11-25"
         upstream.send_ping = AsyncMock()
 
-        async def run_with_session(connected, **_: object) -> None:
+        async def run_with_session(
+            connected: Callable[[ClientSession], Awaitable[None]],
+            on_notification: object = None,
+        ) -> None:
+            _ = on_notification
             if idx == 1:
-                # Wait until target 0 has started, then raise a startup failure
                 await target_0_started.wait()
-                raise RuntimeError("upstream handshake failed")
-            else:
-                target_0_started.set()
-                try:
-                    await asyncio.sleep(10.0)
-                    await connected(upstream)
-                except asyncio.CancelledError:
-                    cancelled_targets.append(idx)
-                    raise
+                raise MCPError(code=-32000, message="upstream handshake failed")
+            target_0_started.set()
+            try:
+                await asyncio.sleep(10.0)
+                await connected(upstream)
+            except asyncio.CancelledError:
+                cancelled_targets.put_nowait(idx)
+                raise
 
-        client = Mock(spec=MCPClient)
+        client: Final = Mock(spec=MCPClient)
         client.run_with_session = AsyncMock(side_effect=run_with_session)
         return client
 
-    targets = tuple(
+    targets: Final = tuple(
         subscriptions.SubscriptionTarget(s, make_client(i), f"fingerprint-{i}") for i, s in enumerate(servers)
     )
 
@@ -696,26 +681,19 @@ async def test_upstream_target_startup_failure_cancels_peers_and_releases_slots(
     session.client_params = Mock()
     session.send_notification = AsyncMock()
 
-    try:
-        from exceptiongroup import BaseExceptionGroup
-    except ImportError:
-        BaseExceptionGroup = getattr(__builtins__, "BaseExceptionGroup", Exception)
-
     service: Final = subscriptions.GatewaySubscriptions(resolve_targets=resolve)
-    initial_upstream_borrowed = service._upstream_slots.borrowed_tokens
-    initial_listener_borrowed = service._slots.borrowed_tokens
+    initial_upstream_borrowed: Final = service._upstream_slots.borrowed_tokens
+    initial_listener_borrowed: Final = service._slots.borrowed_tokens
 
-    with pytest.raises((RuntimeError, BaseExceptionGroup)) as excinfo:
+    expected_error: Final = pytest.raises(MCPError)
+    with expected_error as exc_info:
         await service.legacy_session(
             context(session, "2025-11-25"),
             subscriptions.SubscriptionAuthorization(initial, authorize, lambda *_: "alice"),
         )
 
-    assert "upstream handshake failed" in repr(excinfo.value)
-
-    # Remaining peer relays must have been cancelled when inner task group caught failure
-    assert len(cancelled_targets) > 0
-
-    # Capacity slots must be fully released back to original baseline
+    assert exc_info.value.error.code == -32000
+    assert "upstream handshake failed" in exc_info.value.error.message
+    assert not cancelled_targets.empty()
     assert service._upstream_slots.borrowed_tokens == initial_upstream_borrowed
     assert service._slots.borrowed_tokens == initial_listener_borrowed
