@@ -451,12 +451,13 @@ async fn every_route_asks_the_pre_call_hook_before_it_reaches_a_provider(#[case]
     );
 }
 
-const FACTS: [Field; 5] = [
+const FACTS: [Field; 6] = [
     Field::KeyIdentity,
     Field::LoggedKeyIdentity,
     Field::Deployment,
     Field::AttemptTiming,
     Field::SpendLogId,
+    Field::SpendLogInput,
 ];
 
 /// A callback that keeps what the success log hands it of the call: the facts of `FACTS` and the
@@ -575,6 +576,45 @@ async fn the_success_log_is_told_who_called_which_deployment_answered_when_and_u
             json!("msg_1"),
             true,
         )
+    );
+}
+
+/// Python tags a call's spend log row with the client its `user-agent` names and then the header
+/// whole, read as Starlette decodes a header, so bytes that are UTF-8 on the wire are logged as
+/// the Latin-1 characters they decode to.
+#[rstest]
+#[tokio::test]
+async fn a_served_calls_spend_log_is_tagged_with_the_requests_user_agent() {
+    let upstream = answering(
+        ResponseTemplate::new(200).set_body_json(json!({"type": "message",
+        "role": "assistant", "model": "test-model", "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn", "usage": {"input_tokens": 8, "output_tokens": 14}})),
+    )
+    .await;
+    let facts = Arc::new(Facts::default());
+    let callback: Arc<dyn ErasedCallback> = facts.clone();
+    let app = support::app_with_callbacks("anthropic/test-model", &upstream.uri(), vec![callback]);
+    let body = json!({"model": "public/model", "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 16});
+    let request = Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .header(
+            "user-agent",
+            axum::http::HeaderValue::from_bytes("probe/1.0 (café)".as_bytes()).unwrap(),
+        )
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    to_bytes(response.into_body(), 4096).await.unwrap();
+    let (read, _) = facts.seen().await;
+
+    assert_eq!(
+        read["SpendLogInput"]["row"]["row"]["metadata"]["tags"],
+        json!([
+            "User-Agent: probe",
+            "User-Agent: probe/1.0 (caf\u{c3}\u{a9})"
+        ])
     );
 }
 

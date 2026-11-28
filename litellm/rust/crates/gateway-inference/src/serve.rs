@@ -7,11 +7,12 @@ use std::{sync::Arc, time::Duration};
 
 use axum::{
     extract::FromRequestParts,
-    http::{HeaderMap, request::Parts},
+    http::{HeaderMap, header::USER_AGENT, request::Parts},
     response::Response,
 };
 use litellm_gateway_auth::Authenticated;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
+use litellm_python_compat::unicode::decode_latin1;
 use litellm_router_core::Op;
 use serde_json::{Map, Value};
 
@@ -142,6 +143,10 @@ where
         if let Some(call_id) = &call.call_id {
             entries.call_id = Some(call_id.clone());
         }
+        entries.user_agent = call
+            .headers
+            .get(USER_AGENT)
+            .map(|agent| decode_latin1(agent.as_bytes()));
     });
     let served = match body {
         Ok(body) => hooks::around(gateway, identity, body, serve).await,

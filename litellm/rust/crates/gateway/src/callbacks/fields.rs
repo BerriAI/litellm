@@ -305,6 +305,7 @@ fn spend_log_input(entries: &CallState) -> Option<Value> {
         start: entries.start(),
         end: entries.end()?,
         provider: provider.as_deref(),
+        user_agent: entries.user_agent.as_deref(),
         call: entries.served()?,
     })
 }

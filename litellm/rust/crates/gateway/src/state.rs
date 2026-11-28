@@ -81,9 +81,15 @@ impl AppState {
         let connected = db::connect(config, &resources.secrets).await?;
         let database_unread = matches!(connected, db::Connected::Unread);
         let connected = connected.pools();
-        let spend_logs = connected
-            .as_ref()
-            .map(|(_, repositories)| Arc::new(SpendLog::start(repositories, &redis, &variables)));
+        let auth_cache = Arc::new(auth_cache(config, &redis, system_clock()));
+        let spend_logs = connected.as_ref().map(|(_, repositories)| {
+            Arc::new(SpendLog::start(
+                repositories,
+                &redis,
+                &variables,
+                auth_cache.clone(),
+            ))
+        });
         let Inference {
             gateway: inference,
             key_limiter,
@@ -107,7 +113,8 @@ impl AppState {
                     environment,
                 );
                 let spend_counters = spend_logs.spend_counters().clone();
-                let auth_store = Arc::new(auth_store(config, &redis, repositories, spend_counters));
+                let auth_store =
+                    Arc::new(auth_store(auth_cache, &redis, repositories, spend_counters));
                 (pools, (auth_store, (requests, Arc::new(flush))))
             })
             .unzip();
@@ -206,18 +213,17 @@ fn gateway_requests_flush(
     })
 }
 
-/// Where the gateway reads a virtual key: through the auth cache Python's `UserApiKeyCache` is,
-/// this process's memory in front of the database, with the coordination Redis between them when
-/// `enable_redis_auth_cache` attaches it. Every pod's evictions reach the memory whenever a
-/// coordination Redis carries them, as Python subscribes with the flag on or off, and so do its
-/// spend resets, to `spend_counters`, the counters the spend log charges.
+/// Where the gateway reads a virtual key: through `cache`, the auth cache Python's
+/// `UserApiKeyCache` is, which the spend log reads a cached tag's spend from too. Every pod's
+/// evictions reach its memory whenever a coordination Redis carries them, as Python subscribes
+/// with `enable_redis_auth_cache` on or off, and so do its spend resets, to `spend_counters`, the
+/// counters the spend log charges.
 pub(crate) fn auth_store(
-    config: &Config,
+    cache: Arc<AuthCache>,
     redis: &RedisClients,
     database: Database,
     spend_counters: Arc<SpendCounters>,
 ) -> AuthStore {
-    let cache = Arc::new(auth_cache(config, redis, system_clock()));
     if let Some(client) = &redis.coordination {
         hear_evictions(&cache, spend_counters, client);
     }
