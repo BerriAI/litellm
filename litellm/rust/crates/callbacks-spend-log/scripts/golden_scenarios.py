@@ -424,6 +424,27 @@ _EXTRA_SCENARIOS: Final[dict[str, tuple[dict[str, object], dict[str, object], di
             },
         ),
     ),
+    "websocket_continuation_turn_kept_whole": (
+        {"store_prompts_in_spend_logs": True, "spend_logs_prompt_storage": "latest_turn"},
+        {},
+        _scenario_kwargs(
+            call_type="_aresponses_websocket",
+            payload={"response": {"object": "response", "output": []}},
+            body={
+                "previous_response_id": "resp_prev",
+                "input": [{"type": "function_call_output", "call_id": "call_1", "output": "tool result"}],
+            },
+        ),
+    ),
+    "websocket_first_turn_trimmed": (
+        {"store_prompts_in_spend_logs": True, "spend_logs_prompt_storage": "latest_turn"},
+        {},
+        _scenario_kwargs(
+            call_type="_aresponses_websocket",
+            payload={"response": {"object": "response", "output": []}},
+            body={"input": [{"role": "user", "content": "first"}, {"role": "user", "content": "latest"}]},
+        ),
+    ),
     "vector_store_results_redacted": (
         {},
         {},

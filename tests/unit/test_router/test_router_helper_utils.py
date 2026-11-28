@@ -345,7 +345,7 @@ def _open_websocket_turn(routed: Mapping[str, object], call_id: str) -> Logging:
     connection: Final = routed["litellm_logging_obj"]
     assert isinstance(connection, Logging)
     connection.update_environment_variables(litellm_params=get_litellm_params(**routed), optional_params={})
-    return connection.copy_for_new_call(litellm_call_id=call_id, start_time=datetime.now())
+    return connection.copy_for_new_call(litellm_call_id=call_id, start_time=datetime.now(), request_body={})
 
 
 async def _complete_35_token_turn(turn: Logging) -> None:

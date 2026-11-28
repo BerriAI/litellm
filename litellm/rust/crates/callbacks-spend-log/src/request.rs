@@ -16,6 +16,8 @@ use crate::text::masked_ip_text;
 use crate::{RowError, SpendLogRowBuilder};
 
 const RESPONSES_CALL_TYPES: [&str; 2] = ["responses", "aresponses"];
+const STORED_CONVERSATION_CALL_TYPES: [&str; 3] =
+    ["responses", "aresponses", "_aresponses_websocket"];
 const STATEFUL_REQUEST_KEYS: [&str; 2] = ["previous_response_id", "conversation"];
 const TURNS_KEYS: [&str; 2] = ["messages", "input"];
 const TEXT_BLOCK_TYPES: [&str; 2] = ["text", "input_text"];
@@ -84,7 +86,7 @@ fn latest_user_message_text(turns: &Value) -> Option<String> {
 }
 
 fn continues_stored_conversation(body: &Value, call_type: &Value) -> bool {
-    matches!(call_type, Value::Str(kind) if RESPONSES_CALL_TYPES.contains(&kind.as_str()))
+    matches!(call_type, Value::Str(kind) if STORED_CONVERSATION_CALL_TYPES.contains(&kind.as_str()))
         && STATEFUL_REQUEST_KEYS
             .iter()
             .any(|key| truthy(get_or_none(body, key)))

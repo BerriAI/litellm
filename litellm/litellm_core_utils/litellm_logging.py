@@ -732,6 +732,26 @@ _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
+
+
+def turn_request_body(
+    connection_request: Mapping[str, object], request_body: Mapping[str, object]
+) -> Mapping[str, object]:
+    """One turn's request body with the long-lived connection's ``user``, the end user the turn's rows are billed to."""
+    connection_body: Final = connection_request.get("body")
+    end_user: Final = (
+        _LITELLM_PARAMS.validate_python(connection_body).get("user") if isinstance(connection_body, dict) else None
+    )
+    return {**request_body, "user": end_user} if end_user is not None else dict(request_body)
+
+
+def turn_proxy_server_request(
+    connection_request: Mapping[str, object], request_body: Mapping[str, object]
+) -> Mapping[str, object]:
+    """A long-lived connection's request with one turn's request body in place of the connection's."""
+    return {**connection_request, "body": turn_request_body(connection_request, request_body)}
+
+
 _REDACTED_RESULT: Final = TypeAdapter(object)
 _AGENT_PRICE: Final[TypeAdapter[float]] = TypeAdapter(Annotated[NonNegativeFloat, AllowInfNan(False)])
 _DECODED_BODY: Final = TypeAdapter(object)
@@ -1358,11 +1378,18 @@ class Logging(LiteLLMLoggingBaseClass):
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
         self.logging_only_guardrail_masked: bool = False
 
-    def copy_for_new_call(self, litellm_call_id: str, start_time: datetime.datetime) -> "Logging":
+    def copy_for_new_call(
+        self, litellm_call_id: str, start_time: datetime.datetime, request_body: Mapping[str, object]
+    ) -> "Logging":
         """One turn of a long-lived connection: the connection's deployment, key and metadata under its own call id,
-        start time and chunk buffers, so the turn logs and bills as a request of its own."""
+        start time, request body and chunk buffers, so the turn logs and bills as a request of its own."""
         connection_params: Final = _LITELLM_PARAMS.validate_python(
             self.litellm_params  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped
+        )
+        connection_request: Final = (
+            _LITELLM_PARAMS.validate_python(connection_params["proxy_server_request"])
+            if isinstance(connection_params.get("proxy_server_request"), dict)
+            else None
         )
         litellm_params: Final[dict[str, object]] = {
             **connection_params,
@@ -1371,6 +1398,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 for key, value in connection_params.items()
                 if key in _PER_CALL_LITELLM_PARAM_DICTS and isinstance(value, dict)
             },
+            **(
+                {"proxy_server_request": turn_proxy_server_request(connection_request, request_body)}
+                if connection_request is not None
+                else {}
+            ),
             "litellm_call_id": litellm_call_id,
         }
         new_call: Final = copy.copy(self)

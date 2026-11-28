@@ -2165,7 +2165,10 @@ def _failure_fields_to_lift(
         else ()
     )
     _entries: Final = (
-        ("start_time", _model_call_details.get("start_time")),
+        (
+            "start_time",
+            None if isinstance(request_data.get("start_time"), datetime) else _model_call_details.get("start_time"),
+        ),
         ("first_api_call_start_time", _first_handoff),
         ("call_type", _model_call_details.get("call_type")),
         ("combined_usage_object", None if _usage_to_lift is None else _usage_to_lift[0]),

@@ -3,7 +3,9 @@
 OpenAI bills each turn as a request, so one socket carrying two turns has to leave two
 rows, each keyed by the response id the client saw and priced from that turn's own usage,
 instead of one row at socket close that sums both (LIT-8949). A turn the provider fails
-leaves a failure row of its own and does not swallow the completed turn before it.
+leaves a failure row of its own and does not swallow the completed turn before it. With
+prompts stored, each row's request is that turn's own response.create, never the socket's
+first frame.
 """
 
 import asyncio
@@ -14,7 +16,14 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from integration._support.client import Gateway, eventually, gateway_from_environment, object_value, string_value
+from integration._support.client import (
+    Gateway,
+    eventually,
+    gateway_from_environment,
+    list_value,
+    object_value,
+    string_value,
+)
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy
 from integration._support.responses_stream import RATE_LIMIT_MESSAGE, openai_error_event
@@ -28,7 +37,8 @@ INPUT_RATE: Final = 0.001
 OUTPUT_RATE: Final = 0.002
 TURN_SPEND: Final = USAGE["input_tokens"] * INPUT_RATE + USAGE["output_tokens"] * OUTPUT_RATE
 SPEND_ROWS_FOR_KEY: Final = (
-    'SELECT request_id, spend, total_tokens, call_type, status, metadata FROM "LiteLLM_SpendLogs" WHERE api_key = %s'
+    "SELECT request_id, spend, total_tokens, call_type, status, metadata, proxy_server_request"
+    ' FROM "LiteLLM_SpendLogs" WHERE api_key = %s'
 )
 
 
@@ -42,6 +52,11 @@ def _key_hash(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()
 
 
+def _stored_prompt(row: dict[str, JsonValue]) -> str:
+    message: Final = object_value(list_value(object_value(row["proxy_server_request"])["input"])[0])
+    return string_value(object_value(list_value(message["content"])[0])["text"])
+
+
 @pytest.fixture(scope="module")
 def cert(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     return write_self_signed_cert(tmp_path_factory.mktemp("responses-ws-rows-cert"))
@@ -50,7 +65,11 @@ def cert(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 @pytest.fixture(scope="module")
 def candidate(tmp_path_factory: pytest.TempPathFactory, cert: tuple[Path, Path]) -> Iterator[Gateway]:
     with gateway_from_environment() as base:
-        with owned_proxy(base, tmp_path_factory.mktemp("responses-ws-rows"), {"SSL_CERT_FILE": str(cert[0])}) as proxy:
+        with owned_proxy(
+            base,
+            tmp_path_factory.mktemp("responses-ws-rows"),
+            {"SSL_CERT_FILE": str(cert[0]), "STORE_PROMPTS_IN_SPEND_LOGS": "true"},
+        ) as proxy:
             yield proxy
 
 
@@ -80,6 +99,10 @@ def test_two_turns_on_one_socket_leave_two_rows_keyed_by_the_response_ids_the_cl
         assert [float(row["spend"]) for row in rows] == [pytest.approx(TURN_SPEND)] * 2, rows
         assert {(row["call_type"], row["status"], row["total_tokens"]) for row in rows} == {
             ("_aresponses_websocket", "success", USAGE["total_tokens"])
+        }, rows
+        assert {str(row["request_id"]): _stored_prompt(row) for row in rows} == {
+            str(completed(first)["id"]): texts[0],
+            str(completed(second)["id"]): texts[1],
         }, rows
 
 
@@ -112,3 +135,7 @@ def test_a_turn_the_provider_rejects_leaves_its_own_failure_row_next_to_the_comp
         error: Final = object_value(object_value(by_status["failure"]["metadata"])["error_information"])
         assert str(error["error_code"]) == "429", error
         assert RATE_LIMIT_MESSAGE in string_value(error["error_message"]), error
+        assert {status: _stored_prompt(row) for status, row in by_status.items()} == {
+            "success": texts[0],
+            "failure": texts[1],
+        }, rows

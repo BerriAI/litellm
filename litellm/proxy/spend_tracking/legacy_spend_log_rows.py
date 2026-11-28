@@ -69,6 +69,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _RESPONSES_CALL_TYPES,
     _SCRUBBED_ERROR_TEXT_FIELDS,
     _SPEND_LOGS_PRIVACY_METADATA_ADAPTER,
+    _STORED_CONVERSATION_CALL_TYPES,
     _TOOL_OUTPUT_BLOCK_TYPES,
     _TRUNCATION_MARKER,
     _adapter_route_call_type,
@@ -302,8 +303,9 @@ def _latest_user_message_text(turns: object) -> str | None:
 
 
 def _continues_stored_conversation(request_body: Mapping[str, object], call_type: object) -> bool:
-    """Only `/v1/responses` resumes a stored conversation, so the same keys on a chat body do not exempt it."""
-    return call_type in _RESPONSES_CALL_TYPES and any(request_body.get(key) for key in _STATEFUL_REQUEST_KEYS)
+    """Only `/v1/responses`, over HTTP or a WebSocket, resumes a stored conversation, so the same keys on a chat body
+    do not exempt it."""
+    return call_type in _STORED_CONVERSATION_CALL_TYPES and any(request_body.get(key) for key in _STATEFUL_REQUEST_KEYS)
 
 
 def _replayed_by_responses_bridge(standard_payload: Mapping[str, object] | None) -> bool:

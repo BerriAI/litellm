@@ -83,6 +83,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+    CallTypes,
     LiteLLMBatch,
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
@@ -8414,17 +8415,19 @@ _CONTINUATION_BODIES: Final[tuple[dict[str, object], ...]] = (
     },
     {"model": "gpt-4o-mini", "conversation": "conv_1", "input": "next question"},
 )
-_NATIVE_RESPONSES_PAYLOAD: Final = {"call_type": "aresponses", "response": {"object": "response", "output": []}}
+_NATIVE_RESPONSES_RESPONSE: Final = {"object": "response", "output": []}
 
 
+@pytest.mark.parametrize("call_type", ["aresponses", CallTypes.aresponses_websocket.value])
 @pytest.mark.parametrize("body", _CONTINUATION_BODIES)
 def test_latest_turn_mode_keeps_the_whole_request_when_a_responses_call_continues_a_stored_conversation(
-    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object]
+    monkeypatch: pytest.MonkeyPatch, body: Mapping[str, object], call_type: str
 ) -> None:
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "general_settings", _LATEST_TURN_SETTINGS)
-    assert _stored_request_with_payload(body, _NATIVE_RESPONSES_PAYLOAD) == body
+    standard_payload: Final = {"call_type": call_type, "response": _NATIVE_RESPONSES_RESPONSE}
+    assert _stored_request_with_payload(body, standard_payload) == body
 
 
 @pytest.mark.parametrize(

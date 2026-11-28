@@ -884,6 +884,7 @@ _TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_
 _TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
 _LATEST_TURN_STORAGE: Final = "latest_turn"
 _RESPONSES_CALL_TYPES: Final = frozenset({"responses", "aresponses"})
+_STORED_CONVERSATION_CALL_TYPES: Final = frozenset({*_RESPONSES_CALL_TYPES, CallTypes.aresponses_websocket.value})
 _REQUEST_BODY_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
 _OMITTED_BLOCK_PLACEHOLDERS: Final = MappingProxyType(
