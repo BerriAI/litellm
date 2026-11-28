@@ -164,6 +164,8 @@ async def test_queue_timeout_rejects_and_decrements_queue(state: AdmissionContro
         ("", "/health/liveliness"),
         ("/proxy", "/proxy/health/liveliness"),
         ("/proxy", "/proxy/metrics"),
+        ("", "/in_flight/requests"),
+        ("/proxy", "/proxy/in_flight/cancel"),
     ),
 )
 async def test_exempt_path_passes_through_when_saturated(
@@ -191,6 +193,32 @@ async def test_exempt_path_passes_through_when_saturated(
     assert blocked[0]["status"] == 503
     lookalike: Final = await _call(middleware, "/proxyhealth/liveliness", "/proxy")
     assert lookalike[0]["status"] == 503
+    release.set()
+    await first
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/in_flight/requests/all", "/health/drain/x"))
+async def test_sub_path_of_an_exempt_route_is_still_gated_when_saturated(
+    state: AdmissionControlState,
+    path: str,
+) -> None:
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+
+    async def handler(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["path"] == "/":
+            started.set()
+            await release.wait()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    middleware: Final = AdmissionControlMiddleware(handler, lambda: AdmissionControlSettings(1, 0, 1.0), state)
+
+    first: Final = asyncio.create_task(_call(middleware))
+    await started.wait()
+    gated: Final = await _call(middleware, path)
+    assert gated[0]["status"] == 503
     release.set()
     await first
 

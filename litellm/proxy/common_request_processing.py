@@ -134,6 +134,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
 from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
+from litellm.proxy import in_flight_registry
 from litellm.proxy._types import LiteLLMRoutes, LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.answered_status import is_provider_overload, with_openai_overload_status
 from litellm.proxy.auth.auth_checks import (
@@ -449,6 +450,18 @@ def resolve_litellm_call_id(client_call_id: str | None) -> str:
     if client_call_id is not None and 0 < len(client_call_id) <= MAX_LITELLM_CALL_ID_LENGTH:
         return client_call_id
     return str(uuid.uuid4())
+
+
+def pick_litellm_call_id(request_data: Mapping[str, object], resolved_header_call_id: str) -> str:
+    """Prefer a ``litellm_call_id`` already placed in the request body (routes that
+    run the pre-call logic directly), but only under the same bound the header path
+    enforces in ``resolve_litellm_call_id``: a bounded non-empty string. Anything
+    else (missing, wrong type, oversized) falls back to the resolved header value,
+    so log sinks never receive oversized ids from client-controlled bodies."""
+    body_call_id: Final = request_data.get("litellm_call_id")
+    if isinstance(body_call_id, str) and 0 < len(body_call_id) <= MAX_LITELLM_CALL_ID_LENGTH:
+        return body_call_id
+    return resolved_header_call_id
 
 
 def should_return_raw_model_name(request_data: Mapping[str, object]) -> bool:
@@ -3415,7 +3428,10 @@ class ProxyBaseLLMRequestProcessing:
                 )
             )
 
-        litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+        litellm_call_id: Final = pick_litellm_call_id(
+            cast(dict[str, object], self.data),  # cast-ok: self.data is an untyped legacy request dict
+            resolve_litellm_call_id(request.headers.get("x-litellm-call-id")),
+        )
         self.data["litellm_call_id"] = litellm_call_id
         bind_telemetry_call_id(litellm_call_id)
         DDSpanTagger.tag_call_id(litellm_call_id)
@@ -3927,6 +3943,23 @@ class ProxyBaseLLMRequestProcessing:
         ``litellm_settings.sse_keepalive_ping_interval_seconds``.
         """
         answers_as_anthropic: Final = route_type == "anthropic_messages"
+
+        request_data: Final = cast(dict[str, object], self.data)  # cast-ok: self.data is an untyped legacy request dict
+        litellm_call_id: Final = pick_litellm_call_id(
+            request_data, resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+        )
+        request_data["litellm_call_id"] = litellm_call_id
+        current_task: Final = asyncio.current_task()
+        handle: Final = in_flight_registry.register(
+            litellm_call_id,
+            current_task,
+            model=str(request_data.get("model") or ""),
+            user_id=getattr(user_api_key_dict, "user_id", None),
+            key_alias=getattr(user_api_key_dict, "key_alias", None),
+            is_streaming=bool(is_streaming_request),
+        )
+        if handle is not None and current_task is not None:
+            current_task.add_done_callback(lambda _: in_flight_registry.unregister_if_owned(handle, current_task))
 
         async def _audit_late_failure(exc: Exception) -> HTTPException | None:
             # Once a keepalive is on the wire this can no longer raise, so the
