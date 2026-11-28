@@ -40,6 +40,16 @@ pub enum KeyError {
         "the key uses legacy OpenSSL PEM encryption, which Rust cannot read. Convert it to PKCS#8 with `openssl pkcs8 -topk8`"
     )]
     LegacyEncryption,
+    #[cfg(feature = "fips")]
+    #[error(
+        "the key is encrypted with des-ede3-cbc, which the FIPS build does not allow. Re-encrypt it with PBKDF2-HMAC-SHA256 and AES-256-CBC: `openssl pkcs8 -topk8 -v2 aes-256-cbc -v2prf hmacWithSHA256`"
+    )]
+    TripleDes,
+    #[cfg(feature = "fips")]
+    #[error(
+        "ssl_password does not decrypt the key, or the FIPS module does not read its encryption scheme (AWS-LC: {0}). Keys encrypted with PBKDF2-HMAC-SHA256 and AES-256-CBC are read: `openssl pkcs8 -topk8 -v2 aes-256-cbc -v2prf hmacWithSHA256`"
+    )]
+    FipsDecrypt(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

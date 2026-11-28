@@ -7,7 +7,7 @@ repository.workspace = true
 
 [features]
 test-support = []
-fips = ["rustls/fips", "litellm-http/fips", "litellm-at-rest/fips"]
+fips = ["rustls/fips", "litellm-http/fips", "litellm-at-rest/fips", "litellm-redis-client/fips"]
 
 [dependencies]
 litellm-at-rest.workspace = true

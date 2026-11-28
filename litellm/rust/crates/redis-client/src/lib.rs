@@ -5,6 +5,8 @@ mod config;
 mod connection;
 mod error;
 mod events;
+#[cfg(feature = "fips")]
+mod fips;
 mod namespace;
 mod pipeline;
 mod pubsub;
