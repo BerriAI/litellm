@@ -45,6 +45,9 @@ export const pageDescriptions: Record<string, ParseKeys> = {
   telemetry: "shell.pageDescriptions.telemetry",
   "logging-and-alerts": "shell.pageDescriptions.loggingAndAlerts",
   "admin-panel": "shell.pageDescriptions.adminPanel",
+  "tape-check": "shell.pageDescriptions.tapeCheck",
+  "lost-fields": "shell.pageDescriptions.lostFields",
+  "key-split": "shell.pageDescriptions.keySplit",
 };
 
 export interface PageMetadata {
