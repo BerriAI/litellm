@@ -21,6 +21,8 @@ import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from itertools import chain, groupby
+from operator import itemgetter
 from types import MappingProxyType, TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -2226,15 +2228,22 @@ def _check_key_model_io_limits(
     entity_type: str,
 ) -> None:
     for name, label in (("model_itpm_limit", "ITPM"), ("model_otpm_limit", "OTPM")):
+        allocated: Final = _summed_io_limits((key.metadata for key in keys), name)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+        entity_limits: Final = io_limit_entries(entity_metadata, name)
         for model, limit in io_limit_entries(data.metadata, name).items():  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
             if detail := _io_overallocation(
                 label,
-                sum(io_limit_entries(key.metadata, name).get(model, 0) for key in keys),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+                allocated.get(model, 0),
                 limit,
-                ((label, io_limit_entries(entity_metadata, name).get(model) or None), ("TPM", entity_tpm_limit)),
+                ((label, entity_limits.get(model) or None), ("TPM", entity_tpm_limit)),
                 entity_type,
             ):
                 raise HTTPException(status_code=400, detail=detail)
+
+
+def _summed_io_limits(metadatas: Iterable[object], name: str) -> Mapping[str, int]:
+    entries: Final = sorted(chain.from_iterable(io_limit_entries(metadata, name).items() for metadata in metadatas))
+    return {model: sum(limit for _, limit in group) for model, group in groupby(entries, key=itemgetter(0))}
 
 
 def check_team_key_rpm_tpm_limits(

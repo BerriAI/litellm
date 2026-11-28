@@ -4883,6 +4883,23 @@ def test_a_key_io_limit_within_the_team_tpm_limit_but_over_the_team_io_limit_is_
     assert f"is greater than team {label} limit=1000" in str(refused.value.detail)
 
 
+def test_the_team_keys_io_allocations_are_summed_per_model():
+    keys: Final = [
+        LiteLLM_VerificationToken(token="a", metadata={"model_otpm_limit": {"gpt-4": 300, "claude": 900}}),
+        LiteLLM_VerificationToken(token="b", metadata={"model_otpm_limit": {"claude": 50, "gpt-4": 400}}),
+    ]
+    with pytest.raises(HTTPException) as refused:
+        check_team_key_model_specific_limits(
+            keys=keys,
+            team_table=_io_team_table("model_otpm_limit"),
+            data=GenerateKeyRequest(metadata={"model_otpm_limit": {"gpt-4": 400}}),
+        )
+
+    assert "Allocated OTPM limit=700 + Key OTPM limit=400 is greater than team OTPM limit=1000" in str(
+        refused.value.detail
+    )
+
+
 @pytest.mark.parametrize("limit", ["model_itpm_limit", "model_otpm_limit"])
 def test_a_key_io_limit_the_team_can_fit_is_accepted(limit: str):  # test-quality-ok: accepting means not raising
     check_team_key_model_specific_limits(
