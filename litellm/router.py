@@ -29,6 +29,7 @@ from litellm.types.router import (
     AllowedFailsPolicy,
     AssistantsTypedDict,
     AutoRouterCapabilityLimit,
+    CandidateAccessCheck,
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
@@ -127,6 +128,7 @@ def _router_init(
     auto_router_capability_limit: AutoRouterCapabilityLimit | None = None,
     session_affinity_repin_on_failover: bool = False,
     enable_cross_model_group_collision_check: bool | None = None,
+    candidate_access_check: CandidateAccessCheck | None = None,
 ) -> None:
     """
     Initialize the Router class with the given parameters for caching, reliability, and routing strategy.
@@ -173,6 +175,7 @@ def _router_init(
         fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
         fallback_budget_check (Optional[FallbackBudgetCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over budget is skipped. Defaults to None (budget is not re-checked on fallback).
         fallback_rate_limit_check (Optional[FallbackRateLimitCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects as over its per-model rate limit is skipped. Defaults to None (rate limits are not re-checked on fallback).
+        candidate_access_check (Optional[CandidateAccessCheck]): Awaited on the deployments a request resolved to when it names a deployment's `litellm_params.model` and the check applies to its caller; only the deployments it keeps may serve the request, and a request left with none is refused. Defaults to None (every resolved deployment may serve).
     Returns:
         Router: An instance of the litellm.Router class.
 

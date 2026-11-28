@@ -2531,6 +2531,7 @@ async def run_centralized_common_checks(
     *,
     force_virtual_key_checks: bool = False,
     sub_call: bool = False,
+    admit_deployment_selector: bool = False,
 ) -> None:
     """Run ``common_checks`` once at the ``user_api_key_auth`` wrapper
     boundary, regardless of which ``user_api_key_auth_builder`` path
@@ -2913,6 +2914,7 @@ async def run_centralized_common_checks(
             valid_token=user_api_key_auth_obj,
             skip_budget_checks=skip_budget_checks,
             project_object=project_object,
+            admit_deployment_selector=admit_deployment_selector,
         )
         if not skip_budget_checks:
             models: Final = get_model_names_for_budget_checks(
@@ -3274,6 +3276,7 @@ async def _authorize_authenticated_request_checks(
                                 register=register,
                                 register_organization=register_organization,
                                 header_names=customer_header_names,
+                                admit_deployment_selector=True,
                             ),
                             header_names=customer_header_names,
                         )
@@ -3288,6 +3291,7 @@ async def _authorize_authenticated_request_checks(
                         request_model,
                         route,
                         user_api_key_auth_obj,
+                        admit_deployment_selector=True,
                     )
                     user_api_key_auth_obj.customer_hierarchy = app_hierarchy  # rebind-ok: request auth state
             except CustomerBudgetExceededError as error:
@@ -3312,6 +3316,7 @@ async def _authorize_authenticated_request_checks(
                 request=request,
                 llm_model_list=llm_model_list,
                 llm_router=llm_router,
+                admit_deployment_selector=True,
             )
 
         store: Final = AgentIdentityStore.from_client(prisma_client) if prisma_client is not None else None
@@ -3361,6 +3366,7 @@ async def _authorize_authenticated_request_checks(
             request_data=authorized_data,
             route=route,
             force_virtual_key_checks=force_virtual_key_checks,
+            admit_deployment_selector=True,
         )
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
@@ -3813,6 +3819,7 @@ async def enforce_key_and_fallback_model_access(
     request: Request | None,
     llm_model_list: Sequence[object] | None,
     llm_router: litellm.Router | None,
+    admit_deployment_selector: bool = False,
 ) -> None:
     """
     Key-level model allowlist and client fallbacks (same as standard auth).
@@ -3844,6 +3851,7 @@ async def enforce_key_and_fallback_model_access(
                 llm_model_list=llm_model_list,
                 valid_token=valid_token,
                 llm_router=llm_router,
+                admit_deployment_selector=admit_deployment_selector,
             )
 
         fallback_names: Final = tuple(

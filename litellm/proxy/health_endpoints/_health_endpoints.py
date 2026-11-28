@@ -40,7 +40,6 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_UserTable,
     LitellmUserRoles,
-    ModelAccessDeniedProxyException,
     ProxyException,
     SpecialModelNames,
     UserAPIKeyAuth,
@@ -49,21 +48,16 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     _resolve_key_models_for_auth_check,  # pyright: ignore[reportPrivateUsage]  # the auth layer's sentinel resolution, reused so /health scopes exactly like a request
     agent_model_grants,
-    can_agent_call_model,
-    can_key_call_resolved_model,
-    can_user_call_model,
-    get_user_object,
+    deployment_access_groups,
     key_model_aliases_for_auth_check,
     model_matches_any_wildcard_pattern_in_list,
     team_model_aliases_for_auth_check,
-)
-from litellm.proxy.auth.auth_exception_handler import (
-    _as_proxy_exception,  # pyright: ignore[reportPrivateUsage]  # one auth-failure mapping, shared with user_api_key_auth
 )
 from litellm.proxy.auth.auth_utils import (
     _BANNED_REQUEST_BODY_PARAMS,  # pyright: ignore[reportPrivateUsage]  # one canonical list, shared with the request-body check
     VERTEX_TARGET_PARAMS,
 )
+from litellm.proxy.auth.candidate_model_access import key_may_call_model, key_owner
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils import http_parsing_utils
 from litellm.proxy.common_utils.model_listing_utils import (
@@ -292,18 +286,6 @@ class _ModelGrants(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     models: tuple[object, ...] = ()
-
-
-class _ModelInfoAccessGroups(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    access_groups: tuple[object, ...]
-
-
-class _DeploymentAccessGroups(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    model_info: _ModelInfoAccessGroups
 
 
 services = (
@@ -1158,62 +1140,6 @@ def _public_names_by_internal_name(llm_model_list: Sequence[object], team_id: st
     return MappingProxyType(dict(names for names in team_names if names is not None))
 
 
-async def _key_owner(user_api_key_dict: UserAPIKeyAuth) -> LiteLLM_UserTable | None:
-    if user_api_key_dict.team_id is not None or user_api_key_dict.user_id is None:
-        return None
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
-
-    try:
-        return await get_user_object(
-            user_id=user_api_key_dict.user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-            parent_otel_span=user_api_key_dict.parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except Exception:  # noqa: BLE001  # auth reads an unloadable user as no user limit, so /health does too
-        return None
-
-
-async def _key_may_call_model(
-    model_name: str,
-    user_api_key_dict: UserAPIKeyAuth,
-    owner: LiteLLM_UserTable | None,
-    llm_router: Router | None,
-) -> bool:
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
-
-    await asyncio.sleep(0)
-    try:
-        await can_key_call_resolved_model(
-            model=model_name, llm_model_list=None, valid_token=user_api_key_dict, llm_router=llm_router
-        )
-        await can_agent_call_model(
-            model=model_name,
-            valid_token=user_api_key_dict,
-            llm_router=llm_router,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-        await can_user_call_model(
-            model=model_name,
-            llm_router=llm_router,
-            user_object=owner,
-            key_model_aliases=key_model_aliases_for_auth_check(user_api_key_dict),
-        )
-    except ModelAccessDeniedProxyException:
-        return False
-    except ProxyException:
-        raise
-    except Exception as failure:
-        if isinstance(failure, HTTPException) and failure.status_code == status.HTTP_403_FORBIDDEN:
-            return False
-        raise _as_proxy_exception(failure) from failure
-    return True
-
-
 async def _caller_aliases(user_api_key_dict: UserAPIKeyAuth) -> CallerAliases:
     from litellm.proxy.proxy_server import prisma_client, proxy_config, proxy_logging_obj
 
@@ -1284,15 +1210,6 @@ def _ids_of(deployments: Iterable[object]) -> frozenset[str]:
     return frozenset(model_id for model_id in map(_deployment_id, deployments) if model_id is not None)
 
 
-def _access_groups_of(deployment: object) -> frozenset[str]:
-    match deployment:
-        case {"model_info": {"access_groups": list()}}:
-            access_groups: Final = _DeploymentAccessGroups.model_validate(deployment).model_info.access_groups
-            return frozenset(access_group for access_group in access_groups if isinstance(access_group, str))
-        case _:
-            return frozenset()
-
-
 @dataclass(frozen=True, slots=True)
 class _AccessGroupGrants:
     granted_names: frozenset[str]
@@ -1316,7 +1233,7 @@ class _AccessGroupGrants:
 def _access_group_grants(llm_model_list: Sequence[object], user_api_key_dict: UserAPIKeyAuth) -> _AccessGroupGrants:
     granted: Final = _granted_names(user_api_key_dict)
     in_granted_groups: Final = (
-        deployment for deployment in llm_model_list if not granted.isdisjoint(_access_groups_of(deployment))
+        deployment for deployment in llm_model_list if not granted.isdisjoint(deployment_access_groups(deployment))
     )
     return _AccessGroupGrants(granted, _ids_of(in_granted_groups))
 
@@ -1352,7 +1269,7 @@ async def _names_key_may_request(
         [
             name
             for name in names
-            if await _key_may_call_model(_model_auth_checks(name, aliases), user_api_key_dict, owner, llm_router)
+            if await key_may_call_model(_model_auth_checks(name, aliases), user_api_key_dict, owner, llm_router)
         ]
     )
 
@@ -1690,7 +1607,7 @@ async def health_endpoint(
                 _OBJECTS.validate_python(llm_model_list),
                 aliases,
                 user_api_key_dict,
-                await _key_owner(user_api_key_dict),
+                await key_owner(user_api_key_dict),
                 llm_router,
             )
             if aliases is not None

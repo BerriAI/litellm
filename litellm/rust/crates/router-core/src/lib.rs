@@ -498,7 +498,11 @@ impl Router {
             .await?;
         let name = match routed {
             PreRouted::Model(name) | PreRouted::Bound { model: name, .. } => name,
-            PreRouted::Deployment(deployment) => return Ok(deployment),
+            PreRouted::Deployment(deployment) => {
+                return call
+                    .authorized_pick(&snapshot, op, request, &request.model, deployment)
+                    .await;
+            }
         };
         snapshot.missing_routing_group(request, &name)?;
         let candidates = call

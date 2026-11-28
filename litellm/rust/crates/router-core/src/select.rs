@@ -324,6 +324,45 @@ impl<H: RouterHost> Call<'_, H> {
         }
     }
 
+    /// The deployments of `candidates` the host lets the caller use, for a request that asks
+    /// (`authorize_candidates`): every pick runs it on what its name resolved to, even nothing,
+    /// and a caller the host restricts and leaves with none is refused.
+    pub(crate) async fn authorized(
+        &self,
+        ctx: &RoutingContext<'_>,
+        candidates: Vec<Arc<Deployment>>,
+    ) -> Result<Vec<Arc<Deployment>>, Error> {
+        if !ctx.request.authorize_candidates {
+            return Ok(candidates);
+        }
+        match self.host.authorize_candidates(ctx, &candidates).await? {
+            None => Ok(candidates),
+            Some(kept) if kept.is_empty() => Err(Error::NoAccessibleDeployment {
+                model: ctx.name.to_owned(),
+            }),
+            Some(kept) => Ok(kept),
+        }
+    }
+
+    /// A custom strategy's pick for `name`, which no resolution filtered: served only when the
+    /// caller may use it.
+    pub(crate) async fn authorized_pick(
+        &self,
+        snapshot: &RouterStateSnapshot,
+        op: &Op,
+        request: &RouterRequest,
+        name: &str,
+        deployment: Arc<Deployment>,
+    ) -> Result<Arc<Deployment>, Error> {
+        let ctx = self.context(snapshot, op, request, name, name, StrategyScope::Default);
+        let kept = self.authorized(&ctx, vec![deployment]).await?;
+        kept.into_iter()
+            .next()
+            .ok_or_else(|| Error::NoAccessibleDeployment {
+                model: name.to_owned(),
+            })
+    }
+
     /// The eligible deployments for `name`, in filter-chain order.
     pub(crate) async fn candidates(
         &self,
@@ -397,8 +436,8 @@ impl<H: RouterHost> Call<'_, H> {
         let usable = filter_team_based(resolution.deployments.clone(), request)?;
         // `_filter_reserved_deployments`: PTU shares keep holders to their share and everyone
         // else to the deployments split into none.
-        let (mut all, withheld) = crate::ptu::filter_shared(usable, team_id);
-        if withheld && all.is_empty() {
+        let (shared, withheld) = crate::ptu::filter_shared(usable, team_id);
+        if withheld && shared.is_empty() {
             return Err(Error::PtuReserved {
                 model: match resolution.kind {
                     ResolveKind::Id => first_model.unwrap_or_else(|| name.to_owned()),
@@ -407,6 +446,9 @@ impl<H: RouterHost> Call<'_, H> {
                 },
             });
         }
+        let scope = StrategyScope::Default;
+        let ctx = self.context(snapshot, op, request, &resolution.group, name, scope);
+        let mut all = self.authorized(&ctx, shared).await?;
         let skip_batch_only = skips_batch_only(request, &all);
         let listed =
             request.pass_through == Some(PassThrough::Listed) && !resolution.kind.is_single();

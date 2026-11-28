@@ -3685,3 +3685,49 @@ async def test_a_request_a_hook_turned_streaming_runs_unbounded_under_a_header_t
 
     assert chunks
     assert deadline is not None and deadline.allows_wait(10**9)
+
+
+def _router_with_a_group_a_deployment(**settings: object) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "name-a",
+                "litellm_params": {"model": "openai/held-through-a-group", "api_key": "k", "mock_response": "hi"},
+                "model_info": {"access_groups": ["group-a"]},
+            }
+        ],
+        **settings,  # pyright: ignore[reportArgumentType]  # router settings as the proxy passes them
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("data", "route_type", "settings"),
+    [
+        pytest.param(
+            {"messages": list(_HELLO_MESSAGES)},
+            "acompletion",
+            {"router_general_settings": RouterGeneralSettings(pass_through_all_models=True)},
+            id="pass_through_all_models",
+        ),
+        pytest.param(
+            {"messages": list(_HELLO_MESSAGES), "user_config": {"model_list": []}}, "acompletion", {}, id="user_config"
+        ),
+        pytest.param({}, "alist_evals", {}, id="evals"),
+    ],
+)
+async def test_a_dispatch_outside_the_router_refuses_a_litellm_model_the_key_holds_only_through_a_deployment(
+    data: dict[str, object], route_type: str, settings: dict[str, object]
+) -> None:
+    from litellm.proxy._types import ModelAccessDeniedProxyException, ProxyErrorTypes
+
+    with pytest.raises(ModelAccessDeniedProxyException) as denied:
+        await route_request(
+            {**data, "model": "openai/held-through-a-group"},
+            _router_with_a_group_a_deployment(**settings),
+            None,
+            route_type,  # pyright: ignore[reportArgumentType]  # a route type literal per case
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed", models=["group-a"]),
+        )
+
+    assert denied.value.type == ProxyErrorTypes.key_model_access_denied

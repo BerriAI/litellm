@@ -214,7 +214,11 @@ def customer_request_auth(data: Mapping[str, object]) -> UserAPIKeyAuth | None:
 
 
 def check_customer_request_model_access(
-    data: Mapping[str, object], auth: UserAPIKeyAuth | None, llm_router: "Router | None"
+    data: Mapping[str, object],
+    auth: UserAPIKeyAuth | None,
+    llm_router: "Router | None",
+    *,
+    admit_deployment_selector: bool = False,
 ) -> None:
     if auth is None or not auth.customer_model_scopes:
         return
@@ -223,8 +227,10 @@ def check_customer_request_model_access(
 
     requested: Final = _CUSTOMER_REQUEST_MODELS.validate_python(data.get("model"))
     names: Final = (requested,) if isinstance(requested, str) else (requested or ())
-    for model in (*names, *request_fallback_model_names(data)):
-        check_customer_model_access(model=model, valid_token=auth, llm_router=llm_router)
+    for model in names:
+        check_customer_model_access(model, auth, llm_router, admit_deployment_selector)
+    for fallback_model in request_fallback_model_names(data):
+        check_customer_model_access(model=fallback_model, valid_token=auth, llm_router=llm_router)
 
 
 async def resolve_customer_request_usage(
@@ -3601,7 +3607,9 @@ async def add_litellm_data_to_request(
     if holds_api_key_secret_reference(data):  # pyright: ignore[reportUnknownArgumentType]  # data is an untyped dict
         raise HTTPException(status_code=400, detail=API_KEY_SECRET_REFERENCE_REJECTION)
 
-    check_customer_request_model_access(_REQUEST_FIELDS.validate_python(data), _customer_request_auth, llm_router)
+    check_customer_request_model_access(
+        _REQUEST_FIELDS.validate_python(data), _customer_request_auth, llm_router, admit_deployment_selector=True
+    )
 
     ## ENFORCED PARAMS CHECK
     # loop through each enforced param

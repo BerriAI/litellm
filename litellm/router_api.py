@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.router import (
         AllowedFailsPolicy,
+        CandidateAccessCheck,
         CustomRoutingStrategyBase,
         Deployment,
         DeploymentModelListingInfo,
@@ -293,6 +294,7 @@ ROUTER_INIT_ARGS: Final[tuple[str, ...]] = (
     "auto_router_capability_limit",
     "session_affinity_repin_on_failover",
     "enable_cross_model_group_collision_check",
+    "candidate_access_check",
 )
 
 
@@ -1438,6 +1440,7 @@ SETTING_FIELDS: Final[tuple[str, ...]] = (
     "fallback_access_check",
     "fallback_budget_check",
     "fallback_rate_limit_check",
+    "candidate_access_check",
     "kubernetes_pod_discovery",
     "search_tools",
     "guardrail_list",
@@ -1509,6 +1512,7 @@ class RouterSettings:
     fallback_access_check: "FallbackAccessCheck | None" = None
     fallback_budget_check: "FallbackBudgetCheck | None" = None
     fallback_rate_limit_check: "FallbackRateLimitCheck | None" = None
+    candidate_access_check: "CandidateAccessCheck | None" = None
     kubernetes_pod_discovery: "KubernetesPodDiscovery" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)
     search_tools: "list[SearchToolTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     guardrail_list: "list[GuardrailTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
@@ -1910,6 +1914,14 @@ class RoutingContext:
     async def fallback_rate_limit_allowed(self, *, model: str, request_kwargs: Mapping[str, object]) -> bool:
         check: Final = self._router.settings().fallback_rate_limit_check
         return check is None or await _run_fallback_check(check, self, model=model, request_kwargs=request_kwargs)
+
+    async def accessible_candidates(
+        self, *, model: str, candidate_ids: Sequence[str], request_kwargs: Mapping[str, object]
+    ) -> Sequence[str] | None:
+        check: Final = self._router.settings().candidate_access_check
+        if check is None:
+            return None
+        return await check(model=model, candidate_ids=candidate_ids, request_kwargs=request_kwargs, ctx=self)
 
     def pre_call_checks(
         self,

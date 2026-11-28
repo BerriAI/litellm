@@ -448,9 +448,11 @@ fn fallback_lookup<'a>(
 /// holds, somewhere in the walk: the request ends with that error, whichever level or fallback hop
 /// raised it.
 fn ends_call(error: &Error) -> bool {
-    matches!(error, Error::Refused(_))
-        || retried_failure(error)
-            .is_some_and(|failure| failure.queue_rejected() || failure.is_unknown_follow_up())
+    matches!(
+        error,
+        Error::Refused(_) | Error::NoAccessibleDeployment { .. }
+    ) || retried_failure(error)
+        .is_some_and(|failure| failure.queue_rejected() || failure.is_unknown_follow_up())
 }
 
 fn may_have_created(error: &Error) -> bool {
@@ -1421,7 +1423,7 @@ impl<H: RouterHost> Call<'_, H> {
         let pick_started = self.health().now_time();
         let (deployment, candidates) = match self.picked(level, inputs, retry).await {
             Ok(picked) => picked,
-            Err(failed) if request.passthrough_on_no_deployment => {
+            Err(failed) if request.passthrough_on_no_deployment && !ends_call(&failed.error) => {
                 self.pick_failed(level, &failed.error);
                 return self.unrouted_attempt(level, (retry, max_retries)).await;
             }
@@ -1685,6 +1687,9 @@ impl<H: RouterHost> Call<'_, H> {
             // A custom strategy's pick is served as is, for the requested name.
             PreRouted::Bound { .. } => unreachable!("mapped to a model above"),
             PreRouted::Deployment(deployment) => {
+                let deployment = self
+                    .authorized_pick(snapshot, op, request, &target.group, deployment)
+                    .await?;
                 let candidates = Candidates {
                     name: target.group.clone(),
                     model_group: target.group.clone(),

@@ -103,6 +103,9 @@ pub(crate) enum Stage {
     /// `f"{provider}/{model}"` for a name no wildcard pattern matches as spelled: return it as
     /// the one entry of `models`.
     ProviderRequest,
+    /// The host's model access checks on what a name resolved to: return the candidates the
+    /// caller may use as `models`, `None` when it may use any.
+    AuthorizeCandidates,
 }
 
 /// One [`RouterCache`] op, as a `cache` step carries it to Python.
@@ -1060,6 +1063,27 @@ impl RouterHost for PythonRouterHost {
             kept: answered_by_id(&candidates, &ids),
             preferred,
         })
+    }
+
+    async fn authorize_candidates(
+        &self,
+        ctx: &RoutingContext<'_>,
+        candidates: &[Arc<Deployment>],
+    ) -> Result<Option<Vec<Arc<Deployment>>>, Error> {
+        let (scope, group) = ctx.scope.wire();
+        let call = HostCall::Select {
+            stage: Stage::AuthorizeCandidates,
+            pool: Vec::new(),
+            model_group: ctx.model_group.to_owned(),
+            name: ctx.name.to_owned(),
+            scope,
+            group: group.map(str::to_owned),
+            candidates: candidates.iter().map(|d| d.id.clone()).collect(),
+        };
+        let HostCallResponse::Models(kept) = answered(call_host(call).await)? else {
+            unreachable!("{CHECKED}");
+        };
+        Ok(kept.map(|ids| answered_by_id(candidates, &ids)))
     }
 
     async fn allow_fallback(&self, target: &str) -> Result<bool, AttemptError> {

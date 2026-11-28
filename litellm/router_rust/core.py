@@ -69,6 +69,8 @@ from litellm.litellm_core_utils.routing_common_utils import (
     format_no_fallback_group_message,
     get_request_team_id,
     is_web_search_request,
+    names_deployment_selector,
+    request_user_api_key_auth,
     truncate_fallback_error_detail,
 )
 from litellm.litellm_core_utils.routing_groups import validate_routing_strategy
@@ -399,6 +401,7 @@ _SERVED_ARGUMENTS: Final = frozenset(
         "fallback_access_check",
         "fallback_budget_check",
         "fallback_rate_limit_check",
+        "candidate_access_check",
         "enable_mid_stream_fallback_continuation",
         "redis_url",
         "redis_host",
@@ -490,6 +493,7 @@ _DYNAMIC_SETTINGS: Final = frozenset(
         "fallback_access_check",
         "fallback_budget_check",
         "fallback_rate_limit_check",
+        "candidate_access_check",
         "routing_strategy_args",
         "enable_tag_filtering",
         "tag_filtering_match_any",
@@ -754,6 +758,7 @@ class Resolved:
     fallback_access_check: object
     fallback_budget_check: object
     fallback_rate_limit_check: object
+    candidate_access_check: object
     enable_mid_stream_fallback_continuation: bool = False
     routing_groups: "tuple[RoutingGroup, ...]" = ()
     enable_tag_filtering: bool = False
@@ -872,6 +877,7 @@ class Resolved:
             fallback_access_check=get("fallback_access_check"),
             fallback_budget_check=get("fallback_budget_check"),
             fallback_rate_limit_check=get("fallback_rate_limit_check"),
+            candidate_access_check=get("candidate_access_check"),
             enable_mid_stream_fallback_continuation=continuation_flag(get("enable_mid_stream_fallback_continuation")),
             enable_tag_filtering=bool(get("enable_tag_filtering")),
             tag_filtering_match_any=_true_unless_given(get("tag_filtering_match_any")),
@@ -2112,6 +2118,7 @@ class RustCore(
             fallback_access_check=r.fallback_access_check,  # pyright: ignore[reportArgumentType]  # the check as passed
             fallback_budget_check=r.fallback_budget_check,  # pyright: ignore[reportArgumentType]  # the check as passed
             fallback_rate_limit_check=r.fallback_rate_limit_check,  # pyright: ignore[reportArgumentType]  # the check as passed
+            candidate_access_check=r.candidate_access_check,  # pyright: ignore[reportArgumentType]  # the check as passed
             cache_responses=self._endpoints.cache_responses,
             search_tools=self._endpoints.search_tools,  # pyright: ignore[reportArgumentType]  # the configured entries, as passed
             guardrail_list=self._endpoints.guardrail_list,  # pyright: ignore[reportArgumentType]  # same
@@ -3020,7 +3027,29 @@ class RustCore(
             ),
         )
 
-    def _routing_fields(self, request: Mapping[str, object], messages: object = None) -> Mapping[str, object]:
+    def _authorizes_candidates(self, request: Mapping[str, object], model: object) -> bool:
+        """Whether the candidate access check decides which resolved deployments may serve the request:
+        a caller's request for a name that selects deployments by their ``litellm_params.model``, which
+        no model access check keys by."""
+        return (
+            self._resolved.candidate_access_check is not None
+            and isinstance(model, str)
+            and request_user_api_key_auth(request) is not None
+            and names_deployment_selector(model, self.registry())
+        )
+
+    async def _accessible_candidates(
+        self, step: Mapping[str, object], request: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        """An ``authorize_candidates`` step: the candidates the request's caller may use, None for any."""
+        kept: Final = await self._core_ctx.accessible_candidates(
+            model=str(step.get("model")), candidate_ids=_strings(step.get("candidates")), request_kwargs=request
+        )
+        return {"models": None if kept is None else list(kept)}
+
+    def _routing_fields(
+        self, request: Mapping[str, object], messages: object = None, *, model: object = None
+    ) -> Mapping[str, object]:
         """The request fields the Rust core routes on, and whether its tag stage may apply: the
         router's ``enable_tag_filtering``, the request's own, or a deployment's
         ``model_info.enable_tag_filtering`` (``get_deployments_for_tag``'s effective setting)."""
@@ -3038,6 +3067,8 @@ class RustCore(
             fields["allowed_models"] = list(pinned_grant)
         if filter_tags:
             fields["filter_tags"] = True
+        if self._authorizes_candidates(request, request.get("model") if model is None else model):
+            fields["authorize_candidates"] = True
         if request_carries_image(messages, request):
             fields["has_image"] = True
         return fields
@@ -3737,6 +3768,8 @@ class RustCore(
             return step["candidates"]
         if step.get("stage") == "provider_request":
             return _provider_request(step)
+        if step.get("stage") == "authorize_candidates":
+            return await self._accessible_candidates(step, request)
         inputs: Final = self._strategy_inputs(step, request)
         if inputs is None:
             return step["candidates"]
@@ -3785,6 +3818,15 @@ class RustCore(
         return _pick_answer(step, candidates, picked)
 
     def _answer_select_sync(
+        self, step: Mapping[str, object], request: Mapping[str, object], messages: object, input: object
+    ) -> object:
+        if step.get("stage") == "authorize_candidates":
+            from litellm.litellm_core_utils import asyncify
+
+            return asyncify.run_async_function(self._accessible_candidates, step, request)  # pyright: ignore[reportUnknownMemberType]  # the untyped sync bridge
+        return self._answer_stage_sync(step, request, messages, input)
+
+    def _answer_stage_sync(
         self, step: Mapping[str, object], request: Mapping[str, object], messages: object, input: object
     ) -> object:
         if step.get("stage") == "pre_call":
@@ -4012,6 +4054,9 @@ class RustCore(
         refused: Final = selection_refusal(step, model, request or {})
         if refused is not None:
             return refused
+        access_check: Final = self.settings().candidate_access_check
+        if kind == "no_accessible_deployment" and access_check is not None:
+            return access_check.denied(str(step.get("error_model") or model))
         if kind == "paused":
             # The message names the deployment's litellm model, not the id that was asked for; the
             # default deployment's copy is named by the requested name.
@@ -4322,7 +4367,7 @@ class _Selection:
         self._messages: Final = messages
         self._input: Final = input
         fields: Final = {
-            **core._routing_fields(request, messages),  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
+            **core._routing_fields(request, messages, model=self._model),  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
             **_narrowing_fields(request, kind),
         }  # pyright: ignore[reportPrivateUsage]  # the selection serves its own core
         # The pick's argument alone: a `specific_deployment` key in its request is no argument, and

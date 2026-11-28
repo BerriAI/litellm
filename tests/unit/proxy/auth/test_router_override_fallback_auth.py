@@ -87,7 +87,7 @@ async def test_router_override_fallbacks_validated_against_key_allowlist():
 
     seen_models: List[str] = []
 
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
+    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router, **_):
         seen_models.append(model)
 
     with (
@@ -138,7 +138,7 @@ async def test_router_override_all_fallback_fields_validated(fallback_field):
 
     seen: List[str] = []
 
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
+    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router, **_):
         seen.append(model)
 
     with (
@@ -185,7 +185,7 @@ async def test_top_level_fallback_fields_validated(fallback_field):
 
     seen: List[str] = []
 
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
+    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router, **_):
         seen.append(model)
 
     with (
@@ -231,7 +231,7 @@ async def test_nested_deployment_fallback_inner_model_validated():
 
     seen: List[str] = []
 
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
+    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router, **_):
         seen.append(model)
 
     with (
@@ -276,7 +276,7 @@ async def test_model_less_fallback_dict_is_skipped_never_passed_as_none():
 
     seen: List[str] = []
 
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
+    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router, **_):
         seen.append(model)
 
     with (
@@ -314,7 +314,7 @@ async def test_router_override_without_fallbacks_does_not_break_auth():
 
     seen: List[str] = []
 
-    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router):
+    async def fake_can_key_call_model(model, llm_model_list, valid_token, llm_router, **_):
         seen.append(model)
 
     with (

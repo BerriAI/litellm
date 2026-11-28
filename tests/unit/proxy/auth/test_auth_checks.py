@@ -2905,3 +2905,243 @@ async def test_common_checks_enforces_key_max_budget_for_custom_auth_keys(
         assert (exc_info.value.current_cost, exc_info.value.max_budget) == (spend, max_budget)
     else:
         assert await run() is True
+
+
+def _deployment_selector_router() -> litellm.Router:
+    def deployment(name: str, model: str, access_group: str) -> dict[str, object]:
+        return {
+            "model_name": name,
+            "litellm_params": {"model": model, "api_key": "k"},
+            "model_info": {"access_groups": [access_group]},
+        }
+
+    return litellm.Router(
+        model_list=[
+            deployment("name-a", "openai/shared", "group-a"),
+            deployment("name-b", "openai/shared", "group-b"),
+            deployment("openai/also-a-group", "openai/unrelated", "group-b"),
+            deployment("name-c", "openai/also-a-group", "group-a"),
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "models", "admit_deployment_selector", "allowed"),
+    [
+        pytest.param("openai/shared", ["group-a"], True, True, id="access group of a deployment it selects"),
+        pytest.param("openai/shared", ["name-b"], True, True, id="public name of a deployment it selects"),
+        pytest.param("openai/shared", ["group-c"], True, False, id="no grant for a deployment it selects"),
+        pytest.param("openai/also-a-group", ["group-a"], True, False, id="a model group name is never a selector"),
+        pytest.param("openai/unknown", ["group-a"], True, False, id="a name no deployment has"),
+        pytest.param("openai/shared", ["group-a"], False, False, id="strict mode"),
+        pytest.param("name-a", ["group-a"], False, True, id="strict mode, granted public name"),
+        pytest.param("name-b", ["group-a"], True, False, id="ungranted public name"),
+    ],
+)
+def test_an_object_admits_a_litellm_model_only_when_asked_to_and_granted_a_deployment_it_selects(
+    model: str, models: list[str], admit_deployment_selector: bool, allowed: bool
+) -> None:
+    from litellm.proxy._types import ProxyErrorTypes
+    from litellm.proxy.auth.auth_checks import can_object_call_model
+
+    def check() -> bool:
+        return can_object_call_model(
+            model=model,
+            llm_router=_deployment_selector_router(),
+            models=models,
+            object_type="key",
+            admit_deployment_selector=admit_deployment_selector,
+        )
+
+    if allowed:
+        assert check() is True
+        return
+    with pytest.raises(ProxyException) as denied:
+        check()
+    assert denied.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admit_deployment_selector", [True, False])
+async def test_the_key_and_team_gates_admit_a_litellm_model_only_on_the_request_path(
+    admit_deployment_selector: bool,
+) -> None:
+    from litellm.proxy.auth.auth_checks import can_key_call_model, can_team_access_model
+
+    router: Final = _deployment_selector_router()
+
+    async def gates() -> None:
+        await can_key_call_model(
+            model="openai/shared",
+            llm_model_list=None,
+            valid_token=UserAPIKeyAuth(models=["group-a"]),
+            llm_router=router,
+            admit_deployment_selector=admit_deployment_selector,
+        )
+        await can_team_access_model(
+            model="openai/shared",
+            team_object=LiteLLM_TeamTable(team_id="a-team", models=["group-a"]),
+            llm_router=router,
+            admit_deployment_selector=admit_deployment_selector,
+        )
+
+    if admit_deployment_selector:
+        await gates()
+        return
+    with pytest.raises(ProxyException):
+        await gates()
+
+
+@pytest.mark.asyncio
+async def test_the_request_path_admits_the_requests_own_litellm_model_but_not_one_named_as_a_fallback() -> None:
+    from litellm.proxy.auth.user_api_key_auth import enforce_key_and_fallback_model_access
+
+    async def enforce(request_data: dict[str, object], admit_deployment_selector: bool) -> None:
+        await enforce_key_and_fallback_model_access(
+            valid_token=UserAPIKeyAuth(models=["group-a"]),
+            request_data=request_data,
+            route="/v1/chat/completions",
+            request=None,
+            llm_model_list=None,
+            llm_router=_deployment_selector_router(),
+            admit_deployment_selector=admit_deployment_selector,
+        )
+
+    await enforce({"model": "openai/shared"}, True)
+    with pytest.raises(ProxyException):
+        await enforce({"model": "openai/shared"}, False)
+    with pytest.raises(ProxyException):
+        await enforce({"model": "name-a", "fallbacks": ["openai/shared"]}, True)
+
+
+async def _team_member_gate(admit_deployment_selector: bool) -> None:
+    from litellm.proxy.auth.auth_checks import check_team_member_model_access
+
+    await check_team_member_model_access(
+        model="openai/shared",
+        team_object=LiteLLM_TeamTable(team_id="a-team"),
+        valid_token=UserAPIKeyAuth(user_id="member", team_id="a-team"),
+        llm_router=_deployment_selector_router(),
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        team_membership=LiteLLM_TeamMembership(
+            user_id="member", team_id="a-team", litellm_budget_table=LiteLLM_BudgetTable(allowed_models=["group-a"])
+        ),
+        team_membership_loaded=True,
+        admit_deployment_selector=admit_deployment_selector,
+    )
+
+
+async def _user_gate(admit_deployment_selector: bool) -> None:
+    from litellm.proxy.auth.auth_checks import can_user_call_model
+
+    await can_user_call_model(
+        model="openai/shared",
+        llm_router=_deployment_selector_router(),
+        user_object=LiteLLM_UserTable(user_id="owner", models=["group-a"]),
+        admit_deployment_selector=admit_deployment_selector,
+    )
+
+
+async def _project_gate(admit_deployment_selector: bool) -> None:
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    can_project_access_model(
+        model="openai/shared",
+        project_object=LiteLLM_ProjectTableCachedObj(project_id="a-project", models=["group-a"]),
+        llm_router=_deployment_selector_router(),
+        admit_deployment_selector=admit_deployment_selector,
+    )
+
+
+async def _end_user_gate(admit_deployment_selector: bool) -> None:
+    from litellm.proxy.auth.auth_checks import can_customer_access_model
+
+    can_customer_access_model(
+        model="openai/shared",
+        end_user_object=LiteLLM_EndUserTable(user_id="a-customer", blocked=False, models=["group-a"]),
+        llm_router=_deployment_selector_router(),
+        valid_token=None,
+        admit_deployment_selector=admit_deployment_selector,
+    )
+
+
+async def _customer_scope_gate(admit_deployment_selector: bool) -> None:
+    from litellm.proxy.litellm_pre_call_utils import check_customer_request_model_access
+
+    check_customer_request_model_access(
+        {"model": "openai/shared"},
+        UserAPIKeyAuth(api_key="hashed").with_customer_model_scopes((("group-a",),)),
+        _deployment_selector_router(),
+        admit_deployment_selector=admit_deployment_selector,
+    )
+
+
+async def _customer_hierarchy_gate(admit_deployment_selector: bool) -> None:
+    from litellm.proxy.auth.customer_hierarchy_auth import check_customer_hierarchy_access
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+
+    scope: Final = CustomerScopeAuth(key="customer_org", entity_id="org", allowed_models=("group-a",))
+    await check_customer_hierarchy_access(
+        CustomerHierarchyAuth(customer_org_id="org", scopes=(scope,)),
+        _deployment_selector_router(),
+        "openai/shared",
+        "/model/info",
+        admit_deployment_selector=admit_deployment_selector,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "gate",
+    [_team_member_gate, _user_gate, _project_gate, _end_user_gate, _customer_scope_gate, _customer_hierarchy_gate],
+)
+async def test_every_request_path_gate_admits_a_litellm_model_only_when_asked_to(gate) -> None:
+    await gate(True)
+    with pytest.raises(ProxyException):
+        await gate(False)
+
+
+@pytest.mark.asyncio
+async def test_the_customer_scope_gate_never_admits_a_litellm_model_named_as_a_fallback() -> None:
+    from litellm.proxy.litellm_pre_call_utils import check_customer_request_model_access
+
+    with pytest.raises(ProxyException):
+        check_customer_request_model_access(
+            {"model": "name-a", "fallbacks": ["openai/shared"]},
+            UserAPIKeyAuth(api_key="hashed").with_customer_model_scopes((("group-a",),)),
+            _deployment_selector_router(),
+            admit_deployment_selector=True,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("admit_deployment_selector", [True, False])
+async def test_common_checks_admits_a_litellm_model_for_a_restricted_team_and_project_only_when_asked_to(
+    admit_deployment_selector: bool,
+) -> None:
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    async def run() -> bool:
+        return await common_checks(
+            request_body={"model": "openai/shared"},
+            team_object=LiteLLM_TeamTable(team_id="a-team", models=["group-a"]),
+            user_object=None,
+            end_user_object=LiteLLM_EndUserTable(user_id="a-customer", blocked=False, models=["group-a"]),
+            global_proxy_spend=None,
+            general_settings={},
+            route="/v1/chat/completions",
+            llm_router=_deployment_selector_router(),
+            proxy_logging_obj=AsyncMock(),
+            valid_token=UserAPIKeyAuth(token="test-token", team_id="a-team"),
+            request=MagicMock(),
+            project_object=LiteLLM_ProjectTableCachedObj(project_id="a-project", models=["group-a"]),
+            admit_deployment_selector=admit_deployment_selector,
+        )
+
+    if admit_deployment_selector:
+        assert await run() is True
+        return
+    with pytest.raises(ProxyException):
+        await run()

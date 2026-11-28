@@ -3039,6 +3039,7 @@ class _SelectStep(_Step):
         "callback_filters",
         "routing_plugins",
         "provider_request",
+        "authorize_candidates",
     ]
     strategy: str | None
     model_group: str
@@ -3158,6 +3159,7 @@ class _FailedStep(_Step):
         "routing_plugins_need_async",
         "multiple_teams",
         "multiple_model_groups",
+        "no_accessible_deployment",
         "reserved",
         "invalid_router_weights",
         "non_numeric_weight",

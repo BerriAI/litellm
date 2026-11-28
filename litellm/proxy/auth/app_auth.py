@@ -99,6 +99,8 @@ async def resolve_app_hierarchy(
     request_model: str | Sequence[str] | None,
     route: str,
     authenticated: UserAPIKeyAuth,
+    *,
+    admit_deployment_selector: bool = False,
 ) -> CustomerHierarchyAuth | None:
     from litellm.proxy.proxy_server import get_current_spend, user_api_key_cache
 
@@ -216,7 +218,12 @@ async def resolve_app_hierarchy(
 
     try:
         admitted: Final = await check_customer_hierarchy_access(
-            app_hierarchy, llm_router, request_model, route, metadata
+            app_hierarchy,
+            llm_router,
+            request_model,
+            route,
+            metadata,
+            admit_deployment_selector=admit_deployment_selector,
         )
     except CustomerBudgetExceededError as error:
         raise CustomerBudgetExceededError(combined(error.customer_hierarchy.scopes), error) from error
