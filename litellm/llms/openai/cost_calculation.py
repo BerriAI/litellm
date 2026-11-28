@@ -109,9 +109,25 @@ def _native_float(value: object) -> float:
     raise TypeError(f"float() argument must be a string or a real number, not '{type(value).__name__}'")
 
 
+_FIELDS: Final = TypeAdapter(Mapping[str, object])
+_VIDEO_INPUT_RATES: Final = TypeAdapter(Mapping[str, float])
+
+
+def _video_input_rates(model_info: Mapping[str, object]) -> Mapping[str, float]:
+    """The per-second rates a provider charges when the task carries a video input, which Ark bills at a lower
+    per-token price than the same output without one."""
+    try:
+        provider_specific: Final = _FIELDS.validate_python(model_info.get("provider_specific_entry"))
+        rates: Final = provider_specific.get("video_input_rates")
+        return _VIDEO_INPUT_RATES.validate_python(rates) if rates is not None else {}
+    except ValidationError:
+        return {}
+
+
 def video_output_cost_per_second(
     model_info: Mapping[str, object],
     video_resolution: str | None,
+    has_video_input: bool = False,
 ) -> float | None:
     """
     Per-second video output rate from model_info.
@@ -119,11 +135,18 @@ def video_output_cost_per_second(
     If ``video_resolution`` is set (e.g. ``1080p``, ``720p``, ``4k``), looks up
     ``output_cost_per_second_<resolution>`` first (e.g. ``output_cost_per_second_1080p``),
     then falls back to ``output_cost_per_second``.
+
+    A task that carries a video input is billed at the provider's lower per-token rate, which a model lists as
+    ``provider_specific_entry.video_input_rates`` keyed by the same resolution suffix.
     """
     r: Final = (video_resolution or "").strip().lower()
     if r:
         suffix: Final = _video_resolution_to_cost_field_suffix(r)
         if suffix is not None:
+            if has_video_input:
+                video_input_rate: Final = _video_input_rates(model_info).get(suffix)
+                if video_input_rate is not None:
+                    return video_input_rate
             tier_key: Final = f"output_cost_per_second_{suffix}"
             tier_rate: Final = model_info.get(tier_key)
             if tier_rate is not None:
@@ -165,6 +188,7 @@ def video_generation_cost(
     custom_llm_provider: str | None = None,
     model_info: ModelInfo | None = None,
     video_resolution: str | None = None,
+    has_video_input: bool = False,
 ) -> float:
     """
     Calculates the cost for video generation based on duration in seconds.
@@ -177,6 +201,7 @@ def video_generation_cost(
             custom video pricing. When provided, skips the global
             get_model_info() lookup so that deployment-specific pricing is used.
         - video_resolution: Optional resolution label from usage (e.g. ``720p``, ``1080p``).
+        - has_video_input: Whether the task carried a video input, which some providers bill at a lower per-token rate.
 
     Returns:
         float - total_cost_in_usd
@@ -204,7 +229,9 @@ def video_generation_cost(
         )
         return video_cost_per_second * duration_seconds
 
-    output_cost_per_second: Final = video_output_cost_per_second(model_info, video_resolution)
+    output_cost_per_second: Final = video_output_cost_per_second(
+        model_info, video_resolution, has_video_input=has_video_input
+    )
     if output_cost_per_second is not None:
         verbose_logger.debug(
             "For model=%s - output_cost_per_second: %s; duration: %s", model, output_cost_per_second, duration_seconds

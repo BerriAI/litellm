@@ -2,7 +2,7 @@ import base64
 import io
 import json
 from pathlib import Path
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, cast
 from unittest.mock import Mock
 
@@ -29,6 +29,7 @@ PNG_DATA_URL: Final = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decod
 
 API_BASE: Final = "https://ark.cn-beijing.volces.com"
 TASKS_URL: Final = f"{API_BASE}/api/v3/contents/generations/tasks"
+REPO_ROOT: Final = Path(__file__).parents[4]
 SEEDANCE_2_5: Final = "doubao-seedance-2-5-260628"
 SEEDANCE_2_0: Final = "doubao-seedance-2-0-260128"
 SEEDANCE_2_0_FAST: Final = "doubao-seedance-2-0-fast-260128"
@@ -99,6 +100,7 @@ def test_a_file_input_reference_becomes_a_data_uri_first_frame(input_reference: 
             {"type": "text", "text": "a cat on a roof"},
             {"type": "image_url", "image_url": {"url": PNG_DATA_URL}, "role": "first_frame"},
         ],
+        "ratio": "adaptive",
         "resolution": "720p",
         "duration": 4,
     }
@@ -175,22 +177,101 @@ def test_a_text_item_in_content_is_dropped_under_drop_params_so_ark_never_sees_u
     assert body["content"] == [{"type": "text", "text": "a cat on a roof"}, IMAGE_ITEM]
 
 
-@pytest.mark.parametrize(
-    "item",
-    [
-        {"type": "video_url", "video_url": {"url": "https://x/v.mp4"}, "role": "reference_video"},
-        {"type": "video_url", "video_url": {"url": "https://x/v.mp4"}},
-        {"type": "image_url", "image_url": {"url": "https://x/v.png"}, "role": "reference_video"},
-    ],
-    ids=["reference-video", "untagged-video", "mistagged-role"],
-)
-def test_a_video_input_is_rejected_because_its_cost_is_not_known_at_create(item: dict[str, object]):
-    with pytest.raises(UnsupportedParamsError, match="Video input"):
-        _ = _create_body({"content": [item], "duration": 4})
+REFERENCE_VIDEO_ITEM: Final = {
+    "type": "video_url",
+    "video_url": {"url": "https://x/reference.mp4"},
+    "role": "reference_video",
+}
 
-    body = _create_body({"content": [item, IMAGE_ITEM], "duration": 4}, drop_params=True)
 
-    assert body["content"] == [{"type": "text", "text": "a cat on a roof"}, IMAGE_ITEM]
+def test_a_reference_video_reaches_ark_so_seedance_can_generate_from_it():
+    body = _create_body({"content": [REFERENCE_VIDEO_ITEM], "duration": 5})
+
+    assert body["content"] == [{"type": "text", "text": "a cat on a roof"}, REFERENCE_VIDEO_ITEM]
+    assert body["duration"] == 5
+
+
+def test_a_reference_video_survives_drop_params_instead_of_becoming_text_to_video():
+    """The proxy runs drop_params, so a dropped video item used to answer 200 with a video that never saw it."""
+    body = _create_body({"content": [REFERENCE_VIDEO_ITEM, IMAGE_ITEM], "duration": 5}, drop_params=True)
+
+    assert body["content"] == [
+        {"type": "text", "text": "a cat on a roof"},
+        REFERENCE_VIDEO_ITEM,
+        IMAGE_ITEM,
+    ]
+
+
+def test_a_reference_audio_and_video_url_without_a_role_are_forwarded_untouched():
+    audio: Final = {"type": "audio_url", "audio_url": {"url": "https://x/a.mp3"}, "role": "reference_audio"}
+    untagged_video: Final = {"type": "video_url", "video_url": {"url": "https://x/v.mp4"}}
+
+    body = _create_body({"content": [REFERENCE_VIDEO_ITEM, audio, untagged_video], "duration": 5})
+
+    assert body["content"][1:] == [REFERENCE_VIDEO_ITEM, audio, untagged_video]
+
+
+def test_reference_audio_alone_reaches_ark_for_seedance_2_5():
+    audio: Final = {"type": "audio_url", "audio_url": {"url": "https://x/a.mp3"}, "role": "reference_audio"}
+
+    body = _create_body({"content": [audio], "duration": 5})
+
+    assert body["content"] == [{"type": "text", "text": "a cat on a roof"}, audio]
+    assert "ratio" not in body
+
+
+def test_a_first_or_last_frame_task_on_seedance_2_5_is_pinned_to_an_adaptive_ratio():
+    body = _create_body(
+        {
+            "content": [
+                {"type": "image_url", "image_url": {"url": "https://x/first.png"}, "role": "first_frame"},
+                {"type": "image_url", "image_url": {"url": "https://x/last.png"}, "role": "last_frame"},
+            ],
+            "duration": 5,
+            "resolution": "720p",
+        }
+    )
+
+    assert body["ratio"] == "adaptive"
+
+
+def test_a_first_frame_task_on_seedance_2_5_rejects_a_ratio_ark_would_refuse():
+    with pytest.raises(UnsupportedParamsError, match="keeps its ratio at adaptive"):
+        _ = _create_body(
+            {
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "https://x/first.png"}, "role": "first_frame"}
+                ],
+                "duration": 5,
+                "ratio": "16:9",
+            }
+        )
+
+
+def test_a_first_frame_task_on_seedance_2_0_keeps_the_requested_ratio():
+    body = _create_body(
+        {
+            "content": [{"type": "image_url", "image_url": {"url": "https://x/first.png"}, "role": "first_frame"}],
+            "duration": 5,
+            "ratio": "16:9",
+        },
+        model=SEEDANCE_2_0,
+    )
+
+    assert body["ratio"] == "16:9"
+
+
+def test_a_first_frame_task_on_seedance_2_5_pins_adaptive_under_drop_params():
+    body = _create_body(
+        {
+            "content": [{"type": "image_url", "image_url": {"url": "https://x/first.png"}, "role": "first_frame"}],
+            "duration": 5,
+            "ratio": "16:9",
+        },
+        drop_params=True,
+    )
+
+    assert body["ratio"] == "adaptive"
 
 
 @pytest.mark.parametrize(
@@ -443,29 +524,66 @@ def test_the_create_response_reports_what_the_task_bills(
 
 
 @pytest.mark.parametrize(
-    "usage,expected_cost",
+    "request_data,expected_usage,expected_cost",
     [
-        ({"duration_seconds": 4.0, "video_resolution": "480p"}, 4 * 0.1),
-        ({"duration_seconds": 5.0, "video_resolution": "720p"}, 5 * 0.2),
-        ({"duration_seconds": 5.0}, 5 * 0.2),
+        ({"duration": 4, "resolution": "480p"}, {"duration_seconds": 4.0, "video_resolution": "480p"}, 4 * 0.1),
+        ({"duration": 5, "resolution": "720p"}, {"duration_seconds": 5.0, "video_resolution": "720p"}, 5 * 0.2),
+        ({"duration": 5}, {"duration_seconds": 5.0}, 5 * 0.2),
+        (
+            {"duration": 5, "resolution": "720p", "content": [REFERENCE_VIDEO_ITEM]},
+            {"duration_seconds": 5.0, "video_resolution": "720p", "has_video_input": True},
+            5 * 0.12,
+        ),
     ],
+    ids=["480p", "720p", "no-geometry", "video-input"],
 )
-def test_the_create_usage_bills_its_duration_at_its_tier_rate(usage: dict[str, object], expected_cost: float):
+def test_the_create_usage_bills_its_duration_at_its_tier_rate(
+    request_data: dict[str, object], expected_usage: dict[str, object], expected_cost: float
+):
     model_info = {
         "output_cost_per_second": 0.2,
         "output_cost_per_second_480p": 0.1,
         "output_cost_per_second_720p": 0.2,
+        "provider_specific_entry": {"video_input_rates": {"720p": 0.12}},
     }
-    video = _created({"duration": int(usage["duration_seconds"]), "resolution": usage.get("video_resolution")})
+    video = _created(request_data)
+
+    assert video.usage == expected_usage
 
     cost = video_generation_cost(
         model=SEEDANCE_2_5,
         duration_seconds=video.usage["duration_seconds"],
         model_info=model_info,  # pyright: ignore[reportArgumentType]  # a hand-written rate card stands in for ModelInfo
         video_resolution=video.usage.get("video_resolution"),
+        has_video_input=video.usage.get("has_video_input") is True,
     )
 
     assert cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [SEEDANCE_2_5, SEEDANCE_2_0, SEEDANCE_2_0_FAST],
+    ids=["2.5", "2.0", "2.0-fast"],
+)
+def test_every_priced_resolution_also_carries_the_video_input_rate(model: str):
+    """A task with a reference video is billed at Ark's lower per-token rate, so the cost map has to offer that rate
+    for every tier the provider is offered at; otherwise those tasks fall back to the higher list rate."""
+    cost_map: Final = json.loads((REPO_ROOT / "model_prices_and_context_window.json").read_text())
+    row: Final = cost_map[f"volcengine/{model}"]
+    provider_specific: Final = row["provider_specific_entry"]
+    video_input_rates: Final = provider_specific["video_input_rates"]
+
+    plain_tiers: Final = tuple(
+        tier for tier in ("480p", "720p", "1080p", "4k") if f"output_cost_per_second_{tier}" in row
+    )
+    assert plain_tiers
+
+    for tier in plain_tiers:
+        plain: Final = float(row[f"output_cost_per_second_{tier}"])
+        with_video: Final = video_input_rates.get(tier)
+        assert with_video is not None, tier
+        assert with_video < plain
 
 
 def test_the_created_id_carries_the_requested_and_served_model_groups():
@@ -731,9 +849,15 @@ def test_an_empty_list_still_carries_the_object_type():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("call", ["avideo_edit", "avideo_extension", "avideo_remix"])
-async def test_edit_extension_and_remix_are_a_bad_request_because_a_video_input_cannot_be_billed_at_create(call: str):
-    with pytest.raises(litellm.BadRequestError, match="Ark bills a task with a video input") as raised:
+@pytest.mark.parametrize(
+    "call,message",
+    [
+        ("avideo_edit", "Ark edits keep the source video's length"),
+        ("avideo_remix", "Ark has no video remix operation"),
+    ],
+)
+async def test_edit_and_remix_are_a_bad_request(call: str, message: str):
+    with pytest.raises(litellm.BadRequestError, match=message) as raised:
         _ = await getattr(litellm, call)(
             video_id="https://x/source.mp4",
             prompt="make it brighter",
@@ -745,6 +869,154 @@ async def test_edit_extension_and_remix_are_a_bad_request_because_a_video_input_
         )
 
     assert raised.value.status_code == 400
+
+
+def _edit_request(**extra_body: object):
+    headers: Final = {}
+    url, data, files = VolcEngineVideoConfig().transform_video_edit_request(
+        prompt="replace the sky",
+        video_id="https://x/source.mp4",
+        api_base=API_BASE,
+        litellm_params=GenericLiteLLMParams(model=f"volcengine/{SEEDANCE_2_5}"),  # pyright: ignore[reportArgumentType]  # the model reaches the transform through litellm_params
+        headers=headers,
+        extra_body=extra_body or None,
+    )
+    return url, data, files, headers
+
+
+def test_an_edit_is_a_reference_video_create_pinned_to_the_source_length():
+    url, data, files, headers = _edit_request(seconds="5", resolution="720p")
+
+    assert (url, files) == (TASKS_URL, None)
+    assert data == {
+        "model": SEEDANCE_2_5,
+        "content": [
+            {"type": "text", "text": "replace the sky"},
+            {"type": "video_url", "video_url": {"url": "https://x/source.mp4"}, "role": "reference_video"},
+        ],
+        "ratio": "adaptive",
+        "duration": -1,
+        "omni_reference_task_type": "edit",
+    }
+    assert headers == {"x-litellm-billing-seconds": "5", "x-litellm-billing-resolution": "720p"}
+
+
+@pytest.mark.parametrize(
+    "extra_body,message",
+    [
+        ({"resolution": "720p"}, "extra_body.seconds"),
+        ({"seconds": "3", "resolution": "720p"}, "extra_body.seconds"),
+        ({"seconds": "5"}, "extra_body.resolution"),
+        ({"seconds": "5", "resolution": "1080"}, "extra_body.resolution"),
+    ],
+    ids=["no-seconds", "seconds-out-of-range", "no-resolution", "bad-resolution"],
+)
+def test_an_edit_without_a_priceable_source_is_rejected(extra_body: dict[str, object], message: str):
+    with pytest.raises(UnsupportedParamsError, match=message):
+        _ = _edit_request(**extra_body)
+
+
+def test_an_edit_derives_the_billing_tier_from_size_when_no_resolution_is_given():
+    _, _, _, headers = _edit_request(seconds="5", size="1280x720")
+
+    assert headers["x-litellm-billing-resolution"] == "720p"
+
+
+def test_an_edit_forwards_the_create_time_fields_it_accepts():
+    _, data, _, _ = _edit_request(seconds="5", resolution="720p", watermark=True, seed=7)
+
+    assert (data.get("watermark"), data.get("seed")) == (True, 7)
+    assert data.get("size") is None
+
+
+def test_an_edit_bills_the_source_length_at_the_video_input_rate():
+    _, data, _, headers = _edit_request(seconds="5", resolution="720p")
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"additional_args": {"complete_input_dict": dict(data)}}
+    logging_obj.litellm_params = {}
+
+    video = VolcEngineVideoConfig().transform_video_edit_response(
+        raw_response=httpx.Response(
+            200,
+            json={"id": TASK_ID},
+            request=httpx.Request("POST", TASKS_URL, headers=headers),
+        ),
+        logging_obj=logging_obj,
+        custom_llm_provider="volcengine",
+    )
+
+    assert video.usage == {"duration_seconds": 5.0, "video_resolution": "720p", "has_video_input": True}
+    assert video.model == SEEDANCE_2_5
+
+
+def _extension_request(seconds: str, video_id: str = "https://x/source.mp4", **extra_body: object):
+    return VolcEngineVideoConfig().transform_video_extension_request(
+        prompt="keep the camera moving",
+        video_id=video_id,
+        seconds=seconds,
+        api_base=API_BASE,
+        litellm_params=GenericLiteLLMParams(model=f"volcengine/{SEEDANCE_2_5}"),  # pyright: ignore[reportArgumentType]  # the model reaches the transform through litellm_params
+        headers={},
+        extra_body=extra_body or None,
+    )
+
+
+def _extension_created(request_data: dict[str, object]):
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"additional_args": {"complete_input_dict": request_data}}
+    logging_obj.litellm_params = {}
+    return VolcEngineVideoConfig().transform_video_extension_response(
+        raw_response=_response({"id": TASK_ID}),
+        logging_obj=logging_obj,
+        custom_llm_provider="volcengine",
+    )
+
+
+def test_an_extension_is_a_reference_video_create_that_keeps_the_source_ratio():
+    url, body = _extension_request("8")
+
+    assert (url, body) == (
+        TASKS_URL,
+        {
+            "model": SEEDANCE_2_5,
+            "content": [
+                {"type": "text", "text": "keep the camera moving"},
+                {"type": "video_url", "video_url": {"url": "https://x/source.mp4"}, "role": "reference_video"},
+            ],
+            "ratio": "adaptive",
+            "resolution": "720p",
+            "duration": 8,
+            "omni_reference_task_type": "extend",
+        },
+    )
+
+
+def test_an_extension_forwards_the_create_time_fields_it_accepts():
+    _, body = _extension_request("8", watermark=True, seed=7)
+
+    assert (body["watermark"], body["seed"]) == (True, 7)
+
+
+def test_an_extension_bills_the_output_length_at_the_video_input_rate():
+    _, body = _extension_request("8")
+    video = _extension_created(body)
+
+    assert video.usage == {"duration_seconds": 8.0, "video_resolution": "720p", "has_video_input": True}
+    assert video.model == SEEDANCE_2_5
+
+
+@pytest.mark.parametrize(
+    "seconds,video_id,message",
+    [
+        ("3", "https://x/source.mp4", "whole number of seconds from 4 to 30"),
+        ("31", "https://x/source.mp4", "whole number of seconds from 4 to 30"),
+        ("8", "cgt-2026-abc", "take the source video as a URL"),
+    ],
+    ids=["too-short", "too-long", "task-id-source"],
+)
+def test_an_extension_rejects_what_ark_cannot_take(seconds: str, video_id: str, message: str):
+    with pytest.raises(UnsupportedParamsError, match=message):
+        _ = _extension_request(seconds, video_id=video_id)
 
 
 @pytest.mark.parametrize(
@@ -852,6 +1124,91 @@ async def _wire_body(**kwargs: object) -> dict[str, object]:
     (request,) = sent
     assert (str(request.url), request.headers["authorization"]) == (TASKS_URL, "Bearer sk-test")
     return json.loads(request.content)
+
+
+async def _video_call_wire(
+    call: Callable[..., Awaitable[object]], **kwargs: object
+) -> tuple[dict[str, object], httpx.Headers, object]:
+    sent: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json={"id": TASK_ID})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        handler: Final = AsyncHTTPHandler()
+        await handler.close()
+        handler.client = http_client
+        result: Final = await call(api_key="sk-test", api_base=API_BASE, client=handler, **kwargs)
+
+    (request,) = sent
+    assert (str(request.url), request.headers["authorization"]) == (TASKS_URL, "Bearer sk-test")
+    return json.loads(request.content), request.headers, result
+
+
+@pytest.mark.asyncio
+async def test_an_edit_reaches_the_wire_with_its_billing_and_extra_headers():
+    body, headers, video = await _video_call_wire(
+        litellm.avideo_edit,
+        video_id="https://x/source.mp4",
+        prompt="replace the sky",
+        model=f"volcengine/{SEEDANCE_2_5}",
+        custom_llm_provider="volcengine",
+        extra_headers={"x-custom": "yes"},
+        extra_body={"seconds": "5", "resolution": "720p", "watermark": True},
+    )
+
+    assert body == {
+        "model": SEEDANCE_2_5,
+        "content": [
+            {"type": "text", "text": "replace the sky"},
+            {"type": "video_url", "video_url": {"url": "https://x/source.mp4"}, "role": "reference_video"},
+        ],
+        "ratio": "adaptive",
+        "duration": -1,
+        "omni_reference_task_type": "edit",
+        "watermark": True,
+    }
+    assert headers["x-custom"] == "yes"
+    assert (headers["x-litellm-billing-seconds"], headers["x-litellm-billing-resolution"]) == ("5", "720p")
+    assert getattr(video, "usage", None) == {
+        "duration_seconds": 5.0,
+        "video_resolution": "720p",
+        "has_video_input": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_extension_reaches_the_wire_with_its_tier_and_extra_headers():
+    body, headers, video = await _video_call_wire(
+        litellm.avideo_extension,
+        video_id="https://x/source.mp4",
+        prompt="continue the shot",
+        seconds="5",
+        model=f"volcengine/{SEEDANCE_2_5}",
+        custom_llm_provider="volcengine",
+        extra_headers={"x-custom": "yes"},
+        extra_body={"size": "1280x720", "seed": 9},
+    )
+
+    assert body == {
+        "model": SEEDANCE_2_5,
+        "content": [
+            {"type": "text", "text": "continue the shot"},
+            {"type": "video_url", "video_url": {"url": "https://x/source.mp4"}, "role": "reference_video"},
+        ],
+        "ratio": "adaptive",
+        "resolution": "720p",
+        "duration": 5,
+        "omni_reference_task_type": "extend",
+        "seed": 9,
+    }
+    assert headers["x-custom"] == "yes"
+    assert getattr(video, "usage", None) == {
+        "duration_seconds": 5.0,
+        "video_resolution": "720p",
+        "has_video_input": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -1135,8 +1492,9 @@ def test_a_video_created_through_a_routing_group_is_polled_on_the_member_that_cr
 
 @pytest.mark.parametrize("role", ["first_frame", "last_frame", "reference_image"])
 def test_openrouter_video_images_become_provider_content(role: str) -> None:
+    aspect_ratio: Final = "adaptive" if role in {"first_frame", "last_frame"} else "9:16"
     params: Final = cast(VideoCreateOptionalRequestParams, {
-        "duration": 8, "aspect_ratio": "9:16", "resolution": "720p", "seed": 0, "generate_audio": False,
+        "duration": 8, "aspect_ratio": aspect_ratio, "resolution": "720p", "seed": 0, "generate_audio": False,
         **(
             {"input_references": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}]}
             if role == "reference_image"
@@ -1153,7 +1511,7 @@ def test_openrouter_video_images_become_provider_content(role: str) -> None:
         {"type": "text", "text": "a cat"},
         {"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}, "role": role},
     ]
-    assert (body["duration"], body["ratio"]) == (8, "9:16")
+    assert (body["duration"], body["ratio"]) == (8, aspect_ratio)
     assert not ({"frame_images", "input_references", "aspect_ratio"} & body.keys())
 
 

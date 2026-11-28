@@ -165,6 +165,8 @@ _VIDEO_CALL_TYPES: Final = frozenset(
         CallTypes.acreate_video.value,
         CallTypes.video_edit.value,
         CallTypes.avideo_edit.value,
+        CallTypes.video_extension.value,
+        CallTypes.avideo_extension.value,
         CallTypes.video_remix.value,
         CallTypes.avideo_remix.value,
     }
@@ -2477,6 +2479,7 @@ def completion_cost(
                     _video_usage_obj: object = attribute_or_none(completion_response, "usage")
                     duration_seconds: float | None = None
                     video_resolution: str | None = None
+                    has_video_input: bool = _video_usage_value(_video_usage_obj, "has_video_input") is True
                     provider_reported_cost: float | None = None
                     if completion_response is not None and _video_usage_obj:
                         duration_seconds = _VIDEO_USAGE_NUMBER.validate_python(
@@ -2505,6 +2508,7 @@ def completion_cost(
                                 custom_llm_provider=custom_llm_provider,
                                 model_info=_video_model_info,
                                 video_resolution=video_resolution,
+                                has_video_input=has_video_input,
                             ) * _video_count(_video_usage_obj) + _video_input_image_cost(
                                 requested_model or model,
                                 custom_llm_provider,
@@ -2518,6 +2522,7 @@ def completion_cost(
                         custom_llm_provider=custom_llm_provider,
                         model_info=_video_model_info,
                         video_resolution=video_resolution,
+                        has_video_input=has_video_input,
                     ) * _video_count(_video_usage_obj)
                 elif call_type in _SPEECH_CALL_TYPES:
                     prompt_characters = _speech_billed_characters(
@@ -3551,6 +3556,7 @@ def default_video_cost_calculator(
     custom_llm_provider: str | None = None,
     model_info: ModelInfo | None = None,
     video_resolution: str | None = None,
+    has_video_input: bool = False,
 ) -> float:
     """
     Default video cost calculator for video generation
@@ -3622,7 +3628,9 @@ def default_video_cost_calculator(
     if video_cost_per_second is not None:
         return video_cost_per_second * duration_seconds
 
-    output_cost_per_second: Final = video_output_cost_per_second(cost_info, video_resolution)
+    output_cost_per_second: Final = video_output_cost_per_second(
+        cost_info, video_resolution, has_video_input=has_video_input
+    )
     if output_cost_per_second is not None:
         return output_cost_per_second * duration_seconds
 
