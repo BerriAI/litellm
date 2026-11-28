@@ -560,9 +560,11 @@ def _with_pdf_formats(
     return tuple(_with_parts(message, rewrite) for message in messages)
 
 
-async def _fetch_data_url(url: str, in_flight: asyncio.Semaphore, timeout: float | httpx.Timeout | None) -> str:
+async def _fetch_data_url(
+    url: str, in_flight: asyncio.Semaphore, timeout: float | httpx.Timeout | None, max_bytes: int | None
+) -> str:
     async with in_flight:
-        return await async_convert_url_to_base64(url, timeout=timeout)
+        return await async_convert_url_to_base64(url, timeout=timeout, max_bytes=max_bytes)
 
 
 async def _serves_pdf_within(url: str, in_flight: asyncio.Semaphore) -> bool:
@@ -581,11 +583,14 @@ async def _gather_or_cancel_all(fetches: tuple["asyncio.Task[_Fetched]", ...]) -
 
 
 async def async_convert_urls_to_base64(
-    remote_urls: tuple[str, ...], timeout: float | httpx.Timeout | None = None
+    remote_urls: tuple[str, ...],
+    timeout: float | httpx.Timeout | None = None,
+    *,
+    max_bytes: int | None = None,
 ) -> tuple[str, ...]:
     in_flight: Final = asyncio.Semaphore(MAX_CONCURRENT_REMOTE_MEDIA_FETCHES)
     return await _gather_or_cancel_all(
-        tuple(asyncio.create_task(_fetch_data_url(url, in_flight, timeout)) for url in remote_urls)
+        tuple(asyncio.create_task(_fetch_data_url(url, in_flight, timeout, max_bytes)) for url in remote_urls)
     )
 
 
