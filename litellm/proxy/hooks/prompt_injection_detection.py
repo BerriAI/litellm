@@ -8,6 +8,7 @@
 
 
 import asyncio
+import re
 from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from typing import Final, Literal
@@ -32,6 +33,16 @@ from litellm.utils import get_formatted_prompt
 HEURISTICS_EXECUTOR: Final = ThreadPoolExecutor(
     max_workers=PROMPT_INJECTION_HEURISTICS_MAX_THREADS, thread_name_prefix="prompt-injection-heuristics"
 )
+
+
+_VERDICT_PREFIX: Final = r"[\s*_`\"'#>]*(?:(?:verdict|answer|result|classification)\s*[:=-]\s*[*_`\"']*)?"
+
+
+def _is_fail_verdict(content: str, fail_call_string: str) -> bool:
+    if fail_call_string in content:
+        return True
+    leading_verdict: Final = _VERDICT_PREFIX + re.escape(fail_call_string) + r"(?!\w)"
+    return re.match(leading_verdict, content, re.IGNORECASE) is not None
 
 
 class _OPTIONAL_PromptInjectionDetection(CustomLogger):
@@ -269,7 +280,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             if isinstance(response, litellm.ModelResponse) and isinstance(response.choices[0], litellm.Choices):
                 fail_call_string: Final = self.prompt_injection_params.llm_api_fail_call_string
                 content: Final = response.choices[0].message.content
-                if fail_call_string is not None and content is not None and fail_call_string in content:
+                if fail_call_string is not None and content is not None and _is_fail_verdict(content, fail_call_string):
                     is_prompt_attack = True
 
         if is_prompt_attack is True:
