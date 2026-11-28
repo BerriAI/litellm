@@ -648,10 +648,18 @@ class CustomStreamWrapper:
         self.received_model_id: str | None = None
         self.logging_loop = None
         self.rules = Rules()
-        self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
+        self.stream_options: Final = cast(  # cast-ok: callers and the logging object pass stream_options untyped
+            Mapping[str, object] | None, stream_options or getattr(logging_obj, "stream_options", None)
+        )
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
+        stream_options_fields: Final = as_str_mapping(self.stream_options)
+        self._continuous_usage_stats = (
+            self.send_stream_usage
+            and stream_options_fields is not None
+            and stream_options_fields.get("continuous_usage_stats") is True
+        )
         self.caller_requested_stream_usage: Final = (
             self.check_send_stream_usage(getattr(logging_obj, "stream_options", None))
             and getattr(logging_obj, "stream_usage_injected", False) is not True
@@ -2113,7 +2121,7 @@ class CustomStreamWrapper:
                 else:
                     if not self.sent_first_chunk and isinstance(original_chunk, BaseModel):
                         self._hold_attributes_before_first_choice(original_chunk)
-                    if self.send_stream_usage is True:
+                    if self.send_stream_usage is True and not self._continuous_usage_stats:
                         model_response.choices = []
                         if not self.proxy_drops_choiceless_chunks:
                             self._release_attributes_before_first_choice(model_response)
@@ -2651,7 +2659,7 @@ class CustomStreamWrapper:
                     # ModelResponseStream declares `usage` as a field, so
                     # hasattr(response, "usage") is always True — must check
                     # `is not None` to avoid running this path on every chunk.
-                    if getattr(response, "usage", None) is not None:
+                    if getattr(response, "usage", None) is not None and not self._continuous_usage_stats:
                         usage_to_preserve = response.usage
                         if usage_to_preserve:
                             response_hidden_params_for_usage = cast(  # cast-ok: preserve dynamic mapping behavior
@@ -2749,6 +2757,8 @@ class CustomStreamWrapper:
                 if final_chunk_for_logging is not None:
                     self.chunks.append(final_chunk_for_logging)
                 self._maybe_set_final_chunk_usage(processed_chunk)
+                if self._continuous_usage_stats:
+                    processed_chunk.usage = calculate_total_usage(chunks=self.chunks)
                 ## LOGGING
                 executor.submit(
                     self.run_success_logging_and_cache_storage,
@@ -2845,7 +2855,7 @@ class CustomStreamWrapper:
                         hasattr(processed_chunk, "usage") and getattr(processed_chunk, "usage", None) is not None
                     )
 
-                    if _has_usage:
+                    if _has_usage and not self._continuous_usage_stats:
                         usage_free_chunk = self._record_and_strip_usage_chunk(processed_chunk)
                         if usage_free_chunk is None:
                             continue
@@ -3001,6 +3011,8 @@ class CustomStreamWrapper:
             if final_chunk_for_logging is not None:
                 self.chunks.append(final_chunk_for_logging)
             self._maybe_set_final_chunk_usage(processed_chunk)
+            if self._continuous_usage_stats:
+                processed_chunk.usage = calculate_total_usage(chunks=self.chunks)
             # see sync __next__'s sibling branch: deliberately do NOT restore
             # here - this chunk is still this call's own data, and restoring
             # before returning it would corrupt the caller's own log
@@ -3121,7 +3133,8 @@ class CustomStreamWrapper:
         return None if is_model_response_stream_empty(model_response=usage_free_chunk) else usage_free_chunk
 
     def _returned_sync_stream_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
-        if getattr(chunk, "usage", None) is None or (not self.send_stream_usage and chunk.choices):
+        keeps_usage: Final = self._continuous_usage_stats or getattr(chunk, "usage", None) is None
+        if keeps_usage or (not self.send_stream_usage and chunk.choices):
             self.chunks.append(chunk)
             return chunk
         return self._record_and_strip_usage_chunk(chunk)
