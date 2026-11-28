@@ -7696,6 +7696,8 @@ async def list_keys(
         None,
         description="Filter keys by expiration. 'expired' returns keys whose expires is in the past; 'active' returns keys that never expire or expire in the future. Omit to return keys regardless of expiration.",
     ),
+    pagination: Literal["page", "cursor"] = "page",
+    cursor: str | None = None,
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
@@ -7713,6 +7715,11 @@ async def list_keys(
             "current_page": int,
             "total_pages": int,
         }
+
+    Cursor mode uses ascending stored key hashes, ignores sort_order, and returns next_cursor
+    instead of page totals. Supply that hash as cursor until next_cursor is null. New keys
+    behind the cursor are visible on the next scan; this is not a point-in-time snapshot.
+    Cursor mode supports live keys only and cannot be combined with sort_by or page > 1.
 
     When expand includes "user", each key object will include a "user" field with the associated user object.
     Note: When expand=user is specified, full key objects are returned regardless of the return_full_object parameter.
@@ -7813,6 +7820,8 @@ async def list_keys(
             include_created_by_keys=include_created_by_keys,
             sort_by=sort_by,
             sort_order=sort_order,
+            pagination=pagination,
+            cursor=cursor,
             expand=expand,
             status=status,
             project_id=project_id,
@@ -8213,6 +8222,8 @@ async def list_key_helper(
     use_key_alias_substring_matching: bool = False,
     expires_filter: str | None = None,
     search: str | None = None,
+    pagination: Literal["page", "cursor"] = "page",
+    cursor: str | None = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -8236,6 +8247,13 @@ async def list_key_helper(
             "total_pages": int,
         }
     """
+    if pagination not in {"page", "cursor"} or (cursor is not None and pagination != "cursor"):
+        raise HTTPException(status_code=400, detail="Invalid pagination mode")
+    if pagination == "cursor" and (page != 1 or sort_by is not None or status == "deleted"):
+        raise HTTPException(status_code=400, detail="Cursor pagination requires page=1, no sort_by and live keys")
+    if cursor is not None and re.fullmatch(r"[0-9a-f]{64}", cursor) is None:
+        raise HTTPException(status_code=400, detail="Invalid key cursor")
+
     where: Final = _build_key_filter_conditions(
         user_id=user_id,
         team_id=team_id,
@@ -8256,8 +8274,9 @@ async def list_key_helper(
         status_filter=status,
     )
 
-    # Calculate skip for pagination
-    skip: Final = (page - 1) * size
+    query_where: Final = {"AND": [where, {"token": {"gt": cursor}}]} if cursor is not None else where
+    skip: Final = 0 if pagination == "cursor" else (page - 1) * size
+    take: Final = size + 1 if pagination == "cursor" else size
 
     verbose_proxy_logger.debug("Pagination: skip=%s, take=%s", skip, size)
 
@@ -8271,11 +8290,13 @@ async def list_key_helper(
     # Fetch keys with pagination
     if use_deleted_table:
         keys = await DeletedVerificationTokenRepository(prisma_client).table.find_many(
-            where=where,
+            where=query_where,
             skip=skip,
-            take=size,
+            take=take,
             order=(
-                order_by
+                {"token": "asc"}
+                if pagination == "cursor"
+                else order_by
                 if order_by
                 else [
                     {"created_at": "desc"},
@@ -8285,11 +8306,13 @@ async def list_key_helper(
         )
     else:
         keys = await VerificationTokenRepository(prisma_client).table.find_many(
-            where=where,
+            where=query_where,
             skip=skip,
-            take=size,
+            take=take,
             order=(
-                order_by
+                {"token": "asc"}
+                if pagination == "cursor"
+                else order_by
                 if order_by
                 else [
                     {"created_at": "desc"},
@@ -8302,7 +8325,9 @@ async def list_key_helper(
     verbose_proxy_logger.debug("Fetched %s keys", len(keys))
 
     # Get total count of keys
-    if use_deleted_table:
+    if pagination == "cursor":
+        total_count = None
+    elif use_deleted_table:
         total_count = await _deleted_verification_token_table(prisma_client).count(where=where)
     else:
         total_count = await _prisma_table(VerificationTokenRepository(prisma_client)).count(where=where)
@@ -8310,7 +8335,7 @@ async def list_key_helper(
     verbose_proxy_logger.debug("Total count of keys: %s", total_count)
 
     # Calculate total pages
-    total_pages: Final = -(-total_count // size)  # Ceiling division
+    total_pages: Final = None if total_count is None else -(-total_count // size)  # Ceiling division
 
     # Fetch user information if expand includes "user"
     user_map = dict[str | None, _UserRowLike]()
@@ -8326,7 +8351,7 @@ async def list_key_helper(
 
     # Prepare response
     key_list: Final[list[str | UserAPIKeyAuth | LiteLLM_DeletedVerificationToken]] = []
-    for key in keys:
+    for key in keys[:size]:
         # Convert Prisma model to dict (supports both Pydantic v1 and v2)
         try:
             key_dict = key.model_dump()
@@ -8363,6 +8388,12 @@ async def list_key_helper(
         else:
             _token = key_dict.get("token")
             key_list.append(cast(str, _token))  # Return only the token
+
+    if pagination == "cursor":
+        return KeyListResponseObject(
+            keys=key_list,
+            next_cursor=keys[size - 1].token if len(keys) > size else None,
+        )
 
     return KeyListResponseObject(
         keys=key_list,

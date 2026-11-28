@@ -25709,3 +25709,67 @@ async def test_key_team_changes_cannot_remove_inherited_header_policy(
         return
     result: Final = await call
     assert result["team_id"] == new_team
+
+
+@pytest.mark.asyncio
+async def test_cursor_scan_survives_deleted_boundary_and_insertions():
+    rows = {c * 64: LiteLLM_VerificationToken(token=c * 64, team_id="team-a") for c in "2468"}
+    client = AsyncMock()
+
+    async def find_many(*, where, skip, take, order, include):
+        assert skip == 0
+        assert order == {"token": "asc"}
+        if "AND" in where and "token" in where["AND"][-1]:
+            scope, boundary = where["AND"]
+            after = boundary["token"]["gt"]
+        else:
+            scope, after = where, ""
+        assert scope["AND"][-1]["team_id"] == "team-a"
+        return [rows[key] for key in sorted(rows) if key > after and rows[key].team_id == scope["AND"][-1]["team_id"]][:take]
+
+    client.db.litellm_verificationtoken.find_many.side_effect = find_many
+    args = dict(prisma_client=client, page=1, size=2, user_id=None, team_id="team-a",
+                organization_id=None, key_alias=None, key_hash=None, pagination="cursor")
+    first = await list_key_helper(**args)
+    assert first == {"keys": ["2" * 64, "4" * 64], "next_cursor": "4" * 64}
+    del rows["2" * 64]
+    del rows["4" * 64]
+    rows["1" * 64] = LiteLLM_VerificationToken(token="1" * 64, team_id="team-a")
+    rows["5" * 64] = LiteLLM_VerificationToken(token="5" * 64, team_id="team-other")
+    rows["7" * 64] = LiteLLM_VerificationToken(token="7" * 64, team_id="team-a")
+    second = await list_key_helper(**args, cursor=first["next_cursor"])
+    assert second == {"keys": ["6" * 64, "7" * 64], "next_cursor": "7" * 64}
+    last = await list_key_helper(**args, cursor=second["next_cursor"], return_full_object=True)
+    assert [row.token for row in last["keys"]] == ["8" * 64]
+    assert last["next_cursor"] is None
+    assert last["keys"][0].team_id == "team-a"
+    again = await list_key_helper(**args)
+    assert again == {"keys": ["1" * 64, "6" * 64], "next_cursor": "6" * 64}
+    client.db.litellm_verificationtoken.count.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"cursor": "sk-secret"}, {"cursor": ""}, {"page": 2},
+    {"sort_by": "spend"}, {"status": "deleted"},
+    {"pagination": "page", "cursor": "a" * 64},
+])
+async def test_cursor_rejects_invalid_requests_before_reading_keys(changes):
+    client = AsyncMock()
+    args = dict(prisma_client=client, page=1, size=2, user_id=None, team_id=None,
+                organization_id=None, key_alias=None, key_hash=None, pagination="cursor")
+    with pytest.raises(HTTPException) as error:
+        await list_key_helper(**dict(args, **changes))
+    assert error.value.status_code == 400
+    client.db.litellm_verificationtoken.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("full", [False, True])
+async def test_cursor_empty_scan_terminates(full):
+    client = AsyncMock()
+    client.db.litellm_verificationtoken.find_many.return_value = []
+    result = await list_key_helper(prisma_client=client, page=1, size=100, user_id=None,
+                                   team_id=None, organization_id=None, key_alias=None,
+                                   key_hash=None, pagination="cursor", return_full_object=full)
+    assert result == {"keys": [], "next_cursor": None}

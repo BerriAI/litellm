@@ -4810,6 +4810,7 @@ class TeamListResponseObject(LiteLLM_TeamTable):
 
 
 class KeyListResponseObject(TypedDict, total=False):
+    next_cursor: ReadOnly[str | None]
     keys: list[str | UserAPIKeyAuth | LiteLLM_DeletedVerificationToken]
     total_count: int | None
     current_page: int | None
