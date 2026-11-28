@@ -36,6 +36,7 @@ arc-swap.workspace = true
 litellm-config.workspace = true
 litellm-config-load.workspace = true
 litellm-core-utils.workspace = true
+litellm-host.workspace = true
 litellm-db.workspace = true
 litellm-db-resolve.workspace = true
 litellm-repositories.workspace = true
@@ -82,6 +83,7 @@ litellm-yaml.workspace = true
 serde_yaml_ng = "0.10.0"
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
+litellm-cost = { workspace = true, features = ["test-support"] }
 litellm-callbacks-spend-log.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "test-util"] }

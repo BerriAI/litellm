@@ -5,18 +5,18 @@
 use std::time::{Duration, Instant};
 
 use litellm_host::interceptors::{
-    ExecutionFacts, Interceptors, RawResponse, RequestContext, ResultSource, RetriedRequest,
+    Cost, ExecutionFacts, Interceptors, RawResponse, RequestContext, ResultSource, RetriedRequest,
     WireRequest,
 };
 
 use crate::Error;
 
 /// What one attempt saw of its provider: where it called, when it began, its request went out,
-/// its response head came back and its result was ready, the headers that head carried and where
-/// its result came from.
+/// its response head came back and its result was ready, the headers that head carried, where
+/// its result came from and what it cost.
 /// [`Recorder`] fills it; readers get it through the call's record, which only lends it out.
 /// `Debug` hides the URL and the headers, which can carry credentials.
-#[derive(Clone, Default, PartialEq, Eq, veil::Redact)]
+#[derive(Clone, Default, PartialEq, veil::Redact)]
 pub struct AttemptRecord {
     /// The wire URL the attempt called.
     #[redact(with = "[REDACTED]")]
@@ -36,6 +36,8 @@ pub struct AttemptRecord {
     pub provider_headers: Vec<(String, String)>,
     /// Where the attempt's result came from.
     pub source: Option<ResultSource>,
+    /// What the route settled the attempt's cost as.
+    pub cost: Option<Cost>,
 }
 
 impl AttemptRecord {
@@ -128,6 +130,7 @@ impl<E> Interceptors<E> for Recorder {
         super::note(|record| {
             record.ready = Some(Instant::now());
             record.source = Some(facts.source);
+            record.cost = Some(facts.cost);
         });
         Ok(())
     }
@@ -135,7 +138,7 @@ impl<E> Interceptors<E> for Recorder {
 
 #[cfg(test)]
 mod tests {
-    use litellm_host::interceptors::{Cost, ProviderIdentity, ResponseHead};
+    use litellm_host::interceptors::{ProviderIdentity, ResponseHead};
     use rstest::rstest;
     use serde_json::json;
 

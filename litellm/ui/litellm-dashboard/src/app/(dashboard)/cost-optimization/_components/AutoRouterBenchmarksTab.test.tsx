@@ -1,7 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { renderWithProviders } from "../../../../../tests/test-utils";
 
 import type { AutoRouterDeployment } from "@/app/(dashboard)/hooks/models/useModels";
 import { ApiError } from "@/lib/http/client";
@@ -128,30 +131,36 @@ const response = (groups: AutoRouterBenchmarkGroup[], shared: Totals = totals())
   groups,
 });
 
-const renderTab = () => {
+const activityFor = (dateValue: { from: Date; to: Date }, onDateChange = vi.fn()) => ({
+  dateValue,
+  onDateChange,
+  results: [],
+  loading: false,
+  isFetchingMore: false,
+  progress: { currentPage: 1, totalPages: 1 },
+  cancelled: false,
+  cancel: vi.fn(),
+});
+
+const renderTab = (
+  url: { searchParams?: string; onUrlUpdate?: OnUrlUpdateFunction; resetUrlUpdateQueueOnMount?: boolean } = {},
+) => {
   const dateValue = { from: new Date(2026, 6, 6), to: new Date(2026, 7, 5) };
   const onDateChange = vi.fn();
-  const activity = {
-    dateValue,
-    onDateChange,
-    results: [],
-    loading: false,
-    isFetchingMore: false,
-    progress: { currentPage: 1, totalPages: 1 },
-    cancelled: false,
-    cancel: vi.fn(),
-  };
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return {
     dateValue,
     onDateChange,
-    ...render(
+    ...renderWithProviders(
       <QueryClientProvider client={queryClient}>
-        <AutoRouterBenchmarksTab accessToken="sk-test" activity={activity} />
+        <AutoRouterBenchmarksTab accessToken="sk-test" activity={activityFor(dateValue, onDateChange)} />
       </QueryClientProvider>,
+      url,
     ),
   };
 };
+
+const lastUpdate = (onUrlUpdate: ReturnType<typeof vi.fn<OnUrlUpdateFunction>>) => onUrlUpdate.mock.calls.at(-1)?.[0];
 
 describe("AutoRouterBenchmarksTab", () => {
   beforeEach(() => {
@@ -535,5 +544,46 @@ describe("AutoRouterBenchmarksTab", () => {
 
     expect(screen.getByTestId("date-picker")).toBeInTheDocument();
     expect(screen.getByText("All auto-routers")).toBeInTheDocument();
+  });
+
+  describe("URL state", () => {
+    it("opens the sub-tab named in ?router_tab= and mounts the other one only once visited", async () => {
+      mockHook({ data: response([group()]) });
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderTab({ searchParams: "?router_tab=shadow-evals", onUrlUpdate });
+
+      expect(screen.getByRole("tab", { name: "Shadow Evals", selected: true })).toBeInTheDocument();
+      expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
+      expect(screen.queryByText("Total estimated savings")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
+      await waitFor(() => expect(lastUpdate(onUrlUpdate)?.searchParams.has("router_tab")).toBe(false));
+      expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+      expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
+    });
+
+    it("replaces ?router_tab= for shadow evals and drops it for usage", async () => {
+      mockHook({ data: response([group()]) });
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderTab({ onUrlUpdate });
+
+      fireEvent.click(screen.getByRole("tab", { name: "Shadow Evals" }));
+      await waitFor(() => expect(lastUpdate(onUrlUpdate)?.searchParams.get("router_tab")).toBe("shadow-evals"));
+      expect(lastUpdate(onUrlUpdate)?.searchParams.has("tab")).toBe(false);
+      expect(lastUpdate(onUrlUpdate)?.options.history).toBe("replace");
+
+      fireEvent.click(screen.getByRole("tab", { name: "Usage" }));
+      await waitFor(() => expect(lastUpdate(onUrlUpdate)?.searchParams.has("router_tab")).toBe(false));
+    });
+
+    it("falls back to usage and clears an unknown ?router_tab=", async () => {
+      mockHook({ data: response([group()]) });
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderTab({ searchParams: "?router_tab=bogus", onUrlUpdate, resetUrlUpdateQueueOnMount: false });
+
+      expect(screen.getByRole("tab", { name: "Usage", selected: true })).toBeInTheDocument();
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      expect(lastUpdate(onUrlUpdate)?.searchParams.has("router_tab")).toBe(false);
+    });
   });
 });
