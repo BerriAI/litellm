@@ -16919,8 +16919,17 @@
         "memberAddFailed": "添加组织成员失败",
         "memberUpdated": "已成功更新组织成员",
         "memberUpdateFailed": "更新组织成员失败",
-        "memberDeleted": "已成功删除组织成员",
+        "memberDeleted": "已移除组织成员，其在该组织各团队中的成员身份和密钥已一并删除",
         "memberDeleteFailed": "删除组织成员失败"
+      },
+      "deleteMember": {
+        "title": "移除组织成员",
+        "alert": "移除此成员时，也会将其从该组织的所有团队中移除，并删除其在这些团队中拥有的密钥。",
+        "message": "确定从组织中移除此成员吗？此操作无法撤销。",
+        "informationTitle": "组织成员信息",
+        "userId": "用户 ID",
+        "email": "邮箱",
+        "role": "角色"
       },
       "overview": {
         "detailsTitle": "组织详情",

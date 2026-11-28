@@ -268,6 +268,55 @@ test("keeps the members pager on its page when an admin opens a member's edit di
   expect(screen.getByText("Showing 26-30 of 30")).toBeInTheDocument();
 });
 
+test("removes an organization member only after the admin types the member's email to confirm", async () => {
+  const { organizationMemberDeleteCall } = await import("../networking");
+  const deleteCall = vi.mocked(organizationMemberDeleteCall);
+  deleteCall.mockReset();
+  deleteCall.mockResolvedValue(undefined);
+  mockUseOrganization.mockReturnValue({
+    data: { ...mockOrg, members: [{ user_id: "user-1", user_email: "alice@example.com", user_role: "internal_user" }] },
+    isLoading: false,
+  } as unknown as ReturnType<typeof useOrganization>);
+  const user = userEvent.setup();
+  renderWithProviders(renderOrgView({ is_proxy_admin: true }), { searchParams: "?org=org_123&org_tab=members" });
+
+  await user.click(screen.getByTestId("delete-member"));
+
+  const dialog = screen.getByRole("dialog", { name: "Remove Organization Member" });
+  expect(dialog).toHaveTextContent("deletes the keys they own on those teams");
+  const confirm = within(dialog).getByRole("button", { name: "Delete" });
+  expect(confirm).toBeDisabled();
+  expect(deleteCall).not.toHaveBeenCalled();
+
+  fireEvent.change(within(dialog).getByPlaceholderText("alice@example.com"), {
+    target: { value: "alice@example.com" },
+  });
+  await user.click(confirm);
+
+  expect(deleteCall).toHaveBeenCalledWith("test-token", "org_123", "user-1");
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+});
+
+test("leaves the organization member in place when the admin cancels the removal", async () => {
+  const { organizationMemberDeleteCall } = await import("../networking");
+  const deleteCall = vi.mocked(organizationMemberDeleteCall);
+  deleteCall.mockReset();
+  mockUseOrganization.mockReturnValue({
+    data: { ...mockOrg, members: [{ user_id: "user-1", user_role: "internal_user" }] },
+    isLoading: false,
+  } as unknown as ReturnType<typeof useOrganization>);
+  const user = userEvent.setup();
+  renderWithProviders(renderOrgView({ is_proxy_admin: true }), { searchParams: "?org=org_123&org_tab=members" });
+
+  await user.click(screen.getByTestId("delete-member"));
+  const dialog = screen.getByRole("dialog", { name: "Remove Organization Member" });
+  expect(within(dialog).getByPlaceholderText("user-1")).toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(deleteCall).not.toHaveBeenCalled();
+});
+
 test("should display team aliases when teams are available", async () => {
   const orgWithTeams = {
     ...mockOrg,
