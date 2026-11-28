@@ -310,6 +310,7 @@ class MistralTokenCounter(BaseTokenCounter):
                     system=None,
                     tools=tools,
                     output_format=output_format,
+                    preserve_system_instructions=True,
                 )
                 system_text: Final = _anthropic_system_as_chat_sends_it(system)
                 return OpenAICountTokensConfig.count_request_parts(
