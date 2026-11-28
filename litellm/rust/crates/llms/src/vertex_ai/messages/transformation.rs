@@ -187,7 +187,7 @@ impl MessagesDialect for VertexAiMessagesConfig {
         let request = strip_beta_gated_request(
             request,
             &existing_betas(&headers),
-            context.drops_unsupported_params,
+            context.drop_params,
             BetaProvider::VertexAi,
         );
         let request = normalize_system_role_messages(
@@ -196,7 +196,7 @@ impl MessagesDialect for VertexAiMessagesConfig {
                 .thinking
                 .capabilities
                 .supports_mid_conversation_system,
-            context.drops_unsupported_params,
+            context.drop_params,
             BetaProvider::VertexAi,
         );
         Ok((strip_cache_control_scope(request), headers))
@@ -1180,7 +1180,6 @@ mod tests {
                     ..ThinkingContext::default()
                 },
                 drop_params: false,
-                drops_unsupported_params: false,
                 ..MessagesTransformContext::default()
             },
         );
@@ -1192,9 +1191,9 @@ mod tests {
         assert_eq!(body["messages"].as_array().unwrap().len(), 4);
     }
 
-    fn dropping_context(drops_unsupported_params: bool) -> MessagesTransformContext {
+    fn dropping_context(drop_params: bool) -> MessagesTransformContext {
         MessagesTransformContext {
-            drops_unsupported_params,
+            drop_params,
             ..MessagesTransformContext::default()
         }
     }
@@ -1217,7 +1216,7 @@ mod tests {
     #[case::dropped_under_drop_params(true, 2)]
     #[case::kept_without_drop_params(false, 3)]
     fn a_converted_system_turn_loses_its_tool_changes_under_drop_params(
-        #[case] drops_unsupported_params: bool,
+        #[case] drop_params: bool,
         #[case] converted_blocks: usize,
     ) {
         let body = transformed(
@@ -1234,7 +1233,7 @@ mod tests {
                     {"role": "user", "content": "c"}
                 ]
             }),
-            &dropping_context(drops_unsupported_params),
+            &dropping_context(drop_params),
         );
         assert_eq!(body["messages"][2]["role"], json!("user"));
         assert_eq!(
@@ -1256,7 +1255,7 @@ mod tests {
         })
     }
 
-    fn mid_conversation_system(drops_unsupported_params: bool) -> MessagesTransformContext {
+    fn mid_conversation_system(drop_params: bool) -> MessagesTransformContext {
         MessagesTransformContext {
             thinking: ThinkingContext {
                 capabilities: MessagesModelCapabilities {
@@ -1265,7 +1264,7 @@ mod tests {
                 },
                 ..ThinkingContext::default()
             },
-            drops_unsupported_params,
+            drop_params,
             ..MessagesTransformContext::default()
         }
     }
@@ -1298,14 +1297,14 @@ mod tests {
     fn fields_the_final_betas_do_not_unlock_are_stripped_under_drop_params(
         #[case] system: Value,
         #[case] headers: &[(&str, &str)],
-        #[case] drops_unsupported_params: bool,
+        #[case] drop_params: bool,
         #[case] expected: Value,
     ) {
         assert_eq!(
             finalized(
                 reminder(system),
                 headers,
-                &mid_conversation_system(drops_unsupported_params)
+                &mid_conversation_system(drop_params)
             )["messages"][2],
             expected
         );
@@ -1341,7 +1340,6 @@ mod tests {
                 ..ThinkingContext::default()
             },
             drop_params: false,
-            drops_unsupported_params: false,
             ..MessagesTransformContext::default()
         }
     }

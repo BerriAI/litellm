@@ -727,7 +727,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         if "safeguards" in anthropic_messages_optional_request_params and self.drops_safeguards(
             anthropic_messages_optional_request_params["safeguards"],  # pyright: ignore[reportUnknownArgumentType]  # the request params arrive as a bare dict
-            litellm_params.drop_params is True,
+            drops_unsupported_params(litellm_params.drop_params),
         ):
             anthropic_messages_optional_request_params.pop("safeguards")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
 
@@ -761,7 +761,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             model=model,
             optional_params=anthropic_messages_optional_request_params,
             custom_llm_provider=self._resolved_provider,
-            drop_params=getattr(litellm_params, "drop_params", None) is True,
+            drop_params=drops_unsupported_params(getattr(litellm_params, "drop_params", None)),
         )
         if dropped_budget is not None and self._report_reasoning_drops:
             dropped_budget.warn(model)

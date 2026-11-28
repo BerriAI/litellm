@@ -498,16 +498,12 @@ fn drop_compaction_without_beta(body: &mut Body, betas: &[String]) {
     }
 }
 
-fn pop_output_config_under_global_drop(
-    body: &mut Body,
-    global_drop_params: bool,
-    supports_effort: bool,
-) {
+fn pop_unsupported_output_config(body: &mut Body, drop_params: bool, supports_effort: bool) {
     let has_non_format_keys = matches!(
         body.get("output_config"),
         Some(Value::Object(output_config)) if output_config.keys().any(|key| key != "format")
     );
-    if global_drop_params && has_non_format_keys && !supports_effort {
+    if drop_params && has_non_format_keys && !supports_effort {
         tracing::warn!("Bedrock Invoke: dropping `output_config` the model does not accept");
         body.shift_remove("output_config");
     }
@@ -540,7 +536,7 @@ pub(crate) fn transform_anthropic_messages_request(
     let model = request.model.clone();
     let stream = request.params.stream.clone();
     let capabilities = &context.thinking.capabilities;
-    let drops_unknown_thinking = context.drop_params || context.global_drop_params;
+    let drops_unknown_thinking = context.drop_params;
     let requested_display_updates = is_thinking_display_updates_used(
         serde_json::to_value(&request.params.thinking).ok().as_ref(),
     );
@@ -548,7 +544,7 @@ pub(crate) fn transform_anthropic_messages_request(
     let request = normalize_system_role_messages(
         transform_messages_request(request, context)?,
         capabilities.supports_mid_conversation_system,
-        context.drops_unsupported_params,
+        context.drop_params,
         settings.custom_llm_provider,
     );
     let mut body = to_body(&request)?;
@@ -597,11 +593,11 @@ pub(crate) fn transform_anthropic_messages_request(
         );
     }
     drop_compaction_without_beta(&mut body, &betas);
-    if context.drops_unsupported_params {
+    if context.drop_params {
         strip_beta_gated_body(&mut body, &model, &betas)?;
     }
     tools_without_eager_input_streaming(&mut body);
-    pop_output_config_under_global_drop(&mut body, context.global_drop_params, supports_effort);
+    pop_unsupported_output_config(&mut body, context.drop_params, supports_effort);
     let mut body = strip_unsupported_bedrock_invoke_fields(body, settings);
     body.insert("model".into(), Value::String(model));
     if let Some(stream) = stream {
@@ -672,10 +668,7 @@ mod tests {
             bedrock: with_invoke_flags(capabilities.bedrock, &capabilities),
             ..capabilities
         };
-        MessagesTransformContext {
-            drops_unsupported_params: drop_params,
-            ..MessagesTransformContext::new(capabilities, drop_params)
-        }
+        MessagesTransformContext::new(capabilities, drop_params)
     }
 
     fn transformed_with(
@@ -892,16 +885,32 @@ mod tests {
         assert_eq!(wire["output_config"], json!({"effort": expected}));
     }
 
-    #[test]
-    fn global_drop_params_pops_output_config_the_model_does_not_take() {
-        let context = MessagesTransformContext {
-            global_drop_params: true,
-            ..context(MessagesModelCapabilities::default(), false)
+    #[rstest]
+    #[case::popped_under_drop_params(true, None)]
+    #[case::kept_without_it(false, Some(json!({"effort": "high"})))]
+    fn drop_params_pops_an_output_config_the_model_takes_no_effort_in(
+        #[case] drop_params: bool,
+        #[case] sent: Option<Value>,
+    ) {
+        let capabilities = MessagesModelCapabilities {
+            supports_output_config: true,
+            bedrock: BedrockCapabilities {
+                supports_output_config: true,
+                ..BedrockCapabilities::default()
+            },
+            ..MessagesModelCapabilities::default()
         };
-        let mut request =
-            body(json!({"output_config": {"effort": "high", "format": {"type": "json_schema"}}}));
-        pop_output_config_under_global_drop(&mut request, context.global_drop_params, false);
-        assert_eq!(request.get("output_config"), None);
+        let wire = transformed_with(
+            hello(
+                "anthropic.claude-3-haiku-20240307-v1:0",
+                json!({"output_config": {"effort": "high"}}),
+            ),
+            &MessagesTransformContext::new(capabilities, drop_params),
+            Vec::new(),
+        )
+        .unwrap()
+        .0;
+        assert_eq!(wire.get("output_config").cloned(), sent);
     }
 
     #[rstest]

@@ -45,7 +45,6 @@ from litellm.litellm_core_utils import exception_mapping_utils
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     drops_unsupported_params,
-    normalize_drop_params,
     only,
     proxy_request_headers,
     require_attributes,
@@ -163,7 +162,6 @@ class MessagesSettings:
     reasoning_auto_summary: bool
     additional_drop_params: Sequence[str]
     request_timeout: float | None
-    drops_unsupported_params: bool
     model: str | None = None
     mock_response: Mapping[str, object] | None = None
     stream_cost_model: str | None = None
@@ -405,7 +403,7 @@ def _with_deployment_effort(params: Mapping[str, object], request: Mapping[str, 
         model=model,
         custom_llm_provider=provider,
         kwargs=request,
-        drop_params=litellm.drop_params is True or request.get("drop_params") is True,
+        drop_params=drops_unsupported_params(request.get("drop_params")),
     )
 
 
@@ -1430,10 +1428,6 @@ def map_failure(
     return _public_provider_error(provider_error, error, request, request_provider)
 
 
-def _drop_params(kwargs: Mapping[str, object]) -> bool:
-    return bool(litellm.drop_params) or normalize_drop_params(kwargs.get("drop_params")) is True
-
-
 def _python_handler_params(request: Mapping[str, object], custom_llm_provider: object) -> GenericLiteLLMParams:
     return GenericLiteLLMParams(
         **{name: value for name, value in request.items() if name not in _HANDLER_PARAMS},
@@ -1527,11 +1521,10 @@ def settings(
         _raise_as_python_does(request, asynchronous)
     aiohttp: Final = http_transport.uses_aiohttp_transport()
     configured: Final = MessagesSettings(
-        drop_params=_drop_params(kwargs),
+        drop_params=drops_unsupported_params(kwargs.get("drop_params")),
         reasoning_auto_summary=is_reasoning_auto_summary_enabled(),
         additional_drop_params=handler.additional_drop_paths(kwargs),
         request_timeout=get_configured_request_timeout(),
-        drops_unsupported_params=drops_unsupported_params(kwargs.get("drop_params")),
         ascii_response_headers=aiohttp,
         joined_reads=aiohttp,
         detached_drain_timeout=ANTHROPIC_MESSAGES_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS if asynchronous else None,

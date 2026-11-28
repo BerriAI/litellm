@@ -1042,7 +1042,7 @@ def anthropic_messages_handler(
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
             params=local_vars,
             model=model,
-            drop_params=litellm_params.get("drop_params") is True,
+            drop_params=drops_unsupported_params(litellm_params.drop_params),
             custom_llm_provider=custom_llm_provider,
             additional_drop_params=additional_drop_paths(request_kwargs),
         )
@@ -1070,7 +1070,7 @@ def anthropic_messages_handler(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 kwargs=cast(Mapping[str, object], kwargs),  # cast-ok: router kwargs arrive untyped
-                drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
+                drop_params=drops_unsupported_params(litellm_params.drop_params),
             )
         ),
         _is_async=is_async,

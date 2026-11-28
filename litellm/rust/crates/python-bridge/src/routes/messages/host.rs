@@ -367,10 +367,6 @@ fn vertex_label_fields(py: Python<'_>) -> PyResult<Vec<Value>> {
     })
 }
 
-fn global_drop_params(py: Python<'_>) -> PyResult<bool> {
-    Ok(module_global(py, "drop_params")?.is_some_and(|value| value.is(PyBool::new(py, true))))
-}
-
 fn anthropic_auth_fields(py: Python<'_>) -> PyResult<&'static [String]> {
     static FIELDS: PyOnceLock<Vec<String>> = PyOnceLock::new();
     FIELDS
@@ -844,7 +840,6 @@ impl MessagesPythonHost {
                 intercepted: self.may_intercept(py)?,
                 unencodable_request_header,
                 module_api_key: azure.as_ref().and_then(|azure| azure.api_key.clone()),
-                global_drop_params: global_drop_params(py)?,
                 base_model,
                 ..settings.settings
             },

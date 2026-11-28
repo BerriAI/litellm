@@ -201,7 +201,7 @@ impl MessagesDialect for AnthropicMessagesConfig {
         let stripped = strip_beta_gated_request(
             request,
             &existing_betas(&headers),
-            context.drops_unsupported_params,
+            context.drop_params,
             BetaProvider::Anthropic,
         );
         Ok((stripped, headers))
@@ -287,7 +287,7 @@ pub fn should_retry_anthropic_messages_on_http_error(
     {
         return true;
     }
-    let drops_rejected_strict_tools = context.drops_unsupported_params
+    let drops_rejected_strict_tools = context.drop_params
         && is_claude_strict_tools_rejection(status, error_text)
         && tools_without_strict(request_body.get("tools")).is_some();
     if drops_rejected_strict_tools {
@@ -405,12 +405,10 @@ pub(crate) fn transform_messages_request(
     let request = without_unstructured_output_format(request, context);
     let request = drop_unsupported_params(request, context)?;
     let request = translate_thinking(request, &context.thinking)?;
-    let context_management = request
-        .params
-        .context_management
-        .clone()
-        .map(map_openai_context_management_to_anthropic);
-    let request = if context.drops_unsupported_params {
+    let context_management = request.params.context_management.clone().and_then(|sent| {
+        map_openai_context_management_to_anthropic(&sent).or((!context.drop_params).then_some(sent))
+    });
+    let request = if context.drop_params {
         MessagesRequest {
             params: MessagesOptionalParams {
                 system: request.params.system.and_then(drop_non_string_system_texts),
@@ -421,7 +419,7 @@ pub(crate) fn transform_messages_request(
     } else {
         request
     };
-    let messages = if context.drops_unsupported_params {
+    let messages = if context.drop_params {
         map_messages_rejecting_emptied(
             request.messages,
             drop_non_string_user_texts,
@@ -434,7 +432,7 @@ pub(crate) fn transform_messages_request(
         || continues_message_thread(&request.params)
     {
         messages
-    } else if context.drops_unsupported_params {
+    } else if context.drop_params {
         map_messages(messages, drop_advisor_blocks, drop_raw_advisor_blocks)
     } else {
         map_messages(messages, strip_advisor_blocks, strip_raw_advisor_blocks)
@@ -469,7 +467,7 @@ fn without_unstructured_output_format(
     request: MessagesRequest,
     context: &MessagesTransformContext,
 ) -> MessagesRequest {
-    if !context.drops_unsupported_params
+    if !context.drop_params
         || request
             .params
             .output_format
@@ -854,13 +852,18 @@ fn compact_edit_from_openai(entry: &Map<String, Value>) -> Option<ContextEdit> {
     })
 }
 
-/// An OpenAI-style `context_management` list becomes Anthropic `edits` when it holds
-/// compaction entries. Anything else, native edits included, is sent as it came.
+/// The Anthropic `context_management` a sent one names: an object with `edits` as it came, and
+/// an OpenAI-style list as the `edits` of its compaction entries. Anything else names none, and
+/// is sent as it came unless the call drops what the provider rejects.
 pub fn map_openai_context_management_to_anthropic(
-    context_management: Recognized<ContextManagement>,
-) -> Recognized<ContextManagement> {
-    let Recognized::Unrecognized(Value::Array(entries)) = &context_management else {
-        return context_management;
+    context_management: &Recognized<ContextManagement>,
+) -> Option<Recognized<ContextManagement>> {
+    let entries = match context_management {
+        Recognized::Known(native) => {
+            return native.edits.is_some().then(|| context_management.clone());
+        }
+        Recognized::Unrecognized(Value::Array(entries)) => entries,
+        Recognized::Unrecognized(_) => return None,
     };
     let edits: Vec<Recognized<ContextEdit>> = entries
         .iter()
@@ -868,12 +871,11 @@ pub fn map_openai_context_management_to_anthropic(
         .filter_map(compact_edit_from_openai)
         .map(Recognized::Known)
         .collect();
-    if edits.is_empty() {
-        return context_management;
-    }
-    Recognized::Known(ContextManagement {
-        edits: Some(Recognized::Known(edits)),
-        extra: Map::new(),
+    (!edits.is_empty()).then(|| {
+        Recognized::Known(ContextManagement {
+            edits: Some(Recognized::Known(edits)),
+            extra: Map::new(),
+        })
     })
 }
 
@@ -975,17 +977,11 @@ mod tests {
         MessagesModelCapabilities::default()
     }
 
-    fn transformed_messages(
-        messages: Value,
-        drops_unsupported_params: bool,
-    ) -> Result<Value, Error> {
+    fn transformed_messages(messages: Value, drop_params: bool) -> Result<Value, Error> {
         ANTHROPIC_MESSAGES_CONFIG
             .transform_anthropic_messages_request(
                 request(json!({"messages": messages})),
-                &MessagesTransformContext {
-                    drops_unsupported_params,
-                    ..MessagesTransformContext::with_lookup(unmapped(), false, &no_env)
-                },
+                &MessagesTransformContext::with_lookup(unmapped(), drop_params, &no_env),
             )
             .map(|transformed| serde_json::to_value(transformed).unwrap()["messages"].clone())
     }
@@ -1502,13 +1498,10 @@ mod tests {
     #[case::object_kept(json!({"type": "json_schema"}), true, Some(json!({"type": "json_schema"})))]
     fn a_non_object_output_format_is_dropped_under_drop_params(
         #[case] output_format: Value,
-        #[case] drops_unsupported_params: bool,
+        #[case] drop_params: bool,
         #[case] expected: Option<Value>,
     ) {
-        let context = MessagesTransformContext {
-            drops_unsupported_params,
-            ..MessagesTransformContext::with_lookup(unmapped(), false, &no_env)
-        };
+        let context = MessagesTransformContext::with_lookup(unmapped(), drop_params, &no_env);
         let transformed = ANTHROPIC_MESSAGES_CONFIG
             .transform_anthropic_messages_request(
                 request(json!({"output_format": output_format})),
@@ -1562,7 +1555,7 @@ mod tests {
     #[case::empty_list(json!([]), None)]
     #[case::anthropic_edits_pass_through(
         json!({"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 150000}}]}),
-        None
+        Some(json!({"edits": [{"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 150000}}]}))
     )]
     #[case::object_without_edits(json!({"type": "compaction"}), None)]
     #[case::scalar(json!("compaction"), None)]
@@ -1573,8 +1566,9 @@ mod tests {
         let parsed: Recognized<ContextManagement> =
             serde_json::from_value(context_management.clone()).unwrap();
         assert_eq!(
-            serde_json::to_value(map_openai_context_management_to_anthropic(parsed)).unwrap(),
-            mapped.unwrap_or(context_management)
+            map_openai_context_management_to_anthropic(&parsed)
+                .map(|mapped| serde_json::to_value(mapped).unwrap()),
+            mapped
         );
     }
 
@@ -1595,6 +1589,50 @@ mod tests {
                 json!({"context_management": context_management}),
                 unmapped,
                 false
+            ),
+            Ok(body(json!({"context_management": expected})))
+        );
+    }
+
+    #[rstest]
+    #[case::a_list_with_no_compaction_entry(json!([{"type": "clear_tool_uses_20250919"}]))]
+    #[case::an_empty_list(json!([]))]
+    #[case::an_object_without_edits(json!({"type": "other"}))]
+    #[case::a_scalar(json!("compaction"))]
+    fn drop_params_drops_a_context_management_that_maps_to_no_edits(
+        #[case] context_management: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        assert_eq!(
+            transform(
+                json!({"context_management": context_management}),
+                unmapped,
+                true
+            ),
+            Ok(body(json!({})))
+        );
+    }
+
+    #[rstest]
+    #[case::an_openai_list_is_mapped(
+        json!([{"type": "compaction"}]),
+        json!({"edits": [{"type": "compact_20260112"}]})
+    )]
+    #[case::native_edits(
+        json!({"edits": [{"type": "clear_tool_uses_20250919"}]}),
+        json!({"edits": [{"type": "clear_tool_uses_20250919"}]})
+    )]
+    #[case::null_edits(json!({"edits": null}), json!({"edits": null}))]
+    fn drop_params_keeps_a_context_management_that_names_edits(
+        #[case] context_management: Value,
+        #[case] expected: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        assert_eq!(
+            transform(
+                json!({"context_management": context_management}),
+                unmapped,
+                true
             ),
             Ok(body(json!({"context_management": expected})))
         );
@@ -1651,14 +1689,11 @@ mod tests {
     )]
     fn advisor_history_left_unpaired_is_dropped_only_under_drop_params(
         #[case] unpaired: Value,
-        #[case] drops_unsupported_params: bool,
+        #[case] drop_params: bool,
         #[case] kept: Value,
         unmapped: MessagesModelCapabilities,
     ) {
-        let context = MessagesTransformContext {
-            drops_unsupported_params,
-            ..MessagesTransformContext::with_lookup(unmapped, false, &no_env)
-        };
+        let context = MessagesTransformContext::with_lookup(unmapped, drop_params, &no_env);
         let content = [
             vec![json!({"type": "server_tool_use", "id": "srvtoolu_1", "name": "advisor", "input": {}})],
             unpaired.as_array().unwrap().clone(),
@@ -1849,8 +1884,6 @@ mod tests {
                         warns_dropped_disabled_thinking: false,
                     },
                     drop_params: true,
-                    drops_unsupported_params: false,
-                    global_drop_params: false,
                     claude_base_model: false,
                     keeps_unsigned_thinking: false,
                 }
@@ -2592,7 +2625,7 @@ mod tests {
                 let status = u16::try_from(case["status"].as_u64().unwrap()).unwrap();
                 let error_text = case["error_text"].as_str().unwrap();
                 let context = MessagesTransformContext {
-                    drops_unsupported_params: case["drops_unsupported_params"].as_bool().unwrap(),
+                    drop_params: case["drop_params"].as_bool().unwrap(),
                     ..MessagesTransformContext::default()
                 };
                 let mut reasons = Vec::new();

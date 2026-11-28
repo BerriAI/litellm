@@ -165,10 +165,12 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
     async fn run(&self, attempt: &Attempt) -> Result<Self::Output, Error> {
         let deployment = &attempt.deployment;
         let cost_map = self.gateway.cost_map();
+        let body = routing::attempt_body(&self.body, attempt);
         let mut shaping = shaping(
             deployment,
             cost_map.catalog(),
             &self.gateway.messages_settings,
+            &body,
         );
         shaping.settings.pricing = pricing::priced_as(
             deployment,
@@ -183,12 +185,7 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
                 <Self as Endpoint>::streamed(&self.body),
                 shaping.settings.request_timeout(),
             ),
-            ..project(
-                deployment,
-                shaping,
-                routing::attempt_body(&self.body, attempt),
-                self.headers,
-            )?
+            ..project(deployment, shaping, body, self.headers)?
         };
         let machine = self.route.clone().machine(call, self.policy);
         let ran = litellm_host_http::run(machine, (), Recorder, None).await?;
@@ -224,25 +221,31 @@ fn is_set(flag: Option<&Spelled<bool>>) -> bool {
     }
 }
 
-/// How the messages route shapes a call to `deployment`: the `configured` settings under its own
-/// `drop_params` and `additional_drop_params`, the capabilities `catalog` and its `model_info`
-/// declare, and for Claude on Vertex AI the model's `supported_regions`, which route the call as
-/// they route it in Python.
+/// How the messages route shapes a call to `deployment` with `body`: the `configured` settings,
+/// the capabilities `catalog` and its `model_info` declare, the deployment's `drop_params` and
+/// `additional_drop_params` with the request's own laid over them, as Python lays a call's
+/// kwargs over the deployment's (`{**deployment, **request}`), and for Claude on Vertex AI the
+/// model's `supported_regions`, which route the call as they route it in Python. The request's
+/// `drop_params` turns dropping on or off for its call, and `litellm_settings.drop_params` keeps
+/// it on whatever the request says (`litellm.drop_params or drop_params`).
 fn shaping(
     deployment: &Deployment,
     catalog: &Catalog,
     configured: &MessagesSettings,
+    body: &Map<String, Value>,
 ) -> MessagesShaping {
     let params = &deployment.params;
-    let drop_params = configured.global_drop_params || is_set(params.drop_params.as_ref());
+    let drop_params = configured.drop_params
+        || body
+            .get("drop_params")
+            .map_or_else(|| is_set(params.drop_params.as_ref()), is_on);
     let base_model = params.extra.get("base_model").and_then(Value::as_str);
     MessagesShaping {
         settings: MessagesSettings {
             drop_params,
-            drops_unsupported_params: drop_params,
-            additional_drop_params: params
-                .extra
+            additional_drop_params: body
                 .get("additional_drop_params")
+                .or_else(|| params.extra.get("additional_drop_params"))
                 .map(drop_paths)
                 .unwrap_or_default(),
             base_model: base_model.map(str::to_owned),
@@ -272,11 +275,10 @@ fn shaping(
 
 fn project(
     deployment: &Deployment,
-    deployment_shaping: MessagesShaping,
+    shaping: MessagesShaping,
     body: Map<String, Value>,
     headers: &HeaderMap,
 ) -> Result<MessagesCall, Error> {
-    let shaping = requested(deployment_shaping, &body);
     let tools = merged_tools(deployment, body.get(TOOLS)).map(|tools| (TOOLS.to_owned(), tools));
     let params = &deployment.params;
     let client_params = body
@@ -301,28 +303,6 @@ fn project(
         timeout: None,
         shaping,
     })
-}
-
-/// The deployment's settings with the request's own laid over them, as Python lays a call's
-/// kwargs over the deployment's (`{**deployment, **request}`). The request's `drop_params` turns
-/// dropping on or off for its call, and `litellm_settings.drop_params` keeps it on whatever the
-/// request says (`litellm.drop_params or drop_params`).
-fn requested(shaping: MessagesShaping, body: &Map<String, Value>) -> MessagesShaping {
-    let settings = shaping.settings;
-    let drops = body
-        .get("drop_params")
-        .map(|requested| settings.global_drop_params || is_on(requested));
-    let additional_drop_params = body.get("additional_drop_params").map(drop_paths);
-    MessagesShaping {
-        settings: MessagesSettings {
-            drop_params: drops.unwrap_or(settings.drop_params),
-            drops_unsupported_params: drops.unwrap_or(settings.drops_unsupported_params),
-            additional_drop_params: additional_drop_params
-                .unwrap_or(settings.additional_drop_params),
-            ..settings
-        },
-        ..shaping
-    }
 }
 
 /// `lax_bool(value) is True`, the rule Python reads a call's `drop_params` by.
@@ -455,17 +435,27 @@ mod tests {
     use super::*;
     use crate::test_support::deployment;
 
-    fn deployment_shaping(global: bool, drop_params: bool) -> MessagesShaping {
-        MessagesShaping {
-            settings: MessagesSettings {
-                global_drop_params: global,
-                drop_params,
-                drops_unsupported_params: drop_params,
-                additional_drop_params: vec!["deployment".to_owned()],
-                ..MessagesSettings::default()
-            },
-            ..MessagesShaping::default()
-        }
+    fn requested(global: bool, deployment_drops: bool, body: &Value) -> MessagesSettings {
+        let deployment = deployment(
+            json!({
+                "model": "provider/model",
+                "drop_params": deployment_drops,
+                "additional_drop_params": ["deployment"],
+            }),
+            json!({}),
+        );
+        let configured = MessagesSettings {
+            drop_params: global,
+            ..MessagesSettings::default()
+        };
+
+        shaping(
+            &deployment,
+            &catalog(),
+            &configured,
+            body.as_object().unwrap(),
+        )
+        .settings
     }
 
     #[rstest]
@@ -487,16 +477,7 @@ mod tests {
         #[case] deployment: bool,
         #[case] expected: bool,
     ) {
-        let settings = requested(
-            deployment_shaping(global, deployment),
-            body.as_object().unwrap(),
-        )
-        .settings;
-
-        assert_eq!(
-            (settings.drop_params, settings.drops_unsupported_params),
-            (expected, expected)
-        );
+        assert_eq!(requested(global, deployment, &body).drop_params, expected);
     }
 
     #[rstest]
@@ -511,10 +492,10 @@ mod tests {
         #[case] body: Value,
         #[case] expected: &[&str],
     ) {
-        let settings =
-            requested(deployment_shaping(false, false), body.as_object().unwrap()).settings;
-
-        assert_eq!(settings.additional_drop_params, expected);
+        assert_eq!(
+            requested(false, false, &body).additional_drop_params,
+            expected
+        );
     }
 
     const CACHED_USAGE: &str = r#""usage":{"input_tokens":7,"output_tokens":5,"cache_creation_input_tokens":100,"cache_read_input_tokens":20}"#;
@@ -564,16 +545,13 @@ mod tests {
         let deployment = deployment(Value::Object(params), json!({}));
 
         let configured = MessagesSettings {
-            global_drop_params: drops_params_globally,
+            drop_params: drops_params_globally,
             ..MessagesSettings::default()
         };
 
-        let settings = shaping(&deployment, &catalog(), &configured).settings;
+        let settings = shaping(&deployment, &catalog(), &configured, &Map::new()).settings;
 
-        assert_eq!(
-            (settings.drop_params, settings.drops_unsupported_params),
-            (expected, expected)
-        );
+        assert_eq!(settings.drop_params, expected);
     }
 
     #[rstest]
@@ -583,8 +561,13 @@ mod tests {
     fn model_info_flags_reach_the_deployment(#[case] model_info: Value, #[case] expected: bool) {
         let deployment = deployment(json!({"model": "anthropic/claude-unlisted-9"}), model_info);
 
-        let capabilities =
-            shaping(&deployment, &catalog(), &MessagesSettings::default()).capabilities;
+        let capabilities = shaping(
+            &deployment,
+            &catalog(),
+            &MessagesSettings::default(),
+            &Map::new(),
+        )
+        .capabilities;
 
         assert_eq!(capabilities.supports_reasoning, expected);
     }
@@ -596,17 +579,17 @@ mod tests {
             json!({}),
         );
         let configured = MessagesSettings {
-            global_drop_params: true,
+            drop_params: true,
             reasoning_auto_summary: true,
             request_timeout: Some(30.0),
             ..MessagesSettings::default()
         };
 
-        let settings = shaping(&deployment, &catalog(), &configured).settings;
+        let settings = shaping(&deployment, &catalog(), &configured, &Map::new()).settings;
 
         assert_eq!(
             (
-                settings.global_drop_params,
+                settings.drop_params,
                 settings.reasoning_auto_summary,
                 settings.request_timeout
             ),
@@ -627,7 +610,13 @@ mod tests {
             json!({}),
         );
 
-        let settings = shaping(&deployment, &catalog(), &MessagesSettings::default()).settings;
+        let settings = shaping(
+            &deployment,
+            &catalog(),
+            &MessagesSettings::default(),
+            &Map::new(),
+        )
+        .settings;
 
         assert_eq!(settings.additional_drop_params, expected);
     }

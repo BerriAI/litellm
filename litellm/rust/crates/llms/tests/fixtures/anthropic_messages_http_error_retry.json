@@ -492,7 +492,7 @@
           "type": "enabled",
           "budget_tokens": 2048
         },
-        "drops_unsupported_params": true,
+        "drop_params": true,
         "retried": true,
         "stripped": false,
         "strict_dropped": true
@@ -505,7 +505,7 @@
           "type": "enabled",
           "budget_tokens": 2048
         },
-        "drops_unsupported_params": false,
+        "drop_params": false,
         "retried": false,
         "stripped": false,
         "strict_dropped": true
@@ -518,7 +518,7 @@
           "type": "enabled",
           "budget_tokens": 2048
         },
-        "drops_unsupported_params": true,
+        "drop_params": true,
         "retried": true,
         "stripped": false,
         "strict_dropped": true
@@ -531,7 +531,7 @@
           "type": "enabled",
           "budget_tokens": 2048
         },
-        "drops_unsupported_params": true,
+        "drop_params": true,
         "retried": false,
         "stripped": false,
         "strict_dropped": false
@@ -544,7 +544,7 @@
           "type": "enabled",
           "budget_tokens": 2048
         },
-        "drops_unsupported_params": true,
+        "drop_params": true,
         "retried": false,
         "stripped": false,
         "strict_dropped": false
@@ -557,7 +557,7 @@
           "type": "enabled",
           "budget_tokens": 2048
         },
-        "drops_unsupported_params": true,
+        "drop_params": true,
         "retried": true,
         "stripped": true,
         "strict_dropped": false
@@ -570,7 +570,7 @@
           "type": "enabled",
           "budget_tokens": 2048
         },
-        "drops_unsupported_params": false,
+        "drop_params": false,
         "retried": true,
         "stripped": true,
         "strict_dropped": false
@@ -583,7 +583,7 @@
           "type": "enabled",
           "budget_tokens": 2048
         },
-        "drops_unsupported_params": false,
+        "drop_params": false,
         "retried": true,
         "stripped": true,
         "strict_dropped": true
@@ -598,7 +598,7 @@
             "prefix_mismatch_behavior": "error"
           }
         },
-        "drops_unsupported_params": true,
+        "drop_params": true,
         "retried": true,
         "stripped": true,
         "strict_dropped": true
@@ -613,7 +613,7 @@
             "prefix_mismatch_behavior": "error"
           }
         },
-        "drops_unsupported_params": false,
+        "drop_params": false,
         "retried": false,
         "stripped": true,
         "strict_dropped": true

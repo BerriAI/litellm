@@ -556,7 +556,7 @@ async fn sent_under(
 )]
 #[case::the_config_over_the_request(
     json!({}),
-    json!({"global_drop_params": true}),
+    json!({"drop_params": true}),
     json!(false),
     Ok(())
 )]

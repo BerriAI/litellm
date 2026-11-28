@@ -435,7 +435,7 @@ fn without_unsupported_server_side_fallback(
     context: &MessagesTransformContext,
 ) -> BTreeSet<String> {
     if !betas.contains(SERVER_SIDE_FALLBACK)
-        || !context.drops_unsupported_params
+        || !context.drop_params
         || context
             .thinking
             .capabilities
@@ -484,10 +484,7 @@ mod tests {
             .unwrap()
             .extend(params.as_object().unwrap().clone());
         let request: MessagesRequest = serde_json::from_value(request).unwrap();
-        let context = MessagesTransformContext {
-            drops_unsupported_params: drop_params,
-            ..MessagesTransformContext::new(capabilities, drop_params)
-        };
+        let context = MessagesTransformContext::new(capabilities, drop_params);
         let headers = header
             .map(|value| vec![("anthropic-beta".to_string(), value.to_string())])
             .unwrap_or_default();

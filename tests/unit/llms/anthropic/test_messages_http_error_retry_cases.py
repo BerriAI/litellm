@@ -69,7 +69,7 @@ class _StrictRetryCase(TypedDict):
     status: ReadOnly[int]
     error_text: ReadOnly[str]
     thinking: ReadOnly[Mapping[str, object]]
-    drops_unsupported_params: ReadOnly[bool]
+    drop_params: ReadOnly[bool]
     retried: ReadOnly[bool]
     stripped: ReadOnly[bool]
     strict_dropped: ReadOnly[bool]
@@ -194,7 +194,7 @@ def test_the_strict_tools_retry_matches_the_shared_cases(
     }
 
     retried: Final = config.should_retry_anthropic_messages_on_http_error(
-        e=_rejection(case), litellm_params={"drop_params": case["drops_unsupported_params"]}, request_body=body
+        e=_rejection(case), litellm_params={"drop_params": case["drop_params"]}, request_body=body
     )
     transformed: Final = config.transform_anthropic_messages_request_on_http_error(
         e=_rejection(case), request_data=copy.deepcopy(body)

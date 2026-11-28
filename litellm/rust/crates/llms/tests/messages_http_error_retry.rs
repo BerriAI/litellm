@@ -131,7 +131,7 @@ fn every_messages_provider_drops_rejected_strict_tools_like_the_python_base_conf
                 case["error_text"].as_str().unwrap(),
                 &body,
                 &MessagesTransformContext {
-                    drops_unsupported_params: case["drops_unsupported_params"].as_bool().unwrap(),
+                    drop_params: case["drop_params"].as_bool().unwrap(),
                     ..MessagesTransformContext::default()
                 },
             ) != expected
