@@ -1084,6 +1084,52 @@ def _pin_scalar_consts(schema: JsonValue, *, pins_empty_string: bool, depth: int
         _pin_scalar_consts(subschema, pins_empty_string=pins_empty_string, depth=depth + 1)
 
 
+_PROPERTY_KEYWORDS: Final = ("properties", "patternProperties")
+_DEFINITION_KEYWORDS: Final = ("$defs", "definitions")
+_SUBSCHEMA_LIST_KEYWORDS: Final = ("anyOf", "oneOf", "allOf", "prefixItems")
+
+
+def _replace_boolean_subschemas(schema: object) -> None:
+    if not isinstance(schema, dict):
+        return
+    for keyword in _PROPERTY_KEYWORDS:
+        subschemas = schema.get(keyword)
+        if not isinstance(subschemas, dict):
+            continue
+        dropped: Final = {name for name, value in subschemas.items() if isinstance(value, bool)}
+        for name in dropped:
+            del subschemas[name]
+        if keyword == "properties" and dropped and isinstance(schema.get("required"), list):
+            schema["required"] = [name for name in schema["required"] if name not in dropped]
+        for value in subschemas.values():
+            _replace_boolean_subschemas(value)
+    for keyword in _DEFINITION_KEYWORDS:
+        definitions = schema.get(keyword)
+        if not isinstance(definitions, dict):
+            continue
+        for name, value in definitions.items():
+            if isinstance(value, bool):
+                definitions[name] = {}
+            else:
+                _replace_boolean_subschemas(value)
+    for keyword in _SUBSCHEMA_LIST_KEYWORDS:
+        subschemas = schema.get(keyword)
+        if not isinstance(subschemas, list):
+            continue
+        kept: Final = [{} if value is True else value for value in subschemas if value is not False]
+        if kept:
+            schema[keyword] = kept
+            for value in kept:
+                _replace_boolean_subschemas(value)
+        else:
+            schema.pop(keyword)
+    items: Final = schema.get("items")
+    if isinstance(items, bool):
+        schema["items"] = {}
+    else:
+        _replace_boolean_subschemas(items)
+
+
 def build_vertex_schema(
     parameters: dict,
     add_property_ordering: bool = False,
@@ -1107,6 +1153,7 @@ def build_vertex_schema(
     # Get valid fields from Schema TypedDict
     valid_schema_fields: Final = set(get_type_hints(Schema).keys())
 
+    _replace_boolean_subschemas(parameters)
     defs: Final = parameters.pop("$defs", {})
     # Expand $ref references in parameters using the definitions
     # Note: We don't pre-flatten defs as that causes exponential memory growth

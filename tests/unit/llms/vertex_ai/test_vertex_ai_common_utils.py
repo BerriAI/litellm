@@ -3267,3 +3267,82 @@ def test_enum_budget_answers_fast_when_one_huge_enum_value_repeats_across_branch
     huge: Final = "x" * (8 * 1024 * 1024)
 
     assert enums_fit({"anyOf": [{"type": "string", "enum": [huge]} for _ in range(20_000)]}) is False
+
+
+def _boolean_subschema_tool_parameters():
+    return {
+        "type": "object",
+        "properties": {
+            "source": {
+                "oneOf": [
+                    {"type": "string"},
+                    {"type": "object", "properties": {"evidence": True}},
+                ]
+            },
+            "anything": True,
+            "blocked": False,
+            "tags": {"type": "array", "items": True},
+        },
+        "required": ["source", "anything", "blocked"],
+    }
+
+
+def test_build_vertex_schema_drops_boolean_properties():
+    schema = build_vertex_schema(_boolean_subschema_tool_parameters())
+
+    assert "anything" not in schema["properties"]
+    assert "blocked" not in schema["properties"]
+    assert schema["required"] == ["source"]
+    assert isinstance(schema["properties"]["tags"]["items"], dict)
+
+
+def test_build_vertex_schema_keeps_refs_to_boolean_defs():
+    schema = build_vertex_schema(
+        {
+            "type": "object",
+            "$defs": {"Any": True},
+            "properties": {"payload": {"$ref": "#/$defs/Any"}},
+        }
+    )
+
+    assert "payload" in schema["properties"]
+
+
+def test_gemini_tool_mapping_accepts_boolean_subschema():
+    tools = [{"type": "function", "function": {"name": "browse", "parameters": _boolean_subschema_tool_parameters()}}]
+
+    optional_params = litellm.GoogleAIStudioGeminiConfig().map_openai_params(
+        non_default_params={"tools": tools},
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+
+    assert optional_params["tools"]
+
+
+def test_build_vertex_schema_drops_boolean_subschemas_under_unsupported_keywords():
+    schema = build_vertex_schema(
+        {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "additionalProperties": False,
+                    "not": True,
+                    "if": True,
+                    "then": False,
+                },
+                "tags": {"type": "array", "items": {"type": "string"}, "contains": True},
+            },
+            "additionalProperties": False,
+        }
+    )
+
+    config: Final = schema["properties"]["config"]
+    assert "name" in config["properties"]
+    for keyword in ("additionalProperties", "not", "if", "then"):
+        assert keyword not in config
+    assert "contains" not in schema["properties"]["tags"]
+    assert "additionalProperties" not in schema
