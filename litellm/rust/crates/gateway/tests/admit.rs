@@ -27,6 +27,9 @@ struct Scenario {
     /// The other rows the database holds, each under its table's name, stored in this order.
     #[serde(default)]
     rows: Vec<BTreeMap<String, serde_json::Value>>,
+    /// The teams the database holds, each id with the columns set on its row.
+    #[serde(default)]
+    teams: BTreeMap<String, Columns>,
     /// Whether the config reads the database that holds the keys, as its
     /// `general_settings.database_url`.
     #[serde(default)]
@@ -103,18 +106,22 @@ fn stored_config(stored: Stored, held: Held) -> StoredConfig {
 
 type Columns = serde_json::Map<String, serde_json::Value>;
 
-/// The database holding each key of the scenario, a plain row with its columns set on it, and
-/// each of its other rows.
-async fn listed(
-    keys: &BTreeMap<String, Columns>,
-    rows: &[BTreeMap<String, serde_json::Value>],
-) -> keys::Held {
+/// The database holding each key and each team of the scenario, a key as a plain row with its
+/// columns set on it, and each of its other rows.
+async fn listed(scenario: &Scenario) -> keys::Held {
     let held = keys::Held::start().await;
-    for (token, columns) in keys {
+    for (token, columns) in &scenario.keys {
         held.key(token, serde_json::Value::Object(columns.clone()))
             .await;
     }
-    for (table, row) in rows.iter().flatten() {
+    for (team_id, columns) in &scenario.teams {
+        let row = std::iter::once(("team_id".to_owned(), serde_json::json!(team_id)))
+            .chain(columns.clone())
+            .collect();
+        held.insert_named("LiteLLM_TeamTable", &serde_json::Value::Object(row))
+            .await;
+    }
+    for (table, row) in scenario.rows.iter().flatten() {
         held.insert(table, row).await;
     }
     held
@@ -232,6 +239,7 @@ impl Sent {
 #[case::virtual_key_budgets_without_database("virtual_key_budgets_without_database")]
 #[case::end_user("end_user")]
 #[case::end_user_token_database("end_user_token_database")]
+#[case::virtual_key_team("virtual_key_team")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
@@ -239,9 +247,11 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let text = std::fs::read_to_string(&path).unwrap();
     let scenario: Scenario =
         serde_yaml_ng::from_value(litellm_yaml::from_str(&text).unwrap()).unwrap();
-    let held = match scenario.keys.is_empty() && scenario.rows.is_empty() {
+    let nothing_held =
+        scenario.keys.is_empty() && scenario.teams.is_empty() && scenario.rows.is_empty();
+    let held = match nothing_held {
         true => None,
-        false => Some(listed(&scenario.keys, &scenario.rows).await),
+        false => Some(listed(&scenario).await),
     };
     let config = match (&held, scenario.database) {
         (Some(held), true) => with_database(scenario.config.clone(), held.url()),

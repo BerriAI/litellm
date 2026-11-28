@@ -5,6 +5,8 @@
 
 use serde_json::{Map, Value};
 
+use crate::authz::ModelList;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UserRecord {
     pub user_id: String,
@@ -17,6 +19,8 @@ pub struct UserRecord {
 pub struct TeamRecord {
     pub team_id: String,
     pub team_alias: Option<String>,
+    /// The models the team may call, which the model rule reads as the team's layer.
+    pub models: Vec<String>,
     pub limits: MinuteLimits,
     pub budget: Budget,
     /// The `max_budget` of the budget `metadata.team_member_budget_id` names, which a member with
@@ -107,6 +111,12 @@ impl Record for UserRecord {
 
     fn alias(&self) -> Option<&str> {
         self.user_alias.as_deref()
+    }
+}
+
+impl TeamRecord {
+    pub fn model_list(&self) -> ModelList<'_> {
+        ModelList::read(&self.models)
     }
 }
 

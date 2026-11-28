@@ -4,7 +4,7 @@
 use litellm_config::LitellmRole;
 use litellm_python_compat::{Value, datetime::IsoDateTime};
 use litellm_redis_store::auth_cache::{
-    Bag, BudgetEntry, Lists, ModelRegion, ObjectPermissionEntry,
+    Bag, BudgetEntry, Lists, ModelRegion, ModelTableEntry, ObjectPermissionEntry,
 };
 
 /// The name of the first of `fields` that holds something.
@@ -48,6 +48,7 @@ carried_when_held!(
     LitellmRole,
     ModelRegion,
     ObjectPermissionEntry,
+    ModelTableEntry,
     BudgetEntry
 );
 
