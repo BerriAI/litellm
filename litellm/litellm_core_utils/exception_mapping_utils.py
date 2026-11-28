@@ -40,7 +40,7 @@ from litellm.llms.base_llm.chat.transformation import RelayOnlyBodyLLMException
 from litellm.llms.bedrock.common_utils import bedrock_model_reaches_converse_by_default
 from litellm.llms.bigmodel.common_utils import raise_bigmodel_business_error
 from litellm.llms.minimax.common_utils import minimax_safety_error
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CallTypes, LlmProviders
 
 from ..exceptions import (
     APIConnectionError,
@@ -309,7 +309,7 @@ class _ProviderHTTPException(Protocol):
 _ERROR_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
-def _openai_cyber_policy_body(original_exception: object) -> Mapping[str, object] | None:
+def _openai_error_object(original_exception: object) -> Mapping[str, object] | None:
     raw_body: Final[object] = getattr(original_exception, "body", None)
     try:
         body: Final = (
@@ -317,10 +317,49 @@ def _openai_cyber_policy_body(original_exception: object) -> Mapping[str, object
             if raw_body is not None
             else _ERROR_BODY_ADAPTER.validate_json(getattr(original_exception, "message", ""))
         )
-        error: Final = _ERROR_BODY_ADAPTER.validate_python(body.get("error", body))
+        return _ERROR_BODY_ADAPTER.validate_python(body.get("error", body))
     except ValidationError:
         return None
-    return error if error.get("code") == "cyber_policy" else None
+
+
+def _reply_error_object(response: object) -> Mapping[str, object] | None:
+    if not isinstance(response, httpx.Response):
+        return None
+    try:
+        body: Final = _ERROR_BODY_ADAPTER.validate_json(response.content)
+        return _ERROR_BODY_ADAPTER.validate_python(body.get("error", body))
+    except ValidationError:
+        return None
+
+
+def _openai_cyber_policy_body(original_exception: object) -> Mapping[str, object] | None:
+    error: Final = _openai_error_object(original_exception)
+    return error if error is not None and error.get("code") == "cyber_policy" else None
+
+
+_OPENAI_IMAGE_CALL_TYPES: Final = frozenset(
+    {
+        CallTypes.image_generation.value,
+        CallTypes.aimage_generation.value,
+        CallTypes.image_edit.value,
+        CallTypes.aimage_edit.value,
+    }
+)
+
+
+def _openai_moderation_blocked(
+    original_exception: object,
+    response: httpx.Response | None,
+    custom_llm_provider: str,
+    request_kwargs: Mapping[str, object],
+) -> bool:
+    call_type: Final[object] = getattr(request_kwargs.get("litellm_logging_obj"), "call_type", None)
+    if custom_llm_provider != "openai" or call_type not in _OPENAI_IMAGE_CALL_TYPES:
+        return False
+    if getattr(original_exception, "status_code", None) != 400:
+        return False
+    error: Final = _openai_error_object(original_exception) or _reply_error_object(response)
+    return error is not None and error.get("code") == "moderation_blocked"
 
 
 def _litellm_proxy_response(
@@ -542,6 +581,7 @@ def _map_openai_exception(
         ("invalid_request_error" in error_str and "content_policy_violation" in error_str)
         or ("Invalid prompt" in error_str and "violating our usage policy" in error_str)
         or ("request was rejected as a result of the safety system" in error_str.lower())
+        or _openai_moderation_blocked(original_exception, response, custom_llm_provider, request_kwargs)
     ):
         raise ContentPolicyViolationError(
             message=f"ContentPolicyViolationError: {exception_provider} - {message}",

@@ -1,7 +1,10 @@
+import asyncio
+import datetime
 import functools
+import io
 import json
 import traceback
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from types import MappingProxyType
 from typing import Any, Final, Literal, Optional, Union
 from unittest.mock import MagicMock, patch
@@ -9,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import openai
 import pytest
+import respx
 from fastapi import HTTPException
 from openai import AsyncOpenAI, OpenAI
 
@@ -26,7 +30,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     provider_origin_status,
 )
 from litellm.llms.anthropic.common_utils import AnthropicError
-from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.litellm_core_utils.litellm_logging import Logging, StandardLoggingPayloadSetup
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -44,7 +48,184 @@ from litellm.proxy.common_utils.openai_error_payload import (
     relayed_provider_specific_fields,
 )
 from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import CallTypes, LlmProviders
+
+
+# Body shape from a customer report (Pylon #12371) and a live OpenAI repro on 2026-11-24
+_MODERATION_BLOCKED_BODY: Final = {
+    "error": {
+        "message": "Your request was rejected by the safety system. If you believe this is an error, contact us "
+        "at help.openai.com and include the request ID req_unit.",
+        "type": "image_generation_user_error",
+        "param": None,
+        "code": "moderation_blocked",
+    }
+}
+_REFERENCE_PNG: Final = b"\x89PNG\r\n\x1a\nreference-image"
+
+
+@pytest.fixture
+def moderation_blocked_upstream(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> Iterator[respx.Route]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield respx_mock.route().mock(return_value=httpx.Response(400, json=_MODERATION_BLOCKED_BODY))
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+def _image_request_kwargs() -> dict[str, object]:
+    return {
+        "litellm_logging_obj": Logging(
+            model="gpt-image-1",
+            messages=[],
+            stream=False,
+            call_type=CallTypes.aimage_generation.value,
+            start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+            litellm_call_id="call-image",
+            function_id="fn-image",
+        )
+    }
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(
+            lambda: litellm.completion(
+                model="groq/openai/gpt-oss-120b", messages=[{"role": "user", "content": "hi"}], api_key="gsk-test"
+            ),
+            id="groq",
+        ),
+        pytest.param(
+            lambda: litellm.completion(
+                model="hosted_vllm/served-model",
+                messages=[{"role": "user", "content": "hi"}],
+                api_base="https://vllm.example/v1",
+            ),
+            id="hosted_vllm",
+        ),
+        pytest.param(
+            lambda: litellm.completion(
+                model="openai/gpt-6.2-sol", messages=[{"role": "user", "content": "hi"}], api_key="sk-test"
+            ),
+            id="openai_chat",
+        ),
+        pytest.param(
+            lambda: litellm.image_edit(
+                model="hosted_vllm/served-image-model",
+                prompt="a cat",
+                image=io.BytesIO(_REFERENCE_PNG),
+                api_base="https://vllm.example/v1",
+            ),
+            id="hosted_vllm_image_edit",
+        ),
+    ],
+)
+def test_moderation_blocked_outside_openai_image_calls_stays_a_bad_request(
+    call: Callable[[], object], moderation_blocked_upstream: respx.Route
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as caught:
+        call()
+    assert moderation_blocked_upstream.called
+    assert not isinstance(caught.value, litellm.ContentPolicyViolationError)
+    assert caught.value.status_code == 400
+    assert "rejected by the safety system" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(
+            lambda: litellm.image_generation(model="openai/gpt-image-1", prompt="a cat", api_key="sk-test"),
+            id="image_generation",
+        ),
+        pytest.param(
+            lambda: asyncio.run(
+                litellm.aimage_generation(model="openai/gpt-image-1", prompt="a cat", api_key="sk-test")
+            ),
+            id="aimage_generation",
+        ),
+        pytest.param(
+            lambda: litellm.image_edit(
+                model="openai/gpt-image-1", prompt="a cat", image=io.BytesIO(_REFERENCE_PNG), api_key="sk-test"
+            ),
+            id="image_edit",
+        ),
+        pytest.param(
+            lambda: asyncio.run(
+                litellm.aimage_edit(
+                    model="openai/gpt-image-1", prompt="a cat", image=io.BytesIO(_REFERENCE_PNG), api_key="sk-test"
+                )
+            ),
+            id="aimage_edit",
+        ),
+    ],
+)
+def test_openai_moderation_blocked_image_rejection_is_a_content_policy_violation(
+    call: Callable[[], object], moderation_blocked_upstream: respx.Route
+) -> None:
+    with pytest.raises(litellm.ContentPolicyViolationError) as caught:
+        call()
+    assert moderation_blocked_upstream.called
+    assert caught.value.status_code == 400
+    assert caught.value.llm_provider == "openai"
+
+
+@pytest.mark.parametrize(
+    ("status_code", "error_type", "code", "expected"),
+    [
+        (400, "invalid_request_error", "invalid_value", litellm.BadRequestError),
+        (401, "invalid_request_error", "invalid_api_key", litellm.AuthenticationError),
+        (500, "server_error", None, litellm.InternalServerError),
+    ],
+)
+def test_moderation_blocked_in_message_text_without_the_structured_code_keeps_its_status_mapping(
+    status_code: int, error_type: str, code: str | None, expected: type[Exception]
+) -> None:
+    body: Final = {"code": code, "message": "Prompt quotes the word moderation_blocked", "type": error_type}
+    request: Final = httpx.Request("POST", "https://provider.example/v1/images/generations")
+    original: Final = OpenAIError(
+        status_code=status_code,
+        message=json.dumps({"error": body}),
+        request=request,
+        response=httpx.Response(status_code, request=request, json={"error": body}),
+    )
+    with pytest.raises(expected) as caught:
+        exception_type(
+            model="gpt-image-1",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs=_image_request_kwargs(),
+        )
+    assert not isinstance(caught.value, litellm.ContentPolicyViolationError)
+    assert caught.value.status_code == status_code
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected"), [(429, litellm.RateLimitError), (500, litellm.InternalServerError)]
+)
+def test_moderation_blocked_code_outside_a_400_keeps_its_status_mapping(
+    status_code: int, expected: type[Exception]
+) -> None:
+    body: Final = {"code": "moderation_blocked", "message": "Upstream hiccup", "type": "server_error"}
+    request: Final = httpx.Request("POST", "https://provider.example/v1/images/generations")
+    original: Final = OpenAIError(
+        status_code=status_code,
+        message=json.dumps({"error": body}),
+        request=request,
+        response=httpx.Response(status_code, request=request, json={"error": body}),
+        body=body,
+    )
+    with pytest.raises(expected) as caught:
+        exception_type(
+            model="gpt-image-1",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs=_image_request_kwargs(),
+        )
+    assert not isinstance(caught.value, litellm.ContentPolicyViolationError)
+    assert caught.value.status_code == status_code
 
 
 @pytest.mark.parametrize("shape", ["sdk", "http"])
