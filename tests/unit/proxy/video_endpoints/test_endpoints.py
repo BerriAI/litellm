@@ -901,3 +901,28 @@ async def test_extension__restamps_new_video_id_with_source_model_id(harness: Ha
     resp: Final = await call_extension(harness, body={"prompt": "continue", "video": {"id": AZURE_VIDEO_ID}})
 
     _assert_id_resolves_to_deployment(resp)
+
+
+@pytest.mark.asyncio
+async def test_extension__uploaded_video_file_is_forwarded_not_dropped(harness):
+    """A multipart-uploaded source video must be converted to bytes and attached
+    under ``video`` so the provider receives the file. Before the fix the upload
+    was popped, coerced to an empty ``video_id``, and silently dropped."""
+    import io
+
+    upload = StarletteUploadFile(file=io.BytesIO(b"rawmp4"), filename="clip.mp4")
+    harness.read_body.return_value = {"prompt": "extend the scene", "video": upload}
+
+    await endpoints.video_extension(
+        request=FakeRequest(raw_body=b"multipart"),
+        fastapi_response=Response(),
+        user_api_key_dict=_user(),
+    )
+
+    harness.batch_to_bytesio.assert_called_once_with((upload,))
+    assert harness.processor_data() == {
+        "prompt": "extend the scene",
+        "video": b"filebytes",
+        "video_id": "",
+        "custom_llm_provider": "openai",
+    }
