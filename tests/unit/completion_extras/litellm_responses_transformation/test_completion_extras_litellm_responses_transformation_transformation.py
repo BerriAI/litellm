@@ -33,7 +33,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.responses.instructions_length import RESPONSES_INSTRUCTIONS_MAX_LENGTH
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.llms.openai import AllMessageValues, REASONING_EFFORT, ResponsesAPIResponse
-from litellm.types.utils import ModelResponse, StandardLoggingPayload, TextCompletionResponse
+from litellm.types.utils import Choices, ModelResponse, StandardLoggingPayload, TextCompletionResponse
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseOutputItem
@@ -7916,6 +7916,319 @@ def test_stream_refusal_delta_carries_the_phase_of_its_message_like_text() -> No
     refusal: Final = iterator.chunk_parser({"type": "response.refusal.delta", "output_index": 0, "delta": "b"})
 
     assert refusal.provider_specific_fields == text.provider_specific_fields == {"phase": "final_answer"}
+
+
+_REFUSAL_PART: Final = MappingProxyType({"type": "refusal", "refusal": _REFUSAL_TEXT})
+
+
+def _text_part(text: str) -> Mapping[str, object]:
+    return {"type": "output_text", "text": text, "annotations": []}
+
+
+def _message_item(parts: Sequence[Mapping[str, object]]) -> Mapping[str, object]:
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [dict(part) for part in parts],
+    }
+
+
+def _typed_message(*parts: Mapping[str, object]) -> ResponseOutputMessage:
+    return ResponseOutputMessage.model_validate(_message_item(parts))
+
+
+def _transformed(
+    output: Sequence[object],
+    status: Literal["completed", "incomplete"] = "completed",
+    incomplete_reason: str | None = None,
+    structured_output: bool = False,
+    handler: LiteLLMResponsesTransformationHandler | None = None,
+) -> "ModelResponse":
+    raw_response: Final = _make_incomplete_responses_api_response(incomplete_reason, [], status=status).model_copy(
+        update={"output": list(output)}
+    )
+    logging_obj: Final = Mock()
+    logging_obj.model_call_details = {}
+    return (handler or LiteLLMResponsesTransformationHandler()).transform_response(
+        model="gpt-5.6-sol",
+        raw_response=raw_response,
+        model_response=_make_empty_model_response(),
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.6-sol"},
+        messages=[{"role": "user", "content": "compute something hard"}],
+        optional_params={"response_format": {"type": "json_object"}} if structured_output else {},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+
+def _transformed_content(output: Sequence[object], structured_output: bool = False) -> str | None:
+    result: Final = _transformed(output, structured_output=structured_output)
+    assert len(result.choices) == 1
+    return result.choices[0].message.content
+
+
+@pytest.mark.parametrize(
+    ("status", "incomplete_reason", "finish_reason"),
+    [("completed", None, "stop"), ("incomplete", "content_filter", "content_filter")],
+)
+def test_transform_response_returns_a_typed_refusal_as_content(
+    status: Literal["completed", "incomplete"], incomplete_reason: str | None, finish_reason: str
+) -> None:
+    result: Final = _transformed([_typed_message(_REFUSAL_PART)], status=status, incomplete_reason=incomplete_reason)
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == _REFUSAL_TEXT
+    assert result.choices[0].message.role == "assistant"
+    assert getattr(result.choices[0].message, "refusal", None) is None
+    assert result.choices[0].finish_reason == finish_reason
+    assert result.id == "resp_incomplete"
+    assert result.usage.total_tokens == 53
+
+
+@pytest.mark.parametrize(
+    ("parts", "structured_output", "expected"),
+    [
+        pytest.param((_text_part("Sure: "), _REFUSAL_PART), False, "Sure: " + _REFUSAL_TEXT, id="text-then-refusal"),
+        pytest.param((_REFUSAL_PART, _text_part(" Other.")), False, _REFUSAL_TEXT + " Other.", id="refusal-then-text"),
+        pytest.param((_REFUSAL_PART, _text_part(" Other.")), True, _REFUSAL_TEXT, id="structured-keeps-first-part"),
+        pytest.param((_text_part("A."), _REFUSAL_PART), True, "A.", id="structured-drops-later-refusal"),
+        pytest.param(({"type": "refusal", "refusal": ""},), False, "", id="empty-refusal"),
+    ],
+)
+def test_transform_response_folds_typed_refusal_parts_into_content_like_text(
+    parts: tuple[Mapping[str, object], ...], structured_output: bool, expected: str
+) -> None:
+    assert _transformed_content([_typed_message(*parts)], structured_output=structured_output) == expected
+
+
+@pytest.mark.parametrize(
+    "refusal_fields",
+    [
+        pytest.param({}, id="missing"),
+        pytest.param({"refusal": None}, id="null"),
+        pytest.param({"refusal": 5}, id="int"),
+    ],
+)
+def test_transform_response_unvalidated_typed_refusal_keeps_empty_content(refusal_fields: Mapping[str, object]) -> None:
+    from openai.types.responses import ResponseOutputRefusal
+
+    message: Final = ResponseOutputMessage.model_construct(
+        id="msg_1",
+        type="message",
+        role="assistant",
+        status="completed",
+        content=[ResponseOutputRefusal.model_construct(type="refusal", **refusal_fields)],
+    )
+
+    assert _transformed_content([message]) == ""
+
+
+def test_transform_response_typed_refusal_beside_a_tool_call_keeps_both() -> None:
+    call: Final = ResponseFunctionToolCall(
+        type="function_call", id="fc_1", call_id="call_1", name="get_weather", arguments='{"city":"Paris"}'
+    )
+
+    result: Final = _transformed([_typed_message(_REFUSAL_PART), call])
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == _REFUSAL_TEXT
+    assert result.choices[0].finish_reason == "tool_calls"
+    assert [tool_call.function.name for tool_call in result.choices[0].message.tool_calls or ()] == ["get_weather"]
+
+
+_RAW_MESSAGE_PARTS_CASES: Final = (
+    pytest.param((_REFUSAL_PART,), _REFUSAL_TEXT, id="refusal-only"),
+    pytest.param((_text_part("Sure: "), _REFUSAL_PART), "Sure: ", id="text-then-refusal"),
+    pytest.param((_REFUSAL_PART, _text_part("Other.")), "Other.", id="refusal-then-text"),
+    pytest.param((_text_part("A."), _text_part("B."), _REFUSAL_PART), "A.", id="first-of-many-texts"),
+    pytest.param((_text_part(""), _REFUSAL_PART), "", id="empty-text-still-wins"),
+)
+
+
+@pytest.mark.parametrize(("parts", "expected"), _RAW_MESSAGE_PARTS_CASES)
+def test_transform_response_raw_message_uses_refusal_only_without_any_output_text(
+    parts: tuple[Mapping[str, object], ...], expected: str
+) -> None:
+    result: Final = _transformed([_message_item(parts)])
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == expected
+    assert result.choices[0].message.role == "assistant"
+    assert result.choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(("parts", "expected"), _RAW_MESSAGE_PARTS_CASES)
+def test_transform_response_generic_message_uses_refusal_only_without_any_output_text(
+    parts: tuple[Mapping[str, object], ...], expected: str
+) -> None:
+    from litellm.types.responses.main import GenericResponseOutputItem
+
+    assert _transformed_content([GenericResponseOutputItem.model_validate(_message_item(parts))]) == expected
+
+
+def _message_of(kind: Literal["raw", "generic", "typed"], part: Mapping[str, object]) -> object:
+    from litellm.types.responses.main import GenericResponseOutputItem
+
+    raw: Final = _message_item([part])
+    match kind:
+        case "raw":
+            return raw
+        case "generic":
+            return GenericResponseOutputItem.model_validate(raw)
+        case "typed":
+            return ResponseOutputMessage.model_validate(raw)
+
+
+_OTHER_REFUSAL: Final = MappingProxyType({"type": "refusal", "refusal": "Still no."})
+_EMPTY_REFUSAL: Final = MappingProxyType({"type": "refusal", "refusal": ""})
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "structured_output", "expected"),
+    [
+        pytest.param(("raw", _REFUSAL_PART), ("raw", _text_part("answer")), True, "answer", id="raw-answer-wins"),
+        pytest.param(
+            ("generic", _REFUSAL_PART), ("generic", _text_part("answer")), True, "answer", id="generic-answer-wins"
+        ),
+        pytest.param(("raw", _REFUSAL_PART), ("typed", _text_part("answer")), True, "answer", id="typed-answer-wins"),
+        pytest.param(
+            ("typed", _REFUSAL_PART), ("raw", _text_part("answer")), True, _REFUSAL_TEXT, id="typed-refusal-first"
+        ),
+        pytest.param(
+            ("typed", _EMPTY_REFUSAL), ("generic", _text_part("answer")), True, "", id="typed-empty-refusal-first"
+        ),
+        pytest.param(("raw", _text_part("answer")), ("raw", _REFUSAL_PART), True, "answer", id="answer-first"),
+        pytest.param(("raw", _REFUSAL_PART), ("generic", _OTHER_REFUSAL), True, _REFUSAL_TEXT, id="first-refusal"),
+        pytest.param(
+            ("raw", _REFUSAL_PART), ("raw", _text_part("answer")), False, _REFUSAL_TEXT + "answer", id="unstructured"
+        ),
+        pytest.param(
+            ("raw", _text_part("answer")),
+            ("generic", _REFUSAL_PART),
+            False,
+            "answer" + _REFUSAL_TEXT,
+            id="unstructured-answer-first",
+        ),
+        pytest.param(
+            ("generic", _REFUSAL_PART),
+            ("typed", _text_part("answer")),
+            False,
+            _REFUSAL_TEXT + "answer",
+            id="unstructured-typed-answer",
+        ),
+    ],
+)
+def test_transform_response_raw_refusal_fallback_never_displaces_a_structured_answer(
+    first: tuple[Literal["raw", "generic", "typed"], Mapping[str, object]],
+    second: tuple[Literal["raw", "generic", "typed"], Mapping[str, object]],
+    structured_output: bool,
+    expected: str,
+) -> None:
+    output: Final = (_message_of(*first), _message_of(*second))
+
+    assert _transformed_content(output, structured_output=structured_output) == expected
+
+
+@pytest.mark.parametrize("kind", ["raw", "generic"])
+def test_transform_response_structured_raw_refusal_beside_a_tool_call_is_still_content(
+    kind: Literal["raw", "generic"],
+) -> None:
+    call: Final = ResponseFunctionToolCall(
+        type="function_call", id="fc_1", call_id="call_1", name="get_weather", arguments='{"city":"Paris"}'
+    )
+
+    result: Final = _transformed([_message_of(kind, _REFUSAL_PART), call], structured_output=True)
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == _REFUSAL_TEXT
+    assert result.choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.parametrize(
+    ("parts", "expected"),
+    [
+        pytest.param((_REFUSAL_PART, _OTHER_REFUSAL), _REFUSAL_TEXT, id="first-of-two-refusals"),
+        pytest.param(
+            (_EMPTY_REFUSAL, {"type": "refusal", "refusal": None}, _OTHER_REFUSAL), "Still no.", id="skips-unusable"
+        ),
+    ],
+)
+def test_transform_response_raw_message_uses_its_first_usable_refusal(
+    parts: tuple[Mapping[str, object], ...], expected: str
+) -> None:
+    assert _transformed_content([_message_item(parts)]) == expected
+
+
+def test_transform_response_raw_refusal_keeps_the_item_role() -> None:
+    result: Final = _transformed([{**_message_item([_REFUSAL_PART]), "role": "user"}])
+
+    assert result.choices[0].message.role == "user"
+    assert result.choices[0].message.content == _REFUSAL_TEXT
+
+
+def test_transform_response_raw_non_message_item_with_refusal_content_still_raises() -> None:
+    with pytest.raises(ValueError, match="Unknown items"):
+        _transformed([{**_message_item([_REFUSAL_PART]), "type": "unknown"}])
+
+
+class _RawItemDroppingHandler(LiteLLMResponsesTransformationHandler):
+    def _handle_raw_dict_response_item(self, item: Mapping[str, object], index: int) -> tuple[Choices | None, int]:
+        return None, index
+
+
+class _RawItemReplacingHandler(LiteLLMResponsesTransformationHandler):
+    def _handle_raw_dict_response_item(self, item: Mapping[str, object], index: int) -> tuple[Choices | None, int]:
+        return Choices(message={"role": "assistant", "content": "custom"}, finish_reason="stop", index=index), index + 1
+
+
+@pytest.mark.parametrize("structured_output", [True, False])
+def test_transform_response_overridden_raw_handler_that_drops_a_refusal_keeps_it_dropped(
+    structured_output: bool,
+) -> None:
+    with pytest.raises(ValueError, match="Unknown items"):
+        _transformed(
+            [_message_item([_REFUSAL_PART])], structured_output=structured_output, handler=_RawItemDroppingHandler()
+        )
+
+    beside_answer: Final = _transformed(
+        [_message_item([_REFUSAL_PART]), _typed_message(_text_part("answer"))],
+        structured_output=structured_output,
+        handler=_RawItemDroppingHandler(),
+    )
+    assert beside_answer.choices[0].message.content == "answer"
+
+
+@pytest.mark.parametrize(("structured_output", "expected"), [(True, "custom"), (False, "customcustom")])
+def test_transform_response_overridden_raw_handler_choices_are_used_unchanged(
+    structured_output: bool, expected: str
+) -> None:
+    result: Final = _transformed(
+        [_message_item([_REFUSAL_PART]), _message_item([_text_part("answer")])],
+        structured_output=structured_output,
+        handler=_RawItemReplacingHandler(),
+    )
+
+    assert result.choices[0].message.content == expected
+
+
+@pytest.mark.parametrize(
+    "refusal_part",
+    [
+        pytest.param({"type": "refusal", "refusal": ""}, id="empty"),
+        pytest.param({"type": "refusal"}, id="missing"),
+        pytest.param({"type": "refusal", "refusal": None}, id="null"),
+        pytest.param({"type": "refusal", "refusal": 5}, id="int"),
+        pytest.param({"refusal": _REFUSAL_TEXT}, id="untyped-part"),
+    ],
+)
+def test_transform_response_raw_message_with_unusable_refusal_still_raises(
+    refusal_part: Mapping[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="Unknown items"):
+        _transformed([_message_item([refusal_part])])
 
 
 @pytest.mark.parametrize(

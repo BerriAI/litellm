@@ -464,6 +464,33 @@ def _json_field(value: object, key: str) -> object:
     return cast(Mapping[str, object], value).get(key) if isinstance(value, dict) else None  # cast-ok: untyped JSON
 
 
+def _refusal_text(refusal: object) -> str | None:
+    return refusal if isinstance(refusal, str) and refusal else None
+
+
+def _raw_refusal_text(part: object) -> str | None:
+    return _refusal_text(_json_field(part, "refusal")) if _json_field(part, "type") == "refusal" else None
+
+
+def _raw_refusal_choice(item: object, index: int) -> "Choices | None":
+    from litellm.types.utils import Choices
+
+    fields: Final = as_str_mapping(item.model_dump() if isinstance(item, BaseModel) else item)
+    if fields is None or fields.get("type") != "message":
+        return None
+    parts: Final = as_object_list(fields.get("content")) or ()
+    refusal: Final = next((text for part in parts if (text := _raw_refusal_text(part)) is not None), None)
+    if refusal is None:
+        return None
+    return Choices(
+        message={"role": fields.get("role", "assistant"), "content": refusal}, finish_reason="stop", index=index
+    )
+
+
+def _first_raw_refusal_choice(output_items: Sequence[object], index: int) -> "Choices | None":
+    return next((choice for item in output_items if (choice := _raw_refusal_choice(item, index)) is not None), None)
+
+
 def _tool_search_replay_item(item: object) -> Mapping[str, object] | None:
     raw: Final[object] = item.model_dump(exclude_unset=True) if isinstance(item, BaseModel) else item
     if not isinstance(raw, dict):
@@ -1640,6 +1667,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         replay_openai_history: bool = False,
         completed: bool = False,
         keeps_every_reasoning_item: bool = False,
+        *,
+        enable_raw_refusal_fallback: bool = False,
     ) -> list["Choices"]:
         """
         Convert Responses API output items to chat completion choices.
@@ -1652,6 +1681,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             replay_openai_history: Record the output's item sequence for the next turn
             completed: The response finished, so its item sequence is whole
             keeps_every_reasoning_item: Keep each reasoning item before an answer, not only the last
+            enable_raw_refusal_fallback: Turn a raw message with a refusal and no output_text into a
+                choice when the callback returns none for it
 
         Returns:
             List of Choices objects
@@ -1659,6 +1690,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         from openai.types.responses import (
             ResponseFunctionToolCall,
             ResponseOutputMessage,
+            ResponseOutputRefusal,
             ResponseReasoningItem,
         )
 
@@ -1682,6 +1714,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         tool_call_index = 0
 
         for item in output_items:
+            output_item: object = item
             if isinstance(item, ResponseReasoningItem):
                 pending_reasoning_items = (
                     *(pending_reasoning_items if replay_openai_history or keeps_every_reasoning_item else ()),
@@ -1699,7 +1732,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
-                    response_text = getattr(content, "text", "")
+                    response_text = (
+                        _refusal_text(attribute_or_none(content, "refusal"))
+                        if isinstance(content, ResponseOutputRefusal)
+                        else None
+                    ) or getattr(content, "text", "")
                     # Extract annotations from content if present
                     raw_annotations = getattr(content, "annotations", None)
                     annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
@@ -1771,10 +1808,26 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     tool_call_index += 1
                 elif handle_raw_dict_callback is not None:
                     choice, index = handle_raw_dict_callback(item=raw_item, index=index)
+                    choice = (
+                        _raw_refusal_choice(output_item, index)
+                        if choice is None and enable_raw_refusal_fallback and not structured_output
+                        else choice
+                    )
                     if choice is not None:
                         choices.append(choice)
             else:
                 pass  # don't fail request if item in list is not supported
+
+        # A structured answer is the first message choice, so a refusal fallback must not displace a later answer
+        structured_refusal: Final = (
+            _first_raw_refusal_choice(output_items, index)
+            if structured_output
+            and enable_raw_refusal_fallback
+            and not choices
+            and handle_raw_dict_callback is not None
+            else None
+        )
+        choices.extend((structured_refusal,) if structured_refusal is not None else ())
 
         tool_search_items: Final = _tool_search_items_from_output_items(output_items)
         if not choices and not accumulated_tool_calls:
@@ -1936,6 +1989,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             ),
             completed=raw_response.status == "completed",
             keeps_every_reasoning_item=serves_anthropic_messages(logging_obj),
+            enable_raw_refusal_fallback=type(self)._handle_raw_dict_response_item
+            is LiteLLMResponsesTransformationHandler._handle_raw_dict_response_item,
         )
 
         response_is_incomplete: Final = raw_response.status == "incomplete" or (
