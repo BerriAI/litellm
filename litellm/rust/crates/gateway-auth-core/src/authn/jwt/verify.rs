@@ -712,9 +712,10 @@ fn verifier(key: &Map<String, Value>) -> Result<(DecodingKey, Validation), KeyEr
             };
             let key = DecodingKey::from_rsa_components(n, e);
             #[cfg(feature = "fips")]
-            if let Ok(key) = &key {
-                fips_rsa_size(key)?;
-            }
+            let key = match key {
+                Ok(key) => Ok(fips_rsa_key(key)?),
+                error => error,
+            };
             verifying(key, Validation::new_for_family(AlgorithmFamily::Rsa))
         }
         Some("EC") => {
@@ -759,19 +760,26 @@ fn verifier(key: &Map<String, Value>) -> Result<(DecodingKey, Validation), KeyEr
     }
 }
 
+/// The key AWS-LC's FIPS module verifies with: `n` and `e` without leading zero bytes, which it refuses, and `n` of an
+/// even number of bits, the modulus length FIPS 186-5 specifies and the module's service indicator approves.
 #[cfg(feature = "fips")]
-fn fips_rsa_size(key: &DecodingKey) -> Result<(), KeyError> {
-    let jsonwebtoken::DecodingKeyKind::RsaModulusExponent { n, .. } = key.kind() else {
-        return Ok(());
+fn fips_rsa_key(key: DecodingKey) -> Result<DecodingKey, KeyError> {
+    let jsonwebtoken::DecodingKeyKind::RsaModulusExponent { n, e } = key.kind() else {
+        return Ok(key);
     };
-    let n = &n[n.iter().take_while(|byte| **byte == 0).count()..];
+    let (n, e) = (without_leading_zeros(n), without_leading_zeros(e));
     let bits = n
         .first()
         .map_or(0, |top| n.len() * 8 - top.leading_zeros() as usize);
-    if bits < 2048 {
-        return Err(KeyError::RsaKeyTooShort { bits });
+    if bits % 2 == 1 {
+        return Err(KeyError::OddRsaKeySize { bits });
     }
-    Ok(())
+    Ok(DecodingKey::from_rsa_raw_components(n, e))
+}
+
+#[cfg(feature = "fips")]
+fn without_leading_zeros(bytes: &[u8]) -> &[u8] {
+    &bytes[bytes.iter().take_while(|byte| **byte == 0).count()..]
 }
 
 #[cfg(test)]
@@ -911,36 +919,36 @@ PpJJnVD0Rp6PJwk=
 -----END PRIVATE KEY-----
 ";
     const RSA_1024_N: &str = "pRSWAT6NsAPjN_bIVusgI0j2CKBebSTqnG-Rrlq6JeysoCJ1Uq0xMV-PHNKXdm92qC9Vcj4QXP4_1YQrBZHZovu7WssYzAyEpwYbvmkB5erDnnst6LtHTjg6lnXaSp594mbxDc91TCCJzW17Zal1WwPSHlekiLa3w3Zp1iAIWxU";
-    const RSA_2047_PEM: &str = "-----BEGIN PRIVATE KEY-----
-MIIEuwIBADANBgkqhkiG9w0BAQEFAASCBKUwggShAgEAAoIBAF+nkJxXchaLKv95
-cCD6o/tskpoyh2Hinm44heIZ4Jw1vRks3/M82tZlLrLVFhHKxzyM2LhHSdClovSm
-8y9/o/pXt7vLIv5iBjAvrSQaiNolLekmFOJn12oD4/au7AV86KUfn2VQ9ULOnhCk
-lDG1hR04fWjwouS0ogBaCcUbUGaz4q5zI8wYDxQB5NMzllMRg+cyA+bI+7v2VYdj
-jnEE3LcBi3wlza25cehuwQQ5hvhYNADK6/dsKrEZLOFcdATigR3kaRt3tId3cmX8
-KTRtv1OVINM/uEqkQme2P2zBxdgR0Mcy0c9GWikCLb7b5mOONopy8bR2kzOQFCkD
-g2EipqUCAwEAAQKCAQBTyLYF+yJXVLbo5zmr6V5RD5ypq7ChsJoM+T1r+jafHQLx
-VjkjGR6lxCLPSY33L6KsCsKZRvgE5dCCcul3pVnAIa0xtJCGON4qvtftU8CjMwWv
-vkd0uHgayCWZIUZi2DH+0GARooPxbIFPGpkjoVdjbOOMU5qasQ1lOXhtSat3COXY
-Rg7F9tb2+GkAVw6bHRzjczx1mWTgN7H95pN/gTUTDvvoCS679UNipbpx1WwctffH
-u4mLi+l1CelorKkKOOxUv1Sg55hHrCEQpZyFy6XDycgKsklhvVfMtHTPOVWOtGzd
-/dqn2DtsvvHm5GPbb1jxfQPFidA7BRaOTsWR3BrRAoGBAMtwKEiNFAeD6rs3eQ67
-WjfvZa/YjvMVd5FGGGe6Hx5bY5tXkoE8ZH7Nckr0gIRjyBk1YGajtjwPxz0YFyTU
-n0zXXWSlz3RY+1CwyGc/J9Bn7miTN2nxclRn+7PWzfr8HJHzCnOZ7YsUPXZSDK/z
-yDg00+QDbA4qZOM+PCbHbGwrAoGAeF5dzh3vnkEWLnmRU9Vihz4ifRSRpTYlWa5N
-Ta6nJVIFA24+UlMGNqj+Sy3+xIdRRn3Eq7gwNd9vu91dj+A2ZxJwyNekmzuBUcLf
-UqqeTpvO6RuK2QG9GT+EmE5Wz3GK6YOtGepFDBEHlMZG6ha1nbewQxIca+7wtaNY
-+k6/QG8CgYAq5+a3FnoI87uH7LUtdDoc3fK2WZgckIR9MSlohwqVHnUtiBSwCQqw
-66eVQ2fvhBPprSY9v31pwXIl4nTPIcDPNgTOe2H7ieDHLeG2VM2S2LiheZsQTwnr
-31ponX8n1hA4f+fOZcKBuK0VzUw7t9CcehfOWSJrAmnwu2l4TEsDrQKBgCQzxaTb
-jhkb3E8IEzSSpjqk7nyONivpeBxb9zYZBH6OB6H7g1UBUYoZE7qKz+hOBpzb8M3w
-7NcXJ6TqNFy0g8hGXJObgA+MOx3bLY3QcSKVbAriVMVl53jziK7CSQvFS5FmICb+
-NdwmNxCA/g0j3WXdPG8/wDqaN915jqZiDtWTAoGBAJIy219CzaEcsS/pRgQa7OtS
-HOGr0fv+wlOPx28UUHe2iLZdvsdg/qO7gCStgGMOlo22jcLvsrm9K0r8xJrDEYnf
-ewC5/Qr20BJMbAWIJLOT9wv230NkqO4X24DgyTpRgn6cE7CNiOrKtS0MjWOfkcrR
-opRLTvropJlC3eLaI6JN
+    const RSA_2049_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQFzhqNObs0D94st
+a15jbsL+3VMrLBw9GsxhjjkeaR//ItZJgDA09kxkoe+6hW9G/CHpbx1+p/mK4gxQ
+EZGGudPUlq0sPaZyd5hAtvGpyPicw3Cr19TBWnTk5iauylWXYzaZxhbm01iZUydJ
+qCr3c8dyHB8fTrX+GPNYCpiQP0ILdNFfTn+yHjnj6iGOm3VxfCVzvAI22NRuiSU6
+pR2kiqIwZR9Q0NMd5ZKLAEDZ+YtPoC+UY0Z2SOjFHGCOCZFX/eHO2p0QtquZND6m
+f8Hdh5iIMKorrrT0df0IEXBpu4jEGMfIPSkDI0eoLEpC1FmZUjCdeJN6i8xMbmWq
+FHH59MPdAgMBAAECggEBALqcR+6fbM6vSfL4WSKsgbkuRhYLQ+vVSA9ANqR1vSKT
+xvqILq6Lf/eT9yvC1g/bmNT9gN0bVhZSUEjvah83u5SuUjFEjhQ0yf7HZT8YuPdU
+m4VVFYJBAzHuAEQPUUqHBOfcPaiXQ4tP3w36MAq21tkUEvXQvUzyD1iLifH6NBw3
+zHISqinmuYKsTO4mk8QS8OjR6gs4OSUUzjBCAp5BO6z2A88mmpVXVqFTwfQnUOct
++k12y4vVm1CUgeRz413xWr/PqFg0LvyQvCFUohja//FcVKnl/wIyuHwaGQJijPsl
+O/O1HlCKd4KafA9onwjMWqqYKjn6DE7fz/E/2CxBZmkCgYEBSS0//fuZhG3b4ta2
+/ltwH0LW6HRavob0jBkjEGRLuLwLZEg/7Cn5pmEZhFWqGEDeqlPKJi9NjPpqtMJP
+T2meX9k6Go+zCxYi/vV3jgTXaUPUhh9Pvz2DoR2B2B8oDep+hpPXQQGx3KuP+JcO
+u3xUvFxQD+JgCSkCOB+WCpgy5IsCgYEBIO9SfZI9ciYkRbLPZ+6A8zOgQLaThA/h
+eIGdB+IBpWO51N/zq71r8jGBDR4Iw8crpetuu+9PyoyG4P92EjKmDedMfKgkt1rM
+/kmL8porQXJVt4cV1Zgy7uCx/cKzln3RYmebwNv/vBtoPV/FUZPXZewOlFhCHGD/
+xvCbKtSEPjcCgYEAlNbqBWx7OL732rSdX5t2shvl0oux8E5TSvmeui2vc2NLf1eP
+17gPEuT6xbR6SacjRz7Fu8hNt34PO5ZUiCLIoqw1ModhPJUQ09mn6kZUJFuwP8ju
+pRkqaHJQIKnN0aUC+tTkUpdylcXZPl0HI00Pf2/6H4SLSfkJ8NiPXlD9SgsCgYBk
+Qkc4hYdG1c9eVBa+NLeQLIjeC7ySZcRSQX+Q3a6+iiVQpcly/Y64gs8KEzLtZG5T
+66cIFZl1al/fMSXyWJrgVjNnSh07domNb03dh/ucgSUXQwuji2WZGGUK7gXNIamH
+YPZd7LkHt+bq7RGWJhvnJQtGFH4UROBcUt809HtS7wKBgEPV0dts84NAvojvNUV9
+3XYrbpb2HgpKXjcESXRM9qEv1U5wj8QlNLQSj1kteQdxa726s5aIg57VfZyt7Ufw
+z3POqharHd7mXhrNdEhmcRexhPXJqAeTnpACXtV2PeBXXVfQqzK+ApDygw81M7yf
+8GGik3BWoBe+jxFEryvGXRGI
 -----END PRIVATE KEY-----
 ";
-    const RSA_2047_N: &str = "X6eQnFdyFosq_3lwIPqj-2ySmjKHYeKebjiF4hngnDW9GSzf8zza1mUustUWEcrHPIzYuEdJ0KWi9KbzL3-j-le3u8si_mIGMC-tJBqI2iUt6SYU4mfXagPj9q7sBXzopR-fZVD1Qs6eEKSUMbWFHTh9aPCi5LSiAFoJxRtQZrPirnMjzBgPFAHk0zOWUxGD5zID5sj7u_ZVh2OOcQTctwGLfCXNrblx6G7BBDmG-Fg0AMrr92wqsRks4Vx0BOKBHeRpG3e0h3dyZfwpNG2_U5Ug0z-4SqRCZ7Y_bMHF2BHQxzLRz0ZaKQItvtvmY442inLxtHaTM5AUKQODYSKmpQ";
+    const RSA_2049_N: &str = "AXOGo05uzQP3iy1rXmNuwv7dUyssHD0azGGOOR5pH_8i1kmAMDT2TGSh77qFb0b8IelvHX6n-YriDFARkYa509SWrSw9pnJ3mEC28anI-JzDcKvX1MFadOTmJq7KVZdjNpnGFubTWJlTJ0moKvdzx3IcHx9Otf4Y81gKmJA_Qgt00V9Of7IeOePqIY6bdXF8JXO8AjbY1G6JJTqlHaSKojBlH1DQ0x3lkosAQNn5i0-gL5RjRnZI6MUcYI4JkVf94c7anRC2q5k0PqZ_wd2HmIgwqiuutPR1_QgRcGm7iMQYx8g9KQMjR6gsSkLUWZlSMJ14k3qLzExuZaoUcfn0w90";
 
     #[derive(Clone, Copy)]
     enum Signer {
@@ -950,7 +958,7 @@ opRLTvropJlC3eLaI6JN
         Ed,
         Secret,
         Rsa1024,
-        Rsa2047,
+        Rsa2049,
     }
 
     fn b64(value: &Value) -> String {
@@ -965,7 +973,7 @@ opRLTvropJlC3eLaI6JN
             Signer::Ed => EncodingKey::from_ed_pem(ED_PEM.as_bytes()),
             Signer::Secret => Ok(EncodingKey::from_secret(b"shared-secret")),
             Signer::Rsa1024 => EncodingKey::from_rsa_pem(RSA_1024_PEM.as_bytes()),
-            Signer::Rsa2047 => EncodingKey::from_rsa_pem(RSA_2047_PEM.as_bytes()),
+            Signer::Rsa2049 => EncodingKey::from_rsa_pem(RSA_2049_PEM.as_bytes()),
         }
         .unwrap();
         let input = format!("{}.{}", b64(&header), b64(&claims));
@@ -1116,14 +1124,22 @@ opRLTvropJlC3eLaI6JN
     }
 
     #[rstest]
-    #[case::rsa_1024(Signer::Rsa1024, RSA_1024_N, 1024)]
-    #[case::rsa_2047(Signer::Rsa2047, RSA_2047_N, 2047)]
+    #[case::rsa_1024(
+        Signer::Rsa1024,
+        RSA_1024_N,
+        TokenError::Jwt(ErrorKind::InvalidSignature.into())
+    )]
+    #[case::rsa_2049(
+        Signer::Rsa2049,
+        RSA_2049_N,
+        KeyError::OddRsaKeySize { bits: 2049 }.into()
+    )]
     #[tokio::test]
-    async fn rsa_keys_under_2048_bits_are_refused_only_in_the_fips_build(
+    async fn the_fips_build_refuses_rsa_keys_under_2048_bits_or_of_odd_size(
         settings: JwtSettings,
         #[case] signer: Signer,
         #[case] n: &str,
-        #[case] bits: usize,
+        #[case] refusal_in_fips_build: TokenError,
     ) {
         let claims = json!({"sub": "user"});
         let host = host(&[(JWKS, jwks(&[rsa_jwk("k", n)]))]);
@@ -1137,11 +1153,35 @@ opRLTvropJlC3eLaI6JN
         .await;
 
         let expected = if cfg!(feature = "fips") {
-            Err(VerifyDenial::Invalid(KeyError::RsaKeyTooShort { bits }.into()).into())
+            Err(VerifyDenial::Invalid(refusal_in_fips_build).into())
         } else {
             Ok(Claims(object(claims)))
         };
         assert_eq!(verified, expected);
+    }
+
+    fn zero_prefixed(component: &str) -> String {
+        let bytes = URL_SAFE_NO_PAD.decode(component).unwrap();
+        URL_SAFE_NO_PAD.encode(iter::once(0).chain(bytes).collect::<Vec<u8>>())
+    }
+
+    #[rstest]
+    #[case::n(zero_prefixed(RSA_A_N), "AQAB")]
+    #[case::e(RSA_A_N.to_owned(), "AAEAAQ")]
+    #[case::n_and_e(zero_prefixed(RSA_A_N), "AAEAAQ")]
+    #[tokio::test]
+    async fn rsa_components_with_leading_zero_bytes_verify(
+        settings: JwtSettings,
+        #[case] n: String,
+        #[case] e: &str,
+    ) {
+        let claims = json!({"sub": "user"});
+        let jwk = json!({"kty": "RSA", "kid": "k", "n": n, "e": e});
+        let host = host(&[(JWKS, jwks(&[jwk]))]);
+
+        let verified = verify(&host, &rs256(Some("k"), claims.clone()), &settings, AT).await;
+
+        assert_eq!(verified, Ok(Claims(object(claims))));
     }
 
     #[rstest]
