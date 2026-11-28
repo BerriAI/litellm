@@ -146,14 +146,18 @@ def _callback_settings(field: str) -> dict[str, JsonValue]:
 def test_team_writes_refuse_an_env_reference_in_callback_settings(gateway: Gateway, field: str) -> None:
     with gateway.scenario() as scenario:
         team: Final = scenario.team(metadata={"owner": "env-reference-audit"})
-        updated: Final = gateway.request("POST", "/team/update", {"team_id": team, "metadata": _callback_settings(field)})
+        updated: Final = gateway.request(
+            "POST", "/team/update", {"team_id": team, "metadata": _callback_settings(field)}
+        )
         _assert_refused(updated, field)
         patched: Final = gateway.request("PATCH", f"/team/{team}", {"metadata": _callback_settings(field)})
         _assert_refused(patched, field)
         assert "already stores" not in patched.text
         assert _team_metadata(team) == {"owner": "env-reference-audit"}
         alias: Final = f"env-reference-{uuid.uuid4().hex}"
-        created: Final = gateway.request("POST", "/team/new", {"team_alias": alias, "metadata": _callback_settings(field)})
+        created: Final = gateway.request(
+            "POST", "/team/new", {"team_alias": alias, "metadata": _callback_settings(field)}
+        )
         if created.status_code == 200:
             scenario.cleanups.callback(scenario.delete_team, string_value(created.json()["team_id"]))
         _assert_refused(created, field)
@@ -276,9 +280,7 @@ def _encrypted_reference_logging(monkeypatch: pytest.MonkeyPatch) -> dict[str, J
     return encrypted
 
 
-@pytest.mark.parametrize(
-    "route", [pytest.param("/team/new", id="team-new"), pytest.param("/user/new", id="user-new")]
-)
+@pytest.mark.parametrize("route", [pytest.param("/team/new", id="team-new"), pytest.param("/user/new", id="user-new")])
 def test_a_copied_ciphertext_of_an_env_reference_is_refused_on_create(
     gateway: Gateway, monkeypatch: pytest.MonkeyPatch, route: str
 ) -> None:
