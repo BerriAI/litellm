@@ -3,9 +3,14 @@ Helper util for handling bedrock-specific cost calculation
 - e.g.: prompt caching
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
-from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+import litellm
+from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import price_model
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    generic_cost_per_token,
+    get_provider_specific_geo_multiplier,
+)
 
 if TYPE_CHECKING:
     from litellm.types.utils import Usage
@@ -13,13 +18,23 @@ if TYPE_CHECKING:
 
 def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) -> tuple[float, float]:
     """
-    Calculates the cost per token for a given model, prompt tokens, and completion tokens.
-
-    Follows the same logic as Anthropic's cost per token calculation.
+    Prompt and completion cost of ``usage`` on a Bedrock model, with the geo uplift its row carries.
     """
-    return generic_cost_per_token(
+    priced: Final = price_model(model=model, provider="bedrock", usage=usage, service_tier=service_tier)
+    if priced is not None:
+        return priced
+    return _python_cost_per_token(model, usage, service_tier)
+
+
+def _python_cost_per_token(model: str, usage: "Usage", service_tier: str | None) -> tuple[float, float]:
+    """Main's pricing, for a call the Rust core leaves to Python. An unreadable geo value raises, as on main."""
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="bedrock")
+    prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
         usage=usage,
         custom_llm_provider="bedrock",
         service_tier=service_tier,
+        model_info=model_info,
     )
+    geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
+    return prompt_cost * geo_multiplier, completion_cost * geo_multiplier

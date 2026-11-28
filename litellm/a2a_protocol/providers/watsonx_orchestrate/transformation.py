@@ -8,11 +8,35 @@ WXO uses a REST API (not A2A/JSON-RPC) with an async-poll execution model:
 """
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping
-from typing import Any, Final
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+from itertools import chain
+from typing import Final
 from uuid import uuid4
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, iter_items
+from litellm.llms.openai.common_utils import decoded_json_object
+
+
+def _a2a_text_part(part: object) -> Sequence[object]:
+    part_fields: Final = as_str_mapping(part)
+    if not isinstance(part_fields, dict):
+        return ()
+    if part_fields.get("kind") in (None, "", "text") and part_fields.get("text"):
+        return (part_fields["text"],)
+    return ()
+
+
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _join_with_spaces(texts: Sequence[object]) -> str:
+    strings: Final = [text for text in texts if isinstance(text, str)]
+    if len(strings) == len(texts):
+        return " ".join(strings)
+    first_bad: Final = next(position for position, text in enumerate(texts) if not isinstance(text, str))
+    raise TypeError(f"sequence item {first_bad}: expected str instance, {type(texts[first_bad]).__name__} found")
 
 
 class WatsonxOrchestrateTransformation:
@@ -29,22 +53,16 @@ class WatsonxOrchestrateTransformation:
         return f"{cp4d_host.rstrip('/')}/orchestrate/cpd/instances/{instance_id}"
 
     @staticmethod
-    def extract_text_from_a2a_params(params: dict[str, Any]) -> str:
+    def extract_text_from_a2a_params(params: Mapping[str, object]) -> str:
         """
         Extract user message text from A2A MessageSendParams.
 
         A2A format: params.message.parts[*] where part.kind == "text"
         """
-        message: Final = params.get("message", {})
-        parts: Final = message.get("parts", [])
-        texts: Final = []
-        for part in parts:
-            if not isinstance(part, dict):
-                continue
-            kind = part.get("kind")
-            if kind in (None, "", "text") and part.get("text"):
-                texts.append(part["text"])
-        return " ".join(texts) or ""
+        message: Final = decoded_json_object(params.get("message", {}))
+        parts: Final[Iterable[object]] = iter_items(message.get("parts", []))
+        texts: Final = list(chain.from_iterable(map(_a2a_text_part, parts)))
+        return _join_with_spaces(texts) or ""
 
     @staticmethod
     def build_wxo_run_body(
@@ -104,16 +122,16 @@ class WatsonxOrchestrateTransformation:
 
     @staticmethod
     def extract_text_from_a2a_message_response(a2a_response: Mapping[str, object]) -> str:
-        result: Final = a2a_response.get("result")
-        if not isinstance(result, dict):
+        result: Final = _as_dict(a2a_response.get("result"))
+        if result is None:
             verbose_logger.warning("WXO: A2A response missing result object")
             return ""
-        parts: Final = result.get("parts")
-        if not isinstance(parts, list):
+        parts: Final = as_object_list(result.get("parts"))
+        if parts is None:
             verbose_logger.warning("WXO: A2A result has no parts list")
             return ""
-        for part in parts:
-            if isinstance(part, dict) and part.get("kind") == "text" and part.get("text"):
+        for part in (_as_dict(entry) for entry in parts):
+            if part is not None and part.get("kind") == "text" and part.get("text"):
                 return str(part["text"])
         verbose_logger.warning("WXO: A2A result parts contained no text")
         return ""
@@ -192,6 +210,8 @@ class WatsonxOrchestrateTransformation:
                     "contextId": context_id,
                     "kind": "artifact-update",
                     "taskId": task_id,
+                    "append": i > 0,
+                    "lastChunk": is_last,
                     "artifact": {
                         "artifactId": artifact_id,
                         "parts": [{"kind": "text", "text": chunk_text}],

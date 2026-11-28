@@ -91,6 +91,8 @@ def _proxy_exc(message: str, error_type: str, code: int) -> ProxyException:
                 httpx.RemoteProtocolError(
                     "peer closed connection without sending complete message body (incomplete chunked read)"
                 ),
+                httpx.ReadError(""),
+                httpx.RemoteProtocolError(""),
             ),
             "500_PROVIDER_CONNECTION_ERROR",
         ),
@@ -215,6 +217,22 @@ def test_no_exception_has_no_normalized_error() -> None:
 def test_unknown_exception_falls_back_to_status_then_unclassified() -> None:
     assert normalize_error(Exception("x"), "429", "x") == "429_RATE_LIMIT_EXCEEDED"
     assert normalize_error(Exception("x"), "", "x") == "UNCLASSIFIED"
+
+
+def test_a_529_the_anthropic_routes_answered_is_an_overload() -> None:
+    paused = _proxy_exc("Model is paused", "service_unavailable_error", 529)
+    assert StandardLoggingPayloadSetup.get_error_information(paused)["normalized_error"] == "503_PROVIDER_OVERLOADED"
+
+
+@pytest.mark.parametrize("body", ["", "<html>bad gateway</html>", '{"type":"error","error":{"type":"api_error"}}'])
+def test_an_internal_server_error_answered_as_529_is_an_overload_whatever_its_body_says(body: str) -> None:
+    overloaded = litellm.InternalServerError(body, llm_provider="anthropic", model="claude", provider_status_code=529)
+    overloaded.status_code = 529
+    internal = litellm.InternalServerError(body, llm_provider="anthropic", model="claude")
+    assert (
+        StandardLoggingPayloadSetup.get_error_information(overloaded)["normalized_error"],
+        StandardLoggingPayloadSetup.get_error_information(internal)["normalized_error"],
+    ) == ("503_PROVIDER_OVERLOADED", "500_PROVIDER_INTERNAL_ERROR")
 
 
 def test_budget_exceeded_error_with_custom_wording_is_still_a_budget_error() -> None:

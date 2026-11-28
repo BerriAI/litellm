@@ -1,6 +1,7 @@
 import copy
 import os
 import types
+from collections.abc import Mapping
 from typing import Final
 
 from openai.types.image import Image
@@ -52,16 +53,17 @@ class AmazonStabilityConfig:
         width: int | None = None,
         height: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -76,14 +78,14 @@ class AmazonStabilityConfig:
         }
 
     @classmethod
-    def get_supported_openai_params(cls, model: str | None = None) -> list:
+    def get_supported_openai_params(cls, model: str | None = None) -> list[str]:
         return ["size"]
 
     @classmethod
     def map_openai_params(
         cls,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
     ):
         _size: Final = non_default_params.get("size")
         if _size is not None:
@@ -97,8 +99,8 @@ class AmazonStabilityConfig:
     def transform_request_body(
         cls,
         text: str,
-        optional_params: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+    ) -> dict[str, object]:
         inference_params: Final = copy.deepcopy(optional_params)
         inference_params.pop("user", None)  # make sure user is not passed in for bedrock call
 

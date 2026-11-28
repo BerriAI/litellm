@@ -2,8 +2,12 @@
 Unit tests for prometheus metric labels configuration
 """
 
-import pytest
+from typing import Final, Literal
 
+import pytest
+from pydantic import JsonValue
+
+import litellm
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
@@ -233,6 +237,53 @@ def test_extract_api_provider_from_request_data_failure_path():
     assert extract({}) is None
     # Unmappable model name -> None, not a guess
     assert extract({"model": "some-unknown-model-xyz"}) is None
+
+
+_PASS_THROUGH_CALL_TYPE: Final = "pass_through_endpoint"
+
+
+@pytest.mark.parametrize(
+    "request_data, expected_provider",
+    [
+        ({"model": "gpt-4o-mini", "call_type": "acompletion", "custom_llm_provider": "anthropic"}, "openai"),
+        ({"model": "gpt-4o-mini", "litellm_params": {"custom_llm_provider": "humanloop"}}, "humanloop"),
+        ({"model": "gemini-3.8-flash", "call_type": _PASS_THROUGH_CALL_TYPE}, "vertex_ai"),
+        (
+            {"model": "gemini-3.8-flash", "call_type": _PASS_THROUGH_CALL_TYPE, "custom_llm_provider": "gemini"},
+            "gemini",
+        ),
+        (
+            {
+                "call_type": _PASS_THROUGH_CALL_TYPE,
+                "custom_llm_provider": "gemini",
+                "standard_logging_object": {"custom_llm_provider": "vertex_ai"},
+            },
+            "vertex_ai",
+        ),
+    ],
+)
+def test_extract_api_provider_reads_the_request_declared_provider_only_on_pass_through_failures(
+    request_data: dict[str, object], expected_provider: str
+):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    assert PrometheusLogger._extract_api_provider_from_request_data(request_data) == expected_provider
+
+
+@pytest.mark.parametrize(
+    "declared_provider",
+    ["azure", "bedrock", "openrouter", "client-supplied-value", "", {"nested": "object"}, 42],
+)
+def test_extract_api_provider_ignores_pass_through_declared_values_outside_gemini_and_vertex(
+    declared_provider: object,
+):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    extract = PrometheusLogger._extract_api_provider_from_request_data
+    declared = {"call_type": _PASS_THROUGH_CALL_TYPE, "custom_llm_provider": declared_provider}
+
+    assert extract({"model": "gpt-4o-mini", **declared}) == "openai"
+    assert extract({"model": "no-such-model", **declared}) is None
 
 
 def test_extract_api_provider_swallows_unknown_model_but_logs_unexpected_errors():
@@ -568,12 +619,12 @@ def test_prometheus_label_value_sanitization():
 
     # U+2028 must be stripped
     assert (
-        "\u2028" not in labels["requested_model"]
+        "\u2028" not in (labels["requested_model"] or "")
     ), f"U+2028 should be removed from label value, got: {repr(labels['requested_model'])}"
     assert labels["requested_model"] == "claude-haiku-4-5-20251001"
 
     # Newlines must be replaced with spaces, quotes must be escaped
-    assert "\n" not in labels["api_key_alias"]
+    assert "\n" not in (labels["api_key_alias"] or "")
     assert labels["api_key_alias"] == 'My Key \\"test\\" with newline'
 
     print("✅ Prometheus label values are properly sanitized")
@@ -611,7 +662,16 @@ def test_prometheus_label_value_sanitization_non_string_types():
 
 
 @pytest.mark.asyncio
-async def test_success_hook_emits_api_provider_value_on_token_metric():
+@pytest.mark.parametrize("metadata_bucket", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("populate_other_bucket", (False, True))
+@pytest.mark.parametrize("original_model_group", (None, "", 123, "requested-source"))
+@pytest.mark.parametrize("stream", (False, True))
+async def test_success_hook_preserves_requested_model_and_deployment_labels(
+    metadata_bucket: Literal["metadata", "litellm_metadata"],
+    populate_other_bucket: bool,
+    original_model_group: str | int | None,
+    stream: bool,
+) -> None:
     """
     End-to-end emit wiring for the success path.
 
@@ -627,11 +687,12 @@ async def test_success_hook_emits_api_provider_value_on_token_metric():
 
     from litellm.integrations.prometheus import PrometheusLogger
 
-    payload = {
+    payload: Final = {
         "id": "t",
         "call_type": "completion",
         "response_cost": 0.001,
         "status": "success",
+        "stream": stream,
         "total_tokens": 30,
         "prompt_tokens": 20,
         "completion_tokens": 10,
@@ -661,26 +722,52 @@ async def test_success_hook_emits_api_provider_value_on_token_metric():
         "hidden_params": {"litellm_overhead_time_ms": None, "additional_headers": None},
     }
 
+    other_bucket: Final = "litellm_metadata" if metadata_bucket == "metadata" else "metadata"
+    litellm_params: Final = {
+        metadata_bucket: {
+            "request_tag": "router",
+            **({"original_model_group": original_model_group} if original_model_group is not None else {}),
+        },
+        **({other_bucket: {"request_tag": "client"}} if populate_other_bucket else {}),
+    }
     _clear_prometheus_registry()
     try:
-        logger = PrometheusLogger()
-        now = datetime.datetime.now()
+        logger: Final = PrometheusLogger()
+        now: Final = datetime.datetime.fromtimestamp(1, tz=datetime.timezone.utc)
         await logger.async_log_success_event(
             {
                 "model": "gpt-4o-mini",
-                "litellm_params": {"metadata": {}},
+                "litellm_params": litellm_params,
                 "standard_logging_object": payload,
             },
             None,
             now,
             now,
         )
-        samples = _collected_samples("litellm_total_tokens_metric_total")
+        request_samples: Final = _collected_samples("litellm_proxy_total_requests_metric_total")
+        assert len(request_samples) == 1
+        assert request_samples[0].value == 1
+        expected_requested_model: Final = (
+            original_model_group
+            if isinstance(original_model_group, str) and original_model_group
+            else payload["model_group"]
+        )
+        assert request_samples[0].labels["requested_model"] == expected_requested_model
+        assert request_samples[0].labels["model_id"] == payload["model_id"]
+        assert request_samples[0].labels["api_provider"] == payload["custom_llm_provider"]
+        assert request_samples[0].labels["status_code"] == "200"
+        samples: Final = _collected_samples("litellm_total_tokens_metric_total")
         assert samples, "expected litellm_total_tokens_metric to be emitted"
         assert all(s.labels.get("api_provider") == "openai" for s in samples), (
             "collected token metric must carry api_provider=openai, got "
             f"{[s.labels.get('api_provider') for s in samples]}"
         )
+        assert all(sample.labels["requested_model"] == payload["model_group"] for sample in samples)
+        spend_samples: Final = _collected_samples("litellm_spend_metric_total")
+        assert len(spend_samples) == 1
+        assert spend_samples[0].value == payload["response_cost"]
+        assert spend_samples[0].labels["requested_model"] == payload["model_group"]
+        assert spend_samples[0].labels["model"] == payload["model"]
     finally:
         _clear_prometheus_registry()
 
@@ -712,6 +799,419 @@ async def test_failure_hook_emits_api_provider_value_on_failed_requests_metric()
             "collected failed-requests metric must carry api_provider=openai, got "
             f"{[s.labels.get('api_provider') for s in samples]}"
         )
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata_id", "request_id", "logged_id", "expected"),
+    (
+        (None, None, "logged-deployment", "logged-deployment"),
+        ("", None, "logged-deployment", "logged-deployment"),
+        ("metadata-deployment", "request-deployment", "logged-deployment", "metadata-deployment"),
+        (None, "request-deployment", "logged-deployment", "request-deployment"),
+        (None, None, None, "None"),
+    ),
+)
+async def test_failure_counters_keep_logged_deployment_attribution(
+    metadata_id: str | None, request_id: str | None, logged_id: str | None, expected: str
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request_data: Final[dict[str, JsonValue]] = {
+        "model": "metric-test-alias",
+        "metadata": {"model_info": {"id": metadata_id}},
+        "model_info": {"id": request_id},
+        "standard_logging_object": {"model_id": logged_id, "custom_llm_provider": "openai"},
+    }
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=HTTPException(status_code=400, detail="guardrail rejected"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        for metric_name in ("litellm_proxy_failed_requests_metric_total", "litellm_proxy_total_requests_metric_total"):
+            samples: Final = _collected_samples(metric_name)
+            assert [(sample.labels["model_id"], sample.value) for sample in samples] == [
+                (expected, 1.0)
+            ]
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "usage", "response_cost", "expected_spend", "expected_tokens"),
+    (
+        pytest.param(
+            "aimage_generation", litellm.Usage(prompt_tokens=8, total_tokens=8), 0.25, 0.25, 8.0, id="billed_image"
+        ),
+        pytest.param("aimage_edit", litellm.Usage(prompt_tokens=8, total_tokens=8), 0.25, 0.25, 8.0, id="billed_edit"),
+        pytest.param("aimage_generation", None, 0.25, None, None, id="unbilled_image"),
+        pytest.param(
+            "aimage_generation", litellm.Usage(prompt_tokens=15, total_tokens=15), 0.0, None, None, id="estimated_prompt"
+        ),
+        pytest.param(
+            "acompletion", litellm.Usage(prompt_tokens=8, total_tokens=8), 0.25, None, None, id="cut_chat_stream"
+        ),
+    ),
+)
+async def test_failure_hook_counts_the_spend_of_a_billed_image_failure_once(
+    call_type: str,
+    usage: litellm.Usage | None,
+    response_cost: float,
+    expected_spend: float | None,
+    expected_tokens: float | None,
+) -> None:
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data={
+                "model": "image-group",
+                "metadata": {},
+                "call_type": call_type,
+                "response_cost": response_cost,
+                "standard_logging_object": {"model": "gemini/image-model", "custom_llm_provider": "gemini"},
+                **({} if usage is None else {"combined_usage_object": usage}),
+            },
+            original_exception=Exception("refused"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        spend: Final = _collected_samples("litellm_spend_metric_total")
+        tokens: Final = _collected_samples("litellm_total_tokens_metric_total")
+        assert [sample.value for sample in spend] == ([] if expected_spend is None else [expected_spend])
+        assert [sample.value for sample in tokens] == ([] if expected_tokens is None else [expected_tokens])
+        assert all(sample.labels["model"] == "image-model" for sample in (*spend, *tokens))
+    finally:
+        _clear_prometheus_registry()
+
+
+def _image_refusal() -> Exception:
+    import httpx
+
+    from litellm.llms.gemini.empty_image_response import ImageRefusalError
+
+    return ImageRefusalError(
+        message="Gemini refused to return an image, finishReason=IMAGE_SAFETY",
+        model="gemini-3.1-flash-image",
+        llm_provider="gemini",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://gemini.invalid")),
+        provider_specific_fields={"finish_reason": "IMAGE_SAFETY"},
+        billed_answer=None,
+    )
+
+
+def _billed_image_failure(standard_logging_object: dict[str, JsonValue], **request: JsonValue) -> dict[str, object]:
+    return {
+        "model": "image-group",
+        "metadata": {},
+        "call_type": "aimage_generation",
+        "response_cost": 0.25,
+        "standard_logging_object": standard_logging_object,
+        "combined_usage_object": litellm.Usage(prompt_tokens=8, total_tokens=8),
+        **request,
+    }
+
+
+@pytest.mark.asyncio
+async def test_refused_image_prompt_keeps_the_custom_metadata_labels_of_its_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", ["metadata.rig_label"])
+    standard_logging_object: Final[dict[str, JsonValue]] = {
+        "model": "gemini/image-model",
+        "model_id": "dep-1",
+        "model_group": "image-group",
+        "custom_llm_provider": "gemini",
+        "metadata": {"requester_metadata": {"rig_label": "alpha"}},
+    }
+    refusal: Final = _image_refusal()
+    _clear_prometheus_registry()
+    try:
+        logger: Final = PrometheusLogger()
+        logger.set_llm_deployment_failure_metrics(
+            {
+                "model": "gemini/image-model",
+                "litellm_params": {
+                    "custom_llm_provider": "gemini",
+                    "metadata": {"model_info": {"id": "dep-1"}, "model_group": "image-group"},
+                },
+                "standard_logging_object": standard_logging_object,
+                "exception": refusal,
+            }
+        )
+        await logger.async_post_call_failure_hook(
+            request_data=_billed_image_failure(standard_logging_object),
+            original_exception=refusal,
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        labelled: Final = {
+            metric_name: [sample.labels.get("metadata_rig_label") for sample in _collected_samples(metric_name)]
+            for metric_name in (
+                "litellm_deployment_success_responses_total",
+                "litellm_deployment_total_requests_total",
+                "litellm_proxy_failed_requests_metric_total",
+                "litellm_proxy_total_requests_metric_total",
+                "litellm_spend_metric_total",
+            )
+        }
+        assert labelled == {metric_name: ["alpha"] for metric_name in labelled}
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("global_disable_no_log_param", "expected_spend", "expected_tokens", "exports_requester_label"),
+    ((False, [], [], False), (True, [0.25], [8.0], True)),
+)
+async def test_failure_hook_counts_no_spend_for_a_no_log_image_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    global_disable_no_log_param: bool,
+    expected_spend: list[float],
+    expected_tokens: list[float],
+    exports_requester_label: bool,
+) -> None:
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", global_disable_no_log_param)
+    monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", ["metadata.rig_label"])
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=_billed_image_failure(
+                {
+                    "model": "gemini/image-model",
+                    "custom_llm_provider": "gemini",
+                    "metadata": {"requester_metadata": {"rig_label": "alpha"}},
+                },
+                **{"no-log": True},
+            ),
+            original_exception=_image_refusal(),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        assert [sample.value for sample in _collected_samples("litellm_spend_metric_total")] == expected_spend
+        assert [sample.value for sample in _collected_samples("litellm_total_tokens_metric_total")] == expected_tokens
+        proxy_request_samples: Final = (
+            *_collected_samples("litellm_proxy_failed_requests_metric_total"),
+            *_collected_samples("litellm_proxy_total_requests_metric_total"),
+        )
+        labels: Final = {sample.labels.get("metadata_rig_label") for sample in proxy_request_samples}
+        assert proxy_request_samples
+        assert ("alpha" in labels) is exports_requester_label
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_an_image_served_after_a_refusal_then_rejected_counts_its_spend_once(monkeypatch) -> None:
+    import asyncio
+    from datetime import datetime
+    from unittest.mock import AsyncMock
+
+    import httpx
+    import respx
+    from fastapi import HTTPException
+
+    from litellm import Router
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.utils import Rules, function_setup
+
+    class _CountedPrometheus(PrometheusLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.success_logged: Final = asyncio.Event()
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
+            self.success_logged.set()
+
+    usage: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
+    image: Final = {"inlineData": {"mimeType": "image/png", "data": "aW1n"}}
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _clear_prometheus_registry()
+    try:
+        prometheus: Final = _CountedPrometheus()
+        monkeypatch.setattr(litellm, "callbacks", [prometheus])
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": group,
+                    "litellm_params": {
+                        "model": "gemini/gemini-3.1-flash-image",
+                        "api_key": "test-key",
+                        "api_base": f"https://{group}.invalid/v1",
+                    },
+                }
+                for group in ("primary", "backup")
+            ],
+            fallbacks=[{"primary": ["backup"]}],
+            num_retries=0,
+        )
+        logging_obj, request = function_setup(
+            original_function="aimage_generation",
+            rules_obj=Rules(),
+            start_time=datetime.now(),
+            model="primary",
+            prompt="a single small red dot",
+            litellm_call_id="refused-then-served-then-rejected",
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://primary.invalid/").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}],
+                        "usageMetadata": usage,
+                    },
+                )
+            )
+            upstream.post(url__startswith="https://backup.invalid/").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={"candidates": [{"finishReason": "STOP", "content": {"parts": [image]}}], "usageMetadata": usage},
+                )
+            )
+            await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+            await asyncio.wait_for(prometheus.success_logged.wait(), 10)
+        served_spend: Final = sum(sample.value for sample in _collected_samples("litellm_spend_metric_total"))
+
+        proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alert_types = []
+        monkeypatch.setattr(proxy_logging, "update_request_status", AsyncMock())
+        await proxy_logging.post_call_failure_hook(
+            request_data={"litellm_logging_obj": logging_obj, "model": "primary", "metadata": {}},
+            original_exception=HTTPException(status_code=400, detail="post_call guardrail rejected the image"),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+            dispatched_call_type="aimage_generation",
+        )
+
+        assert served_spend > 0
+        assert sum(sample.value for sample in _collected_samples("litellm_spend_metric_total")) == pytest.approx(
+            served_spend
+        )
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_a_billed_fallback_refusal_labels_its_spend_with_the_fallback_group() -> None:
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=_billed_image_failure(
+                {
+                    "model": "gemini/image-model",
+                    "model_id": "dep-backup",
+                    "model_group": "backup",
+                    "custom_llm_provider": "gemini",
+                },
+                model="primary",
+            ),
+            original_exception=_image_refusal(),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        assert {
+            metric_name: [sample.labels.get("requested_model") for sample in _collected_samples(metric_name)]
+            for metric_name in ("litellm_spend_metric_total", "litellm_total_tokens_metric_total")
+        } == {"litellm_spend_metric_total": ["backup"], "litellm_total_tokens_metric_total": ["backup"]}
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_refusal_after_a_provider_failure_counts_on_the_fallback_deployment(monkeypatch) -> None:
+    import asyncio
+    from datetime import datetime
+
+    import httpx
+    import respx
+
+    from litellm import Router
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.utils import Rules, function_setup
+
+    class _CountedPrometheus(PrometheusLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.failed_attempt_logged: Final = asyncio.Event()
+
+        async def async_log_failed_attempt(self, kwargs, start_time, end_time):
+            await super().async_log_failed_attempt(kwargs, start_time, end_time)
+            self.failed_attempt_logged.set()
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _clear_prometheus_registry()
+    try:
+        prometheus: Final = _CountedPrometheus()
+        monkeypatch.setattr(litellm, "callbacks", [prometheus])
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": group,
+                    "litellm_params": {
+                        "model": "gemini/gemini-3.1-flash-image",
+                        "api_key": "test-key",
+                        "api_base": f"https://{group}.invalid/v1",
+                    },
+                    "model_info": {"id": f"dep-{group}"},
+                }
+                for group in ("primary", "backup")
+            ],
+            fallbacks=[{"primary": ["backup"]}],
+            num_retries=0,
+        )
+        logging_obj, request = function_setup(
+            original_function="aimage_generation",
+            rules_obj=Rules(),
+            start_time=datetime.now(),
+            model="primary",
+            prompt="a single small red dot",
+            litellm_call_id="outage-then-refused",
+        )
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://primary.invalid/").mock(
+                return_value=httpx.Response(503, json={"error": {"code": 503, "message": "overloaded"}})
+            )
+            upstream.post(url__startswith="https://backup.invalid/").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "candidates": [{"finishReason": "IMAGE_SAFETY", "content": {"role": "model"}}],
+                        "usageMetadata": {"promptTokenCount": 9, "totalTokenCount": 9},
+                    },
+                )
+            )
+            with pytest.raises(litellm.ContentPolicyViolationError):
+                await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+            await asyncio.wait_for(prometheus.failed_attempt_logged.wait(), 10)
+
+        assert {
+            metric_name: [
+                sample.value
+                for sample in _collected_samples(metric_name)
+                if sample.labels.get("model_id") == "dep-backup"
+            ]
+            for metric_name in ("litellm_deployment_success_responses_total", "litellm_deployment_total_requests_total")
+        } == {"litellm_deployment_success_responses_total": [1.0], "litellm_deployment_total_requests_total": [1.0]}
     finally:
         _clear_prometheus_registry()
 
@@ -808,6 +1308,56 @@ async def test_failure_hook_prefers_request_data_provider_over_exception_provide
         },
         err,
     ) == ["azure"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type, custom_llm_provider, expected_requested_model",
+    [
+        (_PASS_THROUGH_CALL_TYPE, "vertex_ai", "gcp/google/gemini-2.5-flash"),
+        ("acompletion", "vertex_ai", "other"),
+        (_PASS_THROUGH_CALL_TYPE, "bedrock", "other"),
+    ],
+)
+async def test_failure_hook_labels_a_pass_through_failure_with_the_router_model_the_client_requested(
+    call_type: str, custom_llm_provider: str, expected_requested_model: str
+):
+    from unittest.mock import patch
+
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gcp/google/gemini-2.5-flash",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_project": "p",
+                    "vertex_location": "us-central1",
+                },
+            }
+        ]
+    )
+    _clear_prometheus_registry()
+    try:
+        with patch("litellm.proxy.proxy_server.llm_router", router, create=True):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+            await PrometheusLogger().async_post_call_failure_hook(
+                request_data={
+                    "model": "gemini-2.5-flash",
+                    "call_type": call_type,
+                    "custom_llm_provider": custom_llm_provider,
+                    "metadata": {},
+                    "litellm_params": {"metadata": {"model_group": "gcp/google/gemini-2.5-flash"}},
+                },
+                original_exception=Exception("upstream 400"),
+                user_api_key_dict=UserAPIKeyAuth(token="tok"),
+            )
+        assert {
+            s.labels.get("requested_model") for s in _collected_samples("litellm_proxy_failed_requests_metric_total")
+        } == {expected_requested_model}
+    finally:
+        _clear_prometheus_registry()
 
 
 def test_model_group_in_deployment_metrics():
@@ -924,6 +1474,117 @@ def test_deployment_failure_metrics_emit_model_group_from_standard_logging_paylo
             assert values == {"example-model-group"}, (
                 f"expected model_group=example-model-group on {metric._name}, got {values}"
             )
+    finally:
+        _clear_prometheus_registry()
+
+
+def _routed(deployment: object) -> dict[str, object]:
+    return {"deployment": deployment, "model_info": {"id": "model-123"}}
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "logged_provider", "expected"),
+    [
+        pytest.param(
+            {"custom_llm_provider": "bedrock", "metadata": _routed("azure/gpt-4o")},
+            "vertex_ai",
+            "bedrock",
+            id="resolved-provider-wins",
+        ),
+        pytest.param(
+            {"custom_llm_provider": None, "metadata": _routed("anthropic/claude-haiku-4-5")},
+            "openai",
+            "openai",
+            id="provider-on-the-payload-wins",
+        ),
+        pytest.param({"metadata": _routed("azure/limited-azure")}, None, "azure", id="deployment-prefix"),
+        pytest.param(
+            {"litellm_metadata": _routed("anthropic/claude-haiku-4-5"), "metadata": {}},
+            None,
+            "anthropic",
+            id="litellm-metadata-deployment",
+        ),
+        pytest.param(
+            {"litellm_metadata": _routed("anthropic/claude-haiku-4-5"), "metadata": _routed("bedrock/converse/model")},
+            None,
+            "anthropic",
+            id="litellm-metadata-deployment-wins",
+        ),
+        pytest.param(
+            {"litellm_metadata": {"deployment": "bedrock/forged"}, "metadata": _routed("anthropic/claude-haiku-4-5")},
+            None,
+            "anthropic",
+            id="routed-bucket-wins-over-a-bare-deployment",
+        ),
+        pytest.param({"metadata": _routed("abliteration/model")}, None, "abliteration", id="json-configured-provider"),
+        pytest.param({"metadata": _routed("langfuse/my-prompt")}, None, "", id="prompt-management-deployment"),
+        pytest.param({"metadata": _routed("gpt-4o")}, None, "", id="unprefixed-deployment"),
+        pytest.param({"metadata": _routed("meta-llama/Llama-3")}, None, "", id="prefix-is-not-a-provider"),
+        pytest.param({"metadata": _routed(5)}, None, "", id="non-string-deployment"),
+        pytest.param({"metadata": {}}, None, "", id="nothing-known"),
+    ],
+)
+def test_deployment_failure_metrics_label_the_selected_deployment_provider(litellm_params, logged_provider, expected):
+    """
+    A failure on a selected deployment labels api_provider with that
+    deployment's provider, never the string "None" and never a guess from the
+    requested model name (gpt-4o-mini here would read openai).
+    """
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        logger.set_llm_deployment_failure_metrics(
+            request_kwargs={
+                "model": "gpt-4o-mini",
+                "litellm_params": litellm_params,
+                "standard_logging_object": {
+                    "model_group": "gpt-4o-mini",
+                    "model_id": "model-123",
+                    "api_base": "https://example.openai.azure.com",
+                    "custom_llm_provider": logged_provider,
+                    "request_tags": [],
+                },
+                "exception": Exception("boom"),
+            }
+        )
+
+        for metric in (
+            logger.litellm_deployment_failure_responses,
+            logger.litellm_deployment_total_requests,
+        ):
+            index = metric._labelnames.index("api_provider")
+            values = {sample_key[index] for sample_key in metric._metrics}
+            assert values == {expected}, f"expected api_provider={expected!r} on {metric._name}, got {values}"
+    finally:
+        _clear_prometheus_registry()
+
+
+def test_deployment_failure_metrics_label_a_custom_provider_deployment(monkeypatch):
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "in-house", "custom_handler": object()}])
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        logger.set_llm_deployment_failure_metrics(
+            request_kwargs={
+                "model": "gpt-4o-mini",
+                "litellm_params": {"metadata": _routed("in-house/model")},
+                "standard_logging_object": {
+                    "model_group": "gpt-4o-mini",
+                    "model_id": "model-123",
+                    "api_base": "https://in-house.example",
+                    "request_tags": [],
+                },
+                "exception": Exception("boom"),
+            }
+        )
+
+        index = logger.litellm_deployment_failure_responses._labelnames.index("api_provider")
+        values = {sample_key[index] for sample_key in logger.litellm_deployment_failure_responses._metrics}
+        assert values == {"in-house"}
     finally:
         _clear_prometheus_registry()
 

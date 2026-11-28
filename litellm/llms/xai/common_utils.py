@@ -5,6 +5,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -39,14 +40,14 @@ class XAIModelInfo(BaseLLMModelInfo):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is not None:
             headers["Authorization"] = f"Bearer {api_key}"
 
@@ -91,7 +92,7 @@ class XAIModelInfo(BaseLLMModelInfo):
                 "XAI API base or key is not set. Set XAI_API_BASE and provide an xAI API key via api_key, litellm.xai_key, or XAI_API_KEY."
             )
         response: Final = litellm.module_level_client.get(
-            url=f"{api_base}/v1/models",
+            url=join_api_base(api_base, "v1/models"),
             headers={"Authorization": f"Bearer {api_key}"},
         )
 
@@ -104,7 +105,7 @@ class XAIModelInfo(BaseLLMModelInfo):
 
         models: Final = _JSON_VALUES.validate_python(_JSON_OBJECT.validate_python(response.json())["data"])
 
-        litellm_model_names: Final = []
+        litellm_model_names: Final[list[str]] = []
         for model in models:
             stripped_model_name = _MODEL_ID.validate_python(_JSON_OBJECT.validate_python(model)["id"])
             litellm_model_name = "xai/" + stripped_model_name

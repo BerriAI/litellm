@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
@@ -11,18 +11,21 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_ollama_image,
-    custom_prompt,
     ollama_pt,
+    render_custom_prompt_template,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
     inline_remote_image_urls,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -42,7 +45,7 @@ from litellm.types.utils import (
     generate_id,
 )
 
-from ..common_utils import OllamaError, OllamaModelInfo, convert_image
+from ..common_utils import OllamaError, OllamaModelInfo, convert_image, ollama_think
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -73,7 +76,7 @@ class _OllamaGenerateReasoning(LiteLLMBaseModel):
     def split(self) -> tuple[str | None, str | None]:
         """Reasoning reaches `/api/generate` either in the top-level `thinking` field or
         inline in `<think>` tags, never both. The field wins, matching `ollama_chat`."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             parse_content_for_reasoning,
         )
 
@@ -183,7 +186,7 @@ class OllamaConfig(BaseConfig):
         repeat_penalty: float | None = None,
         temperature: float | None = None,
         seed: int | None = None,
-        stop: list | None = None,
+        stop: Sequence[object] | None = None,
         tfs_z: float | None = None,
         num_predict: int | None = None,
         top_k: int | None = None,
@@ -225,13 +228,16 @@ class OllamaConfig(BaseConfig):
             "reasoning_effort",
         ]
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
+
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["num_predict"] = value
@@ -248,10 +254,7 @@ class OllamaConfig(BaseConfig):
             elif param == "stop":
                 optional_params["stop"] = value
             elif param == "reasoning_effort" and value is not None:
-                if model.startswith("gpt-oss"):
-                    optional_params["think"] = value
-                else:
-                    optional_params["think"] = value in {"low", "medium", "high"}
+                optional_params["think"] = ollama_think(model, OPAQUE_VALUE.validate_python(value))
             elif param == "response_format" and isinstance(value, dict):
                 if value["type"] == "json_object":
                     optional_params["format"] = "json"
@@ -260,7 +263,7 @@ class OllamaConfig(BaseConfig):
 
         return optional_params
 
-    def _supports_function_calling(self, ollama_model_info: dict) -> bool:
+    def _supports_function_calling(self, ollama_model_info: Mapping[str, object]) -> bool:
         """
         Check if the 'template' field in the ollama_model_info contains a 'tools' or 'function' key.
         """
@@ -314,8 +317,8 @@ class OllamaConfig(BaseConfig):
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -429,7 +432,7 @@ class OllamaConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> dict:
         custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict") or litellm.custom_prompt_dict
 
@@ -437,11 +440,8 @@ class OllamaConfig(BaseConfig):
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
             model_prompt_details: Final = custom_prompt_dict[model]
-            ollama_prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
+            ollama_prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=messages, model=model, llm_provider="ollama"
             )
         elif text_completion_request:  # handle `/completions` requests
             ollama_prompt = get_str_from_messages(messages=messages)
@@ -477,14 +477,14 @@ class OllamaConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return headers
 
     def get_complete_url(
@@ -492,8 +492,8 @@ class OllamaConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -503,17 +503,14 @@ class OllamaConfig(BaseConfig):
 
         Some providers need `model` in `api_base`
         """
-        clean_api_base: Final = (api_base or "http://localhost:11434").rstrip("/")
-        if clean_api_base.endswith("/api/generate"):
-            return clean_api_base
-        return f"{clean_api_base}/api/generate"
+        return ensure_api_route(api_base or "http://localhost:11434", "api/generate")
 
     def get_model_response_iterator(
         self,
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ):
+    ) -> "OllamaTextCompletionResponseIterator":
         return OllamaTextCompletionResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -522,7 +519,12 @@ class OllamaConfig(BaseConfig):
 
 
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
+    def __init__(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> None:
         super().__init__(streaming_response, sync_stream, json_mode)
         self.response_id: Final[str] = generate_id()
         self.started_reasoning_content: bool = False
@@ -552,7 +554,7 @@ class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
         held: Final = self.held_content
         self.held_content = ""
         try:
-            parsed: Final[object] = json.loads(_strip_json_code_fence(held))
+            parsed: Final = _JSON_VALUE.validate_python(json.loads(_strip_json_code_fence(held)))
         except json.JSONDecodeError:
             return GenericStreamingChunk(text=held, is_finished=True, finish_reason="stop", usage=usage)
         if isinstance(parsed, dict) and "name" in parsed and "arguments" in parsed:

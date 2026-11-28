@@ -5,8 +5,10 @@ import json
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
+from uuid import uuid4
 
 import pytest
+import responses
 import respx
 from respx.models import Call
 
@@ -32,6 +34,48 @@ _TYPESAFE_URL: Final = "https://api.typesafe.ai/v1/systemone"
 _CLOUDFLARE_API_BASE: Final = "https://api.cloudflare.com/client/v4/accounts/acct/ai/run"
 _CLOUDFLARE_CLEF_URL: Final = f"{_CLOUDFLARE_API_BASE}/@cf/cloudflare/clef"
 _PNG_DATA_URL: Final = "data:image/png;base64,AA=="
+
+
+@responses.activate
+@pytest.mark.parametrize("use_async", (True, False), ids=("asystemone", "systemone"))
+@pytest.mark.parametrize("model", ("ai_decide", "serving-decider"))
+@pytest.mark.parametrize("base_from_env", (True, False))
+async def test_should_authenticate_databricks_systemone_with_oauth_m2m(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    use_async: bool,
+    model: str,
+    base_from_env: bool,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "synthetic-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", f"synthetic-{uuid4().hex}")
+    monkeypatch.setenv("DATABRICKS_API_BASE", "https://workspace.example/serving-endpoints")
+    token: Final = responses.post(
+        "https://workspace.example/oidc/v1/token", json={"access_token": "oauth-token", "expires_in": 3600}
+    )
+    url: Final = (
+        "https://workspace.example/api/2.0/ai-functions/ai-decide"
+        if model == "ai_decide"
+        else f"https://workspace.example/serving-endpoints/{model}/invocations"
+    )
+    upstream_response: Final = {"answers": {"is_refund": {"type": "noul", "noul": 0.93}}}
+    route: Final = respx_mock.post(url).respond(
+        json={"response": upstream_response} if model == "ai_decide" else upstream_response
+    )
+    kwargs: Final[Mapping[str, object]] = {
+        "model": f"databricks/{model}",
+        "state": _STATE,
+        "questions": _SYSTEMONE_QUESTIONS,
+        **({} if base_from_env else {"api_base": "https://workspace.example/serving-endpoints"}),
+    }
+
+    for _ in range(2):
+        result: Final = await litellm.asystemone(**kwargs) if use_async else litellm.systemone(**kwargs)
+        assert isinstance(result, DecisionsResponse)
+        assert result.answers["is_refund"].model_dump(mode="json") == {"type": "noul", "noul": 0.93}
+        assert route.calls.last.request.headers["Authorization"] == "Bearer oauth-token"
+    assert route.call_count == 2
+    assert token.call_count == 1
 
 
 @pytest.fixture(autouse=True)
@@ -411,19 +455,20 @@ async def test_typesafe_answers_box_questions_it_cannot_take_as_refusals_under_d
     ]
 
 
-def test_a_malformed_provider_specific_header_is_ignored(respx_mock: respx.MockRouter) -> None:
+def test_a_malformed_provider_specific_header_answers_400_before_http(respx_mock: respx.MockRouter) -> None:
     route: Final = respx_mock.post(_TYPESAFE_URL).respond(json=_SYSTEMONE_RESPONSE)
 
-    response: Final = litellm.systemone(
-        model="typesafe/jev-1.14.0",
-        state=_STATE,
-        questions=_SYSTEMONE_QUESTIONS,
-        api_key="caller-key",
-        provider_specific_header={"custom_llm_provider": "typesafe", "extra_headers": "not a header map"},
-    )
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request") as caught:
+        litellm.systemone(
+            model="typesafe/jev-1.14.0",
+            state=_STATE,
+            questions=_SYSTEMONE_QUESTIONS,
+            api_key="caller-key",
+            provider_specific_header={"custom_llm_provider": "typesafe", "extra_headers": "not a header map"},
+        )
 
-    assert isinstance(response, DecisionsResponse)
-    assert not [name for name in route.calls.last.request.headers if name.startswith("typesafe-danger-zone-")]
+    assert caught.value.status_code == 400
+    assert not route.called
 
 
 @pytest.mark.asyncio

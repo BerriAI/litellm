@@ -12,6 +12,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import dict_from_pairs, iter_items
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -25,9 +26,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObj,
     )
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import (
-        GuardrailConfigModel,
-    )
+    from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import VigilGuardGuardrailConfigModel
 
 
 _ANALYZE_ENDPOINT: Final = "/v1/guard/analyze"
@@ -136,7 +135,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         self.timeout = _DEFAULT_VIGIL_TIMEOUT if timeout is None else httpx.Timeout(timeout, connect=min(timeout, 5.0))
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[VigilGuardGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
             VigilGuardGuardrailConfigModel,
         )
@@ -154,7 +153,7 @@ class VigilGuardGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -300,7 +299,7 @@ class VigilGuardGuardrail(CustomGuardrail):
     def _build_output(
         inputs: GenericGuardrailAPIInputs,
         final_texts: list[str],
-        final_tool_calls: Any,
+        final_tool_calls: _ToolCalls | None,
     ) -> GenericGuardrailAPIInputs:
         # When nothing was changed, return the input shape verbatim so the guardrail
         # logs "allow" rather than "mask". When a text or a tool-call argument was
@@ -315,7 +314,7 @@ class VigilGuardGuardrail(CustomGuardrail):
             guardrailed["images"] = inputs["images"]
         if "tools" in inputs:
             guardrailed["tools"] = inputs["tools"]
-        if tool_calls_changed:
+        if tool_calls_changed and final_tool_calls is not None:
             guardrailed["tool_calls"] = final_tool_calls
         return guardrailed
 
@@ -331,13 +330,11 @@ class VigilGuardGuardrail(CustomGuardrail):
         return pairs
 
     @staticmethod
-    def _set_tool_call_arguments(tool_calls: Any, index: int, arguments: str) -> list[Any]:
-        updated: Final = list(tool_calls)
-        tool_call: Final = dict(updated[index])
-        function: Final = dict(tool_call.get("function") or {})
-        function["arguments"] = arguments
-        tool_call["function"] = function
-        updated[index] = tool_call
+    def _set_tool_call_arguments(tool_calls: Sequence[object] | None, index: int, arguments: str) -> list[Any]:
+        updated: Final = list(iter_items(tool_calls))
+        tool_call: Final = dict_from_pairs(updated[index])
+        function: Final = dict_from_pairs(tool_call.get("function") or {})
+        updated[index] = {**tool_call, "function": {**function, "arguments": arguments}}
         return updated
 
     async def _analyze(self, text: str, source: str, metadata: Mapping[str, _MetadataValue]) -> Mapping[str, object]:
@@ -416,9 +413,9 @@ class VigilGuardGuardrail(CustomGuardrail):
         return original
 
     def _collect_metadata(
-        self, request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]
+        self, request_data: dict[str, object], logging_obj: Optional["LiteLLMLoggingObj"]
     ) -> Mapping[str, _MetadataValue]:
-        sources: Final[list[dict]] = []
+        sources: Final[list[dict[str, object]]] = []
         if isinstance(request_data, dict):
             sources.append(request_data)
             for nested_key in ("metadata", "litellm_metadata"):
@@ -462,7 +459,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         return None
 
     @staticmethod
-    def _extract_call_id(request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]) -> str | None:
+    def _extract_call_id(request_data: dict[str, object], logging_obj: Optional["LiteLLMLoggingObj"]) -> str | None:
         if logging_obj is not None:
             call_id = getattr(logging_obj, "litellm_call_id", None)
             if isinstance(call_id, str) and call_id:

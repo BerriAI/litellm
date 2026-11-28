@@ -132,6 +132,28 @@ class TestImageEditRequestUtilsDropParams:
         assert "size" in result
         assert "unsupported_param" not in result
 
+    def test_drop_params_sent_as_a_form_string(self):
+        optional_params: ImageEditOptionalRequestParams = {
+            "size": "1024x1024",
+            "unsupported_param": "value",
+        }
+
+        result = ImageEditRequestUtils.get_optional_params_image_edit(
+            model=self.model,
+            image_edit_provider_config=self.config,
+            image_edit_optional_params=optional_params,
+            drop_params="true",
+        )
+        assert result == {"size": "1024x1024"}
+
+        with pytest.raises(litellm.UnsupportedParamsError):
+            ImageEditRequestUtils.get_optional_params_image_edit(
+                model=self.model,
+                image_edit_provider_config=self.config,
+                image_edit_optional_params=optional_params,
+                drop_params="false",
+            )
+
     def test_additional_drop_params(self):
         litellm.drop_params = False
         optional_params: ImageEditOptionalRequestParams = {
@@ -536,15 +558,6 @@ async def test_azure_image_edit_litellm_sdk():
         # Validate the response meets expected schema
         ImageResponse.model_validate(result)
 
-        if isinstance(result, ImageResponse) and result.data:
-            image_base64 = result.data[0].b64_json
-            if image_base64:
-                image_bytes = base64.b64decode(image_base64)
-
-                # Save the image to a file
-                with open("test_image_edit.png", "wb") as f:
-                    f.write(image_bytes)
-
 @pytest.mark.asyncio
 async def test_openai_image_edit_cost_tracking():
     """Test OpenAI image edit cost tracking with custom logger"""
@@ -606,15 +619,6 @@ async def test_openai_image_edit_cost_tracking():
 
         # Validate the response meets expected schema
         ImageResponse.model_validate(result)
-
-        if isinstance(result, ImageResponse) and result.data:
-            image_base64 = result.data[0].b64_json
-            if image_base64:
-                image_bytes = base64.b64decode(image_base64)
-
-                # Save the image to a file
-                with open("test_image_edit.png", "wb") as f:
-                    f.write(image_bytes)
 
         await asyncio.sleep(5)
         print(

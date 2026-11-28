@@ -24,8 +24,9 @@ Design notes (intentional divergences from the framework defaults):
 
 import asyncio
 import os
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi.exceptions import HTTPException
 from pydantic import TypeAdapter
@@ -36,7 +37,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, iter_items, redact_nested_match_and_regex_keys
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -53,12 +54,14 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
         Logging as LiteLLMLoggingObj,
     )
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import (
-        GuardrailConfigModel,
-    )
+    from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import XecGuardConfigModel
 
 
-def _sanitize_scan_result_for_logging(scan_result: dict) -> dict:
+def _dict_fields(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _sanitize_scan_result_for_logging(scan_result: Mapping[str, object]) -> dict[str, object]:
     without_secrets: Final = {key: value for key, value in scan_result.items() if key != "secret_fields"}
     redacted: Final = redact_nested_match_and_regex_keys(without_secrets)
     masked: Final = mask_credentials_in_payload(redacted if isinstance(redacted, dict) else without_secrets)
@@ -138,7 +141,7 @@ class XecGuardGuardrail(CustomGuardrail):
         super().__init__(**forwarded)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[XecGuardConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
             XecGuardConfigModel,
         )
@@ -158,7 +161,7 @@ class XecGuardGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -209,7 +212,7 @@ class XecGuardGuardrail(CustomGuardrail):
         kwargs: dict,
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:
+    ) -> tuple[dict[str, object], object]:
         """Observe-only scan for logging_only mode.
 
         Never blocks, never raises - all errors are swallowed. Records a
@@ -285,10 +288,10 @@ class XecGuardGuardrail(CustomGuardrail):
 
     def logging_hook(
         self,
-        kwargs: dict,
+        kwargs: dict[str, object],
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:
+    ) -> tuple[dict[str, object], object]:
         """Sync counterpart to ``async_logging_hook``.
 
         Runs the async version on an available loop, swallowing every
@@ -317,10 +320,10 @@ class XecGuardGuardrail(CustomGuardrail):
 
     async def _call_scan(
         self,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         scan_type: str,
         suppress_errors: bool = False,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         payload: Final[dict[str, object]] = {
             "model": self.xecguard_model,
             "scan_type": scan_type,
@@ -335,14 +338,14 @@ class XecGuardGuardrail(CustomGuardrail):
 
     async def _call_grounding(
         self,
-        messages: list[dict],
-        documents: list[dict],
-    ) -> dict | None:
+        messages: list[dict[str, object]],
+        documents: list[dict[str, object]],
+    ) -> dict[str, object] | None:
         prompt: Final = self._extract_last_text_by_role(messages, "user")
         response_text: Final = self._extract_last_text_by_role(messages, "assistant")
         if prompt is None or response_text is None:
             return None
-        payload: Final = {
+        payload: Final[dict[str, object]] = {
             "model": self.xecguard_model,
             "prompt": prompt,
             "response": response_text,
@@ -354,7 +357,7 @@ class XecGuardGuardrail(CustomGuardrail):
     async def _post(
         self,
         path: str,
-        payload: dict,
+        payload: dict[str, object],
         suppress_errors: bool = False,
     ) -> dict[str, object] | None:
         endpoint: Final = f"{self.api_base}{path}"
@@ -398,7 +401,7 @@ class XecGuardGuardrail(CustomGuardrail):
         request_data: dict,
         inputs: GenericGuardrailAPIInputs,
         input_type: str,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         """Assemble the full message list that will be sent to XecGuard.
 
         Always reads from ``request_data['messages']`` so the framework's
@@ -407,7 +410,9 @@ class XecGuardGuardrail(CustomGuardrail):
         the request data is incomplete.
         """
         raw_messages: Final = request_data.get("messages") or []
-        messages: Final[list[dict]] = [self._normalize_message(m) for m in raw_messages if isinstance(m, dict)]
+        messages: Final[list[dict[str, object]]] = [
+            self._normalize_message(m) for m in raw_messages if isinstance(m, dict)
+        ]
 
         if input_type == "request":
             if not messages:
@@ -427,7 +432,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return messages
 
     @staticmethod
-    def _normalize_message(message: dict) -> dict:
+    def _normalize_message(message: Mapping[str, object]) -> dict[str, object]:
         """Flatten multimodal content to a plain string for XecGuard."""
         role: Final = message.get("role") or "user"
         content: Final = message.get("content")
@@ -444,7 +449,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return {"role": role, "content": ""}
 
     @staticmethod
-    def _synthesize_user_from_inputs(inputs: object) -> dict | None:
+    def _synthesize_user_from_inputs(inputs: object) -> dict[str, object] | None:
         if not isinstance(inputs, dict):
             return None
         texts: Final = inputs.get("texts")
@@ -456,7 +461,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return {"role": "user", "content": joined}
 
     @staticmethod
-    def _extract_last_text_by_role(messages: list[dict], role: str) -> str | None:
+    def _extract_last_text_by_role(messages: Sequence[Mapping[str, object]], role: str) -> str | None:
         for message in reversed(messages):
             if message.get("role") == role:
                 content = message.get("content")
@@ -466,18 +471,19 @@ class XecGuardGuardrail(CustomGuardrail):
         return None
 
     @staticmethod
-    def _extract_assistant_text_from_response(response: Any) -> str | None:
+    def _extract_assistant_text_from_response(response: object) -> str | None:
         if response is None:
             return None
-        choices = None
+        response_fields: Final = _dict_fields(response)
+        choices: object = None
         if hasattr(response, "choices"):
-            choices = response.choices
-        elif isinstance(response, dict):
-            choices = response.get("choices")
+            choices = attribute_or_none(response, "choices")
+        elif response_fields is not None:
+            choices = response_fields.get("choices")
         if not choices:
             return None
         text_parts: Final[list[str]] = []
-        for choice in choices:
+        for choice in iter_items(choices):
             content = XecGuardGuardrail._extract_choice_content(choice)
             text = XecGuardGuardrail._content_to_text(content)
             if text:
@@ -485,19 +491,22 @@ class XecGuardGuardrail(CustomGuardrail):
         return "\n".join(text_parts) or None
 
     @staticmethod
-    def _extract_choice_content(choice: Any) -> object:
+    def _extract_choice_content(choice: object) -> object:
+        choice_fields: Final = _dict_fields(choice)
+        message: object
         if hasattr(choice, "message"):
-            message = choice.message
-        elif isinstance(choice, dict):
-            message = choice.get("message")
+            message = attribute_or_none(choice, "message")
+        elif choice_fields is not None:
+            message = choice_fields.get("message")
         else:
             return None
         if message is None:
             return None
+        message_fields: Final = _dict_fields(message)
         if hasattr(message, "content"):
-            return message.content
-        if isinstance(message, dict):
-            return message.get("content")
+            return attribute_or_none(message, "content")
+        if message_fields is not None:
+            return message_fields.get("content")
         return None
 
     @staticmethod
@@ -519,14 +528,14 @@ class XecGuardGuardrail(CustomGuardrail):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _extract_grounding_documents(request_data: dict) -> list[dict]:
+    def _extract_grounding_documents(request_data: Mapping[str, object]) -> list[dict[str, object]]:
         metadata: Final = request_data.get("metadata") or request_data.get("litellm_metadata")
         if not isinstance(metadata, dict):
             return []
         raw_docs: Final = metadata.get(_METADATA_GROUNDING_KEY)
         if not isinstance(raw_docs, list) or not raw_docs:
             return []
-        valid_docs: Final[list[dict]] = []
+        valid_docs: Final[list[dict[str, object]]] = []
         for doc in raw_docs:
             if (
                 isinstance(doc, dict)
@@ -551,7 +560,7 @@ class XecGuardGuardrail(CustomGuardrail):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _format_scan_block_message(result: dict) -> str:
+    def _format_scan_block_message(result: Mapping[str, object]) -> str:
         trace_id: Final = result.get("trace_id", "")
         violations = result.get("xecguard_result")
         if not isinstance(violations, list):
@@ -574,7 +583,7 @@ class XecGuardGuardrail(CustomGuardrail):
         return f"Blocked by XecGuard: policies=[{policies}] trace_id={trace_id} rationale={rationale}"
 
     @staticmethod
-    def _format_grounding_block_message(result: dict) -> str:
+    def _format_grounding_block_message(result: Mapping[str, object]) -> str:
         trace_id: Final = result.get("trace_id", "")
         detail: Final = result.get("xecguard_result")
         rules: list[str] = []

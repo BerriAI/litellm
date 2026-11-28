@@ -2,7 +2,10 @@
 the detached pipeline's single attempt-row write, and the cache-first job lookup."""
 
 import asyncio
-from collections.abc import Mapping
+import json
+from collections.abc import AsyncIterator, Coroutine, Mapping
+from contextlib import asynccontextmanager
+from contextvars import Context
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
@@ -18,6 +21,9 @@ from litellm.integrations.shadow_eval_logger import (
     _MAX_JUDGE_PROMPT_CHARS,
     JUDGE_MAX_OUTPUT_TOKENS,
     PAIRWISE_JUDGE_RESPONSE_FORMAT,
+    PAIRWISE_JUDGE_SYSTEM_PROMPT,
+    RUBRIC_JUDGE_RESPONSE_FORMAT,
+    SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR,
     ActiveShadowEvalJob,
     GuardrailRequestSnapshot,
     ShadowEvalLogger,
@@ -25,9 +31,12 @@ from litellm.integrations.shadow_eval_logger import (
     _judge_user_prompt,
     _sample_hits,
     _unmask_preference,
+    is_shadow_eval_rubric_enabled,
     request_guardrail_fingerprint,
+    rubric_judge_system_prompt,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.management_endpoints.auto_router_endpoints import SHADOW_EVAL_RUBRIC_VERSION
 from litellm.types.utils import (
     SHADOW_EVAL_JUDGE_CALL_ORIGIN,
     SHADOW_EVAL_ROUTER_CALL_ORIGIN,
@@ -77,7 +86,14 @@ def _prisma(jobs=(), attempt_counts=(), attempt_costs=()) -> MagicMock:
     return prisma
 
 
-def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash") -> MagicMock:
+def _job_record(
+    job: ActiveShadowEvalJob,
+    target_type="key",
+    target_id="key-hash",
+    rubric: str | None = None,
+    rubric_version: int | None = None,
+) -> MagicMock:
+    """rubric and rubric_version, when given, override the job's, to pose rows the job model rejects."""
     record = MagicMock()
     for field, value in dict(
         id=job.id,
@@ -88,14 +104,24 @@ def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash
         models=sorted(job.models),
         direction=job.direction,
         baseline_model=job.baseline_model,
+        skip_same_model=job.skip_same_model,
         shadow_percentage=job.shadow_percentage,
         judge_model=job.judge_model,
         max_turns=job.max_turns,
         max_budget=job.max_budget,
         ends_at=job.ends_at,
+        rubric=rubric or job.rubric,
+        rubric_version=rubric_version or job.rubric_version,
     ).items():
         setattr(record, field, value)
     return record
+
+
+def _serve_aliases(router: MagicMock, aliases: Mapping[str, str]) -> None:
+    """Point the mock router's ``registry().resolve(name, kind="alias")`` at this model_group_alias map."""
+    router.registry.return_value.resolve.side_effect = lambda name, *, kind: (
+        aliases.get(name) if kind == "alias" else None
+    )
 
 
 def _router(
@@ -110,7 +136,7 @@ def _router(
     model reports the model it served on the response, which is how each direction learns
     which model answered."""
     router = MagicMock()
-    router.model_group_alias = {}
+    _serve_aliases(router, {})
     router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
 
     async def acompletion(**kwargs):
@@ -145,7 +171,7 @@ def _shadow_reply_router(message, finish_reason="stop", routed_model="cheap-mode
     yields no judgeable text can be posed as the two different things it can be: an arm
     that chose a tool, or an arm that returned nothing."""
     router = MagicMock()
-    router.model_group_alias = {}
+    _serve_aliases(router, {})
     router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
 
     async def acompletion(**kwargs):
@@ -165,7 +191,7 @@ def _reasoning_judge_router(
     elevated reasoning_effort does: reasoning bills against the caller's own max_tokens and
     the reply is cut off at that cap. One character stands in for one token."""
     router = MagicMock()
-    router.model_group_alias = {}
+    _serve_aliases(router, {})
     router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
 
     async def acompletion(**kwargs):
@@ -184,7 +210,7 @@ def _judge_reply_router(content: str | None, finish_reason: str = "stop", served
     on the same parser error can be posed apart: no content at all, versus JSON cut off
     mid-object."""
     router = MagicMock()
-    router.model_group_alias = {}
+    _serve_aliases(router, {})
     router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
 
     async def acompletion(**kwargs):
@@ -230,7 +256,15 @@ def _spend_counter(store=None):
     return counter, read, write
 
 
-def _logger(router=None, prisma=None, jobs=(), counter_store=None, jobs_by_target=None) -> ShadowEvalLogger:
+def _logger(
+    router=None,
+    prisma=None,
+    jobs=(),
+    counter_store=None,
+    jobs_by_target=None,
+    real_is_a: bool | None = None,
+    rubric_enabled: bool = True,
+) -> ShadowEvalLogger:
     cache = InMemoryCache(max_size_in_memory=4, default_ttl=60)
     counter, read, write = _spend_counter(counter_store)
     funnel_events = []
@@ -241,6 +275,8 @@ def _logger(router=None, prisma=None, jobs=(), counter_store=None, jobs_by_targe
         job_spend_reader=read,
         job_spend_writer=write,
         funnel_recorder=lambda job_id, stage: funnel_events.append((job_id, stage)),
+        real_is_a_draw=(lambda: real_is_a) if real_is_a is not None else None,
+        rubric_enabled=lambda: rubric_enabled,
     )
     logger._test_counter = counter
     logger._test_funnel = funnel_events
@@ -1391,7 +1427,7 @@ class TestModelScope:
         map at match time, so re-pointing an alias follows config rather than freezing at
         job start."""
         router = _router()
-        router.model_group_alias = {"fast": "sonnet-group"}
+        _serve_aliases(router, {"fast": "sonnet-group"})
         prisma = _prisma(jobs=[_job_record(_job(models=frozenset({scoped_to})))])
         logger = _logger(router=router, prisma=prisma)
 
@@ -1403,14 +1439,14 @@ class TestModelScope:
 
     async def test_a_repointed_alias_applies_to_the_next_request_without_a_cache_refill(self):
         router = _router()
-        router.model_group_alias = {"fast": "sonnet-group"}
+        _serve_aliases(router, {"fast": "sonnet-group"})
         prisma = _prisma(jobs=[_job_record(_job(models=frozenset({"fast"})))])
         logger = _logger(router=router, prisma=prisma)
         await logger.async_log_success_event(_success_kwargs(model_group="sonnet-group"), RESPONSE, None, None)
         await _drain(logger)
         assert prisma.db.litellm_shadowevalattempt.create.await_count == 1
 
-        router.model_group_alias = {"fast": "haiku-group"}
+        _serve_aliases(router, {"fast": "haiku-group"})
         await logger.async_log_success_event(
             _success_kwargs(request_id="req-2", model_group="sonnet-group"), RESPONSE, None, None
         )
@@ -1656,7 +1692,7 @@ class TestShadowPipeline:
         """The shape reader runs inside the failure path: it must never raise a second time
         and cost the row entirely."""
         router = MagicMock()
-        router.model_group_alias = {}
+        _serve_aliases(router, {})
         router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
 
         async def acompletion(**kwargs):
@@ -1897,6 +1933,40 @@ class TestShadowPipeline:
         )
 
         assert "Let me look that up. [tool call] Read({})" in judge_prompt
+
+    async def test_a_server_tool_call_reaches_the_judge_ahead_of_client_tool_calls(self):
+        router: Final = _shadow_reply_router(
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": '{"city": "SF"}'},
+                    }
+                ],
+                "provider_specific_fields": {
+                    "server_tool_calls": [
+                        {
+                            "id": "srvtoolu_01",
+                            "type": "function",
+                            "function": {"name": "web_search", "arguments": '{"query": "persimmon"}'},
+                        }
+                    ]
+                },
+            },
+            finish_reason="tool_calls",
+        )
+        await self._judged_shadow_row(router)
+
+        judge_prompt: Final = next(
+            call.kwargs["messages"][-1]["content"]
+            for call in router.acompletion.call_args_list
+            if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN
+        )
+
+        shadow_text: Final = '[tool call] web_search({"query": "persimmon"}), [tool call] get_weather({"city": "SF"})'
+        assert f":\n{shadow_text}\n\n" in judge_prompt, judge_prompt
 
     async def test_an_empty_shadow_reply_names_the_finish_reason_and_the_routed_model(self):
         """A reply that really carried no text is diagnosable only if the row says what
@@ -2303,7 +2373,7 @@ class TestActiveJobsFailClosed:
 
 def _failing_router():
     router = MagicMock()
-    router.model_group_alias = {}
+    _serve_aliases(router, {})
     router.get_model_list = MagicMock(return_value=None)
     router.acompletion = AsyncMock(side_effect=RuntimeError("provider exploded"))
     return router
@@ -2521,3 +2591,532 @@ class TestSamplingFunnel:
 
         assert logger._test_funnel == []
         prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
+
+
+_FAR_FUTURE: Final = datetime(2099, 1, 1, tzinfo=timezone.utc)
+_SETTLE_GUARD_SECONDS: Final = 5
+
+
+def _skipping_job(
+    baseline_model: str = "baseline-model", max_turns: int = 200, shadow_percentage: float = 100.0
+) -> ActiveShadowEvalJob:
+    return _reverse_job(
+        skip_same_model=True,
+        ends_at=_FAR_FUTURE,
+        baseline_model=baseline_model,
+        max_turns=max_turns,
+        shadow_percentage=shadow_percentage,
+    )
+
+
+def _served(
+    routed_model: str | None = "baseline-model",
+    attempted_fallbacks: int | None = None,
+    tier_litellm_params: Mapping[str, object] | None = None,
+) -> Mapping[str, object]:
+    """Request metadata as the router under evaluation leaves it on the request it served."""
+    decision: Final = {
+        "router_model_name": "my-router",
+        "tier_label": "COMPLEX",
+        **({"routed_model": routed_model} if routed_model else {}),
+        **({"tier_litellm_params": tier_litellm_params} if tier_litellm_params is not None else {}),
+    }
+    return {
+        "routing_decision": decision,
+        **({"attempted_fallbacks": attempted_fallbacks} if attempted_fallbacks is not None else {}),
+    }
+
+
+@asynccontextmanager
+async def _owned_tasks() -> AsyncIterator[None]:
+    """Record only the tasks created inside this scope and drain them on exit, cancelling
+    them if the guard expires, so the scope leaves nothing running whatever its body did."""
+    loop: Final = asyncio.get_running_loop()
+    previous: Final = loop.get_task_factory()
+    owned: Final[list[asyncio.Task[object]]] = []  # mutable-ok: the loop hands tasks over one at a time
+
+    def record(
+        task_loop: asyncio.AbstractEventLoop,
+        coro: Coroutine[object, object, object],
+        /,
+        *,
+        name: str | None = None,
+        context: Context | None = None,
+    ) -> asyncio.Task[object]:
+        task: Final = (
+            asyncio.Task(coro, loop=task_loop)
+            if context is None
+            else asyncio.Task(coro, loop=task_loop, context=context)
+        )
+        if name is not None:
+            task.set_name(name)
+        owned.append(task)
+        return task
+
+    loop.set_task_factory(record)
+    try:
+        yield
+    finally:
+        loop.set_task_factory(previous)
+        await asyncio.wait_for(asyncio.gather(*owned, return_exceptions=True), timeout=_SETTLE_GUARD_SECONDS)
+
+
+def _attempt_recording_prisma() -> tuple[MagicMock, asyncio.Future[asyncio.Task[object]]]:
+    """A prisma whose attempt write resolves a future with the pipeline task that made it."""
+    prisma: Final = _prisma()
+    writer: Final[asyncio.Future[asyncio.Task[object]]] = asyncio.get_running_loop().create_future()
+
+    async def create(*, data: Mapping[str, object]) -> None:
+        task: Final = asyncio.current_task()
+        if task is not None and not writer.done():
+            writer.set_result(task)
+
+    prisma.db.litellm_shadowevalattempt.create = AsyncMock(side_effect=create)
+    return prisma, writer
+
+
+async def _hook(logger: ShadowEvalLogger, kwargs: Mapping[str, object]) -> None:
+    async with _owned_tasks():
+        await logger.async_log_success_event(kwargs, RESPONSE, None, None)
+
+
+async def _hook_until_judged(
+    logger: ShadowEvalLogger,
+    kwargs: Mapping[str, object],
+    writer: asyncio.Future[asyncio.Task[object]],
+) -> None:
+    async with _owned_tasks():
+        await logger.async_log_success_event(kwargs, RESPONSE, None, None)
+        await asyncio.wait_for(asyncio.shield(writer), timeout=_SETTLE_GUARD_SECONDS)
+        await writer.result()
+
+
+@pytest.mark.asyncio
+class TestSameModelSkip:
+    """An opted-in reverse job skips samples its baseline's own group served and counts
+    them apart; whenever the served group is in doubt the sample is judged as before."""
+
+    @pytest.mark.parametrize(
+        ("baseline_model", "model_group", "metadata", "aliases"),
+        [
+            ("baseline-model", "my-router", _served("baseline-model"), {}),
+            ("baseline-model", "my-router", _served("fast"), {"fast": "baseline-model"}),
+            ("fast", "my-router", _served("baseline-model"), {"fast": "baseline-model"}),
+            ("baseline-model", "baseline-model", _served("other-model", attempted_fallbacks=1), {}),
+            (
+                "baseline-model",
+                "my-router",
+                _served("baseline-model", tier_litellm_params={"reasoning_effort": "high"}),
+                {},
+            ),
+        ],
+        ids=[
+            "router-picked-the-baseline",
+            "pick-is-an-alias",
+            "baseline-is-an-alias",
+            "fallback-landed-on-baseline",
+            "tier-overrides-do-not-change-the-group",
+        ],
+    )
+    async def test_baseline_served_sample_is_skipped_without_spend(
+        self, baseline_model, model_group, metadata, aliases
+    ):
+        prisma: Final = _prisma()
+        router: Final = _router()
+        _serve_aliases(router, aliases)
+        logger: Final = _logger(router=router, prisma=prisma, jobs=(_skipping_job(baseline_model=baseline_model),))
+
+        await _hook(logger, _success_kwargs(request_metadata=metadata, model_group=model_group))
+
+        router.acompletion.assert_not_called()
+        prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
+        assert logger._test_counter == {}
+        assert logger._test_funnel == [("job-1", "same_model")]
+
+    async def test_a_lost_sampling_roll_counts_not_sampled_even_when_the_baseline_served_it(self):
+        job: Final = _skipping_job(shadow_percentage=1.0)
+        missing_id: Final = next(
+            f"req-miss-{n}" for n in range(10_000) if not _sample_hits(f"req-miss-{n}", job.id, job.shadow_percentage)
+        )
+        prisma: Final = _prisma()
+        router: Final = _router()
+        logger: Final = _logger(router=router, prisma=prisma, jobs=(job,))
+
+        await _hook(logger, _success_kwargs(request_id=missing_id, request_metadata=_served(), model_group="my-router"))
+
+        router.acompletion.assert_not_called()
+        assert logger._test_funnel == [("job-1", "not_sampled")]
+
+    @pytest.mark.parametrize(
+        ("model_group", "metadata"),
+        [
+            ("my-router", _served("other-model")),
+            ("my-router", _served("baseline-twin")),
+            ("fallback-model", _served("baseline-model", attempted_fallbacks=1)),
+            ("my-router", _served("baseline-model", attempted_fallbacks=1)),
+            ("", _served("baseline-model")),
+            ("my-router", _served(None)),
+        ],
+        ids=[
+            "router-picked-another-group",
+            "differently-named-group-for-the-same-provider-model",
+            "fallback-left-the-baseline-pick",
+            "hop-back-onto-the-router-name",
+            "no-served-group",
+            "no-routed-model",
+        ],
+    )
+    async def test_sample_not_provably_served_by_the_baseline_is_judged(self, model_group, metadata):
+        prisma, writer = _attempt_recording_prisma()
+        router: Final = _router()
+        logger: Final = _logger(router=router, prisma=prisma, jobs=(_skipping_job(),))
+
+        await _hook_until_judged(logger, _success_kwargs(request_metadata=metadata, model_group=model_group), writer)
+
+        row: Final = prisma.db.litellm_shadowevalattempt.create.await_args.kwargs["data"]
+        assert row["shadow_model"] == "baseline-model"
+        assert row["outcome"] in ("real", "shadow", "tie")
+        assert router.acompletion.call_args_list[0].kwargs["model"] == "baseline-model"
+        assert logger._test_funnel == []
+
+    async def test_a_job_without_the_flag_still_judges_the_baseline_against_itself(self):
+        prisma, writer = _attempt_recording_prisma()
+        logger: Final = _logger(router=_router(), prisma=prisma, jobs=(_reverse_job(ends_at=_FAR_FUTURE),))
+
+        await _hook_until_judged(logger, _success_kwargs(request_metadata=_served(), model_group="my-router"), writer)
+
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == 1
+        assert logger._test_funnel == []
+
+    async def test_skips_leave_the_turn_budget_for_judged_samples(self):
+        prisma, writer = _attempt_recording_prisma()
+        logger: Final = _logger(router=_router(), prisma=prisma, jobs=(_skipping_job(max_turns=1),))
+
+        for request_id in ("req-skip-1", "req-skip-2"):
+            await _hook(
+                logger, _success_kwargs(request_id=request_id, request_metadata=_served(), model_group="my-router")
+            )
+        await _hook_until_judged(
+            logger,
+            _success_kwargs(request_id="req-judged", request_metadata=_served("other-model"), model_group="my-router"),
+            writer,
+        )
+
+        judged: Final = prisma.db.litellm_shadowevalattempt.create.await_args_list
+        assert [call.kwargs["data"]["request_id"] for call in judged] == ["req-judged"]
+        assert logger._test_funnel == [("job-1", "same_model"), ("job-1", "same_model")]
+
+    async def test_the_flag_is_read_off_the_stored_job_row(self):
+        prisma: Final = _prisma(jobs=[_job_record(_skipping_job())])
+        router: Final = _router()
+        logger: Final = _logger(router=router, prisma=prisma)
+
+        await _hook(logger, _success_kwargs(request_metadata=_served(), model_group="my-router"))
+
+        router.acompletion.assert_not_called()
+        assert logger._test_funnel == [("job-1", "same_model")]
+
+
+RUBRIC: Final = "Cites the source document and answers in under 100 words."
+
+
+def _rubric_job(
+    id: str = "job-1",
+    router_names: tuple[str, ...] = (),
+    direction: Literal["forward", "reverse"] = "forward",
+    baseline_model: str | None = None,
+) -> ActiveShadowEvalJob:
+    return _job(
+        id=id,
+        router_names=router_names,
+        direction=direction,
+        baseline_model=baseline_model,
+        rubric=RUBRIC,
+        rubric_version=SHADOW_EVAL_RUBRIC_VERSION,
+    )
+
+
+def _rubric_reply(grade_a: object, grade_b: object, preference: str = "A") -> str:
+    return json.dumps({"preference": preference, "confidence": 0.8, "grade_a": grade_a, "grade_b": grade_b})
+
+
+def _judge_calls(router: MagicMock) -> list[Mapping[str, object]]:
+    return [
+        call.kwargs
+        for call in router.acompletion.call_args_list
+        if call.kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == SHADOW_EVAL_JUDGE_CALL_ORIGIN
+    ]
+
+
+def _attempt_rows(prisma: MagicMock) -> list[Mapping[str, object]]:
+    return [call.kwargs["data"] for call in prisma.db.litellm_shadowevalattempt.create.await_args_list]
+
+
+async def _sample_once(logger: ShadowEvalLogger, job: ActiveShadowEvalJob) -> None:
+    await logger._run_shadow_eval(
+        job=job,
+        request_id="req-1",
+        messages=({"role": "user", "content": "hi"},),
+        real_text="real answer",
+        real_model="claude-opus",
+        real_cost=0.0,
+        real_classifier_cost=0.0,
+        real_cache_hit=False,
+        control_tier=None,
+        shadow_params={},
+        parent_metadata={},
+    )
+
+
+@pytest.mark.asyncio
+class TestRubricGrades:
+    async def test_a_preference_job_sends_the_legacy_judge_request_and_writes_the_legacy_row(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        prisma = _prisma()
+        router = _router(judge_json='{"preference": "A", "confidence": 1.7, "grade_a": 5, "grade_b": 1}')
+
+        await _sample_once(_logger(router=router, prisma=prisma, real_is_a=False), _job())
+
+        (judge_call,) = _judge_calls(router)
+        assert judge_call["messages"][0] == {"role": "system", "content": PAIRWISE_JUDGE_SYSTEM_PROMPT}
+        assert judge_call["response_format"] == PAIRWISE_JUDGE_RESPONSE_FORMAT
+        assert "Response A:\nshadow answer\n\nResponse B:\nreal answer" in judge_call["messages"][1]["content"]
+        assert _attempt_rows(prisma) == [
+            {
+                "job_id": "job-1",
+                "request_id": "req-1",
+                "router_name": "my-router",
+                "outcome": "shadow",
+                "tier": "SIMPLE",
+                "real_model": "claude-opus",
+                "shadow_model": "cheap-model",
+                "confidence": 1.0,
+                "judge_cost": 0.005,
+                "shadow_cost": 0.005,
+                "shadow_classifier_cost": 0.0,
+                "real_cost": 0.0,
+                "real_classifier_cost": 0.0,
+                "real_cache_hit": False,
+                "error": None,
+            }
+        ]
+
+    @pytest.mark.parametrize("direction", ["forward", "reverse"])
+    @pytest.mark.parametrize("real_is_a", [True, False], ids=["real-is-a", "real-is-b"])
+    async def test_grades_follow_each_response_through_either_label_order(self, direction: str, real_is_a: bool):
+        """The same draw places the responses and unmasks the grades, and real is always the
+        response the caller received, including a reverse job's router response."""
+        prisma = _prisma()
+        router = _router(judge_json=_rubric_reply(5, 2))
+        job = (
+            _rubric_job()
+            if direction == "forward"
+            else _rubric_job(direction="reverse", baseline_model="baseline-model")
+        )
+
+        await _sample_once(_logger(router=router, prisma=prisma, real_is_a=real_is_a), job)
+
+        (judge_call,) = _judge_calls(router)
+        first, second = ("real answer", "shadow answer") if real_is_a else ("shadow answer", "real answer")
+        assert f"Response A:\n{first}\n\nResponse B:\n{second}" in judge_call["messages"][1]["content"]
+        assert judge_call["messages"][0] == {"role": "system", "content": rubric_judge_system_prompt(RUBRIC)}
+        assert RUBRIC in judge_call["messages"][0]["content"]
+        assert judge_call["response_format"] == RUBRIC_JUDGE_RESPONSE_FORMAT
+        (row,) = _attempt_rows(prisma)
+        expected = ("real", 5, 2) if real_is_a else ("shadow", 2, 5)
+        assert (row["outcome"], row["real_grade"], row["shadow_grade"]) == expected
+        assert (row["confidence"], row["error"]) == (0.8, None)
+
+    @pytest.mark.parametrize(
+        ("grade_a", "grade_b", "preference", "expected"),
+        [
+            (1, 5, "B", ("shadow", 1, 5)),
+            (5, 1, "A", ("real", 5, 1)),
+            (1, 1, "tie", ("tie", 1, 1)),
+            (5, 5, "tie", ("tie", 5, 5)),
+            (3, 3, "B", ("shadow", 3, 3)),
+        ],
+        ids=["lowest-vs-highest", "highest-vs-lowest", "both-bad", "both-good", "equal-grades-still-a-winner"],
+    )
+    async def test_every_valid_grade_pair_is_recorded_with_an_independent_preference(
+        self, grade_a: int, grade_b: int, preference: str, expected: tuple[str, int, int]
+    ):
+        prisma = _prisma()
+        router = _router(judge_json=_rubric_reply(grade_a, grade_b, preference))
+
+        await _sample_once(_logger(router=router, prisma=prisma, real_is_a=True), _rubric_job())
+
+        (row,) = _attempt_rows(prisma)
+        assert (row["outcome"], row["real_grade"], row["shadow_grade"]) == expected
+
+    @pytest.mark.parametrize(
+        ("reply", "invalid"),
+        [
+            (_rubric_reply(True, 2), "grade_a:value_error"),
+            (_rubric_reply("4", 2), "grade_a:value_error"),
+            (_rubric_reply(4.0, 2), "grade_a:value_error"),
+            (_rubric_reply(4.5, 2), "grade_a:value_error"),
+            (_rubric_reply(None, 2), "grade_a:value_error"),
+            (_rubric_reply(0, 2), "grade_a:literal_error"),
+            (_rubric_reply(6, 2), "grade_a:literal_error"),
+            (_rubric_reply(4, -1), "grade_b:literal_error"),
+            ('{"preference": "A", "confidence": 0.8, "grade_a": 4}', "grade_b:missing"),
+            ('{"preference": "A", "confidence": 0.8}', "grade_a:missing,grade_b:missing"),
+            (_rubric_reply(4, 2, preference="C"), "preference:literal_error"),
+            ("I would give A a 4 and B a 2", "verdict:JSONDecodeError"),
+        ],
+        ids=[
+            "bool",
+            "string",
+            "integral-float",
+            "fractional-float",
+            "null",
+            "below-range",
+            "above-range",
+            "negative",
+            "one-missing",
+            "both-missing",
+            "bad-preference",
+            "not-json",
+        ],
+    )
+    async def test_a_malformed_verdict_is_an_error_row_that_keeps_the_billed_costs(
+        self, reply: str, invalid: str, monkeypatch: pytest.MonkeyPatch
+    ):
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.007)
+        prisma = _prisma()
+        logger = _logger(router=_router(judge_json=reply), prisma=prisma, real_is_a=True)
+
+        await _sample_once(logger, _rubric_job())
+
+        (row,) = _attempt_rows(prisma)
+        assert row["outcome"] == "error"
+        assert row["error"].startswith(f"unparseable rubric verdict; invalid={invalid}, finish_reason=")
+        assert RUBRIC not in row["error"] and reply not in row["error"]
+        assert row["confidence"] is None
+        assert "real_grade" not in row and "shadow_grade" not in row
+        assert (row["judge_cost"], row["shadow_cost"]) == (0.007, 0.007)
+        assert sum(logger._test_counter.values()) == pytest.approx(0.014)
+
+    async def test_each_router_arm_records_the_grades_its_own_response_earned(self):
+        prisma = _prisma()
+        router = _router(sibling_router_texts={"alt-router": "alt answer"})
+        arms = router.acompletion.side_effect
+
+        async def acompletion(**kwargs):
+            if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_JUDGE_CALL_ORIGIN:
+                return await arms(**kwargs)
+            shadow_grade = 2 if "alt answer" in kwargs["messages"][1]["content"] else 4
+            return {"choices": [{"message": {"content": _rubric_reply(3, shadow_grade, preference="tie")}}]}
+
+        router.acompletion = MagicMock(side_effect=acompletion)
+
+        await _sample_once(
+            _logger(router=router, prisma=prisma, real_is_a=True),
+            _rubric_job(router_names=("my-router", "alt-router")),
+        )
+
+        assert [(row["router_name"], row["real_grade"], row["shadow_grade"]) for row in _attempt_rows(prisma)] == [
+            ("my-router", 3, 4),
+            ("alt-router", 3, 2),
+        ]
+
+    @pytest.mark.parametrize("rubric", [True, False], ids=["rubric", "preference"])
+    async def test_a_failed_judge_call_records_only_what_the_job_may_persist(
+        self, rubric: bool, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A provider error can quote the request it rejected. A rubric row keeps only the
+        exception type and status; a preference row keeps the message exactly as before."""
+        import litellm as litellm_module
+        from litellm.exceptions import BadRequestError
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.007)
+        provider_error: Final = BadRequestError(
+            message=f"rejected prompt containing {RUBRIC} and real answer",
+            model="judge-model",
+            llm_provider="openai",
+        )
+        router: Final = _router()
+        arms: Final = router.acompletion.side_effect
+
+        async def acompletion(**kwargs: object) -> object:
+            metadata: Final = kwargs["metadata"]
+            if isinstance(metadata, Mapping) and metadata.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == (
+                SHADOW_EVAL_JUDGE_CALL_ORIGIN
+            ):
+                raise provider_error
+            return await arms(**kwargs)
+
+        router.acompletion = MagicMock(side_effect=acompletion)
+        prisma: Final = _prisma()
+
+        await _sample_once(_logger(router=router, prisma=prisma, real_is_a=True), _rubric_job() if rubric else _job())
+
+        (row,) = _attempt_rows(prisma)
+        expected_error: Final = (
+            "rubric judge call failed; type=BadRequestError, status=400"
+            if rubric
+            else f"judge call failed: {provider_error}"[:_MAX_ERROR_CHARS]
+        )
+        assert (row["outcome"], row["error"], row["confidence"]) == ("error", expected_error, None)
+        assert (row["judge_cost"], row["shadow_cost"]) == (0.0, 0.007)
+        assert "real_grade" not in row and "shadow_grade" not in row
+
+    @pytest.mark.parametrize(("enabled", "sampled"), [(True, ["job-plain", "job-rubric"]), (False, ["job-plain"])])
+    async def test_a_rubric_job_samples_only_while_rubric_grading_is_enabled(self, enabled: bool, sampled: list[str]):
+        prisma = _prisma()
+        logger = _logger(
+            router=_router(judge_json=_rubric_reply(4, 4)),
+            prisma=prisma,
+            jobs=(_job(id="job-plain"), _rubric_job(id="job-rubric")),
+            real_is_a=True,
+            rubric_enabled=enabled,
+        )
+
+        await _hook(logger, _success_kwargs())
+
+        assert sorted(row["job_id"] for row in _attempt_rows(prisma)) == sampled
+        assert logger._test_funnel == []
+
+    async def test_a_rubric_row_this_worker_cannot_grade_is_dropped_not_run_as_preference_only(self):
+        records = [
+            _job_record(_job(id="job-plain")),
+            _job_record(_rubric_job(id="job-rubric")),
+            _job_record(_job(id="job-newer-contract"), rubric=RUBRIC, rubric_version=SHADOW_EVAL_RUBRIC_VERSION + 1),
+            _job_record(_job(id="job-no-version"), rubric=RUBRIC),
+            _job_record(_job(id="job-no-rubric"), rubric_version=SHADOW_EVAL_RUBRIC_VERSION),
+        ]
+        logger = ShadowEvalLogger(
+            router_provider=lambda: None,
+            prisma_provider=lambda: _prisma(jobs=records),
+            jobs_cache=InMemoryCache(max_size_in_memory=4, default_ttl=60),
+        )
+
+        jobs = (await logger._active_jobs())[("key", "key-hash")]
+
+        assert {job.id: job.rubric for job in jobs} == {"job-plain": None, "job-rubric": RUBRIC}
+
+
+def test_the_rubric_response_format_demands_both_grades_on_the_fixed_scale():
+    schema = RUBRIC_JUDGE_RESPONSE_FORMAT["json_schema"]["schema"]
+    assert schema["required"] == ["preference", "confidence", "grade_a", "grade_b"]
+    assert schema["properties"]["grade_a"]["enum"] == [1, 2, 3, 4, 5]
+    assert schema["properties"]["grade_b"]["enum"] == [1, 2, 3, 4, 5]
+
+
+@pytest.mark.parametrize(("value", "enabled"), [(None, False), ("false", False), ("yes", False), ("true", True)])
+def test_rubric_grading_is_off_unless_the_env_var_turns_it_on(
+    value: str | None, enabled: bool, monkeypatch: pytest.MonkeyPatch
+):
+    if value is None:
+        monkeypatch.delenv(SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR, value)
+
+    assert is_shadow_eval_rubric_enabled() is enabled

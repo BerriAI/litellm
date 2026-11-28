@@ -5,7 +5,10 @@ from typing import TYPE_CHECKING, Final, Literal
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
 
-from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.llms.bedrock.common_utils import (
+    bedrock_control_plane_base_url,
+    configured_bedrock_control_plane_endpoint,
+)
 from litellm.types.llms.bedrock import AwsAuthParams, AwsSessionTag
 from litellm.types.utils import LiteLLMBatch
 
@@ -155,11 +158,15 @@ class BedrockBatchesHandler:
             aws_external_id=aws_external_id,
             aws_session_tags=aws_session_tags,
         )
-        creds: Final = BedrockBatchesConfig().resolve_credentials(auth_params, region)
+        creds: Final = BedrockBatchesConfig().resolve_credentials(auth_params, region, kwargs)
+        control_plane_endpoint: Final = configured_bedrock_control_plane_endpoint(
+            kwargs.get("aws_bedrock_control_plane_endpoint")
+        )
 
         client: Final = boto3.client(
             "bedrock",
             region_name=region,
+            endpoint_url=control_plane_endpoint,
             aws_access_key_id=creds.access_key,
             aws_secret_access_key=creds.secret_key,
             aws_session_token=creds.token,
@@ -167,11 +174,13 @@ class BedrockBatchesHandler:
         )
 
         def job_status() -> "LiteLLMBatch":
+            auth_kwargs: Final[Mapping[str, object]] = dict(auth_params.model_dump())
             return BedrockBatchesHandler.handle_model_invocation_job_status(
                 batch_id=batch_id,
                 aws_region_name=region,
                 logging_obj=logging_obj,
-                **auth_params.model_dump(),
+                aws_bedrock_control_plane_endpoint=control_plane_endpoint,
+                **auth_kwargs,
             )
 
         try:
@@ -187,7 +196,9 @@ class BedrockBatchesHandler:
         return job_status()
 
     @staticmethod
-    def handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
+    def handle_async_invoke_status(
+        batch_id: str, aws_region_name: str, logging_obj: "LiteLLMLoggingObj | None" = None, **kwargs: object
+    ) -> "LiteLLMBatch":
         """
         Handle async invoke status check for AWS Bedrock.
 
@@ -269,8 +280,8 @@ class BedrockBatchesHandler:
     def handle_model_invocation_job_status(
         batch_id: str,
         aws_region_name: str | None = None,
-        logging_obj=None,
-        **kwargs,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
+        **kwargs: object,
     ) -> "LiteLLMBatch":
         """
         Handle ``GetModelInvocationJob`` status check for AWS Bedrock bulk batch
@@ -294,7 +305,10 @@ class BedrockBatchesHandler:
                 ``aws_session_token``, ``aws_profile_name``,
                 ``aws_role_name``, ``aws_session_name``,
                 ``aws_web_identity_token``, ``aws_sts_endpoint``,
-                ``aws_external_id``, ``aws_session_tags``). Unknown keys are ignored.
+                ``aws_external_id``, ``aws_session_tags``), plus
+                ``aws_bedrock_control_plane_endpoint`` to send the call to a VPC
+                endpoint or gateway instead of the regional ``bedrock`` host.
+                Unknown keys are ignored.
 
         Returns:
             ``LiteLLMBatch`` shaped like an OpenAI Batch resource.
@@ -315,13 +329,20 @@ class BedrockBatchesHandler:
         # provider uses, so model_list / env / role-assumption configs are
         # honored. We instantiate BedrockBatchesConfig (which extends
         # BaseAWSLLM) lazily to avoid a circular import at module load.
-        from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
+        from litellm.llms.bedrock.batches.transformation import (
+            BedrockBatchesConfig,
+            openai_endpoint_for_bedrock_job_model,
+        )
 
-        creds: Final = BedrockBatchesConfig().resolve_credentials(AwsAuthParams.model_validate(kwargs), region)
+        creds: Final = BedrockBatchesConfig().resolve_credentials(AwsAuthParams.model_validate(kwargs), region, kwargs)
+        control_plane_endpoint: Final = configured_bedrock_control_plane_endpoint(
+            kwargs.get("aws_bedrock_control_plane_endpoint")
+        )
 
         client: Final = boto3.client(
             "bedrock",
             region_name=region,
+            endpoint_url=control_plane_endpoint,
             aws_access_key_id=creds.access_key,
             aws_secret_access_key=creds.secret_key,
             aws_session_token=creds.token,
@@ -334,14 +355,13 @@ class BedrockBatchesHandler:
             # `GetModelInvocationJob` accepts either form, but only the bare id
             # produces a sensible-looking URL in logs.
             url_path_id: Final = _extract_job_id_from_arn(batch_id) or batch_id
+            control_plane_base: Final = bedrock_control_plane_base_url(control_plane_endpoint, region)
             logging_obj.pre_call(
                 input=batch_id,
                 api_key="",
                 additional_args={
                     "complete_input_dict": {"jobIdentifier": batch_id},
-                    "api_base": (
-                        f"https://bedrock.{region}.{get_aws_dns_suffix(region)}/model-invocation-job/{url_path_id}"
-                    ),
+                    "api_base": f"{control_plane_base}/model-invocation-job/{url_path_id}",
                 },
             )
 
@@ -404,7 +424,7 @@ class BedrockBatchesHandler:
             request_counts=_record_counts_from_response(response),
             metadata=openai_batch_metadata,
             completion_window="24h",
-            endpoint="/v1/chat/completions",
+            endpoint=openai_endpoint_for_bedrock_job_model(response.get("modelId")),
             input_file_id=input_uri,
             output_file_id=output_file_uri if openai_status == "completed" else None,
         )

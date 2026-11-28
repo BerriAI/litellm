@@ -10,27 +10,134 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
       BedrockMantleAuthMixin in common_utils.
 """
 
-from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from collections.abc import AsyncIterator, Iterator, Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils import model_cost_table
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import with_sanitized_schema_at
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
+    drop_schema_keywords_gemma_4_rejects,
+    mantle_supports_all_json_schema_keywords,
+    mantle_url_region,
+    resolve_mantle_region,
+    with_values_gemma_4_accepts,
 )
-from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.llms.mistral.common_utils import with_mistral_tool_call_ids
+from litellm.llms.openai.chat.gpt_reasoning_transformation import get_effort_level, is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import ModelResponse
 
 from ...base_llm.chat.transformation import BaseLLMException
 from ...bedrock.common_utils import BedrockError
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import mantle_base_segment, split_mantle_region_prefix
+
+if TYPE_CHECKING:
+    from litellm.llms.openai.chat.gpt_transformation import (
+        OpenAIChatCompletionStreamingHandler,
+    )
+
+
+def _with_chat_reasoning_effort(non_default_params: Mapping[str, object]) -> Mapping[str, object]:
+    """Chat Completions takes ``reasoning_effort`` as a level, so a Responses-shaped ``{"effort", "summary"}``
+    passes only its effort, the way the OpenAI GPT-5 chat config reads it."""
+    reasoning_effort: Final = non_default_params.get("reasoning_effort")
+    if not isinstance(reasoning_effort, dict):
+        return non_default_params
+    effort: Final = get_effort_level(reasoning_effort)
+    rest: Final = {key: value for key, value in non_default_params.items() if key != "reasoning_effort"}
+    return rest if effort is None else {**rest, "reasoning_effort": effort}
+
+
+def _unsupported_chat_values(non_default_params: Mapping[str, object]) -> tuple[str, ...]:
+    n: Final = non_default_params.get("n")
+    reasoning_effort: Final = non_default_params.get("reasoning_effort")
+    summary: Final = reasoning_effort.get("summary") if isinstance(reasoning_effort, Mapping) else None
+    return tuple(
+        value
+        for value, unsupported in (
+            (f"n={n}", isinstance(n, int) and n > 1),
+            (f"reasoning summary {summary}", summary is not None),
+        )
+        if unsupported
+    )
+
+
+def _drops_params(litellm_params: Mapping[str, object]) -> bool:
+    return litellm.drop_params is True or litellm_params.get("drop_params") is True
+
+
+def _chat_request_params(optional_params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
+    unsupported: Final = _unsupported_chat_values(optional_params)
+    if unsupported and not drop_params:
+        raise UnsupportedParamsError(
+            message=f"Bedrock Mantle Chat Completions does not support {', '.join(unsupported)}. To drop unsupported "
+            "openai params from the call, set `litellm.drop_params = True`",
+            llm_provider="bedrock_mantle",
+            status_code=400,
+        )
+    servable: Final = _with_chat_reasoning_effort(optional_params)
+    n: Final = servable.get("n")
+    return MappingProxyType(
+        {key: value for key, value in servable.items() if not (key == "n" and isinstance(n, int) and n > 1)}
+    )
+
+
+_REQUEST_BODY: Final = TypeAdapter(dict[str, object])
+_JSON_ARRAY: Final = TypeAdapter(list[object])
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
+
+_CHAT_SCHEMA_PATHS: Final = MappingProxyType(
+    {
+        "tools": ("function", "parameters"),
+        "functions": ("parameters",),
+        "response_format": ("json_schema", "schema"),
+    }
+)
+
+
+def _chat_entry_gemma_4_accepts(entry: object, path: tuple[str, ...]) -> object:
+    if not isinstance(entry, dict):
+        return entry
+    return with_sanitized_schema_at(_JSON_OBJECT.validate_python(entry), path, drop_schema_keywords_gemma_4_rejects)
+
+
+def _chat_value_gemma_4_accepts(key: str, value: object) -> object:
+    path: Final = _CHAT_SCHEMA_PATHS.get(key)
+    if path is None:
+        return value
+    if isinstance(value, list):
+        return [_chat_entry_gemma_4_accepts(entry, path) for entry in _JSON_ARRAY.validate_python(value)]
+    return _chat_entry_gemma_4_accepts(value, path)
+
+
+def _chat_request_region(litellm_params: Mapping[str, object]) -> str:
+    api_base: Final = litellm_params.get("api_base")
+    if isinstance(api_base, str) and api_base:
+        return mantle_url_region(api_base, litellm_params)
+    return resolve_mantle_region(litellm_params)
+
+
+def _with_schemas_model_accepts(
+    params: Mapping[str, object], model: str, litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    if mantle_supports_all_json_schema_keywords(
+        model, _chat_request_region(litellm_params), litellm_params, model_cost_table.published()
+    ):
+        return params
+    return with_values_gemma_4_accepts(params, model, _chat_value_gemma_4_accepts)
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -94,14 +201,14 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         headers = super().validate_environment(
             headers=headers,
             model=model,
@@ -116,7 +223,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             headers["OpenAI-Project"] = project_id
         return headers
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         base_params: Final = super().get_supported_openai_params(model)
         extra_params: Final = tuple(
             param
@@ -152,6 +259,40 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             if param != "max_tokens"
         }
 
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        optional_params: dict[str, object],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        litellm_params: dict[str, object],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        headers: dict[str, str],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+    ) -> dict[str, object]:  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        request_params: Final = dict(_chat_request_params(optional_params, _drops_params(litellm_params)))
+        sent_messages: Final = (
+            [with_mistral_tool_call_ids(message) for message in messages]
+            if BaseAWSLLM.get_bedrock_invoke_provider(model) == "mistral"
+            else messages
+        )
+        request: Final = _REQUEST_BODY.validate_python(
+            super().transform_request(model, sent_messages, request_params, litellm_params, headers)
+        )
+        return dict(_with_schemas_model_accepts(request, model, litellm_params))
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return _with_schemas_model_accepts(
+            _chat_request_params(
+                super().transform_extra_body(extra_body, request, model, litellm_params), _drops_params(litellm_params)
+            ),
+            model,
+            litellm_params,
+        )
+
     def _supports_reasoning(self, model: str) -> bool:
         try:
             return litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
@@ -161,10 +302,10 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Iterator[str] | AsyncIterator[str] | Any,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "OpenAIChatCompletionStreamingHandler":
         from litellm.llms.openai.chat.gpt_transformation import (
             OpenAIChatCompletionStreamingHandler,
         )

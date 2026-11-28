@@ -97,11 +97,9 @@ class TestMigrationStartup:
             with containers.start(
                 database, (COMPLETE,), environment={"LITELLM_MIGRATION_LOCK_TIMEOUT": "12"}
             ) as replica:
-                until(
-                    "a replica holding the coordinator lock while Prisma's lock is held",
-                    lambda: bool(database.holders(COORDINATOR_LOCK)),
-                )
-                failed((replica,), "Timed out waiting for Prisma's lock")
+                until("Prisma lock contention", lambda: "Waiting for the Prisma migration lock" in replica.logs())
+                failed((replica,), "Timed out waiting for another Prisma migration")
+                assert database.holders(COORDINATOR_LOCK) == ()
                 assert database.history() == history
                 assert not database.exists("migration_effect")
         with containers.start(database, (COMPLETE,)) as restarted:

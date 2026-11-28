@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shlex
 import threading
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -19,6 +20,7 @@ from integration._support.client import Gateway, eventually, object_value, strin
 from integration._support.process import owned_proxy
 from integration._support.redis_process import owned_redis
 from integration._support.wire import Reply, Request, wire_server
+from litellm.constants import DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
 from redis.exceptions import TimeoutError as RedisTimeoutError
@@ -217,11 +219,12 @@ def test_proxy_usage_routing_reads_cooldown_tpm_then_rpm_from_redis(
                     lambda registered: registered == frozenset(deployment_ids),
                     seconds=15,
                 )
+                cooldown_read_throttle_ends: Final = time.monotonic() + DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS
                 wire.drain()
                 eventually(
-                    lambda: datetime.now(UTC),
-                    lambda current: current.second < 40,
-                    seconds=65,
+                    lambda: (datetime.now(UTC), time.monotonic()),
+                    lambda clock: clock[0].second < 40 and clock[1] >= cooldown_read_throttle_ends,
+                    seconds=65 + DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS,
                 )
                 minute: Final = datetime.now(UTC).strftime("%H-%M")
                 markers: Final = tuple(f"{run_id}-{index}" for index in range(3))
@@ -256,18 +259,18 @@ def test_proxy_usage_routing_reads_cooldown_tpm_then_rpm_from_redis(
                 observed_bodies: Final = tuple(_request_object(request.body) for request in received)
                 expected_bodies: Final = tuple(_expected_wire_body(endpoint, marker) for marker in markers[:2])
                 assert observed_bodies == expected_bodies, observed_bodies
-                expected_mget: Final = (
+                cooldown_mget: Final = (
                     "MGET",
-                    f"deployment:{deployment_ids[0]}:cooldown",
-                    f"deployment:{deployment_ids[1]}:cooldown",
-                    f"{deployment_ids[0]}:openai/{OPENAI_MODEL}:tpm:{minute}",
-                    f"{deployment_ids[1]}:openai/{OPENAI_MODEL}:tpm:{minute}",
-                    *(
-                        f"{deployment_id}:openai/{OPENAI_MODEL}:rpm:{minute}"
-                        for deployment_id in deployment_ids
-                    ),
+                    *(f"deployment:{deployment_id}:cooldown" for deployment_id in deployment_ids),
+                )
+                usage_mget: Final = (
+                    "MGET",
+                    *(f"{deployment_id}:openai/{OPENAI_MODEL}:tpm:{minute}" for deployment_id in deployment_ids),
+                    *(f"{deployment_id}:openai/{OPENAI_MODEL}:rpm:{minute}" for deployment_id in deployment_ids),
                 )
                 mgets: Final = _drain_mgets(commands)
-                assert any(arguments == expected_mget for _, arguments in mgets), mgets
+                mget_arguments: Final = tuple(arguments for _, arguments in mgets)
+                assert cooldown_mget in mget_arguments, mgets
+                assert usage_mget in mget_arguments, mgets
                 raw_mgets: Final = tuple(line for line, _ in mgets)
                 print(f"proxy {endpoint} MGETs: {raw_mgets}")

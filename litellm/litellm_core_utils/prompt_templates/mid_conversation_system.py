@@ -19,9 +19,10 @@ byte-identical prefix and preserved thinking blocks keep their binding.
 
 Models without the flag reject the role inside ``messages``. Their system messages
 become user turns in place, prefixed with an operator note so the model can tell
-the instruction apart from the user's own words. A run caught between a tool call
-and its result moves to just after the result so the ``tool_result`` block stays
-first in the merged user turn.
+the instruction apart from the user's own words. A run caught among one tool call
+turn's results moves to just after the last of them, so every ``tool_result``
+block stays ahead of it in the merged user turn and Gemini gets all of the turn's
+function responses in one content.
 
 Every transformation here is a pure function of the message sequence: turn N's
 output stays a prefix of turn N+1's output, which is what keeps the provider-side
@@ -30,15 +31,20 @@ Anthropic wire shape is built later by ``anthropic_messages_pt``.
 """
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from itertools import chain, dropwhile, groupby, takewhile
+from itertools import accumulate, chain, dropwhile, groupby, takewhile
+from operator import itemgetter
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, TypeVar
 
+from pydantic import ValidationError
+
+from litellm.litellm_core_utils.core_helpers import spread
 from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_TOOL_SEARCH_TOOL_NAMES,
     AnthropicMessagesSystemMessageParam,
     AnthropicSystemMessageContent,
+    AnthropicToolSearchToolResultBlock,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -48,7 +54,7 @@ from litellm.types.llms.openai import (
     ChatCompletionUserMessage,
 )
 
-from .common_utils import is_unsignable_thinking_block
+from .common_utils import has_blank_redacted_data, is_unsignable_thinking_block
 
 CONVERTED_SYSTEM_NOTE: Final = (
     "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
@@ -56,13 +62,14 @@ CONVERTED_SYSTEM_NOTE: Final = (
 
 _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
+_TOOL_RESULT_SEGMENT_KINDS: Final = frozenset({"system", "tool"})
 _NO_IDS: Final[frozenset[str]] = frozenset()
 _RENDERED_PART_TYPES: Final = frozenset({"text", "image_url", "document", "file"})
 _RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 _MessageKind: TypeAlias = Literal["system", "tool", "user", "other"]
-_Message: Final = TypeVar("_Message")
+_Message = TypeVar("_Message")
 _TextPart: TypeAlias = tuple[str, ChatCompletionCachedContent | None]
 
 
@@ -82,6 +89,11 @@ def message_field(message: object, key: str) -> object:
     """
     mapping: Final = _as_mapping(message)
     return mapping.get(key) if mapping is not None else getattr(message, key, None)
+
+
+def string_field(message: object, key: str) -> str | None:
+    value: Final = message_field(message, key)
+    return value if isinstance(value, str) else None
 
 
 def is_system_message(message: object) -> bool:
@@ -213,28 +225,23 @@ def _converted_user_turns(run: Sequence[object]) -> tuple[ChatCompletionUserMess
     return tuple(system_message_as_user(message) for message in run if _text_parts(message))
 
 
-def _runs(messages: Sequence[AllMessageValues]) -> tuple[tuple[_MessageKind, tuple[AllMessageValues, ...]], ...]:
-    return tuple((kind, tuple(group)) for kind, group in groupby(messages, key=_kind))
+def _in_tool_result_segment(message: object) -> bool:
+    return _kind(message) in _TOOL_RESULT_SEGMENT_KINDS
+
+
+def _tool_results_first(segment: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    reminders: Final = tuple(message for message in segment if is_system_message(message))
+    return (*(message for message in segment if not is_system_message(message)), *_converted_user_turns(reminders))
 
 
 def _converted_for_unflagged_model(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
     """Convert every system message to a user turn in place.
 
-    A system run whose follower is a tool message is emitted after that tool run:
-    ``tool_result`` blocks have to open the merged user turn.
+    System messages mixed into one tool call turn's results are emitted after the last of those
+    results: every ``tool_result`` block has to open the merged user turn.
     """
-    runs: Final = _runs(messages)
-
-    def emit(index: int) -> tuple[AllMessageValues, ...]:
-        kind, run = runs[index]
-        follower: Final = runs[index + 1][0] if index + 1 < len(runs) else None
-        if kind == "system":
-            return () if follower == "tool" else _converted_user_turns(run)
-        if kind == "tool" and index > 0 and runs[index - 1][0] == "system":
-            return (*run, *_converted_user_turns(runs[index - 1][1]))
-        return run
-
-    return tuple(chain.from_iterable(emit(index) for index in range(len(runs))))
+    segments: Final = (tuple(group) for _, group in groupby(messages, key=_in_tool_result_segment))
+    return tuple(chain.from_iterable(map(_tool_results_first, segments)))
 
 
 def _user_type_blocks(messages: Sequence[AllMessageValues]) -> tuple[tuple[bool, tuple[int, ...]], ...]:
@@ -259,49 +266,57 @@ def _system_runs(messages: Sequence[AllMessageValues]) -> tuple[tuple[int, ...],
     )
 
 
-def _block_containing(message_index: int, blocks: Sequence[tuple[bool, tuple[int, ...]]]) -> int:
-    return next(index for index, (_, indices) in enumerate(blocks) if message_index in indices)
+def _block_index_by_message(blocks: Sequence[tuple[bool, tuple[int, ...]]]) -> Mapping[int, int]:
+    pairs: Final = (((index, block_index) for index in indices) for block_index, (_, indices) in enumerate(blocks))
+    return MappingProxyType(dict(chain.from_iterable(pairs)))
 
 
 def _thinking_block_renders(block: object) -> bool:
     """A thinking block the converter keeps: one Anthropic can verify, so never bridged encrypted reasoning."""
-    return message_field(block, "type") in _THINKING_BLOCK_TYPES and not is_unsignable_thinking_block(block)
+    return message_field(block, "type") in _THINKING_BLOCK_TYPES and not (
+        is_unsignable_thinking_block(block) or has_blank_redacted_data(block)
+    )
 
 
 def _assistant_part_renders(part: object) -> bool:
     """A text part always renders: the converter pads empty text with a placeholder."""
     part_type: Final = message_field(part, "type")
-    if part_type == "thinking":
-        thinking: Final = message_field(part, "thinking")
-        return isinstance(thinking, str) and bool(thinking) and _thinking_block_renders(part)
+    if part_type in _THINKING_BLOCK_TYPES:
+        return _thinking_block_renders(part)
     return part_type in _RENDERED_ASSISTANT_PART_TYPES or (
         isinstance(part_type, str) and part_type.endswith("_tool_result")
     )
 
 
-def _separate_thinking_blocks_render(message: object, parts: Sequence[object]) -> bool:
-    """``thinking_blocks`` reach the wire only when no inline thinking part claims the slot.
-
-    The converter skips the separate blocks as soon as the content list carries a
-    ``thinking`` or ``redacted_thinking`` part, whether or not that part itself renders.
-    """
-    if any(message_field(part, "type") in _THINKING_BLOCK_TYPES for part in parts):
-        return False
+def _separate_thinking_blocks_render(message: object) -> bool:
     return any(_thinking_block_renders(block) for block in parts_of(message_field(message, "thinking_blocks")))
+
+
+def is_anthropic_server_tool_use(tool_id: str) -> bool:
+    return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX)
 
 
 def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:
     return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name in ANTHROPIC_TOOL_SEARCH_TOOL_NAMES
 
 
+def anthropic_tool_search_result(block: object) -> AnthropicToolSearchToolResultBlock | None:
+    if message_field(block, "type") != "tool_search_tool_result":
+        return None
+    try:
+        return AnthropicToolSearchToolResultBlock.model_validate(block)
+    except ValidationError:
+        return None
+
+
 def find_anthropic_server_tool_result(
     tool_id: str,
-    web_search_results: Sequence[object] | None,
-    tool_results: Sequence[object] | None,
+    web_search_results: object,
+    tool_results: object,
 ) -> dict[str, object] | None:
     if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
         return None
-    candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
+    candidates: Final = (*spread(web_search_results or ()), *spread(tool_results or ()))
     return next(
         (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
         None,
@@ -403,7 +418,7 @@ def _assistant_renders(message: object, answered: frozenset[str]) -> bool:
     parts: Final = parts_of(content)
     return (
         any(_assistant_part_renders(part) for part in parts)
-        or _separate_thinking_blocks_render(message, parts)
+        or _separate_thinking_blocks_render(message)
         or _tool_calls_render(message, answered)
         or bool(message_field(message, "function_call"))
         or bool(message_field(message_field(message, "provider_specific_fields"), "compaction_blocks"))
@@ -413,10 +428,11 @@ def _assistant_renders(message: object, answered: frozenset[str]) -> bool:
 def _renders(message: object, answered: frozenset[str]) -> bool:
     """Whether ``anthropic_messages_pt`` puts a block on the wire for this message.
 
-    A tool message always becomes a ``tool_result`` and a user message with string
-    content always becomes a text block (empty text gets a placeholder). A user list
-    renders only through parts of a type the converter emits; ``None``, an empty list,
-    and a list of other parts vanish. Assistant messages follow ``_assistant_renders``.
+    A tool message always becomes a ``tool_result``, and a user message with string or
+    missing content (``None``, an empty list) always puts its turn on the wire, an empty
+    turn getting a placeholder. A user list renders only through parts of a type the
+    converter emits, so a list of only other parts vanishes. Assistant messages follow
+    ``_assistant_renders``.
     """
     role: Final = message_field(message, "role")
     if role in _TOOL_ROLES:
@@ -424,8 +440,10 @@ def _renders(message: object, answered: frozenset[str]) -> bool:
     if role == "assistant":
         return _assistant_renders(message, answered)
     content: Final = message_field(message, "content")
-    return isinstance(content, str) or any(
-        message_field(part, "type") in _RENDERED_PART_TYPES for part in parts_of(content)
+    return (
+        isinstance(content, str)
+        or not content
+        or any(message_field(part, "type") in _RENDERED_PART_TYPES for part in parts_of(content))
     )
 
 
@@ -434,37 +452,30 @@ def _rendered_indices(messages: Sequence[object]) -> frozenset[int]:
     return frozenset(index for index, message in enumerate(messages) if _renders(message, answered.get(index, _NO_IDS)))
 
 
-def _rendered_block(
-    message_index: int,
-    rendered: frozenset[int],
-    blocks: Sequence[tuple[bool, tuple[int, ...]]],
-) -> int | None:
-    block_index: Final = _block_containing(message_index, blocks)
-    _, indices = blocks[block_index]
-    return block_index if not rendered.isdisjoint(indices) else None
+def _anchorable_blocks(rendered: frozenset[int], blocks: Sequence[tuple[bool, tuple[int, ...]]]) -> tuple[bool, ...]:
+    """Whether a system message behind each block lands on the wire after a user turn and before an assistant turn.
 
-
-def _system_may_follow(
-    block_index: int,
-    rendered: frozenset[int],
-    blocks: Sequence[tuple[bool, tuple[int, ...]]],
-) -> bool:
-    """Whether a system message behind this block precedes an assistant turn or ends the array on the wire.
-
-    Blocks alternate between user-type and assistant, so the check is whether the
-    first later block that puts anything on the wire is an assistant block.
+    The block has to put something on the wire. Blocks alternate between user-type
+    and assistant, so the first later block that puts anything on the wire has to be
+    an assistant block, or there is none and the system message ends the array.
     """
-    return next(
-        (not is_user for is_user, indices in blocks[block_index + 1 :] if not rendered.isdisjoint(indices)),
-        True,
+
+    def may_follow_from(may_follow_later: bool, block: tuple[bool, tuple[int, ...]]) -> bool:
+        is_user, indices = block
+        return may_follow_later if rendered.isdisjoint(indices) else not is_user
+
+    may_follow_from_block: Final = tuple(reversed(tuple(accumulate(reversed(blocks), may_follow_from, initial=True))))
+    return tuple(
+        not rendered.isdisjoint(indices) and may_follow_from_block[block_index + 1]
+        for block_index, (_, indices) in enumerate(blocks)
     )
 
 
 def _anchor_block(
     run: Sequence[int],
     messages: Sequence[AllMessageValues],
-    rendered: frozenset[int],
-    blocks: Sequence[tuple[bool, tuple[int, ...]]],
+    block_index_by_message: Mapping[int, int],
+    anchorable: Sequence[bool],
 ) -> int | None:
     """The user-type block a system run must follow, or ``None`` when it converts in place.
 
@@ -481,10 +492,17 @@ def _anchor_block(
     neighbour: Final = previous if _is_user_type(messages[previous]) else run[-1] + 1
     if neighbour >= len(messages) or not _is_user_type(messages[neighbour]):
         return None
-    block_index: Final = _rendered_block(neighbour, rendered, blocks)
-    if block_index is None or not _system_may_follow(block_index, rendered, blocks):
-        return None
-    return block_index
+    block_index: Final = block_index_by_message[neighbour]
+    return block_index if anchorable[block_index] else None
+
+
+def _runs_by_anchor(
+    anchors: Sequence[tuple[tuple[int, ...], int | None]],
+) -> Mapping[int, tuple[tuple[int, ...], ...]]:
+    anchored: Final = tuple(sorted(((anchor, run) for run, anchor in anchors if anchor is not None), key=itemgetter(0)))
+    return MappingProxyType(
+        {anchor: tuple(run for _, run in group) for anchor, group in groupby(anchored, key=lambda entry: entry[0])}
+    )
 
 
 def _placed_for_flagged_model(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
@@ -497,19 +515,22 @@ def _placed_for_flagged_model(messages: Sequence[AllMessageValues]) -> tuple[All
     move it. Runs that share a user turn merge into one system message.
     """
     blocks: Final = _user_type_blocks(messages)
-    rendered: Final = _rendered_indices(messages)
-    anchors: Final = tuple((run, _anchor_block(run, messages, rendered, blocks)) for run in _system_runs(messages))
+    block_index_by_message: Final = _block_index_by_message(blocks)
+    anchorable: Final = _anchorable_blocks(_rendered_indices(messages), blocks)
+    anchors: Final = tuple(
+        (run, _anchor_block(run, messages, block_index_by_message, anchorable)) for run in _system_runs(messages)
+    )
+    runs_by_anchor: Final = _runs_by_anchor(anchors)
+    converted_run_after: Final = MappingProxyType({run[0] - 1: run for run, anchor in anchors if anchor is None})
 
     def messages_of(run: tuple[int, ...]) -> tuple[AllMessageValues, ...]:
         return tuple(messages[index] for index in run)
 
     def anchored_to(block_index: int) -> tuple[AllMessageValues, ...]:
-        anchored_runs: Final = tuple(run for run, anchor in anchors if anchor == block_index)
-        return tuple(chain.from_iterable(map(messages_of, anchored_runs)))
+        return tuple(chain.from_iterable(map(messages_of, runs_by_anchor.get(block_index, ()))))
 
     def converted_after(message_index: int) -> tuple[ChatCompletionUserMessage, ...]:
-        following_runs: Final = tuple(run for run, anchor in anchors if anchor is None and run[0] == message_index + 1)
-        return tuple(chain.from_iterable(_converted_user_turns(messages_of(run)) for run in following_runs))
+        return _converted_user_turns(messages_of(converted_run_after.get(message_index, ())))
 
     def emit(block_index: int) -> Iterator[AllMessageValues]:
         is_user, indices = blocks[block_index]

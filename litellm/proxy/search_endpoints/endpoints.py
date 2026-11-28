@@ -1,5 +1,6 @@
 #### Search Endpoints #####
 
+from collections.abc import Mapping
 from typing import Final
 
 import orjson
@@ -153,16 +154,17 @@ async def search(
         data["model"] = data["search_tool_name"]
         search_tool_name_value: Final = data["search_tool_name"]
 
-        if llm_router is not None and hasattr(llm_router, "search_tools"):
+        if llm_router is not None and llm_router.settings().is_set("search_tools"):
+            router_search_tools: Final = llm_router.settings().search_tools
             verbose_proxy_logger.debug(
                 "Search endpoint - Looking for search_tool_name: %s. Available search tools in router: %s. Total search tools: %s",
                 search_tool_name_value,
-                [tool.get("search_tool_name") for tool in llm_router.search_tools],
-                len(llm_router.search_tools),
+                [tool.get("search_tool_name") for tool in router_search_tools],
+                len(router_search_tools),
             )
 
             matching_tools: Final = [
-                tool for tool in llm_router.search_tools if tool.get("search_tool_name") == search_tool_name_value
+                tool for tool in router_search_tools if tool.get("search_tool_name") == search_tool_name_value
             ]
 
             if matching_tools:
@@ -262,10 +264,10 @@ async def list_search_tools(
     from litellm.proxy.proxy_server import llm_router
 
     try:
-        search_tools_list: Final = []
+        search_tools_list: Final[list[Mapping[str, object]]] = []
 
-        if llm_router is not None and hasattr(llm_router, "search_tools"):
-            for tool in llm_router.search_tools:
+        if llm_router is not None and llm_router.settings().is_set("search_tools"):
+            for tool in llm_router.settings().search_tools:
                 tool_info = {
                     "search_tool_name": tool.get("search_tool_name"),
                     "search_provider": tool.get("litellm_params", {}).get("search_provider"),

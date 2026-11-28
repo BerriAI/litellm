@@ -44,9 +44,28 @@ _SCRIPT: Final = textwrap.dedent(
     def sync_completion():
         return litellm.completion(model=model, messages=messages, num_retries=0)
 
+    def server_tool_call_turns(marked):
+        call = {"id": "srvtoolu_01DeviceLogin", "type": "function", "function": {"name": "tool_search_tool_bm25", "arguments": "{}"}}
+        mark = {"cache_control": {"type": "ephemeral"}} if marked else {}
+        result = {"type": "tool_search_tool_result", "tool_use_id": call["id"], "content": {"type": "tool_search_tool_search_result", "tool_references": []}}
+        return [
+            {"role": "system", "content": "Answer in one sentence."},
+            *messages,
+            {"role": "assistant", "content": "", "tool_calls": [{**call, **mark}], "provider_specific_fields": {"tool_results": [result]}},
+            {"role": "tool", "tool_call_id": call["id"], "content": "found get_weather"},
+            {"role": "user", "content": "go on"},
+        ]
+
     def run():
         if variant == "completion":
             return sync_completion()
+        if variant in ("marked-server-tool-call", "unmarked-server-tool-call"):
+            return litellm.completion(
+                model=model,
+                messages=server_tool_call_turns(variant == "marked-server-tool-call"),
+                num_retries=0,
+                cache_control_injection_points=[{"location": "message", "role": "system"}, {"location": "message", "index": -1}],
+            )
         if variant == "responses":
             return litellm.responses(model=model, input=f"Reply to marker-{marker}", num_retries=0)
         if variant == "acompletion":
@@ -123,7 +142,9 @@ class _Bench:
     chatgpt_dir: Path
     copilot_dir: Path
 
-    def run(self, variant: str, provider: Provider, marker: str) -> _Outcome:
+    def run(
+        self, variant: str, provider: Provider, marker: str, environment: Mapping[str, str] = MappingProxyType({})
+    ) -> _Outcome:
         completed: Final = subprocess.run(
             [sys.executable, "-P", "-c", _SCRIPT, variant, _MODELS[provider], marker, _AUTHENTICATORS[provider]],
             env={
@@ -132,6 +153,7 @@ class _Bench:
                 "CHATGPT_TOKEN_DIR": str(self.chatgpt_dir),
                 "GITHUB_COPILOT_TOKEN_DIR": str(self.copilot_dir),
                 "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+                **environment,
             },
             capture_output=True,
             text=True,
@@ -165,7 +187,7 @@ def clean(bench: _Bench) -> Iterator[_Bench]:
 
 
 _FIRST_LOGIN_BEARERS: Final[Mapping[Provider, str]] = MappingProxyType(
-    {"chatgpt": dl.CHATGPT_FIRST_LOGIN, "copilot": dl.COPILOT_MINTED_KEY}
+    {"chatgpt": dl.CHATGPT_FIRST_LOGIN, "copilot": dl.COPILOT_FIRST_LOGIN_ACCESS}
 )
 
 
@@ -186,7 +208,7 @@ def test_sync_call_on_the_main_thread_keeps_the_interactive_first_login(
     assert {dl.bearer(request) for request in forwarded} == {_FIRST_LOGIN_BEARERS[provider]}, [
         (request.method, request.target) for request in forwarded
     ]
-    expected_files: Final = ("auth.json",) if provider == "chatgpt" else ("access-token", "api-key.json")
+    expected_files: Final = ("auth.json",) if provider == "chatgpt" else ("access-token",)
     assert clean.token_files() == expected_files
 
 
@@ -228,3 +250,42 @@ def test_sync_call_on_the_main_thread_fails_without_hanging_when_the_auth_host_d
     assert f"{dl.CHATGPT_AUTH_HOST if provider == 'chatgpt' else dl.GITHUB_HOST}:443" in clean.peers.auth_connections()
     assert clean.peers.api.drain() == ()
     assert clean.token_files() == ()
+
+
+def _auth_requests(peers: dl.Peers) -> list[tuple[str, str, str]]:
+    return [(request.headers.get("host", ""), request.method, request.target) for request in peers.auth.drain()]
+
+
+@pytest.mark.parametrize("provider", ("chatgpt", "copilot"))
+def test_a_marked_server_tool_call_reaches_the_auth_host_like_an_unmarked_one_when_the_login_is_denied(
+    clean: _Bench, provider: Provider
+) -> None:
+    unmarked: Final = clean.run("unmarked-server-tool-call", provider, uuid.uuid4().hex)
+    unmarked_auth: Final = _auth_requests(clean.peers)
+    marked: Final = clean.run("marked-server-tool-call", provider, uuid.uuid4().hex)
+    marked_auth: Final = _auth_requests(clean.peers)
+    assert unmarked.verdict()["ok"] is False, (unmarked.verdict(), unmarked.stderr[-3000:])
+    assert marked.verdict()["ok"] is False, (marked.verdict(), marked.stderr[-3000:])
+    assert unmarked_auth, unmarked.stderr[-3000:]
+    assert marked_auth == unmarked_auth
+    assert clean.peers.api.drain() == ()
+    assert clean.token_files() == ()
+
+
+def test_a_stored_ghe_com_login_finds_its_copilot_api_on_its_own_tenant(clean: _Bench) -> None:
+    dl.write_copilot_access(clean.copilot_dir, dl.COPILOT_GHE_ACCESS)
+    marker: Final = uuid.uuid4().hex
+    outcome: Final = clean.run(
+        "completion",
+        "copilot",
+        marker,
+        MappingProxyType({"GITHUB_COPILOT_ACCESS_TOKEN_URL": dl.GHE_ACCESS_TOKEN_URL}),
+    )
+    verdict: Final = outcome.verdict()
+    assert verdict["ok"] is True, (verdict, outcome.stderr[-3000:])
+    assert marker in str(verdict["text"]), verdict
+    assert set(clean.peers.auth_connections()) == {f"{dl.GHE_API_HOST}:443"}
+    forwarded: Final = [request for request in clean.peers.api.drain() if request.method == "POST"]
+    assert {(request.headers.get("host"), dl.bearer(request)) for request in forwarded} == {
+        (dl.GHE_COPILOT_API_HOST, dl.COPILOT_GHE_ACCESS)
+    }, [(request.headers.get("host"), request.target) for request in forwarded]

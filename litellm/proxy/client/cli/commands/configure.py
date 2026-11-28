@@ -7,13 +7,14 @@ from typing import Final
 import click
 from InquirerPy import inquirer
 
-from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .auth import CliContextObj
 from .claude_settings import (
     ClaudeSettingsError,
     UnconfigureOutcome,
     preflight_claude_settings,
+    remove_launch_settings_files,
     settings_file_owners,
     unconfigure_claude_settings,
 )
@@ -210,6 +211,8 @@ def _disconnect(target: Target, forget: bool) -> None:
     settings_path: Final = settings_path_for(target)
     state_path: Final = receipt_path_for(target, settings_path)
     profile: Final = setup_profile_path(target, settings_path)
+    if target == "claude":
+        remove_launch_settings_files(settings_path.parent)
     try:
         if not state_path.exists():
             click.echo(f"No {target} undo receipt at {state_path}; nothing to undo. Agent settings were not changed.")

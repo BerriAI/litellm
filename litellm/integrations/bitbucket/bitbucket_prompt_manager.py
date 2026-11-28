@@ -4,12 +4,13 @@ Fetches .prompt files from BitBucket repositories and provides team-based access
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from jinja2 import DictLoader, select_autoescape
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
+from litellm.litellm_core_utils.core_helpers import require_attributes
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -26,6 +27,10 @@ from litellm.types.utils import StandardCallbackDynamicParams
 from .bitbucket_client import BitBucketClient
 
 
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
 class BitBucketPromptTemplate:
     """
     Represents a prompt template loaded from BitBucket.
@@ -35,7 +40,7 @@ class BitBucketPromptTemplate:
         self,
         template_id: str,
         content: str,
-        metadata: dict[str, Any],
+        metadata: Mapping[str, object],
         model: str | None = None,
     ):
         self.template_id = template_id
@@ -44,7 +49,9 @@ class BitBucketPromptTemplate:
         self.model = model or metadata.get("model")
         self.temperature = metadata.get("temperature")
         self.max_tokens = metadata.get("max_tokens")
-        self.input_schema = metadata.get("input", {}).get("schema", {})
+        self.input_schema = require_attributes(metadata.get("input", {}), _SupportsGetWithDefault, "get").get(
+            "schema", {}
+        )
         self.optional_params = {k: v for k, v in metadata.items() if k not in ["model", "input", "content"]}
 
     def __repr__(self):
@@ -274,7 +281,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         litellm_params: dict[str, object] | None = None,
         prompt_id: str | None = None,
         prompt_variables: Mapping[str, object] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> tuple[list[AllMessageValues], dict[str, object] | None]:
         """
         Pre-call hook that processes the prompt template before making the LLM call.
@@ -329,10 +336,10 @@ class BitBucketPromptManager(CustomPromptManagement):
         Parse prompt content into a list of messages.
         Handles both simple prompts and multi-role conversations.
         """
-        messages = []
+        messages: list[dict[str, str]] = []
         lines: Final = prompt_content.strip().split("\n")
         current_role = None
-        current_content = []
+        current_content: list[str] = []
 
         for line in lines:
             line = line.strip()
@@ -393,7 +400,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         litellm_params: Mapping[str, object] | None = None,
         prompt_id: str | None = None,
         prompt_variables: Mapping[str, object] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> object:
         """
         Post-call hook for any post-processing after the LLM call.
@@ -428,7 +435,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -460,7 +467,7 @@ class BitBucketPromptManager(CustomPromptManagement):
             template_model: Final = prompt_metadata.get("model")
 
             # Extract optional parameters from metadata
-            optional_params: Final = {}
+            optional_params: Final[dict[str, object]] = {}
             for param in [
                 "temperature",
                 "max_tokens",
@@ -485,7 +492,7 @@ class BitBucketPromptManager(CustomPromptManagement):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -511,16 +518,16 @@ class BitBucketPromptManager(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Get chat completion prompt from BitBucket and return processed model, messages, and parameters.
         """
@@ -541,18 +548,18 @@ class BitBucketPromptManager(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         prompt_spec: PromptSpec | None = None,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, object]] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Async version - delegates to PromptManagementBase async implementation.
         """

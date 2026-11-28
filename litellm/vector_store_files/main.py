@@ -4,13 +4,13 @@ import asyncio
 import contextvars
 from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
 import litellm
 from litellm.constants import request_timeout
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.call_kwargs import http_client_of, logging_obj_of
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -23,7 +23,7 @@ from litellm.types.vector_store_files import (
     VectorStoreFileObject,
     VectorStoreFileUpdateRequest,
 )
-from litellm.utils import ProviderConfigManager, client
+from litellm.utils import ProviderConfigManager, client, load_credentials_from_list
 from litellm.vector_store_files.utils import VectorStoreFileRequestUtils
 
 base_llm_http_handler = BaseLLMHTTPHandler()
@@ -49,6 +49,7 @@ def _prepare_registry_credentials(
             kwargs.update(registry_credentials)
     except Exception:
         pass
+    load_credentials_from_list(kwargs)
 
 
 @client
@@ -60,10 +61,10 @@ async def acreate(
     chunking_strategy: Mapping[str, object] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileObject:
     local_vars: Final = locals()
     try:
@@ -112,15 +113,15 @@ def create(
     chunking_strategy: Mapping[str, object] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileObject | Coroutine[object, object, VectorStoreFileObject]:
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("acreate", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
@@ -139,7 +140,7 @@ def create(
         create_request: VectorStoreFileCreateRequest = VectorStoreFileRequestUtils.get_create_request_params(local_vars)
         create_request["file_id"] = file_id
 
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={
@@ -160,11 +161,11 @@ def create(
             vector_store_files_provider_config=provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
             _is_async=_is_async,
         )
         return response
@@ -188,10 +189,10 @@ async def alist(
     limit: int | None = None,
     order: str | None = None,
     extra_headers: dict[str, str] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileListResponse:
     local_vars: Final = locals()
     try:
@@ -241,15 +242,15 @@ def list(
     limit: int | None = None,
     order: str | None = None,
     extra_headers: dict[str, str] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileListResponse | Coroutine[object, object, VectorStoreFileListResponse]:
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("alist", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
@@ -267,7 +268,7 @@ def list(
         local_vars.update(kwargs)
         list_query: VectorStoreFileListQueryParams = VectorStoreFileRequestUtils.get_list_query_params(local_vars)
 
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={"vector_store_id": vector_store_id, **list_query},
@@ -285,11 +286,11 @@ def list(
             vector_store_files_provider_config=provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_query=extra_query,
             timeout=timeout or request_timeout,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
             _is_async=_is_async,
         )
         return response
@@ -311,7 +312,7 @@ async def aretrieve(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileObject:
     local_vars: Final = locals()
     try:
@@ -354,12 +355,12 @@ def retrieve(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileObject | Coroutine[object, object, VectorStoreFileObject]:
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("aretrieve", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
@@ -374,7 +375,7 @@ def retrieve(
         if provider_config is None:
             raise ValueError(f"Vector store file retrieve is not supported for {custom_llm_provider}")
 
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={
@@ -395,10 +396,10 @@ def retrieve(
             vector_store_files_provider_config=provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             timeout=timeout or request_timeout,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
             _is_async=_is_async,
         )
         return response
@@ -420,7 +421,7 @@ async def aretrieve_content(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileContentResponse:
     local_vars: Final = locals()
     try:
@@ -462,12 +463,12 @@ def retrieve_content(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileContentResponse | Coroutine[object, object, VectorStoreFileContentResponse]:
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("aretrieve_content", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
@@ -482,7 +483,7 @@ def retrieve_content(
         if provider_config is None:
             raise ValueError(f"Vector store file content retrieve is not supported for {custom_llm_provider}")
 
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={
@@ -503,10 +504,10 @@ def retrieve_content(
             vector_store_files_provider_config=provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             timeout=timeout or request_timeout,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
             _is_async=_is_async,
         )
         return response
@@ -527,10 +528,10 @@ async def aupdate(
     file_id: str,
     attributes: VectorStoreFileAttributes,
     extra_headers: dict[str, str] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileObject:
     local_vars: Final = locals()
     try:
@@ -573,15 +574,15 @@ def update(
     file_id: str,
     attributes: VectorStoreFileAttributes,
     extra_headers: dict[str, str] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileObject | Coroutine[object, object, VectorStoreFileObject]:
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("aupdate", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
@@ -600,7 +601,7 @@ def update(
         update_request: VectorStoreFileUpdateRequest = VectorStoreFileRequestUtils.get_update_request_params(local_vars)
         update_request["attributes"] = attributes
 
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={
@@ -623,11 +624,11 @@ def update(
             vector_store_files_provider_config=provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
             _is_async=_is_async,
         )
         return response
@@ -649,7 +650,7 @@ async def adelete(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileDeleteResponse:
     local_vars: Final = locals()
     try:
@@ -691,12 +692,12 @@ def delete(
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreFileDeleteResponse | Coroutine[object, object, VectorStoreFileDeleteResponse]:
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id")
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id")
         _is_async: Final = kwargs.pop("adelete", False) is True
 
         custom_llm_provider = _ensure_provider(custom_llm_provider)
@@ -711,7 +712,7 @@ def delete(
         if provider_config is None:
             raise ValueError(f"Vector store file delete is not supported for {custom_llm_provider}")
 
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={
@@ -732,10 +733,10 @@ def delete(
             vector_store_files_provider_config=provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=extra_headers,
             timeout=timeout or request_timeout,
-            client=kwargs.get("client"),
+            client=http_client_of(kwargs.get("client")),
             _is_async=_is_async,
         )
         return response

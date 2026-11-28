@@ -1,4 +1,5 @@
 import warnings
+from collections.abc import Mapping
 from enum import Enum
 from typing import Final, Literal
 
@@ -6,12 +7,23 @@ from pydantic import (
     Field,
     SerializationInfo,
     SerializerFunctionWrapHandler,
+    TypeAdapter,
     field_validator,
     model_serializer,
     model_validator,
 )
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.base import LiteLLMBaseModel
+
+_SERIALIZED: Final = TypeAdapter(object)
+
+
+def _serialized_fields(serialized: object) -> Mapping[str, object]:
+    fields: Final = as_str_mapping(serialized)
+    if fields is None:
+        raise TypeError(f"model serializer produced {type(serialized).__name__}, expected a mapping")
+    return fields
 
 
 class CacheControl(LiteLLMBaseModel):
@@ -21,11 +33,10 @@ class CacheControl(LiteLLMBaseModel):
     @model_serializer(mode="wrap")
     def _serialize(
         self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
-    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
-        result = handler(self)
-        if result.get("ttl") is None:
-            result.pop("ttl", None)
-        return result
+    ) -> dict[str, object]:  # mutable-ok: pydantic serializer contract requires bare dict return
+        fields: Final = _serialized_fields(_SERIALIZED.validate_python(handler(self)))
+        serialized: Final = {k: v for k, v in fields.items() if k != "ttl" or v is not None}
+        return serialized
 
 
 class TextContent(LiteLLMBaseModel):
@@ -36,11 +47,10 @@ class TextContent(LiteLLMBaseModel):
     @model_serializer(mode="wrap")
     def _serialize(
         self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
-    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
-        result = handler(self)
-        if result.get("cache_control") is None:
-            result.pop("cache_control", None)
-        return result
+    ) -> dict[str, object]:  # mutable-ok: pydantic serializer contract requires bare dict return
+        fields: Final = _serialized_fields(_SERIALIZED.validate_python(handler(self)))
+        serialized: Final = {k: v for k, v in fields.items() if k != "cache_control" or v is not None}
+        return serialized
 
 
 class ImageURLContent(LiteLLMBaseModel):
@@ -56,11 +66,10 @@ class ImageContent(LiteLLMBaseModel):
     @model_serializer(mode="wrap")
     def _serialize(
         self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
-    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
-        result = handler(self)
-        if result.get("cache_control") is None:
-            result.pop("cache_control", None)
-        return result
+    ) -> dict[str, object]:  # mutable-ok: pydantic serializer contract requires bare dict return
+        fields: Final = _serialized_fields(_SERIALIZED.validate_python(handler(self)))
+        serialized: Final = {k: v for k, v in fields.items() if k != "cache_control" or v is not None}
+        return serialized
 
 
 class FunctionObj(LiteLLMBaseModel):
@@ -74,13 +83,13 @@ class FunctionTool(LiteLLMBaseModel):
     parameters: dict = Field(default={"type": "object", "properties": {}})
     strict: bool = False
 
-    def model_dump(self, **kwargs: object) -> dict:
+    def model_dump(self, **kwargs: object) -> dict[str, object]:
         kwargs["exclude_unset"] = False
         return super().model_dump(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs forwarded verbatim to pydantic model_dump
 
     @field_validator("parameters", mode="before")
     @classmethod
-    def ensure_object_type(cls, v: dict) -> dict:
+    def ensure_object_type(cls, v: dict) -> dict[str, object]:
         """Ensure parameters has type='object' as required by SAP Orchestration Service."""
         if not v:
             return {"type": "object", "properties": {}}
@@ -96,7 +105,7 @@ class ChatCompletionTool(LiteLLMBaseModel):
     function: FunctionTool
     cache_control: CacheControl | None = None
 
-    def model_dump(self, **kwargs: object) -> dict:
+    def model_dump(self, **kwargs: object) -> dict[str, object]:
         kwargs["exclude_unset"] = False
         result = super().model_dump(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs forwarded verbatim to pydantic model_dump
         if result.get("cache_control") is None:

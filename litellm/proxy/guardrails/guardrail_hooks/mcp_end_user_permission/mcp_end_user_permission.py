@@ -23,7 +23,10 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.llms.openai import ChatCompletionToolParam
+    from litellm.types.proxy.guardrails.guardrail_hooks.mcp_end_user_permission import (
+        MCPEndUserPermissionGuardrailConfigModel,
+    )
 
 GUARDRAIL_NAME: Final = "mcp_end_user_permission"
 
@@ -53,7 +56,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"] = "request",
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
@@ -83,8 +86,8 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.debug("MCP guardrail: end user restricted to MCP servers: %s", allowed_mcp_servers)
 
-        filtered_tools: Final = []
-        removed_tools: Final = []
+        filtered_tools: Final[list[ChatCompletionToolParam]] = []
+        removed_tools: Final[list[str | None]] = []
 
         for tool in tools:
             tool_name = self._get_tool_name_from_definition(tool)
@@ -117,7 +120,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
 
     @staticmethod
     async def _resolve_end_user_object_permission(
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> LiteLLM_ObjectPermissionTable | None:
         """
         Resolve the end user's object_permission via the cached auth lookup.
@@ -189,7 +192,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         if not direct_mcp_servers and not mcp_access_groups:
             return None  # Both empty → no restrictions
 
-        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
 
@@ -202,7 +205,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[MCPEndUserPermissionGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.mcp_end_user_permission import (
             MCPEndUserPermissionGuardrailConfigModel,
         )

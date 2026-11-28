@@ -15,6 +15,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.sandbox.transformation import (
     SANDBOX_MAX_OUTPUT_BYTES,
     BaseSandboxConfig,
@@ -48,7 +49,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
             return client
         return get_async_httpx_client(llm_provider=httpxSpecialProvider.Sandbox)
 
-    def validate_environment(self, api_key: str | None = None, **kwargs) -> str:
+    def validate_environment(self, api_key: str | None = None, **kwargs: object) -> str:
         key: Final = api_key or get_secret_str("E2B_API_KEY")
         if not key:
             raise ValueError("E2B API key not set. Set E2B_API_KEY or pass api_key=...")
@@ -62,9 +63,9 @@ class E2BSandboxConfig(BaseSandboxConfig):
         allow_internet_access: bool | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
-        metadata: dict | None = None,
+        metadata: Mapping[str, object] | None = None,
         client: AsyncHTTPHandler | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> ContainerHandle:
         key: Final = self.validate_environment(api_key=api_key)
         base: Final = api_base or E2B_API_BASE
@@ -78,7 +79,7 @@ class E2BSandboxConfig(BaseSandboxConfig):
             body["metadata"] = metadata
 
         response: Final = await self._http(client).post(
-            url=f"{base}/sandboxes",
+            url=join_api_base(base, "sandboxes"),
             headers={"X-API-Key": key, "Content-Type": "application/json"},
             json=body,
         )
@@ -105,9 +106,9 @@ class E2BSandboxConfig(BaseSandboxConfig):
         container: ContainerHandle | str,
         code: str,
         api_key: str | None = None,
-        env_vars: dict | None = None,
+        env_vars: Mapping[str, object] | None = None,
         client: AsyncHTTPHandler | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> CodeExecutionResult:
         handle: Final = self._as_handle(container)
         hidden_params: Final = cast(  # cast-ok: preserve mapping operations on the validated handle
@@ -144,17 +145,17 @@ class E2BSandboxConfig(BaseSandboxConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> bool:
         handle: Final = self._as_handle(container)
         hidden_params: Final = cast(  # cast-ok: preserve mapping operations on the validated handle
             dict[str, object], getattr(handle, HIDDEN_PARAMS_ATTR)
         )
         key: Final = api_key or hidden_params.get("api_key") or self.validate_environment()
-        base: Final = api_base or hidden_params.get("api_base") or E2B_API_BASE
+        base: Final = str(api_base or hidden_params.get("api_base") or E2B_API_BASE)
         try:
             response: Final = await self._http(client).delete(
-                url=f"{base}/sandboxes/{handle.id}",
+                url=join_api_base(base, f"sandboxes/{handle.id}"),
                 headers={"X-API-Key": key},
             )
         except httpx.HTTPStatusError as e:

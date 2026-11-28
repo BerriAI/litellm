@@ -26,6 +26,8 @@ from litellm.utils import get_optional_params_image_gen
         "fal-ai/gemini-25-flash-image",
         "fal-ai/nano-banana-2",
         "fal-ai/nano-banana-pro",
+        "google/nano-banana-2.1",
+        "google/nano-banana-2.1/edit",
     ],
 )
 def test_nano_banana_config_selected(model):
@@ -48,6 +50,9 @@ def test_imagen4_still_routes_to_imagen4_config():
             "https://fal.run/fal-ai/gemini-25-flash-image",
         ),
         ("nano-banana", "https://fal.run/fal-ai/nano-banana"),
+        ("nano-banana-2/edit", "https://fal.run/fal-ai/nano-banana-2/edit"),
+        ("google/nano-banana-2.1", "https://fal.run/google/nano-banana-2.1"),
+        ("google/nano-banana-2.1/edit", "https://fal.run/google/nano-banana-2.1/edit"),
     ],
 )
 def test_get_complete_url_derives_endpoint_from_model(model, expected_url):

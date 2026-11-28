@@ -8,6 +8,7 @@ from typing_extensions import Required, TypedDict
 import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -81,7 +82,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         """
         Construct the Nvidia NIM rerank URL.
@@ -106,9 +107,9 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         # Strip nvidia_nim/ prefix from model name if present
         clean_model: Final = self._get_clean_model_name(model)
 
-        return f"{api_base}/v1/retrieval/{clean_model}/reranking"
+        return join_api_base(api_base, f"v1/retrieval/{clean_model}/reranking")
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         """
         Nvidia NIM supports these rerank parameters.
         """
@@ -120,7 +121,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: dict[str, object] | None,
         model: str,
         drop_params: bool,
         query: str,
@@ -132,7 +133,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map Cohere/OpenAI rerank params to Nvidia NIM format.
 
@@ -161,9 +162,9 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate that the Nvidia NIM API key is present.
         """
@@ -190,9 +191,9 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         self,
         model: str,
         optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        headers: dict[str, object],
+        litellm_params: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         """
         Transform request to Nvidia NIM format.
 
@@ -274,8 +275,8 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        optional_params: dict[str, object] = {},
+        litellm_params: dict[str, object] = {},
     ) -> RerankResponse:
         """
         Transform Nvidia NIM rerank response to LiteLLM format.
@@ -352,7 +353,9 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             meta=meta,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return BaseLLMException(
             status_code=status_code,
             message=error_message,

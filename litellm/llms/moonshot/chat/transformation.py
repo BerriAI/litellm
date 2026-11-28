@@ -9,6 +9,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
 )
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import supports_reasoning
@@ -86,21 +87,16 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
         If api_base is not provided, use the default Moonshot AI /chat/completions endpoint.
         """
-        clean_api_base: Final = (api_base or "https://api.moonshot.ai/v1").rstrip("/")
+        return ensure_api_route(api_base or "https://api.moonshot.ai/v1", "chat/completions")
 
-        if not clean_api_base.endswith("/chat/completions"):
-            return f"{clean_api_base}/chat/completions"
-
-        return clean_api_base
-
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for Moonshot AI models
 
@@ -213,9 +209,9 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         """
         Transform the overall request to be sent to the API.
@@ -243,7 +239,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         )
 
     def _add_tool_choice_required_message(
-        self, messages: list[AllMessageValues], optional_params: dict
+        self, messages: list[AllMessageValues], optional_params: dict[str, object]
     ) -> list[AllMessageValues]:
         """
         Add a message to the messages list to indicate that the tool choice is required.

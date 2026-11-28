@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT members_with_roles AS \"members_with_roles!: RawJson\"\nFROM \"LiteLLM_TeamTable\"\nWHERE team_id = $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "members_with_roles!: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "members_with_roles"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4e0440cb68c69117a9bd76c975708f72381351229e95b4b34fa0e08000248a0d"
+}

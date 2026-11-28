@@ -2,13 +2,20 @@
 event loop: the preset does no network I/O, and a custom exporter mints the JWT
 lazily on its first export (in the BatchSpanProcessor worker thread)."""
 
+import json
+from typing import Final
+
 import httpx
 import pytest
+import requests_mock
+import respx
+from opentelemetry.sdk.trace.export import SpanExportResult
 
 from litellm.integrations.otel.plumbing import providers
 from litellm.integrations.otel.model.config import ExporterSpec
 from litellm.integrations.otel.presets import agentops as agentops_mod
 from litellm.integrations.otel.presets.agentops import (
+    _AGENTOPS_AUTH_ENDPOINT,
     _AGENTOPS_ENDPOINT,
     _AGENTOPS_EXPORTER_KIND,
     _build_agentops_exporter,
@@ -75,50 +82,44 @@ def test_dynamic_cred_presets_tag_exporter_with_matching_owner(monkeypatch):
         )
 
 
-def test_agentops_exporter_mints_jwt_lazily(monkeypatch):
-    pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
-    monkeypatch.setattr(
-        agentops_mod, "_fetch_agentops_jwt", lambda _k: {"token": "jwt-xyz"}
-    )
-    spec = ExporterSpec(
-        kind=_AGENTOPS_EXPORTER_KIND,
-        endpoint=_AGENTOPS_ENDPOINT,
-        options={"api_key": "ak"},
-    )
-    exporter = _build_agentops_exporter(spec)
-
-    # No auth header until the first export triggers the (off-loop) fetch.
-    assert "Authorization" not in exporter._session.headers
-    exporter._ensure_authenticated()
-    assert exporter._session.headers["Authorization"] == "Bearer jwt-xyz"
-
-    # Cached: a second resolution does not re-fetch.
-    calls = []
-    monkeypatch.setattr(
-        agentops_mod,
-        "_fetch_agentops_jwt",
-        lambda k: calls.append(k) or {"token": "again"},
-    )
-    exporter._ensure_authenticated()
-    assert calls == []
-
-
-def test_agentops_exporter_tolerates_fetch_failure(monkeypatch):
-    pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
-
-    def _raise(_k):
-        raise RuntimeError("auth down")
-
-    monkeypatch.setattr(agentops_mod, "_fetch_agentops_jwt", _raise)
-    exporter = _build_agentops_exporter(
+def _agentops_exporter():
+    return _build_agentops_exporter(
         ExporterSpec(
             kind=_AGENTOPS_EXPORTER_KIND,
             endpoint=_AGENTOPS_ENDPOINT,
             options={"api_key": "ak"},
         )
     )
-    exporter._ensure_authenticated()  # must not raise
-    assert "Authorization" not in exporter._session.headers
+
+
+def test_agentops_exporter_mints_the_jwt_once_on_first_export_and_sends_it_with_every_batch():
+    pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
+    with respx.mock() as auth, requests_mock.Mocker() as collector:
+        token_route = auth.post(_AGENTOPS_AUTH_ENDPOINT).respond(200, json={"token": "jwt-xyz"})
+        agentops_route: Final = collector.post(_AGENTOPS_ENDPOINT, status_code=200)
+        exporter = _agentops_exporter()
+        assert token_route.call_count == 0, "building the exporter must not fetch the JWT"
+
+        results = [exporter.export(()), exporter.export(())]
+
+    assert results == [SpanExportResult.SUCCESS, SpanExportResult.SUCCESS]
+    assert [json.loads(call.request.content) for call in token_route.calls] == [{"api_key": "ak"}]
+    assert [request.headers.get("Authorization") for request in agentops_route.request_history] == [
+        "Bearer jwt-xyz",
+        "Bearer jwt-xyz",
+    ]
+
+
+def test_agentops_exporter_still_exports_without_auth_when_the_jwt_fetch_fails():
+    pytest.importorskip("opentelemetry.exporter.otlp.proto.http.trace_exporter")
+    with respx.mock() as auth, requests_mock.Mocker() as collector:
+        auth.post(_AGENTOPS_AUTH_ENDPOINT).mock(side_effect=httpx.ConnectError("auth down"))
+        collector.post(_AGENTOPS_ENDPOINT, status_code=200)
+
+        result = _agentops_exporter().export(())
+
+    assert result is SpanExportResult.SUCCESS
+    assert [request.headers.get("Authorization") for request in collector.request_history] == [None]
 
 
 def test_fetch_jwt_uses_owned_client_not_shared_pool(monkeypatch):
@@ -278,3 +279,91 @@ def test_signoz_preset_accepts_the_factory_call_shape(monkeypatch):
 
     cfg = PRESET_BY_CALLBACK["signoz"](allow_missing_credentials=True)
     assert any(e.owner == ExporterOwner.SIGNOZ for e in cfg.exporters)
+
+
+def test_mixpanel_preset_reads_token_and_defaults_to_us(monkeypatch: pytest.MonkeyPatch) -> None:
+    import base64
+
+    monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token-123")
+    monkeypatch.delenv("MIXPANEL_REGION", raising=False)
+    monkeypatch.delenv("MIXPANEL_ENDPOINT", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.plumbing.providers import _otlp_traces_endpoint
+    from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
+
+    cfg: Final = mixpanel_preset()
+    spec: Final = next(e for e in cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    expected_basic: Final = base64.b64encode(b"mp-token-123:").decode()
+    assert spec.kind == "otlp_http"
+    assert spec.endpoint == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
+    assert _otlp_traces_endpoint(spec.endpoint) == "https://ingestion-us.mixpanel.com/v1/ai/otel/traces"
+    assert spec.headers == f"Authorization=Basic {expected_basic}"
+    assert spec.requires_headers is True
+    assert "genai" in cfg.mapper_names
+    assert "mixpanel" in cfg.mapper_names
+    assert "user.id" not in cfg.baggage_promoted_keys
+
+
+def test_mixpanel_preset_region_and_endpoint_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token-123")
+    monkeypatch.setenv("MIXPANEL_REGION", "EU")
+    monkeypatch.delenv("MIXPANEL_ENDPOINT", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
+
+    eu_cfg: Final = mixpanel_preset()
+    eu_spec: Final = next(e for e in eu_cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    assert eu_spec.endpoint == "https://ingestion-eu.mixpanel.com/v1/ai/otel/traces"
+
+    monkeypatch.setenv("MIXPANEL_REGION", "in")
+    in_cfg: Final = mixpanel_preset()
+    in_spec: Final = next(e for e in in_cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    assert in_spec.endpoint == "https://ingestion-in.mixpanel.com/v1/ai/otel/traces"
+
+    monkeypatch.setenv("MIXPANEL_ENDPOINT", "http://collector.internal:4318/v1/ai/otel/traces")
+    override_cfg: Final = mixpanel_preset()
+    override_spec: Final = next(e for e in override_cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    assert override_spec.endpoint == "http://collector.internal:4318/v1/ai/otel/traces"
+
+
+def test_mixpanel_preset_without_token_is_header_gated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MIXPANEL_PROJECT_TOKEN", raising=False)
+    from litellm.integrations.otel.model.config import ExporterOwner
+    from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
+
+    cfg: Final = mixpanel_preset()
+    spec: Final = next(e for e in cfg.exporters if e.owner == ExporterOwner.MIXPANEL)
+    assert spec.headers is None
+    assert spec.requires_headers is True
+
+
+def test_mixpanel_without_a_token_or_collector_stays_on_v2_and_exports_nowhere(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.litellm_core_utils.litellm_logging import _exports_nowhere, _maybe_construct_otel_v2
+
+    monkeypatch.delenv("MIXPANEL_PROJECT_TOKEN", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER", raising=False)
+    monkeypatch.delenv("OTEL_ENDPOINT", raising=False)
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        logger: Final = _maybe_construct_otel_v2("mixpanel", [])
+    finally:
+        is_otel_v2_enabled.cache_clear()
+    assert isinstance(logger, OpenTelemetryV2)
+    assert logger.callback_name == "mixpanel"
+    assert _exports_nowhere(logger.config)
+
+
+def test_mixpanel_with_a_token_keeps_the_operators_collector_beside_its_own_exporter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.integrations.otel.model.config import ExporterOwner, ExporterSpec, OpenTelemetryV2Config
+    from litellm.integrations.otel.presets.mixpanel import mixpanel_preset
+
+    monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "mp-token")
+    collector: Final = ExporterSpec(kind="otlp_http", endpoint="http://collector.local")
+    cfg: Final = mixpanel_preset(config_overrides=OpenTelemetryV2Config(exporters=[collector]))
+    assert [spec.owner for spec in cfg.exporters] == [None, ExporterOwner.MIXPANEL]
+    assert "user.id" not in cfg.baggage_promoted_keys

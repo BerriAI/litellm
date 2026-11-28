@@ -9,6 +9,7 @@ gate, the URL construction for both paths, and the shared Bearer auth.
 
 import copy
 import logging
+from typing import Final
 
 import pytest
 from botocore.exceptions import (
@@ -23,6 +24,7 @@ from litellm.llms.bedrock_mantle.responses.transformation import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 LOOKALIKE_MANTLE_HOSTS = (
     "https://bedrock-mantle.us-east-1.api.aws.internal.example.com",
@@ -369,6 +371,127 @@ class TestBedrockMantleResponsesTools:
         assert "file_search" in str(mock_warning.call_args)
 
 
+def _schema_with_gemma_4_refused_keywords() -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {
+            "answers": {"type": "object", "propertyNames": {"type": "string"}},
+            "uniqueItems": {"type": "array", "uniqueItems": True, "items": {"type": "string"}},
+        },
+    }
+
+
+_SCHEMA_GEMMA_4_ACCEPTS: Final = {
+    "type": "object",
+    "properties": {
+        "answers": {"type": "object"},
+        "uniqueItems": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
+
+class TestBedrockMantleResponsesGemma4SchemaKeywords:
+    """Mantle's gemma-4 models answered 400 "The task request was rejected by the target" on
+    /openai/v1/responses to a tool or text.format schema carrying propertyNames or uniqueItems."""
+
+    def _transform(self, model: str, params: dict[str, object], input: object = "hello") -> dict:
+        return BedrockMantleResponsesAPIConfig().transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    def _params(self) -> dict[str, object]:
+        return {
+            "tools": [
+                {"type": "function", "name": "ask", "parameters": _schema_with_gemma_4_refused_keywords()},
+                {
+                    "type": "namespace",
+                    "name": "collaboration",
+                    "tools": [
+                        {"type": "function", "name": "spawn", "parameters": _schema_with_gemma_4_refused_keywords()}
+                    ],
+                },
+            ],
+            "text": {
+                "format": {"type": "json_schema", "name": "reply", "schema": _schema_with_gemma_4_refused_keywords()}
+            },
+        }
+
+    @pytest.mark.parametrize("model", ["google.gemma-4-31b", "us-west-2/google.gemma-4-26b-a4b"])
+    def test_gemma_4_tools_namespace_tools_and_text_format_lose_the_refused_keywords(self, model: str) -> None:
+        body: Final = self._transform(model, self._params())
+
+        assert body["tools"][0]["parameters"] == _SCHEMA_GEMMA_4_ACCEPTS
+        assert body["tools"][1]["tools"][0]["parameters"] == _SCHEMA_GEMMA_4_ACCEPTS
+        assert body["text"]["format"]["schema"] == _SCHEMA_GEMMA_4_ACCEPTS
+        assert body["text"]["format"]["name"] == "reply"
+
+    @pytest.mark.parametrize(
+        "schema, warnings", [(_schema_with_gemma_4_refused_keywords(), 1), (_SCHEMA_GEMMA_4_ACCEPTS, 0)]
+    )
+    def test_gemma_4_warns_once_only_when_a_schema_keyword_was_dropped(
+        self, schema: dict[str, object], warnings: int, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            self._transform("google.gemma-4-31b", {"tools": [{"type": "function", "name": "ask", "parameters": schema}]})
+
+        assert [
+            record.levelno for record in caplog.records if "rejects some JSON schema keywords" in record.getMessage()
+        ] == [logging.WARNING] * warnings
+
+    def test_gemma_4_tools_hoisted_from_codex_additional_tools_lose_the_refused_keywords(self) -> None:
+        body: Final = self._transform(
+            "google.gemma-4-31b",
+            {},
+            input=[
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [
+                        {"type": "function", "name": "ask", "parameters": _schema_with_gemma_4_refused_keywords()}
+                    ],
+                },
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            ],
+        )
+
+        assert body["tools"][0]["parameters"] == _SCHEMA_GEMMA_4_ACCEPTS
+
+    @pytest.mark.parametrize("model", ["openai.gpt-oss-120b", "google.gemma-3-27b-it"])
+    def test_other_mantle_models_keep_every_keyword(self, model: str) -> None:
+        body: Final = self._transform(model, self._params())
+
+        assert body["tools"][0]["parameters"] == _schema_with_gemma_4_refused_keywords()
+        assert body["tools"][1]["tools"][0]["parameters"] == _schema_with_gemma_4_refused_keywords()
+        assert body["text"]["format"]["schema"] == _schema_with_gemma_4_refused_keywords()
+
+    def test_deployment_model_info_with_full_schema_support_keeps_every_keyword_on_gemma_4(self) -> None:
+        body: Final = BedrockMantleResponsesAPIConfig().transform_responses_api_request(
+            model="google.gemma-4-31b",
+            input="hello",
+            response_api_optional_request_params=self._params(),
+            litellm_params=GenericLiteLLMParams(model_info={"supports_all_json_schema_keywords": True}),
+            headers={},
+        )
+
+        assert body["tools"][0]["parameters"] == _schema_with_gemma_4_refused_keywords()
+        assert body["text"]["format"]["schema"] == _schema_with_gemma_4_refused_keywords()
+
+    @pytest.mark.parametrize("model, drops", [("google.gemma-4-31b", True), ("openai.gpt-oss-120b", False)])
+    def test_schemas_sent_through_extra_body_follow_the_same_rule(self, model: str, drops: bool) -> None:
+        merged: Final = BedrockMantleResponsesAPIConfig().transform_extra_body(
+            extra_body=self._params(), request={}, model=model, litellm_params=GenericLiteLLMParams()
+        )
+
+        expected: Final = _SCHEMA_GEMMA_4_ACCEPTS if drops else _schema_with_gemma_4_refused_keywords()
+        assert merged["tools"][0]["parameters"] == expected
+        assert merged["tools"][1]["tools"][0]["parameters"] == expected
+        assert merged["text"]["format"]["schema"] == expected
+
+
 class TestBedrockMantleSamplingParams:
     """Mantle serves OpenAI's gpt-5 models under their OpenAI sampling rule: top_p and a
     non-default temperature are accepted only when reasoning.effort resolves to none, so
@@ -572,6 +695,32 @@ class TestBedrockMantleServiceTier:
         assert "priority" in str(mock_warning.call_args)
 
 
+class TestBedrockMantleRefusedEffort:
+    def test_dropping_a_refused_effort_does_not_suggest_declaring_levels_mantle_ignores(
+        self, local_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        refused: Final = next(
+            level
+            for level in ("none", "minimal", "low")
+            if litellm.model_cost["gpt-6.1-sol"].get(f"supports_{level}_reasoning_effort") is False
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            params: Final = BedrockMantleResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": refused}},
+                model="openai.gpt-6.1-sol",
+                drop_params=True,
+            )
+
+        assert "reasoning" not in params
+        drop_warnings: Final = [
+            record.getMessage()
+            for record in caplog.records
+            if f"Dropping reasoning.effort={refused!r}" in record.getMessage()
+        ]
+        assert len(drop_warnings) == 1
+        assert "model_info" not in drop_warnings[0]
+
+
 class TestBedrockMantleReasoningSummary:
     @pytest.mark.parametrize("summary", ["concise", "detailed"])
     def test_unsupported_reasoning_summary_dropped_when_drop_params_true(self, summary):
@@ -624,6 +773,38 @@ class TestBedrockMantleReasoningSummary:
             drop_params=drop_params,
         )
         assert params["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+    def test_auto_summary_on_still_drops_a_client_detailed_summary(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": "detailed"}},
+            model="openai.gpt-5.6-sol",
+            drop_params=True,
+        )
+        assert params["reasoning"] == {"effort": "medium"}
+
+    def test_auto_summary_on_still_rejects_a_client_detailed_summary_without_drop_params(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(litellm.UnsupportedParamsError):
+            cfg.map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": "medium", "summary": "detailed"}},
+                model="openai.gpt-5.6-sol",
+                drop_params=False,
+            )
+
+    @pytest.mark.parametrize("use_openai_path, expected", [(True, "auto"), (False, "detailed")])
+    def test_auto_reasoning_summary_is_a_level_the_path_accepts(self, use_openai_path, expected):
+        cfg = BedrockMantleResponsesAPIConfig(use_openai_path=use_openai_path)
+        summary = cfg.auto_reasoning_summary()
+        assert summary == expected
+        params = cfg.map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium", "summary": summary}},
+            model="openai.gpt-5.6-sol" if use_openai_path else "openai.gpt-oss-120b",
+            drop_params=False,
+        )
+        assert params["reasoning"] == {"effort": "medium", "summary": summary}
 
     def test_reasoning_summary_kept_on_standard_path(self):
         cfg = BedrockMantleResponsesAPIConfig(use_openai_path=False)
@@ -843,11 +1024,10 @@ class TestBedrockMantleCodexInputItemNormalization:
     on the Codex history item types agent_message, context_compaction, and
     local_shell_call (verified against bedrock-mantle.us-east-1.api.aws with
     openai.gpt-5.6-sol), so the config must rewrite them into supported
-    equivalents. agent_message is what every Codex multi-agent v2 session sends,
-    and its encrypted_content slot carries the verbatim plaintext payload when
-    the upstream model never issued encrypted args, so that slot must be
-    preserved, not dropped. Mantle also rejects assistant messages with
-    input_text content, so the rewrite must use output_text."""
+    equivalents. agent_message is what every Codex multi-agent v2 session sends.
+    One carrying an encrypted_content block is ciphertext only Mantle can decrypt,
+    so it is forwarded intact. Mantle also rejects assistant messages with
+    input_text content, so the plaintext rewrite must use output_text."""
 
     _USER_MESSAGE = {
         "type": "message",
@@ -855,10 +1035,11 @@ class TestBedrockMantleCodexInputItemNormalization:
         "content": [{"type": "input_text", "text": "Continue."}],
     }
 
-    def _transform(self, input):
-        cfg = BedrockMantleResponsesAPIConfig()
+    def _transform(self, input, model="openai.gpt-5.6-sol"):
+        cfg = ProviderConfigManager.get_provider_responses_api_config(LlmProviders.BEDROCK_MANTLE, model)
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
         return cfg.transform_responses_api_request(
-            model="openai.gpt-5.6-sol",
+            model=model,
             input=input,
             response_api_optional_request_params={},
             litellm_params=GenericLiteLLMParams(),
@@ -887,31 +1068,48 @@ class TestBedrockMantleCodexInputItemNormalization:
             },
         ]
 
-    def test_agent_message_encrypted_content_payload_is_preserved(self):
+    def test_agent_message_with_encrypted_content_reaches_mantle_intact_and_unlogged(self, caplog):
+        """Only Mantle can decrypt the block for the recipient model; as assistant text it is gibberish."""
+        agent_message = {
+            "type": "agent_message",
+            "author": "/root/reviewer",
+            "recipient": "/root",
+            "content": [
+                {"type": "input_text", "text": "Worker message:\n"},
+                {"type": "encrypted_content", "encrypted_content": "gAAAAABpZ3ciphertext=="},
+            ],
+        }
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            body = self._transform(input=[copy.deepcopy(agent_message), self._USER_MESSAGE])
+        assert body["input"] == [agent_message, self._USER_MESSAGE]
+        assert not [record for record in caplog.records if "rewrote Codex input item" in record.getMessage()]
+
+    @pytest.mark.parametrize("model", ["openai.gpt-oss-120b", "google.gemma-4-31b", "xai.grok-4.3"])
+    def test_models_that_never_lock_worker_messages_keep_the_text_rewrite(self, model):
+        """Codex puts plain text in the locked slot for these models, which Mantle rejects unless rewritten."""
         body = self._transform(
             input=[
                 {
                     "type": "agent_message",
                     "author": "/root",
-                    "recipient": "/root/arithmetic",
+                    "recipient": "/root/codeword",
                     "content": [
                         {"type": "input_text", "text": "Message Type: NEW_TASK\nPayload:\n"},
-                        {"type": "encrypted_content", "encrypted_content": "Answer the question 'what is 2+2'."},
+                        {"type": "encrypted_content", "encrypted_content": "Reply with ZEPHYR-1."},
                     ],
                 },
                 self._USER_MESSAGE,
-            ]
+            ],
+            model=model,
         )
-        assert body["input"][0] == {
-            "type": "message",
-            "role": "assistant",
-            "content": (
-                {
-                    "type": "output_text",
-                    "text": "Message Type: NEW_TASK\nPayload:\nAnswer the question 'what is 2+2'.",
-                },
-            ),
-        }
+        assert body["input"] == [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": ({"type": "output_text", "text": "Message Type: NEW_TASK\nPayload:\nReply with ZEPHYR-1."},),
+            },
+            self._USER_MESSAGE,
+        ]
 
     def test_agent_message_without_any_text_is_dropped(self):
         body = self._transform(
@@ -1863,3 +2061,68 @@ class TestBedrockMantleResponsesPricing:
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
         assert "bedrock_mantle/openai.gpt-5.4" in litellm.bedrock_mantle_models
+
+
+def _mantle_marked_part(
+    litellm_params: GenericLiteLLMParams, marker: object, model: str = "openai.gpt-6.1-sol"
+) -> object:
+    body: Final = BedrockMantleResponsesAPIConfig().transform_responses_api_request(
+        model=model,
+        input=[
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Stable prefix", "prompt_cache_breakpoint": marker}],
+            }
+        ],
+        response_api_optional_request_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return body["input"][0]["content"][0]
+
+
+@pytest.mark.parametrize(
+    "marker, wire_part",
+    [
+        (
+            {"mode": "explicit", "ttl": "30m"},
+            {"type": "input_text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+        ),
+        ({"mode": "implicit"}, {"type": "input_text", "text": "Stable prefix"}),
+    ],
+    ids=("ttl-dropped", "implicit-dropped"),
+)
+def test_mantle_drop_params_cuts_a_responses_breakpoint_down_to_its_mode(
+    monkeypatch: pytest.MonkeyPatch, marker: dict[str, str], wire_part: dict[str, object]
+) -> None:
+    """Bedrock Mantle Responses answered 400 for a 30m breakpoint ttl and 200 for a bare explicit mode on 2026-10-29."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert _mantle_marked_part(GenericLiteLLMParams(drop_params=True), marker) == wire_part
+    assert _mantle_marked_part(GenericLiteLLMParams(), marker) == {
+        "type": "input_text",
+        "text": "Stable prefix",
+        "prompt_cache_breakpoint": marker,
+    }
+
+
+@pytest.mark.parametrize(
+    "marker, wire_part",
+    [
+        ({"mode": "explicit", "ttl": "1h"}, {"type": "input_text", "text": "Stable prefix"}),
+        ({"mode": "explicit", "ttl": "30m"}, {"type": "input_text", "text": "Stable prefix"}),
+        (
+            {"mode": "explicit"},
+            {"type": "input_text", "text": "Stable prefix", "prompt_cache_breakpoint": {"mode": "explicit"}},
+        ),
+    ],
+    ids=("1h-dropped", "30m-dropped", "explicit-kept"),
+)
+def test_mantle_drop_params_sends_an_unlisted_model_only_a_bare_explicit_breakpoint(
+    monkeypatch: pytest.MonkeyPatch, marker: dict[str, str], wire_part: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert (
+        _mantle_marked_part(GenericLiteLLMParams(drop_params=True), marker, model="openai.not-in-the-cost-map")
+        == wire_part
+    )

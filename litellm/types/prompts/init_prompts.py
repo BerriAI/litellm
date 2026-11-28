@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import ConfigDict
 
@@ -31,7 +31,7 @@ class PromptLiteLLMParams(LiteLLMBaseModel):
     api_base: str | None = None
     api_key: str | None = None
 
-    provider_specific_query_params: dict[str, Any] | None = None
+    provider_specific_query_params: dict[str, object] | None = None
 
     ignore_prompt_manager_model: bool | None = False
     ignore_prompt_manager_optional_params: bool | None = False
@@ -54,7 +54,7 @@ class PromptSpec(LiteLLMBaseModel):
     environment: str | None = "development"
     created_by: str | None = None
 
-    def __init__(self, **data) -> None:
+    def __init__(self, **data: object) -> None:
         if "prompt_info" not in data:
             data["prompt_info"] = PromptInfo(prompt_type="config")
         elif "prompt_info" in data:
@@ -66,7 +66,7 @@ class PromptSpec(LiteLLMBaseModel):
 class PromptTemplateBase(LiteLLMBaseModel):
     litellm_prompt_id: str
     content: str
-    metadata: dict[str, Any] | None = None
+    metadata: dict[str, object] | None = None
 
 
 class PromptInfoResponse(LiteLLMBaseModel):

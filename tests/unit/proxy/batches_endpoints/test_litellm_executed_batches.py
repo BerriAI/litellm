@@ -3,6 +3,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -248,11 +249,42 @@ class FakeRouter:
         )
         self.aresponses = AsyncMock(return_value=chat_response("default"))
 
-    def get_model_ids(self, model_name: str) -> list[str]:
-        return [DEPLOYMENT_ID] if model_name == BATCH_MODEL else []
+    def registry(self) -> "FakeRegistry":
+        return FakeRegistry()
+
+    def settings(self) -> "FakeSettings":
+        return FakeSettings()
 
     def get_model_group_info(self, model_group: str) -> None:
         return None
+
+
+class FakeRegistry:
+    def routing_group(self, name: str) -> None:
+        return None
+
+    def index(self, name: Literal["team_model"]) -> Mapping[tuple[str, str], Sequence[int]]:
+        return MappingProxyType({})
+
+    def names(self, model_name: str | None = None, *, kind: str = "groups") -> list[str]:
+        assert kind == "ids"
+        return [DEPLOYMENT_ID] if model_name == BATCH_MODEL else []
+
+    def group(self, name: str, *, field: str = "info") -> None:
+        return None
+
+    def resolve(self, name: str, *, kind: str = "group") -> None:
+        return None
+
+    def deployments(
+        self, model_name: str | None = None, *, source: str = "group", team_id: str | None = None
+    ) -> list[object]:
+        return []
+
+
+class FakeSettings:
+    def is_set(self, name: str) -> bool:
+        return False
 
 
 class FakeStorageBackend:
@@ -595,6 +627,38 @@ async def test_litellm_executed_provider_for_leaves_a_server_with_its_own_files_
 
 
 @pytest.mark.parametrize(
+    ("model_info", "expected_key"),
+    [({"id": "vllm-batch"}, "vllm-secret"), ({"id": "vllm-batch", "team_id": "team-1"}, None)],
+    ids=["proxy-level deployment", "team-scoped deployment"],
+)
+async def test_resolve_litellm_executed_provider_probes_with_the_secret_only_behind_an_admin_oidc_api_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model_info: Mapping[str, str], expected_key: str | None
+) -> None:
+    monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", str(tmp_path))
+    token: Final = tmp_path / "token"
+    token.write_text("vllm-secret")
+    reference: Final = f"oidc/file/{token}"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": BATCH_MODEL,
+                "litellm_params": {**VLLM_CREDENTIALS, "api_key": reference},
+                "model_info": dict(model_info),
+            }
+        ]
+    )
+    probe: Final = FakeFilesApiProbe(True, [])
+
+    try:
+        provider: Final = await resolve_litellm_executed_provider(router, "vllm-batch", "team-1", probe)
+    finally:
+        router.discard()
+
+    assert provider == "hosted_vllm"
+    assert probe.upstreams == [("http://vllm.test/v1/", expected_key or reference)]
+
+
+@pytest.mark.parametrize(
     "credentials",
     [{"custom_llm_provider": "openai", "model": "gpt-4o", "api_base": "http://openai.test/v1"}, {"model": 7}],
     ids=["provider runs its own batches", "no model to resolve an api_base from"],
@@ -614,11 +678,11 @@ async def test_resolve_litellm_executed_provider_asks_the_router_for_the_team_sc
     credentials: Mapping[str, object] | None, expected: str | None
 ) -> None:
     router = MagicMock(spec=Router)
-    router.get_deployment_credentials_with_provider.return_value = credentials
+    router.registry.return_value.credentials.return_value = credentials
     assert (
         await resolve_litellm_executed_provider(router, BATCH_MODEL, "team-1", FakeFilesApiProbe(True, [])) == expected
     )
-    router.get_deployment_credentials_with_provider.assert_called_once_with(model_id=BATCH_MODEL, team_id="team-1")
+    router.registry.return_value.credentials.assert_called_once_with(BATCH_MODEL, form="with_provider", team_id="team-1")
 
 
 async def test_create_stores_a_validating_batch_and_completes_it_in_the_background() -> None:
@@ -667,6 +731,48 @@ async def test_create_dispatches_each_row_with_the_batch_model_and_the_key_metad
         assert metadata["user_api_key_team_id"] == "team-1"
         assert metadata["user_api_key_alias"] == "alias-1"
         assert metadata["user_api_key_user_email"] == "user@example.com"
+
+
+async def test_create_dispatches_each_row_with_the_key_team_and_project_tags_as_inherited_tags() -> None:
+    user = UserAPIKeyAuth(
+        api_key="sk-batch-key",
+        team_id="team-1",
+        metadata={"tags": ["key-tag", "shared"]},
+        team_metadata={"tags": ["&region:eu", "shared"]},
+        project_metadata={"tags": ["project-tag"]},
+    )
+    harness = make_runner(user=user)
+    await harness.create_and_finish()
+
+    inherited = [call.kwargs["metadata"]["inherited_tags"] for call in harness.router.acompletion.await_args_list]
+    assert inherited == [("key-tag", "shared", "&region:eu", "project-tag")] * 2
+
+
+@pytest.mark.parametrize(
+    ("key_metadata", "team_metadata", "stored"),
+    [
+        ({"store_prompts_in_spend_logs": False}, {}, False),
+        ({}, {"store_prompts_in_spend_logs": False}, False),
+        ({}, {}, True),
+    ],
+)
+async def test_create_dispatches_rows_that_keep_the_key_and_team_prompt_storage_policy(
+    monkeypatch: pytest.MonkeyPatch, key_metadata: dict[str, object], team_metadata: dict[str, object], stored: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.spend_tracking_utils import should_store_prompts_and_responses_in_spend_logs
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    harness: Final = make_runner(
+        user=UserAPIKeyAuth(api_key="sk-batch-key", metadata=key_metadata, team_metadata=team_metadata)
+    )
+    await harness.create_and_finish()
+
+    decisions: Final = [
+        should_store_prompts_and_responses_in_spend_logs(call.kwargs["metadata"])
+        for call in harness.router.acompletion.await_args_list
+    ]
+    assert decisions == [stored] * 2
 
 
 async def test_create_dispatches_cli_session_rows_under_the_per_user_alias_not_the_login_token() -> None:

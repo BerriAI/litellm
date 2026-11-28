@@ -8,11 +8,12 @@ Handles the custom request/response format:
 The actual message transformation reuses OpenAIGPTConfig since Gemma uses OpenAI-compatible format.
 """
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx
-from pydantic import ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypeAliasType, TypedDict
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -30,6 +31,17 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+
+class _PredictionsEnvelope(TypedDict):
+    predictions: NotRequired[ReadOnly[dict[str, object]]]
+
+
+_PredictionsEnvelopeType = TypeAliasType("_PredictionsEnvelopeType", _PredictionsEnvelope)
+_PREDICTIONS_ENVELOPE: Final[TypeAdapter[_PredictionsEnvelope]] = TypeAdapter(
+    _PredictionsEnvelopeType,
+    config=ConfigDict(strict=True, extra="allow"),
+)
 
 
 def parse_vertex_gemma_container_error(predictions: object) -> VertexGemmaContainerError | None:
@@ -72,7 +84,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def _handle_fake_stream_response(
         self,
         model_response: ModelResponse,
-        stream: bool,
+        stream: object,
         model: str,
         logging_obj: "LiteLLMLoggingObj",
     ) -> "ModelResponse | CustomStreamWrapper":
@@ -102,10 +114,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform request to Vertex Gemma format.
 
@@ -142,7 +154,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
     def _unwrap_predictions_response(
         self,
-        response_json: dict[str, Any],
+        response_json: _PredictionsEnvelope,
     ) -> dict[str, object]:
         """
         Unwrap the Vertex Gemma predictions format to OpenAI format.
@@ -240,20 +252,20 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         api_key: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         logging_obj: "LiteLLMLoggingObj",
-        optional_params: dict,
+        optional_params: dict[str, object],
         acompletion: bool,
-        litellm_params: dict,
-        logger_fn: Callable | None = None,
+        litellm_params: dict[str, object],
+        logger_fn: Callable[..., object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | httpx.Client | httpx.AsyncClient | None = None,
         timeout: float | httpx.Timeout | None = None,
-        encoding=None,
+        encoding: "Tokenizer | None" = None,
         custom_llm_provider: str = "vertex_ai",
     ):
         """
@@ -296,14 +308,14 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def _sync_completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         api_key: str,
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         logging_obj: "LiteLLMLoggingObj",
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         client: HTTPHandler | httpx.Client | None = None,
         timeout: float | httpx.Timeout | None = None,
         encoding: "Tokenizer | None" = None,
@@ -354,7 +366,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message=f"Request failed: {response.text}",
             )
 
-        response_json: Final = response.json()
+        response_json: Final = _PREDICTIONS_ENVELOPE.validate_python(response.json())
 
         # Unwrap predictions to get OpenAI-compatible response
         openai_response: Final = self._unwrap_predictions_response(response_json)
@@ -391,14 +403,14 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     async def _async_completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         api_key: str,
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         logging_obj: "LiteLLMLoggingObj",
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         client: AsyncHTTPHandler | httpx.AsyncClient | None = None,
         timeout: float | httpx.Timeout | None = None,
         encoding: "Tokenizer | None" = None,
@@ -449,7 +461,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 message=f"Request failed: {response.text}",
             )
 
-        response_json: Final = response.json()
+        response_json: Final = _PREDICTIONS_ENVELOPE.validate_python(response.json())
 
         # Unwrap predictions to get OpenAI-compatible response
         openai_response: Final = self._unwrap_predictions_response(response_json)

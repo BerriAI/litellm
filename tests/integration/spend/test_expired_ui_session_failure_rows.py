@@ -5,13 +5,13 @@ from typing import Final
 
 import jwt
 import pytest
-from integration._support.client import Gateway, eventually, gateway_from_environment, held, string_value
+from integration._support.client import Gateway, eventually, gateway_from_environment, string_value
 from integration._support.database import read_rows
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 
 from litellm.proxy._types import hash_token
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 240)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 240), pytest.mark.shares_worker_state]
 
 SESSION_SECONDS: Final = 3
 DASHBOARD_INFO_ROUTES: Final = (
@@ -22,7 +22,6 @@ DASHBOARD_INFO_ROUTES: Final = (
     "/v2/model/info",
     "/get/user_banner",
 )
-SPEND_LOG_FLUSH_SECONDS: Final = 25
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,31 +83,33 @@ def expired(owned: OwnedProxy) -> Iterator[ExpiredKeys]:
         yield keys
 
 
-def test_an_expired_dashboard_session_key_writes_no_failure_rows_for_dashboard_info_calls(
+def _model_refusal_row_landed(owned: OwnedProxy) -> None:
+    with owned.gateway.scenario() as scenario:
+        refused_key: Final = scenario.key(models=[f"not-{uuid.uuid4().hex}"])
+        response: Final = owned.gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": "integration-unrouted", "messages": [{"role": "user", "content": "expired session"}]},
+            key=refused_key,
+        )
+        assert response.status_code == 403, response.text
+        assert eventually(lambda: _failure_rows(refused_key), lambda rows: rows != [], seconds=70) == ["acompletion"]
+
+
+def test_expired_dashboard_session_and_virtual_keys_write_no_failure_rows_for_dashboard_info_calls(
     owned: OwnedProxy, expired: ExpiredKeys
 ) -> None:
     for route in DASHBOARD_INFO_ROUTES:
         _rejected_as_expired(owned.gateway, expired.session, route)
         _rejected_as_expired(owned.gateway, expired.virtual, route)
 
-    virtual_rows: Final = eventually(
-        lambda: _failure_rows(expired.virtual),
-        lambda rows: len(rows) == len(DASHBOARD_INFO_ROUTES) + 1,
-        seconds=70,
-    )
-    assert virtual_rows == sorted(("/key/info", *DASHBOARD_INFO_ROUTES))
-    assert (
-        held(
-            lambda: _failure_rows(expired.session),
-            lambda rows: rows == [],
-            holding=SPEND_LOG_FLUSH_SECONDS,
-            seconds=SPEND_LOG_FLUSH_SECONDS + 5,
-        )
-        == []
-    )
+    _model_refusal_row_landed(owned)
+    assert (_failure_rows(expired.virtual), _failure_rows(expired.session)) == ([], [])
 
 
-def test_an_expired_dashboard_session_key_still_logs_a_failed_llm_call(owned: OwnedProxy, expired: ExpiredKeys) -> None:
+def test_an_expired_dashboard_session_key_writes_no_failure_row_for_an_llm_call(
+    owned: OwnedProxy, expired: ExpiredKeys
+) -> None:
     response: Final = owned.gateway.request(
         "POST",
         "/v1/chat/completions",
@@ -117,11 +118,5 @@ def test_an_expired_dashboard_session_key_still_logs_a_failed_llm_call(owned: Ow
     )
     assert response.status_code == 401, response.text
     assert "Expired Key" in response.text, response.text
-    assert (
-        eventually(
-            lambda: _failure_rows(expired.session),
-            lambda rows: "acompletion" in rows,
-            seconds=70,
-        ).count("acompletion")
-        == 1
-    )
+    _model_refusal_row_landed(owned)
+    assert _failure_rows(expired.session) == []

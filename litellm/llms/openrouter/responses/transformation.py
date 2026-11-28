@@ -18,6 +18,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -105,10 +106,10 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, object]:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key: Final = (
             litellm_params.api_key
@@ -132,15 +133,13 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         api_base = (
             api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
         )
 
-        api_base = api_base.rstrip("/")
-
-        return f"{api_base}/responses"
+        return join_api_base(api_base, "responses")
 
     def supports_native_websocket(self) -> bool:
         """OpenRouter does not support native WebSocket for Responses API"""

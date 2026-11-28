@@ -1,6 +1,52 @@
+import { randomUUID } from "node:crypto";
 import { test, expect } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { Role, users } from "../../fixtures/users";
+import { runWithCleanup } from "../../helpers/roundTrip";
+
+test.describe("Add LLM credential", () => {
+  test.use({ storageState: ADMIN_STORAGE_PATH });
+
+  test("rejects a missing name and saves after it is corrected", async ({ page }) => {
+    const name = `e2e-credential-${randomUUID()}`;
+    const headers = { Authorization: `Bearer ${users[Role.ProxyAdmin].password}` };
+    await runWithCleanup(
+      async () => {
+        await page.goto("/ui");
+        await page.getByText("Model Management").click();
+        await page.getByRole("tab", { name: "LLM Credentials" }).click();
+        await page.getByRole("button", { name: "Add Credential" }).click();
+
+        const modal = page.getByRole("dialog", { name: "Add New Credential" });
+        const provider = modal.getByPlaceholder("Select a provider", { exact: true });
+        await provider.click();
+        await provider.fill("OpenAI");
+        await page
+          .getByRole("option")
+          .filter({ hasText: /^OpenAI$/ })
+          .click();
+        await modal.locator("#api_key").fill("sk-e2e-create-credential-ABCDEFGHIJKLMNOP");
+
+        const save = modal.getByRole("button", { name: "Add Credential" });
+        await save.click();
+        await expect(modal.getByText("Credential name is required")).toBeVisible();
+
+        await modal.getByLabel("Credential Name:").fill(name);
+        const saved = page.waitForResponse(
+          (response) => response.request().method() === "POST" && new URL(response.url()).pathname === "/credentials",
+        );
+        await save.click();
+        const response = await saved;
+        expect(response.ok(), `POST /credentials returned ${response.status()}`).toBe(true);
+        await expect(modal).toBeHidden();
+      },
+      async () => {
+        const response = await page.request.delete(`/credentials/${name}`, { headers });
+        return response.ok() || response.status() === 404;
+      },
+    );
+  });
+});
 
 test.describe("Edit LLM credential", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
@@ -33,7 +79,7 @@ test.describe("Edit LLM credential", () => {
 
   test("changing only the api base does not overwrite the stored api key with its masked value", async ({ page }) => {
     await page.goto("/ui");
-    await page.getByText("Models + Endpoints").click();
+    await page.getByText("Model Management").click();
     await page.getByRole("tab", { name: "LLM Credentials" }).click();
 
     const row = page.locator("tr", { hasText: credentialName });

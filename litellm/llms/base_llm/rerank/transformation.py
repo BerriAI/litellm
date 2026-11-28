@@ -21,22 +21,22 @@ class BaseRerankConfig(ABC):
     @abstractmethod
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     @abstractmethod
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        optional_rerank_params: dict[str, object],
+        headers: dict[str, object],
+        litellm_params: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         return {}
 
     @abstractmethod
@@ -47,9 +47,9 @@ class BaseRerankConfig(ABC):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: dict[str, object] = {},
+        optional_params: dict[str, object] = {},
+        litellm_params: dict[str, object] = {},
     ) -> RerankResponse:
         return model_response
 
@@ -58,7 +58,7 @@ class BaseRerankConfig(ABC):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
     ) -> str:
         """
         OPTIONAL
@@ -70,17 +70,17 @@ class BaseRerankConfig(ABC):
         return api_base or ""
 
     @abstractmethod
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         pass
 
     @abstractmethod
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -88,7 +88,7 @@ class BaseRerankConfig(ABC):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

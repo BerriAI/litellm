@@ -2,9 +2,21 @@
 
 import os
 import subprocess
-from typing import Final
+from pathlib import Path
+from typing import Final, Protocol
 
-from litellm._logging import verbose_logger
+from litellm._logging import print_startup_message, print_startup_warning, verbose_logger
+
+_PROXY_SCHEMA_PATH: Final = Path(__file__).resolve().parent.parent / "schema.prisma"
+
+
+class _FailedCommand(Protocol):
+    @property
+    def stderr(self) -> object: ...
+
+
+def _failure_output(failed_command: _FailedCommand) -> object:
+    return failed_command.stderr
 
 
 def extract_sql_commands(diff_output: str) -> list[str]:
@@ -18,7 +30,7 @@ def extract_sql_commands(diff_output: str) -> list[str]:
     # Split the output into lines and remove empty lines
     lines: Final = [line.strip() for line in diff_output.split("\n") if line.strip()]
 
-    sql_commands: Final = []
+    sql_commands: Final[list[str]] = []
     current_command = ""
     in_sql_block = False
 
@@ -63,8 +75,8 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
             run_prisma,
         )
     except ImportError as e:
-        print(  # noqa: T201  # boot-time operator output, same channel as this helper's other messages
-            f"Skipping the migration diff: litellm-proxy-extras has no Prisma runner. Error: {e}"
+        print_startup_warning(
+            f"Skipping the migration diff: litellm-proxy-extras has no Prisma runner. Error: {e}",
         )
         return False, []
 
@@ -79,7 +91,7 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
                 "--from-url",
                 db_url,
                 "--to-schema-datamodel",
-                "./schema.prisma",
+                str(_PROXY_SCHEMA_PATH),
                 "--script",
             ],
             timeout=timeout,
@@ -89,22 +101,21 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
         sql_commands: Final = extract_sql_commands(result.stdout)
 
         if sql_commands:
-            print("Changes to DB Schema detected")  # noqa: T201
-            print("Required SQL commands:")  # noqa: T201
-            for command in sql_commands:
-                print(command)  # noqa: T201
+            print_startup_message(
+                "\n".join(("Changes to DB Schema detected", "Required SQL commands:", *sql_commands)),
+            )
             return True, sql_commands
         else:
             return False, []
     except subprocess.TimeoutExpired:
-        print(  # noqa: T201  # boot-time operator output, same channel as this helper's other messages
+        print_startup_warning(
             f"Timed out after {timeout}s generating the migration diff. "
-            f"Raise {PRISMA_COMMAND_TIMEOUT_ENV_VAR} if this database needs longer."
+            f"Raise {PRISMA_COMMAND_TIMEOUT_ENV_VAR} if this database needs longer.",
         )
         return False, []
     except subprocess.CalledProcessError as e:
-        error_message: Final = f"Failed to generate migration diff. Error: {e.stderr}"
-        print(error_message)  # noqa: T201
+        error_message: Final = f"Failed to generate migration diff. Error: {_failure_output(e)}"
+        print_startup_warning(error_message)
         return False, []
 
 

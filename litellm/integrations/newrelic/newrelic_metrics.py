@@ -212,6 +212,7 @@ class NewRelicMetricsLogger(CustomBatchLogger):
         self._drain_lock = asyncio.Lock()
         asyncio.create_task(self.periodic_flush())
         self.flush_lock = asyncio.Lock()
+        self.log_queue: list[NewRelicMetricRecord]
         super().__init__(
             flush_lock=self.flush_lock,
             batch_size=NEWRELIC_METRICS_MAX_BATCH_SIZE,
@@ -254,7 +255,7 @@ class NewRelicMetricsLogger(CustomBatchLogger):
                 if not self.log_queue:
                     return
                 if _pass < NEWRELIC_METRICS_MAX_DRAIN_PASSES - 1:
-                    await asyncio.sleep(2**_pass)
+                    await asyncio.sleep(1 << _pass)
             async with self.flush_lock:
                 tried_ids: Final = frozenset(id(record) for record in attempted)
                 survivors: Final = tuple(record for record in self.log_queue if id(record) not in tried_ids)
@@ -300,13 +301,13 @@ class NewRelicMetricsLogger(CustomBatchLogger):
             await self.flush_queue()
         await self._final_drain()
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         try:
             await self._log_async_event(standard_logging_object=kwargs.get("standard_logging_object", None))
         except Exception as e:  # noqa: BLE001  # logging must never break the request path
             verbose_logger.exception("New Relic Metrics Layer Error - %s\n%s", e, traceback.format_exc())
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         try:
             await self._log_async_event(standard_logging_object=kwargs.get("standard_logging_object", None))
         except Exception as e:  # noqa: BLE001  # logging must never break the request path

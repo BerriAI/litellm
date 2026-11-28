@@ -1,7 +1,8 @@
 from collections.abc import Sequence
 from enum import Enum
-from typing import Any, Final, Literal, Optional, Union
+from typing import Final, Literal, Optional, Union
 
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -13,7 +14,6 @@ class LiteLLMCacheType(str, Enum):
     REDIS_SEMANTIC = "redis-semantic"
     VALKEY_SEMANTIC = "valkey-semantic"
     S3 = "s3"
-    DISK = "disk"
     QDRANT_SEMANTIC = "qdrant-semantic"
     AZURE_BLOB = "azure-blob"
     GCS = "gcs"
@@ -59,6 +59,12 @@ DEFAULT_CACHING_SUPPORTED_CALL_TYPES: tuple[CachingSupportedCallTypes, ...] = (
 )
 
 
+class CallerMessageCount(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    count: int = Field(ge=0)
+
+
 class RedisPipelineIncrementOperation(TypedDict):
     """
     TypeDict for 1 Redis Pipeline Increment Operation
@@ -75,7 +81,7 @@ class RedisPipelineSetOperation(TypedDict):
     """
 
     key: str
-    value: Any
+    value: object
     ttl: int | None
 
 
@@ -85,7 +91,7 @@ class RedisPipelineRpushOperation(TypedDict):
     """
 
     key: str
-    values: Sequence[Any]
+    values: ReadOnly[Sequence[str]]
 
 
 class RedisPipelineLpopOperation(TypedDict):
@@ -133,7 +139,7 @@ class HealthCheckCacheParams(LiteLLMBaseModel):
 
     host: str | None = None
     port: str | int | None = None
-    redis_kwargs: dict[str, Any] | None = None
+    redis_kwargs: dict[str, object] | None = None
     namespace: str | None = None
     redis_version: str | int | float | None = None
 

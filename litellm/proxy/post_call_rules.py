@@ -1,4 +1,4 @@
-def post_response_rule(input):  # receives the model response
+def post_response_rule(input: str):  # receives the model response
     print(f"post_response_rule:input={input}")  # noqa: T201
     if len(input) < 200:
         return {

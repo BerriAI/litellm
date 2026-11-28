@@ -1,85 +1,281 @@
-from typing import Final
+import functools
+import inspect
+from collections.abc import Awaitable, Callable, Generator, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, ParamSpec, TypeAlias, TypeVar
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import INTERNAL_KWARG_PREFIX
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
+    add_fallback_headers_to_response,
+)
+from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.clientside_credential_handler import UPSTREAM_BOUND_PARAMS
 from litellm.litellm_core_utils.core_helpers import (
     filter_internal_params,
     safe_deep_copy,
 )
-from litellm.router_utils.add_retry_fallback_headers import (
-    add_fallback_headers_to_response,
-)
+from litellm.types.litellm_params import PROMPT_MANAGEMENT_APPLIED_FIELD
+from litellm.types.utils import CallTypes, CustomPricingLiteLLMParams
 
-from .asyncify import run_async_function
+FALLBACK_ATTEMPT_KWARG: Final = f"{INTERNAL_KWARG_PREFIX}fallback_attempt"
+
+FallbackChain: TypeAlias = tuple[str | dict[str, object], ...]
+_FALLBACK_CHAIN: Final = TypeAdapter(FallbackChain)
+_REQUEST_KWARGS: Final = TypeAdapter(dict[str, object])
+_NO_OVERRIDES: Final[Mapping[str, object]] = MappingProxyType({})
+_RUNNER_PARAMS: Final = frozenset({"kwargs", "fallbacks", "acompletion", "model", "litellm_logging_obj"})
+_PROVIDER_BOUND_PARAMS: Final = UPSTREAM_BOUND_PARAMS | {
+    "custom_llm_provider",
+    "client",
+    "headers",
+    "litellm_credential_name",
+}
+_MODEL_BOUND_PARAMS: Final = frozenset(CustomPricingLiteLLMParams.model_fields) | {"base_model"}
+_GLOBAL_FALLBACKS_OFF: Final[ContextVar[bool]] = ContextVar("litellm_global_model_fallbacks_off", default=False)
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
-async def async_completion_with_fallbacks(**kwargs):
-    """
-    Asynchronously attempts completion with fallback models if the primary model fails.
+@contextmanager
+def without_global_fallbacks() -> Generator[None]:
+    token: Final = _GLOBAL_FALLBACKS_OFF.set(True)
+    try:
+        yield
+    finally:
+        _GLOBAL_FALLBACKS_OFF.reset(token)
 
-    Args:
-        **kwargs: Keyword arguments for completion, including:
-            - model (str): Primary model to use
-            - fallbacks (List[Union[str, dict]]): List of fallback models/configs
-            - Other completion parameters
 
-    Returns:
-        ModelResponse: The completion response from the first successful model
+async def _awaited(pending: Awaitable[object]) -> object:
+    return await pending
 
-    Raises:
-        Exception: If all models fail and no response is generated
-    """
-    # Extract and prepare parameters
-    nested_kwargs: Final = kwargs.pop("kwargs", {})
-    original_model: Final = kwargs["model"]
-    model = original_model
-    fallbacks: Final = [original_model] + nested_kwargs.pop("fallbacks", [])
-    kwargs.pop("acompletion", None)  # Remove to prevent keyword conflicts
-    litellm_call_id: Final = str(uuid.uuid4())
-    base_kwargs: Final = {**kwargs, **nested_kwargs, "litellm_call_id": litellm_call_id}
 
-    # fields to remove
-    base_kwargs.pop("model", None)  # Remove model as it will be set per fallback
-    litellm_logging_obj: Final = base_kwargs.pop("litellm_logging_obj", None)
+def without_global_fallbacks_around(endpoint: Callable[_P, _R]) -> Callable[_P, _R]:
+    if not inspect.iscoroutinefunction(endpoint):
 
-    # Try each fallback model
-    most_recent_exception_str: str | None = None
-    for attempted_fallbacks, fallback in enumerate(fallbacks):
-        try:
-            completion_kwargs = safe_deep_copy(base_kwargs)
-            # Handle dictionary fallback configurations
-            if isinstance(fallback, dict):
-                fallback_config = safe_deep_copy(dict(fallback))
-                model = fallback_config.pop("model", original_model)
-                completion_kwargs.update(fallback_config)
-            else:
-                model = fallback
+        @functools.wraps(endpoint)
+        def call(*args: _P.args, **kwargs: _P.kwargs) -> _R:  # kwargs-ok: endpoint payload
+            with without_global_fallbacks():
+                return endpoint(*args, **kwargs)
 
-            # Filter out internal parameters that shouldn't be sent to provider APIs
-            completion_kwargs = filter_internal_params(completion_kwargs)
+        return call
 
-            response = await litellm.acompletion(
-                **completion_kwargs,
-                model=model,
-                litellm_logging_obj=litellm_logging_obj,
-            )
+    @functools.wraps(endpoint)
+    async def acall(*args: _P.args, **kwargs: _P.kwargs) -> object:  # kwargs-ok: endpoint payload
+        with without_global_fallbacks():
+            result: Final = endpoint(*args, **kwargs)
+            return await _awaited(result) if inspect.isawaitable(result) else result
 
-            if response is not None:
-                return add_fallback_headers_to_response(
-                    response=response,
-                    attempted_fallbacks=attempted_fallbacks,
-                )
+    return acall  # pyright: ignore[reportReturnType]  # a coroutine endpoint's _R is the coroutine acall returns
 
-        except Exception as e:
-            verbose_logger.exception("Fallback attempt failed for model %s: %s", model, e)
-            most_recent_exception_str = str(e)
-            continue
 
-    raise Exception(
-        f"{most_recent_exception_str}. All fallback attempts failed. Enable verbose logging with `litellm.set_verbose=True` for details."
+def _configured_fallbacks(request_kwargs: Mapping[str, object]) -> object:
+    if request_kwargs.get(FALLBACK_ATTEMPT_KWARG) is True:
+        return None
+    per_call: Final = request_kwargs.get("fallbacks")
+    if per_call is not None:
+        return per_call
+    return None if _GLOBAL_FALLBACKS_OFF.get() else litellm.model_fallbacks
+
+
+def uses_fallbacks(request_kwargs: Mapping[str, object]) -> bool:
+    return bool(_configured_fallbacks(request_kwargs))
+
+
+def resolve_fallbacks(request_kwargs: Mapping[str, object]) -> FallbackChain | None:
+    configured: Final = _configured_fallbacks(request_kwargs)
+    return _FALLBACK_CHAIN.validate_python(configured) if configured else None
+
+
+@dataclass(frozen=True, slots=True)
+class _FallbackAttempt:
+    model: str
+    kwargs: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _FallbackPlan:
+    original_model: str
+    base_kwargs: Mapping[str, object]
+    fallbacks: FallbackChain
+    logging_obj: object
+
+
+def routes_through_a_prompt_manager(model: str | None) -> bool:
+    return model is not None and model.split("/", 1)[0] in litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # the prompt manager lookup reads this same list
+
+
+def _provider_of(model: str, custom_llm_provider: object) -> str | None:
+    from litellm.integrations.litellm_agent.litellm_agent_model_resolver import LITELLM_AGENT_PREFIX
+    from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
+
+    try:
+        return resolve_model_and_provider_for_metadata(
+            model.removeprefix(LITELLM_AGENT_PREFIX),
+            custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        )[1]
+    except litellm.exceptions.BadRequestError:
+        return None
+
+
+def _inherited_kwargs(
+    base_kwargs: Mapping[str, object], original_model: str, model: str, overrides: Mapping[str, object]
+) -> Mapping[str, object]:
+    if model == original_model:
+        return base_kwargs
+    requested_provider: Final = base_kwargs.get("custom_llm_provider")
+    original_provider: Final = _provider_of(original_model, requested_provider)
+    provider: Final = _provider_of(model, overrides.get("custom_llm_provider")) or _provider_of(
+        model, requested_provider
+    )
+    its_own_template_picks_the_provider: Final = "prompt_id" in overrides and routes_through_a_prompt_manager(model)
+    switches_provider: Final = (
+        its_own_template_picks_the_provider or original_provider is None or original_provider != provider
+    )
+    model_bound: Final = (
+        _MODEL_BOUND_PARAMS | {"custom_llm_provider"} if routes_through_a_prompt_manager(model) else _MODEL_BOUND_PARAMS
+    )
+    dropped: Final = (model_bound | _PROVIDER_BOUND_PARAMS) if switches_provider else model_bound
+    return {key: value for key, value in base_kwargs.items() if key not in dropped}
+
+
+def _without_the_applied_prompt_when_the_fallback_renders_its_own(
+    inherited: Mapping[str, object], model: str, overrides: Mapping[str, object]
+) -> Mapping[str, object]:
+    if "prompt_id" not in overrides and not routes_through_a_prompt_manager(model):
+        return inherited
+    return {key: value for key, value in inherited.items() if key != PROMPT_MANAGEMENT_APPLIED_FIELD}
+
+
+def _fallback_attempt(plan: _FallbackPlan, fallback: str | Mapping[str, object]) -> _FallbackAttempt:
+    overrides: Final = _NO_OVERRIDES if isinstance(fallback, str) else fallback
+    model: Final = fallback if isinstance(fallback, str) else str(overrides.get("model", plan.original_model))
+    inherited: Final = _without_the_applied_prompt_when_the_fallback_renders_its_own(
+        _inherited_kwargs(plan.base_kwargs, plan.original_model, model, overrides),
+        model,
+        overrides,
+    )
+    request: Final = filter_internal_params(safe_deep_copy({**inherited, **overrides}))
+    return _FallbackAttempt(
+        model=model,
+        kwargs={**request, "model": model, "litellm_logging_obj": plan.logging_obj, FALLBACK_ATTEMPT_KWARG: True},
     )
 
 
-def completion_with_fallbacks(**kwargs):
-    return run_async_function(async_function=async_completion_with_fallbacks, **kwargs)
+def _fallback_plan(runner_kwargs: Mapping[str, object]) -> _FallbackPlan:
+    nested_kwargs: Final = _REQUEST_KWARGS.validate_python(runner_kwargs.get("kwargs") or {})
+    merged: Final = {**runner_kwargs, **nested_kwargs}
+    return _FallbackPlan(
+        original_model=str(runner_kwargs["model"]),
+        base_kwargs={
+            **{key: value for key, value in merged.items() if key not in _RUNNER_PARAMS},
+            "litellm_call_id": merged.get("litellm_call_id") or str(uuid.uuid4()),
+        },
+        fallbacks=_FALLBACK_CHAIN.validate_python(nested_kwargs.get("fallbacks") or ()),
+        logging_obj=merged.get("litellm_logging_obj"),
+    )
+
+
+def _fallback_attempts(plan: _FallbackPlan) -> Iterator[_FallbackAttempt]:
+    return (_fallback_attempt(plan, fallback) for fallback in plan.fallbacks)
+
+
+def _all_attempts_failed(last_error: Exception) -> Exception:
+    return Exception(
+        f"{last_error}. All fallback attempts failed. Enable verbose logging with `litellm.set_verbose=True` for details."
+    )
+
+
+async def _fallback_response(plan: _FallbackPlan, attempt: _FallbackAttempt) -> object:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = plan.logging_obj
+    if not isinstance(logging_obj, Logging):
+        return await litellm.acompletion(**attempt.kwargs)
+    if attempt.model == plan.original_model:
+        logging_obj.resume_billing_as_a2a_agent()
+        return await litellm.acompletion(**attempt.kwargs)
+    logging_obj.stop_billing_as_a2a_agent()
+    response: Final = await litellm.acompletion(**attempt.kwargs)
+    logging_obj.stop_attributing_to_a2a_agent()
+    return response
+
+
+async def async_completion_with_fallbacks(**kwargs: object) -> object:
+    plan: Final = _fallback_plan(kwargs)
+    primary: Final = _fallback_attempt(plan, plan.original_model)
+    try:
+        return add_fallback_headers_to_response(
+            response=await litellm.acompletion(**primary.kwargs), attempted_fallbacks=0
+        )
+    except Exception as primary_error:  # noqa: BLE001  # every failed attempt moves on to the next fallback
+        verbose_logger.exception("Fallback attempt failed for model %s: %s", primary.model, primary_error)
+        last_error: Exception = primary_error  # rebind-ok: the newest failure names the final error
+        for attempted_fallbacks, attempt in enumerate(_fallback_attempts(plan), start=1):
+            try:
+                return add_fallback_headers_to_response(
+                    response=await _fallback_response(plan, attempt), attempted_fallbacks=attempted_fallbacks
+                )
+            except Exception as fallback_error:  # noqa: BLE001  # any failed attempt moves on to the next fallback
+                verbose_logger.exception("Fallback attempt failed for model %s: %s", attempt.model, fallback_error)
+                last_error = fallback_error
+        raise _all_attempts_failed(last_error) from last_error
+
+
+def _is_fallback_attempt(request_kwargs: Mapping[str, object], call_type: str) -> bool:
+    return call_type == CallTypes.completion.value and request_kwargs.get(FALLBACK_ATTEMPT_KWARG) is True
+
+
+def checked_fallback_attempt(request_kwargs: Mapping[str, object], call_type: str, response: object) -> object:
+    if not _is_fallback_attempt(request_kwargs, call_type):
+        return response
+    from litellm.utils import async_post_call_success_deployment_hook
+
+    return run_async_function(
+        async_post_call_success_deployment_hook, request_kwargs, response, CallTypes.completion, include_v2=True
+    )
+
+
+def report_failed_sync_fallback_attempt(request_kwargs: Mapping[str, object], call_type: str, error: Exception) -> None:
+    if not _is_fallback_attempt(request_kwargs, call_type) or request_kwargs.get("acompletion") is True:
+        return
+    from litellm.utils import async_post_call_failure_deployment_hook
+
+    run_async_function(async_post_call_failure_deployment_hook, request_kwargs, error, call_type, include_v2=True)
+
+
+def _completion_with_pre_call_hooks(request_kwargs: Mapping[str, object]) -> object:
+    from litellm.utils import async_pre_call_deployment_hook
+
+    request: Final = _REQUEST_KWARGS.validate_python(
+        run_async_function(async_pre_call_deployment_hook, request_kwargs, CallTypes.completion.value, include_v2=True)
+    )
+    return litellm.completion(**request)
+
+
+def completion_with_fallbacks(**kwargs: object) -> object:
+    plan: Final = _fallback_plan(kwargs)
+    primary: Final = _fallback_attempt(plan, plan.original_model)
+    try:
+        return add_fallback_headers_to_response(
+            response=_completion_with_pre_call_hooks(primary.kwargs), attempted_fallbacks=0
+        )
+    except Exception as primary_error:  # noqa: BLE001  # every failed attempt moves on to the next fallback
+        verbose_logger.exception("Fallback attempt failed for model %s: %s", primary.model, primary_error)
+        last_error: Exception = primary_error  # rebind-ok: the newest failure names the final error
+        for attempted_fallbacks, attempt in enumerate(_fallback_attempts(plan), start=1):
+            try:
+                return add_fallback_headers_to_response(
+                    response=_completion_with_pre_call_hooks(attempt.kwargs), attempted_fallbacks=attempted_fallbacks
+                )
+            except Exception as fallback_error:  # noqa: BLE001  # any failed attempt moves on to the next fallback
+                verbose_logger.exception("Fallback attempt failed for model %s: %s", attempt.model, fallback_error)
+                last_error = fallback_error
+        raise _all_attempts_failed(last_error) from last_error

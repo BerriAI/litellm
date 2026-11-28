@@ -11,6 +11,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
@@ -54,11 +55,11 @@ class FirecrawlSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         """
@@ -79,24 +80,20 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         self,
         api_base: str | None,
         optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        data: dict[str, object] | list[dict] | None = None,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint.
         """
-        resolved_api_base: Final = api_base or get_secret_str("FIRECRAWL_API_BASE") or self.FIRECRAWL_API_BASE
-        clean_api_base: Final = resolved_api_base.rstrip("/")
-        if clean_api_base.endswith("/search"):
-            return clean_api_base
-        return f"{clean_api_base}/search"
+        return ensure_api_route(api_base or get_secret_str("FIRECRAWL_API_BASE") or self.FIRECRAWL_API_BASE, "search")
 
     def transform_search_request(
         self,
         query: str | list[str],
         optional_params: dict,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform Search request to Firecrawl API format.
 
@@ -153,7 +150,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform Firecrawl API response to LiteLLM unified SearchResponse format.

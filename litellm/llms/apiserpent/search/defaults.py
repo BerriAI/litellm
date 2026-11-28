@@ -5,6 +5,7 @@ Single source of truth for the supported request parameters and their
 package-level defaults. See https://apiserpent.com/docs.
 """
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Final, Literal
 
@@ -48,17 +49,20 @@ class APISerpentSearchParams:
         if self.pages is not None and not PAGES_MIN <= self.pages <= PAGES_MAX:
             raise ValueError(f"pages must be between {PAGES_MIN} and {PAGES_MAX}, got {self.pages}")
 
-    def to_request_params(self) -> dict:
+    def _field_values(self) -> Mapping[str, object]:
+        return asdict(self)
+
+    def to_request_params(self) -> dict[str, object]:
         """Return non-None fields as request params, booleans lowercased."""
-        params: Final[dict] = {}
-        for key, value in asdict(self).items():
+        params: Final[dict[str, object]] = {}
+        for key, value in self._field_values().items():
             if value is None:
                 continue
             params[key] = str(value).lower() if isinstance(value, bool) else value
         return params
 
     @classmethod
-    def field_names(cls) -> set:
+    def field_names(cls) -> set[str]:
         return set(cls.__dataclass_fields__.keys())
 
 

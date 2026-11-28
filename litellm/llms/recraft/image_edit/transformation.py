@@ -1,10 +1,14 @@
+from collections.abc import Mapping, Sequence
 from io import BufferedReader
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -20,13 +24,31 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _SupportsStrKeyLookup(Protocol):
+    def __getitem__(self, key: str, /) -> object: ...
+
+
+def _json_field(value: object, key: str) -> object:
+    if isinstance(value, _SupportsStrKeyLookup):
+        return value[key]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
+
+
+def _image_object(image_data: object) -> ImageObject:
+    fields: Final = decoded_json_object(image_data)
+    return ImageObject(url=fields.get("url", None), b64_json=fields.get("b64_json", None))
+
 
 class RecraftImageEditConfig(BaseImageEditConfig):
     DEFAULT_BASE_URL: str = "https://external.api.recraft.ai"
     IMAGE_EDIT_ENDPOINT: str = "v1/images/imageToImage"
     DEFAULT_STRENGTH: float = 0.2
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Supported OpenAI parameters that can be mapped to Recraft image edit API.
 
@@ -43,7 +65,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI image edit parameters to Recraft parameters.
         Reuses OpenAI logic but filters to supported params only.
@@ -61,27 +83,24 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete url for the request
 
         Some providers need `model` in `api_base`
         """
-        complete_url: str = api_base or get_secret_str("RECRAFT_API_BASE") or self.DEFAULT_BASE_URL
-
-        complete_url = complete_url.rstrip("/")
-        complete_url = f"{complete_url}/{self.IMAGE_EDIT_ENDPOINT}"
-        return complete_url
+        base_url: Final = api_base or get_secret_str("RECRAFT_API_BASE") or self.DEFAULT_BASE_URL
+        return join_api_base(base_url, self.IMAGE_EDIT_ENDPOINT)
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         final_api_key: Final[str | None] = api_key or get_secret_str("RECRAFT_API_KEY")
         if not final_api_key:
             raise ValueError("RECRAFT_API_KEY is not set")
@@ -93,11 +112,11 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: Mapping[str, object],
+    ) -> tuple[dict[str, object], RequestFiles]:
         """
         Transform the image edit request to Recraft's multipart form format.
         Reuses OpenAI file handling logic but adapts for Recraft API structure.
@@ -114,18 +133,17 @@ class RecraftImageEditConfig(BaseImageEditConfig):
             request_params["prompt"] = prompt
 
         request_body: Final = RecraftImageEditRequestParams(**request_params)
-        request_dict: Final = cast(dict, request_body)
         #########################################################
         # Reuse OpenAI logic: Separate images as `files` and send other parameters as `data`
         #########################################################
         files_list: Final = self._get_image_files_for_request(image=image) if image is not None else []
-        data_without_images: Final = {k: v for k, v in request_dict.items() if k != "image"}
+        data_without_images: Final = {k: v for k, v in request_body.items() if k != "image"}
 
         return data_without_images, files_list
 
     def _get_image_files_for_request(
         self,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
     ) -> list[tuple[str, Any]]:
         files_list: Final[list[tuple[str, Any]]] = []
 
@@ -154,7 +172,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
     ) -> ImageResponse:
         model_response: Final = ImageResponse()
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image edit response: {e}",
@@ -164,12 +182,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         if not model_response.data:
             model_response.data = []
 
-        for image_data in response_data["data"]:
-            model_response.data.append(
-                ImageObject(
-                    url=image_data.get("url", None),
-                    b64_json=image_data.get("b64_json", None),
-                )
-            )
+        for image_data in iter_items(_json_field(response_data, "data")):
+            model_response.data.append(_image_object(image_data))
 
         return model_response

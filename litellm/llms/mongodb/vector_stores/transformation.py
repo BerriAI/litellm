@@ -9,6 +9,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from litellm.exceptions import AuthenticationError, BadRequestError, ServiceUnavailableError, Timeout
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseQueryEmbeddingVectorStoreConfig,
@@ -39,7 +40,7 @@ NUM_CANDIDATES_MULTIPLIER: Final = 10
 MIN_NUM_CANDIDATES: Final = 100
 MAX_NUM_CANDIDATES: Final = 10_000
 MAX_QUERY_CHARACTERS: Final = 32_000
-_EMPTY_EMBEDDING_CONFIG: Final = MappingProxyType({})
+_EMPTY_EMBEDDING_CONFIG: Final[Mapping[str, object]] = MappingProxyType({})
 _SEARCH_ONLY_MESSAGE: Final = (
     "MongoDB vector store is search-only. Create the collection and its MongoDB Vector Search "
     "index in MongoDB directly, then register it here by index name."
@@ -283,7 +284,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
             raise config_error("The embedding model must return a non-empty, finite query vector.")
         limit: Final = cls._limit(optional_params)
         return (
-            f"{api_base}/v1/vector_stores/{quote(vector_store_id, safe='')}/search",
+            join_api_base(api_base, f"v1/vector_stores/{quote(vector_store_id, safe='')}/search"),
             {
                 "query": query_text,
                 "query_vector": tuple(vector),

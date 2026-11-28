@@ -8,6 +8,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
 
+import httpx
+
 from litellm.exceptions import (
     APIConnectionError,
     AuthenticationError,
@@ -133,6 +135,8 @@ _STATUS_CODE_MAP: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
+_OVERLOADED_STATUS_CODE: Final = "529"
+
 _INTERNAL_STATE_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
     TypeError,
     KeyError,
@@ -153,6 +157,7 @@ _CLASS_CODE_TABLE: Final[tuple[tuple[tuple[type[BaseException], ...], str], ...]
     ((Timeout,), UPSTREAM_TIMEOUT),
     ((MidStreamFallbackError,), ROUTER_FALLBACK_FAILURE),
     ((APIConnectionError,), PROVIDER_CONNECTION_ERROR),
+    ((httpx.NetworkError, httpx.RemoteProtocolError), PROVIDER_CONNECTION_ERROR),
     ((ServiceUnavailableError,), PROVIDER_OVERLOADED),
     ((InternalServerError, BadGatewayError), PROVIDER_INTERNAL_ERROR),
     ((BadRequestError, UnprocessableEntityError), INVALID_REQUEST),
@@ -201,6 +206,8 @@ def normalize_error(exc: Exception | None, status_code: str, message: str) -> st
     )
     if by_message is not None:
         return by_message
+    if status_code == _OVERLOADED_STATUS_CODE:
+        return PROVIDER_OVERLOADED
     by_class: Final = _classify_by_class(exc)
     if by_class is not None:
         return by_class

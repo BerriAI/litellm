@@ -6,9 +6,9 @@
 # +-------------------------------------------------------------+
 
 import os
-from collections.abc import AsyncGenerator, AsyncIterable
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping
 from datetime import datetime
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -22,13 +22,15 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.proxy.guardrails.guardrail_hooks.dynamoai import (
     DynamoAIProcessedResult,
     DynamoAIRequest,
     DynamoAIResponse,
 )
-from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponseStream
+from litellm.types.utils import CallTypesLiteral, GuardrailStatus, LLMResponseTypes, ModelResponseStream
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.guardrails.guardrail_hooks.dynamoai import DynamoAIGuardrailConfigModel
 
 GUARDRAIL_NAME: Final = "dynamoai"
 
@@ -89,7 +91,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         messages: list[dict[str, object]],
         event_type: GuardrailEventHooks,
         text_type: str = "input",
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> DynamoAIResponse:
         """
         Call DynamoAI Guardrails API to analyze messages for policy violations.
@@ -133,7 +135,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                 timeout=self.timeout,
             )
             response.raise_for_status()
-            response_json: Final = response.json()
+            response_json: Final[DynamoAIResponse] = response.json()
 
             end_time = datetime.now()
             duration = (end_time - start_time).total_seconds()
@@ -189,7 +191,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         applied_policies: Final = response.get("appliedPolicies", [])
 
         violations_detected: Final[list[str]] = []
-        violation_details: Final[dict[str, object]] = {}
+        violation_details: Final[dict[str, Mapping[str, object]]] = {}
 
         # For now, only handle BLOCK action
         if final_action == "BLOCK":
@@ -380,9 +382,9 @@ class DynamoAIGuardrails(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         """
         Runs on response from LLM API call
@@ -448,7 +450,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[ModelResponseStream],
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Passes the entire stream to the guardrail
@@ -461,7 +463,7 @@ class DynamoAIGuardrails(CustomGuardrail):
             yield item
 
     @staticmethod
-    def get_config_model() -> type[GuardrailConfigModel] | None:
+    def get_config_model() -> "type[DynamoAIGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.dynamoai import (
             DynamoAIGuardrailConfigModel,
         )

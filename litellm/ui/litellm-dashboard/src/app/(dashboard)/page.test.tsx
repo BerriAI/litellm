@@ -1,0 +1,202 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import CreateKeyPage from "./page";
+
+interface KeyRow {
+  token: string;
+}
+
+const { mockReplace, mockUseKeys, mockUiHref, state } = vi.hoisted(() => {
+  const state = {
+    search: "login=success",
+    userRole: "Internal User",
+    keys: [] as KeyRow[],
+    returnUrl: null as string | null,
+    enabledPagesInternalUsers: null as string[] | null,
+    extraUiSettings: {} as Record<string, boolean>,
+    teams: [] as { team_id: string; members_with_roles: { user_id: string; role: string }[] }[],
+    isTeamsLoading: false,
+  };
+  return {
+    state,
+    mockReplace: vi.fn(),
+    mockUiHref: vi.fn((segment: string) => `/mocked-ui/${segment}`),
+    mockUseKeys: vi.fn(() => ({
+      data: { keys: state.keys, total_count: state.keys.length },
+      isLoading: false,
+    })),
+  };
+});
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: mockReplace }),
+  useSearchParams: () => new URLSearchParams(state.search),
+}));
+vi.mock("@/contexts/AuthContext", () => ({
+  useAuth: () => ({
+    authLoading: false,
+    token: "tok",
+    userRole: state.userRole,
+    userID: "user-1",
+  }),
+}));
+vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({ useKeys: mockUseKeys }));
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ isLoading: false, userId: "user-1", userRole: state.userRole, isViewOnly: false }),
+}));
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: () => ({
+    isLoading: false,
+    data: { values: { enabled_ui_pages_internal_users: state.enabledPagesInternalUsers, ...state.extraUiSettings } },
+  }),
+}));
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => ({ data: state.isTeamsLoading ? undefined : state.teams, isLoading: state.isTeamsLoading }),
+}));
+vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({ default: () => false }));
+vi.mock("@/app/(dashboard)/home/_components/HomePage", () => ({
+  default: () => <div data-testid="home-page" />,
+}));
+vi.mock("@/components/common_components/LoadingScreen", () => ({
+  default: () => <div data-testid="loading-screen" />,
+}));
+vi.mock("@/components/networking", async () => {
+  const { normalizeBackendPageUrlToUiOrigin } =
+    await vi.importActual<typeof import("@/utils/returnUrlUtils")>("@/utils/returnUrlUtils");
+  return {
+    getRuntimeBackendBaseUrl: () => "https://backend.example",
+    getUiPageUrl: (url: string) =>
+      normalizeBackendPageUrlToUiOrigin(url, "https://backend.example", "http://localhost:3000"),
+    proxyBaseUrl: "",
+  };
+});
+vi.mock("@/utils/uiHref", () => ({ uiHref: mockUiHref }));
+vi.mock("@/utils/returnUrlUtils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/utils/returnUrlUtils")>()),
+  buildLoginUrlWithReturn: (u: string) => u,
+  consumeReturnUrl: () => state.returnUrl,
+  getLoginUrl: () => "/login",
+  storeReturnUrl: () => undefined,
+}));
+
+const realLocation = window.location;
+const mockLocationReplace = vi.fn();
+
+describe("dashboard landing", () => {
+  beforeEach(() => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        origin: "http://localhost:3000",
+        href: "http://localhost:3000/ui/?login=success",
+        replace: mockLocationReplace,
+      },
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, "location", { configurable: true, value: realLocation });
+    state.search = "login=success";
+    state.userRole = "Internal User";
+    state.keys = [];
+    state.returnUrl = null;
+    state.enabledPagesInternalUsers = null;
+    state.extraUiSettings = {};
+    state.teams = [];
+    state.isTeamsLoading = false;
+    mockReplace.mockClear();
+    mockUseKeys.mockClear();
+    mockUiHref.mockClear();
+    mockLocationReplace.mockClear();
+  });
+
+  it.each(["Internal User", "Internal Viewer", "Admin", "Admin Viewer", "Org Admin", ""])(
+    "lands a keyless %s on the keys dashboard, never on the MCP connect page",
+    (role) => {
+      state.userRole = role;
+      render(<CreateKeyPage />);
+      expect(screen.getByTestId("home-page")).toBeInTheDocument();
+      expect(screen.queryByTestId("loading-screen")).not.toBeInTheDocument();
+      expect(mockReplace).not.toHaveBeenCalled();
+      expect(mockUiHref).not.toHaveBeenCalledWith("connect");
+    },
+  );
+
+  it("lands a user who already owns a key on the keys dashboard", () => {
+    state.keys = [{ token: "sk-abc" }];
+    render(<CreateKeyPage />);
+    expect(screen.getByTestId("home-page")).toBeInTheDocument();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("sends an internal user to their first visible page when Home is hidden from them", () => {
+    state.enabledPagesInternalUsers = ["api-keys"];
+    render(<CreateKeyPage />);
+    expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/api-keys");
+    expect(screen.queryByTestId("home-page")).not.toBeInTheDocument();
+  });
+
+  it("waits for team data before picking the first visible page for a team admin", () => {
+    state.enabledPagesInternalUsers = ["agents", "logs"];
+    state.extraUiSettings = { disable_agents_for_internal_users: true, allow_agents_for_team_admins: true };
+    state.isTeamsLoading = true;
+    const { rerender } = render(<CreateKeyPage />);
+    expect(mockReplace).not.toHaveBeenCalled();
+
+    state.isTeamsLoading = false;
+    state.teams = [{ team_id: "team-1", members_with_roles: [{ user_id: "user-1", role: "admin" }] }];
+    rerender(<CreateKeyPage />);
+    expect(mockReplace).toHaveBeenCalledTimes(1);
+    expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/agents");
+  });
+
+  it("keeps an internal user on Home when the page allowlist includes it", () => {
+    state.enabledPagesInternalUsers = ["home", "api-keys"];
+    render(<CreateKeyPage />);
+    expect(screen.getByTestId("home-page")).toBeInTheDocument();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("keeps an admin on Home despite the internal-user page allowlist", () => {
+    state.userRole = "Admin";
+    state.enabledPagesInternalUsers = ["api-keys"];
+    render(<CreateKeyPage />);
+    expect(screen.getByTestId("home-page")).toBeInTheDocument();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("never looks a user's keys up to decide where the landing goes", () => {
+    render(<CreateKeyPage />);
+    expect(mockUseKeys).not.toHaveBeenCalled();
+  });
+
+  it("redirects an old ?page= bookmark to its path route without rendering the keys dashboard", () => {
+    state.search = "page=logs";
+    render(<CreateKeyPage />);
+    expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/logs");
+    expect(screen.getByTestId("loading-screen")).toBeInTheDocument();
+    expect(screen.queryByTestId("home-page")).not.toBeInTheDocument();
+  });
+
+  it("carries the MCP env-var deep link's other params through the legacy redirect", () => {
+    state.search = "page=mcp-servers&fill_env_vars=srv-1";
+    render(<CreateKeyPage />);
+    expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/mcp-servers?fill_env_vars=srv-1");
+  });
+
+  it("still sends the user to an explicit stored return URL", () => {
+    state.returnUrl = "/ui/models-and-endpoints";
+    render(<CreateKeyPage />);
+    expect(mockLocationReplace).toHaveBeenCalledWith("http://localhost:3000/ui/models-and-endpoints");
+  });
+
+  it.each([
+    "/ui/?login=success",
+    "http://localhost:3000/ui?login=success",
+    "https://backend.example/ui/?login=success",
+  ])("does not reload when the return URL %s already matches the current page", (returnUrl) => {
+    state.returnUrl = returnUrl;
+    render(<CreateKeyPage />);
+    expect(mockLocationReplace).not.toHaveBeenCalled();
+  });
+});

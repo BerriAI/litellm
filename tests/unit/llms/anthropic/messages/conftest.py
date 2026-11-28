@@ -1,0 +1,129 @@
+from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import Final
+from unittest.mock import MagicMock
+
+import pytest
+
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore
+from pydantic import BaseModel
+
+import litellm
+import litellm.proxy.proxy_server as proxy_server
+from litellm.caching.dual_cache import DualCache
+from litellm.proxy._types import (
+    LiteLLM_EndUserTable,
+    LiteLLM_ProjectTableCachedObj,
+    LiteLLM_TeamMembership,
+    LiteLLM_TeamTableCachedObj,
+    LiteLLM_UserTable,
+)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.router import Router
+
+_ProxyObject = (
+    LiteLLM_TeamTableCachedObj
+    | LiteLLM_UserTable
+    | LiteLLM_EndUserTable
+    | LiteLLM_ProjectTableCachedObj
+    | LiteLLM_TeamMembership
+)
+
+
+def _cache_key(row: _ProxyObject) -> AuthObject:
+    match row:
+        case LiteLLM_TeamTableCachedObj():
+            return AuthObject.team(row.team_id)
+        case LiteLLM_UserTable():
+            return AuthObject.user(row.user_id)
+        case LiteLLM_EndUserTable():
+            return AuthObject.end_user(row.user_id)
+        case LiteLLM_ProjectTableCachedObj():
+            return AuthObject.project(row.project_id)
+        case LiteLLM_TeamMembership():
+            return AuthObject.team_membership_reservation(user_id=row.user_id, team_id=row.team_id)
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyAuthState:
+    """A running proxy with a master key, so the centralized auth checks run, and its auth cache to seed."""
+
+    cache: UserApiKeyCache
+    monkeypatch: pytest.MonkeyPatch
+
+    def seed(self, *rows: _ProxyObject) -> None:
+        for row in rows:
+            stored: Final[BaseModel] = row
+            self.cache.set_cache(key=_cache_key(row), value=stored)
+
+    def serve(self, router: Router) -> None:
+        self.monkeypatch.setattr(proxy_server, "llm_router", router)
+
+
+@pytest.fixture
+def proxy_auth_state(monkeypatch: pytest.MonkeyPatch) -> ProxyAuthState:
+    cache: Final = UserApiKeyCache()
+    proxy_globals: Final = {
+        "master_key": "sk-test-master",
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": cache,
+        "spend_counter_cache": DualCache(),
+        "spend_counter_store": SpendCounterStore(connect(None).spend_counters()),
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=cache),
+        "general_settings": {},
+        "user_custom_auth": None,
+        "litellm_proxy_admin_name": "admin",
+        "llm_router": None,
+        "llm_model_list": None,
+    }
+    for name, value in proxy_globals.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    return ProxyAuthState(cache=cache, monkeypatch=monkeypatch)
+
+
+WITHOUT_LOW_TIERS_MODEL: Final = "reasoner-without-low-tiers"
+WITHOUT_MINIMAL_MODEL: Final = "reasoner-without-minimal"
+
+
+def _reasoner_refusing(
+    model: str, model_cost_key: str, provider: str, refused_efforts: frozenset[str]
+) -> Iterator[str]:
+    litellm.model_cost[model_cost_key] = {
+        "litellm_provider": provider,
+        "mode": "responses",
+        "supports_reasoning": True,
+        **{
+            f"supports_{effort}_reasoning_effort": effort not in refused_efforts
+            for effort in ("none", "minimal", "low")
+        },
+    }
+    litellm.get_model_info.cache_clear()
+    try:
+        yield f"{provider}/{model}"
+    finally:
+        litellm.model_cost.pop(model_cost_key, None)
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def openai_model_without_low_tiers(local_model_cost_map: None) -> Iterator[str]:
+    yield from _reasoner_refusing(
+        WITHOUT_LOW_TIERS_MODEL, WITHOUT_LOW_TIERS_MODEL, "openai", frozenset({"none", "minimal", "low"})
+    )
+
+
+@pytest.fixture
+def azure_model_without_low_tiers(local_model_cost_map: None) -> Iterator[str]:
+    yield from _reasoner_refusing(
+        WITHOUT_LOW_TIERS_MODEL, f"azure/{WITHOUT_LOW_TIERS_MODEL}", "azure", frozenset({"none", "minimal", "low"})
+    )
+
+
+@pytest.fixture
+def azure_model_without_minimal(local_model_cost_map: None) -> Iterator[str]:
+    yield from _reasoner_refusing(
+        WITHOUT_MINIMAL_MODEL, f"azure/{WITHOUT_MINIMAL_MODEL}", "azure", frozenset({"none", "minimal"})
+    )

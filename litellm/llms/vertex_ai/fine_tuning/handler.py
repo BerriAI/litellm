@@ -1,6 +1,6 @@
 import json
 import traceback
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from datetime import datetime
 from typing import Final, Literal
 
@@ -25,6 +25,11 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import LiteLLMFineTuningJob
 
 _JSON_VALUE: Final = TypeAdapter(object)
+
+
+def _response_tuning_job(response: httpx.Response) -> ResponseTuningJob:
+    tuning_job: Final[ResponseTuningJob] = response.json()
+    return ResponseTuningJob(**tuning_job)
 
 
 class VertexFineTuningAPI(VertexLLM):
@@ -54,7 +59,7 @@ class VertexFineTuningAPI(VertexLLM):
         self,
         create_fine_tuning_job_data: FineTuningJobCreate,
         original_hyperparameters: dict = {},
-        kwargs: dict | None = None,
+        kwargs: Mapping[str, object] | None = None,
     ) -> FineTuneJobCreate:
         """
         convert request from OpenAI format to Vertex format
@@ -90,7 +95,7 @@ class VertexFineTuningAPI(VertexLLM):
         self,
         create_fine_tuning_job_data: FineTuningJobCreate,
         original_hyperparameters: dict = {},
-        kwargs: dict | None = None,
+        kwargs: Mapping[str, object] | None = None,
     ) -> FineTuneHyperparameters:
         _oai_hyperparameters: Final = create_fine_tuning_job_data.hyperparameters
         _vertex_hyperparameters: Final = FineTuneHyperparameters()
@@ -161,7 +166,7 @@ class VertexFineTuningAPI(VertexLLM):
     async def acreate_fine_tuning_job(
         self,
         fine_tuning_url: str,
-        headers: dict,
+        headers: Mapping[str, object],
         request_data: FineTuneJobCreate,
     ):
         try:
@@ -183,11 +188,11 @@ class VertexFineTuningAPI(VertexLLM):
                     f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
                 )
 
-            verbose_logger.debug("got response from creating fine tuning job: %s", response.json())
-
-            vertex_response: Final = ResponseTuningJob(
-                **response.json(),
+            verbose_logger.debug(
+                "got response from creating fine tuning job: %s", _JSON_VALUE.validate_python(response.json())
             )
+
+            vertex_response: Final = _response_tuning_job(response)
 
             verbose_logger.debug("vertex_response %s", vertex_response)
             open_ai_response: Final = self.convert_vertex_response_to_open_ai_response(vertex_response)
@@ -208,7 +213,7 @@ class VertexFineTuningAPI(VertexLLM):
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
-        kwargs: dict | None = None,
+        kwargs: Mapping[str, object] | None = None,
         original_hyperparameters: dict | None = {},
     ) -> LiteLLMFineTuningJob | Coroutine[object, object, LiteLLMFineTuningJob]:
         verbose_logger.debug("creating fine tuning job, args= %s", create_fine_tuning_job_data)
@@ -267,10 +272,10 @@ class VertexFineTuningAPI(VertexLLM):
                 f"Error creating fine tuning job. Status code: {response.status_code}. Response: {response.text}"
             )
 
-        verbose_logger.debug("got response from creating fine tuning job: %s", response.json())
-        vertex_response: Final = ResponseTuningJob(
-            **response.json(),
+        verbose_logger.debug(
+            "got response from creating fine tuning job: %s", _JSON_VALUE.validate_python(response.json())
         )
+        vertex_response: Final = _response_tuning_job(response)
 
         verbose_logger.debug("vertex_response %s", vertex_response)
         open_ai_response: Final = self.convert_vertex_response_to_open_ai_response(vertex_response)

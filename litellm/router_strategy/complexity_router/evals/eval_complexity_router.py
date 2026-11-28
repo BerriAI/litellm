@@ -231,7 +231,7 @@ EVAL_CASES: Final[list[EvalCase]] = [
 ]
 
 
-def run_eval() -> tuple[int, int, list[dict]]:
+def run_eval() -> tuple[int, int, list[dict[str, object]]]:
     """
     Run the evaluation suite.
 
@@ -239,15 +239,15 @@ def run_eval() -> tuple[int, int, list[dict]]:
         Tuple of (passed, total, failures)
     """
     # Create router with default config
-    mock_router: Final = MagicMock()
+    mock_ctx: Final = MagicMock()
     router: Final = ComplexityRouter(
         model_name="eval-router",
-        litellm_router_instance=mock_router,
+        ctx=mock_ctx,
     )
 
     passed = 0
     total: Final = len(EVAL_CASES)
-    failures: Final = []
+    failures: Final = list[dict[str, object]]()
 
     print("=" * 70)
     print("COMPLEXITY ROUTER EVALUATION")

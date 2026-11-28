@@ -11,8 +11,7 @@ __all__ = ["aingest", "aquery", "ingest", "query"]
 
 import asyncio
 import contextvars
-from collections.abc import Coroutine, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Coroutine, Mapping
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -21,8 +20,9 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
-from litellm._internal_context import is_internal_call
+from litellm._internal_context import internal_sub_call
 from litellm.cost_calculator import vector_store_search_cost
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.rag.ingestion.bedrock_ingestion import BedrockRAGIngestion
@@ -37,10 +37,19 @@ from litellm.types.rag import (
     RAGIngestResponse,
 )
 from litellm.types.utils import ModelResponse
+from litellm.types.vector_stores import VectorStoreSearchResponse
 from litellm.utils import client
 
 if TYPE_CHECKING:
     from litellm import Router
+
+
+def _router_of(value: object, method: str) -> Router | None:
+    if value is None:
+        return None
+    from litellm import Router
+
+    return require_attributes(value, Router, method)
 
 
 # Registry of provider-specific ingestion classes
@@ -151,7 +160,7 @@ async def aingest(
     file_url: str | None = None,
     file_id: str | None = None,
     timeout: float | httpx.Timeout | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> RAGIngestResponse:
     """
     Async: Ingest a document into a vector store.
@@ -212,40 +221,25 @@ async def aingest(
         )
 
 
-@contextmanager
-def _suppressed_sub_call_billing() -> Iterator[None]:
-    """
-    Suppress a sub-call's own billing event so the parent aquery event bills it.
-
-    Every suppressed sub-call's cost must be folded into the parent event:
-    into the response's hidden response_cost on the non-streaming path, or via
-    the logging object's additional_response_cost on the streaming path (the
-    streamed cost is computed from assembled chunks after this pipeline
-    returns, so there is no response object to fold into here).
-    """
-    previous: Final = is_internal_call.get()
-    is_internal_call.set(True)
-    try:
-        yield
-    finally:
-        is_internal_call.set(previous)
-
-
 async def _execute_query_pipeline(
     model: str,
     messages: list[AllMessageValues],
     retrieval_config: Mapping[str, object],
-    rerank: dict[str, Any] | None = None,
+    rerank: Mapping[str, Any] | None = None,
     stream: bool = False,
     vector_store_params: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ModelResponse:
     """
     Execute the RAG query pipeline.
     """
+    parent_request_id: Final[str | None] = TypeAdapter[str | None](str | None).validate_python(
+        TypeAdapter(dict[str, object]).validate_python(kwargs).get("litellm_call_id")
+    )
+
     # Extract router from kwargs - use it for completion if available
     # to properly resolve virtual model names
-    router: Final[Router | None] = kwargs.pop("router", None)
+    router: Final = _router_of(kwargs.pop("router", None), "acompletion")
 
     # 1. Extract query from last user message
     query_text: Final = RAGQuery.extract_query_from_messages(messages)
@@ -272,8 +266,8 @@ async def _execute_query_pipeline(
     forwarded_search_params: Final = MappingProxyType(
         {**provider_search_params, **kwargs, **filter_search_params, **store_search_params}
     )
-    with _suppressed_sub_call_billing():
-        search_response: Final = await litellm.vector_stores.asearch(
+    with internal_sub_call(parent_request_id):
+        search_response: Final[VectorStoreSearchResponse] = await litellm.vector_stores.asearch(
             vector_store_id=retrieval_config["vector_store_id"],
             query=query_text,
             max_num_results=retrieval_config.get("top_k", 10),
@@ -306,7 +300,7 @@ async def _execute_query_pipeline(
     if rerank and rerank.get("enabled"):
         documents: Final = RAGQuery.extract_documents_from_search(search_response)
         if documents:
-            with _suppressed_sub_call_billing():
+            with internal_sub_call(parent_request_id):
                 rerank_response = await litellm.arerank(
                     model=rerank["model"],
                     query=query_text,
@@ -324,7 +318,7 @@ async def _execute_query_pipeline(
     modified_messages: Final = messages[:-1] + [context_message] + [messages[-1]]
 
     # Use router if available to properly resolve virtual model names
-    with _suppressed_sub_call_billing():
+    with internal_sub_call(parent_request_id):
         if router is not None:
             response = await router.acompletion(
                 model=model,
@@ -367,10 +361,10 @@ async def aquery(
     model: str,
     messages: list[AllMessageValues],
     retrieval_config: Mapping[str, object],
-    rerank: dict[str, Any] | None = None,
+    rerank: Mapping[str, object] | None = None,
     stream: bool = False,
     vector_store_params: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ModelResponse:
     """
     Async: Query a RAG pipeline.
@@ -416,10 +410,10 @@ def query(
     model: str,
     messages: list[AllMessageValues],
     retrieval_config: Mapping[str, object],
-    rerank: dict[str, Any] | None = None,
+    rerank: Mapping[str, object] | None = None,
     stream: bool = False,
     vector_store_params: Mapping[str, object] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ModelResponse | Coroutine[None, None, ModelResponse]:
     """
     Query a RAG pipeline.
@@ -468,7 +462,7 @@ def ingest(
     file_url: str | None = None,
     file_id: str | None = None,
     timeout: float | httpx.Timeout | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> RAGIngestResponse | Coroutine[None, None, RAGIngestResponse]:
     """
     Ingest a document into a vector store.
@@ -498,7 +492,7 @@ def ingest(
     local_vars: Final = locals()
     try:
         _is_async: Final = kwargs.pop("aingest", False) is True
-        router: Final[Router | None] = kwargs.get("router")
+        router: Final = _router_of(kwargs.get("router"), "aembedding")
 
         # Convert file dict to file_data tuple if provided
         if file is not None and file_data is None:

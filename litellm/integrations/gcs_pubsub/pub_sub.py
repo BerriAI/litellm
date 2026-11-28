@@ -10,7 +10,10 @@ import asyncio
 import json
 import os
 import traceback
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
+
+from pydantic import TypeAdapter
 
 from litellm.types.utils import StandardLoggingPayload
 
@@ -26,6 +29,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GcsPubSubLogger(CustomBatchLogger):
@@ -93,7 +98,7 @@ class GcsPubSubLogger(CustomBatchLogger):
         }
         return headers
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         """
         Async Log success events to GCS PubSub Topic
 
@@ -152,7 +157,7 @@ class GcsPubSubLogger(CustomBatchLogger):
         finally:
             self.log_queue.clear()
 
-    async def publish_message(self, message: SpendLogsPayload | StandardLoggingPayload) -> dict[str, Any] | None:
+    async def publish_message(self, message: SpendLogsPayload | StandardLoggingPayload) -> object:
         """
         Publish message to Google Cloud Pub/Sub using REST API
 
@@ -188,7 +193,7 @@ class GcsPubSubLogger(CustomBatchLogger):
                 raise Exception(f"Failed to publish message: {response.text}")
 
             verbose_logger.debug("Pub/Sub response: %s", response.text)
-            return response.json()
+            return _DECODED_JSON.validate_python(response.json())
 
         except Exception as e:
             verbose_logger.error("Pub/Sub publish error: %s", str(e))

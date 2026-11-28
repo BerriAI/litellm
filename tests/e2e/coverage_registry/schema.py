@@ -52,6 +52,7 @@ LlmRoute = Literal[
     "azure_openai",
     "bedrock_converse",
     "bedrock_invoke",
+    "bedrock_mantle",
     "cohere",
     "gemini",
     "hosted_vllm",
@@ -81,6 +82,7 @@ LlmCapability = Literal[
     "pdf_input",
     "logprobs",
     "prompt_cache_1h",
+    "prompt_cache_24h",
     "prompt_cache_5m",
     "response_headers",
     "service_tier",
@@ -92,6 +94,8 @@ LlmCapability = Literal[
     "tool_search_history",
     "tool_use",
     "upstream_stream_failure",
+    "transcription",
+    "translation",
     "vision",
     "web_search",
     "web_search_server_tool",
@@ -161,14 +165,7 @@ class OtherCell(_Base):
 
 
 Cell = Annotated[
-    LlmCell
-    | MgmtCell
-    | McpCell
-    | ReliabilityCell
-    | QuotaCell
-    | LoggingCell
-    | GuardrailCell
-    | OtherCell,
+    LlmCell | MgmtCell | McpCell | ReliabilityCell | QuotaCell | LoggingCell | GuardrailCell | OtherCell,
     Field(discriminator="module"),
 ]
 

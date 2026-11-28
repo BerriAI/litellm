@@ -9,6 +9,7 @@ API reference: https://www.scaleway.com/en/developers/api/generative-apis/#path-
 from collections.abc import Mapping
 from typing import Final
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.jina_ai.rerank.transformation import JinaAIRerankConfig
 from litellm.secret_managers.main import get_secret_str
 
@@ -25,17 +26,17 @@ class ScalewayRerankConfig(JinaAIRerankConfig):
         model: str,
         optional_params: Mapping[str, object] | None = None,
     ) -> str:
-        base: Final = SCALEWAY_API_BASE if api_base is None else api_base.rstrip("/")
-        return f"{base}/rerank"
+        base: Final = SCALEWAY_API_BASE if api_base is None else api_base
+        return join_api_base(base, "rerank")
 
     def validate_environment(
         self,
-        headers: Mapping[str, str],
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
         optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict[str, str]:  # mutable-ok: BaseRerankConfig contract
+    ) -> dict[str, object]:  # mutable-ok: BaseRerankConfig contract
         key: Final = api_key or get_secret_str("SCW_SECRET_KEY")
         if not key:
             raise ValueError(

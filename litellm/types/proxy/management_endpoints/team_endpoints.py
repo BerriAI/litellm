@@ -1,5 +1,6 @@
 from collections.abc import Mapping
-from typing import Any, Final, Literal
+from datetime import datetime
+from typing import Final, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -16,6 +17,10 @@ TeamIdSearchMatch = Literal["exact", "prefix"]
 MAX_BULK_TEAM_MEMBER_DELETES: Final = 500
 
 MAX_BULK_TEAM_MEMBER_BUDGET_UPDATES: Final = 500
+
+
+def _is_none(value: object) -> bool:
+    return value is None
 
 
 class MemberDeleteRequest(LiteLLMPydanticObjectBase):
@@ -83,11 +88,22 @@ class BulkUpdateTeamMemberPermissionsResponse(LiteLLMBaseModel):
     permissions_appended: list[str] | None = None
 
 
+class TeamListCallerMembership(LiteLLMBaseModel):
+    """The calling user's own spend and effective member budget in a team."""
+
+    spend: float = 0.0
+    max_budget: float | None = None
+    budget_reset_at: datetime | None = None
+
+    model_config = ConfigDict(frozen=True)
+
+
 class TeamListItem(LiteLLM_TeamTable):
     """A team item in the paginated list response, enriched with computed fields."""
 
     members_count: int = 0
     keys_count: int = 0
+    caller_membership: TeamListCallerMembership | None = None
     # Resources inherited from access groups (separate from direct assignments)
     access_group_models: list[str] | None = None
     access_group_mcp_server_ids: list[str] | None = None
@@ -121,8 +137,8 @@ class TeamMemberAddResult(LiteLLMBaseModel):
     user_email: str | None = None
     success: bool
     error: str | None = None
-    updated_user: dict[str, Any] | None = None
-    updated_team_membership: dict[str, Any] | None = None
+    updated_user: dict[str, object] | None = None
+    updated_team_membership: dict[str, object] | None = None
 
 
 class BulkTeamMemberAddResponse(LiteLLMBaseModel):
@@ -133,7 +149,7 @@ class BulkTeamMemberAddResponse(LiteLLMBaseModel):
     total_requested: int
     successful_additions: int
     failed_additions: int
-    updated_team: dict[str, Any] | None = None
+    updated_team: dict[str, object] | None = None
 
 
 class TeamMemberRef(MemberDeleteRequest):
@@ -224,6 +240,7 @@ class TeamMemberInfoResponse(LiteLLM_TeamMembership):
     role: str | None = None
     user_email: str | None = None
     team_alias: str | None = None
+    effective_max_budget: float | None = Field(default=None, exclude_if=_is_none)
 
 
 class TeamMetadataFieldSchema(LiteLLMBaseModel):

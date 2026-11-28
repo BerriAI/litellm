@@ -6,13 +6,25 @@ to AWS Bedrock's CountTokens API format and vice versa.
 """
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
 from pydantic import JsonValue
 
+from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.anthropic.common_utils import (
+    anthropic_message_objects,
+    is_claude_model_target,
+    json_message_without_provider_specific_fields,
+    strip_unsigned_thinking_from_anthropic_messages,
+    tools_without_custom_field,
+)
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+from litellm.llms.bedrock.common_utils import (
+    get_bedrock_base_model,
+    get_bedrock_cross_region_inference_regions,
+    strip_bedrock_routing_prefix,
+)
 
 # Placeholder satisfying the Anthropic InvokeModel schema's required
 # max_tokens field; CountTokens only counts input, so it has no effect
@@ -44,6 +56,23 @@ def _to_converse_message(message: JsonValue) -> dict[str, JsonValue]:
     }
 
 
+def _converse_message_problem(index: int, message: JsonValue) -> str | None:
+    if not isinstance(message, dict):
+        return f"Message {index} must be a dictionary"
+    if "role" not in message:
+        return f"Message {index} must have a 'role' field"
+    if "content" not in message and "tool_calls" in message:
+        return f"Message {index} has tool_calls and no content, which token counting cannot convert for this model"
+    if "content" not in message:
+        return f"Message {index} must have a 'content' field"
+    return None
+
+
+def count_tokens_messages_problem(messages: Sequence[JsonValue]) -> str | None:
+    problems: Final = (_converse_message_problem(index, message) for index, message in enumerate(messages))
+    return next((problem for problem in problems if problem is not None), None)
+
+
 def _sanitized_bedrock_tool_name(raw_name: JsonValue) -> str:
     name: Final = re.sub(r"[^a-zA-Z0-9_]", "_", raw_name if isinstance(raw_name, str) else "")
     prefixed: Final = name if not name or name[0].isalpha() else f"t_{name}"
@@ -52,12 +81,15 @@ def _sanitized_bedrock_tool_name(raw_name: JsonValue) -> str:
 
 def _to_bedrock_tool_spec(tool: JsonValue) -> dict[str, JsonValue]:
     fields: Final = _json_dict(tool)
-    name: Final = _sanitized_bedrock_tool_name(fields.get("name", ""))
+    chat_function: Final = _json_dict(fields.get("function"))
+    spec: Final = chat_function or fields
+    name: Final = _sanitized_bedrock_tool_name(spec.get("name", ""))
+    schema_field: Final = "parameters" if chat_function else "input_schema"
     return {
         "toolSpec": {
             "name": name,
-            "description": fields.get("description") or name,
-            "inputSchema": {"json": fields.get("input_schema", {"type": "object", "properties": {}})},
+            "description": spec.get("description") or name,
+            "inputSchema": {"json": spec.get(schema_field, {"type": "object", "properties": {}})},
         }
     }
 
@@ -103,6 +135,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
     def transform_anthropic_to_bedrock_count_tokens(
         self,
         request_data: Mapping[str, JsonValue],
+        model: str,
     ) -> dict[str, JsonValue]:
         """
         Transform request to Bedrock CountTokens format.
@@ -138,7 +171,7 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         if input_type == "converse":
             return self._transform_to_converse_format(request_data)
         else:
-            return self._transform_to_invoke_model_format(request_data)
+            return self._transform_to_invoke_model_format(request_data, model)
 
     def _transform_to_converse_format(self, request_data: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
         """Transform to Converse input format, including system and tools."""
@@ -183,14 +216,40 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         return {"tools": bedrock_tools}
 
-    def _transform_to_invoke_model_format(self, request_data: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    def _transform_to_invoke_model_format(
+        self, request_data: Mapping[str, JsonValue], model: str
+    ) -> dict[str, JsonValue]:
         """Transform to InvokeModel input format."""
         import base64
         import json
 
         # For InvokeModel, we need to provide the raw body that would be sent to the model
         # Remove the 'model' field from the body as it's not part of the model input
-        body_data: Final = {k: v for k, v in request_data.items() if k != "model"}
+        tools: Final = request_data.get("tools")
+        messages: Final = request_data.get("messages")
+        claude_messages: Final = (
+            anthropic_message_objects(messages)
+            if isinstance(messages, list) and is_claude_model_target("bedrock", model)
+            else None
+        )
+        body_data: Final = {
+            **{k: v for k, v in request_data.items() if k != "model"},
+            **(
+                {"tools": tools_without_custom_field(tools, hoist_defer_loading=True, drop_custom=True)}
+                if isinstance(tools, list)
+                else {}
+            ),
+            **(
+                {}
+                if claude_messages is None
+                else {
+                    "messages": [
+                        json_message_without_provider_specific_fields(message)
+                        for message in strip_unsigned_thinking_from_anthropic_messages(claude_messages)
+                    ]
+                }
+            ),
+        }
 
         if "messages" in body_data:
             # Bedrock validates the body against the model's InvokeModel schema;
@@ -201,6 +260,13 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         # The CountTokens API expects invokeModel.body as a base64-encoded blob
         encoded_body: Final = base64.b64encode(json.dumps(body_data).encode()).decode()
         return {"input": {"invokeModel": {"body": encoded_body}}}
+
+    @staticmethod
+    def count_tokens_model_id(model: str) -> str:
+        model_id: Final = strip_bedrock_routing_prefix(model)
+        if model_id in get_bedrock_cross_region_inference_regions():
+            return model_id
+        return get_bedrock_base_model(model).removeprefix("bedrock/")
 
     def get_bedrock_count_tokens_endpoint(
         self,
@@ -221,25 +287,16 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         Returns:
             Complete endpoint URL for CountTokens API
         """
-        # Use existing LiteLLM function to get the base model ID (removes region prefix)
-        model_id = get_bedrock_base_model(model)
-
-        # Remove bedrock/ prefix if present
-        model_id = model_id.removeprefix("bedrock/")  # Remove "bedrock/" prefix
-        encoded_model_id: Final = self.encode_model_id(model_id=model_id)
+        encoded_model_id: Final = self.encode_model_id(model_id=self.count_tokens_model_id(model))
 
         base_url, _ = self.get_runtime_endpoint(
             api_base=api_base,
             aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
             aws_region_name=aws_region_name,
         )
-        endpoint: Final = f"{base_url}/model/{encoded_model_id}/count-tokens"
+        return join_api_base(base_url, f"model/{encoded_model_id}/count-tokens")
 
-        return endpoint
-
-    def transform_bedrock_response_to_anthropic(
-        self, bedrock_response: Mapping[str, JsonValue]
-    ) -> dict[str, JsonValue]:
+    def transform_bedrock_response_to_anthropic(self, bedrock_response: Mapping[str, object]) -> dict[str, object]:
         """
         Transform Bedrock CountTokens response to Anthropic format.
 
@@ -257,42 +314,12 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         return {"input_tokens": input_tokens}
 
-    def validate_count_tokens_request(self, request_data: Mapping[str, JsonValue]) -> None:
-        """
-        Validate the incoming count tokens request.
-        Supports both Converse and InvokeModel input formats.
-
-        Args:
-            request_data: The request payload
-
-        Raises:
-            ValueError: If the request is invalid
-        """
+    def count_tokens_request_problem(self, request_data: Mapping[str, JsonValue]) -> str | None:
         if not request_data.get("model"):
-            raise ValueError("model parameter is required")
-
-        input_type: Final = self._detect_input_type(request_data)
-
-        if input_type == "converse":
-            # Validate Converse format (messages-based)
-            messages: Final = request_data.get("messages", [])
-            if not messages:
-                raise ValueError("messages parameter is required for Converse input")
-
-            if not isinstance(messages, list):
-                raise ValueError("messages must be a list")
-
-            for i, message in enumerate(messages):
-                if not isinstance(message, dict):
-                    raise ValueError(f"Message {i} must be a dictionary")
-
-                if "role" not in message:
-                    raise ValueError(f"Message {i} must have a 'role' field")
-
-                if "content" not in message:
-                    raise ValueError(f"Message {i} must have a 'content' field")
-        else:
-            # For InvokeModel format, we need at least some content to count tokens
-            # The content structure varies by model, so we do minimal validation
-            if len(request_data) <= 1:  # Only has 'model' field
-                raise ValueError("Request must contain content to count tokens")
+            return "model parameter is required"
+        if self._detect_input_type(request_data) == "invokeModel":
+            return "Request must contain content to count tokens" if len(request_data) <= 1 else None
+        messages: Final = _json_list(request_data.get("messages"))
+        if not messages:
+            return "messages parameter is required for Converse input"
+        return count_tokens_messages_problem(messages)

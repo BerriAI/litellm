@@ -8,6 +8,8 @@ Regression coverage for the guardrail route table bugs:
   take call_types[0] to a handler-less type
 """
 
+from typing import Final
+
 from litellm.litellm_core_utils.api_route_to_call_types import (
     get_call_types_for_route,
 )
@@ -46,8 +48,11 @@ class TestGenerateContentRouteResolution:
         assert call_types is not None
         assert list(call_types) == [CallTypes.agenerate_content, CallTypes.generate_content]
 
-    def test_empty_model_name_does_not_match(self):
-        assert get_call_types_for_route("/models/:generateContent") is None
+    def test_empty_model_name_resolves_like_the_router(self):
+        for route in ("/models/:generateContent", "/v1beta/models/:generateContent"):
+            call_types = get_call_types_for_route(route)
+            assert call_types is not None
+            assert list(call_types) == [CallTypes.agenerate_content, CallTypes.generate_content]
 
     def test_unrelated_model_action_does_not_match(self):
         assert get_call_types_for_route("/models/gemini-2.5-flash:countTokens") is None
@@ -100,6 +105,16 @@ class TestExistingRouteResolutionUnchanged:
 
     def test_single_segment_placeholder_still_resolves(self):
         call_types = get_call_types_for_route("/a2a/my-agent/message/send")
+        assert call_types is not None
+        assert list(call_types) == [CallTypes.asend_message, CallTypes.send_message]
+
+    def test_single_segment_placeholder_message_stream_resolves(self):
+        call_types: Final = get_call_types_for_route("/a2a/my-agent/message/stream")
+        assert call_types is not None
+        assert list(call_types) == [CallTypes.asend_message, CallTypes.send_message]
+
+    def test_v1_single_segment_placeholder_message_stream_resolves(self):
+        call_types: Final = get_call_types_for_route("/v1/a2a/my-agent/message/stream")
         assert call_types is not None
         assert list(call_types) == [CallTypes.asend_message, CallTypes.send_message]
 

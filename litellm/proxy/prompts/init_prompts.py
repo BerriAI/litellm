@@ -2,13 +2,14 @@
 Similar to init_guardrails.py, but for prompts.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 
 
 def init_prompts(
-    all_prompts: list[dict],
+    all_prompts: Sequence[Mapping[str, object]],
     config_file_path: str | None = None,
 ):
     from litellm.types.prompts.init_prompts import PromptSpec

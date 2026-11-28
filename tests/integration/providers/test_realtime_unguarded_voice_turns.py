@@ -54,7 +54,7 @@ from tests.integration._support.process import (
 from tests.integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
 
-pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+pytestmark: Final = [pytest.mark.timeout(2 * graceful_stop_seconds() + 120), pytest.mark.shares_worker_state]
 
 WORKERS: Final = 2
 BURST: Final = 20
@@ -114,12 +114,10 @@ TRANSCRIPT_FIELDS: Final = (
     pytest.param({"transcript": {"text": "a"}}, id="object"),
 )
 VOICE_UPDATE: Final[dict[str, JsonValue]] = {"type": "realtime", "instructions": "answer briefly"}
-VOICE_UPDATE_FORWARDED: Final[dict[str, JsonValue]] = {
-    "type": "realtime",
-    "instructions": "answer briefly",
-    "audio": {"input": {"turn_detection": {"create_response": False}}},
+VOICE_UPDATE_GATED: Final[dict[str, JsonValue]] = {
+    **VOICE_UPDATE,
+    "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
 }
-TURN_DETECTION_TYPE_MISSING: Final = "Missing required parameter: 'session.audio.input.turn_detection.type'."
 INJECTED_UPDATE: Final[dict[str, JsonValue]] = {
     "type": "realtime",
     "audio": {"input": {"turn_detection": {"type": "server_vad", "create_response": False}}},
@@ -712,6 +710,42 @@ def test_vertex_live_voice_turn_sends_the_upstream_only_the_setup_and_the_audio(
         _assert_billed(key, 1)
 
 
+def test_vertex_live_session_closed_after_barge_in_bills_the_interrupted_frames_usage(gateway: Gateway) -> None:
+    interrupted_turn: Final = RealtimeResponse(
+        content_type="application/x-realtime",
+        events=(
+            {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "QUJD"}}]}}},
+            {
+                "serverContent": {"interrupted": True},
+                "usageMetadata": {"promptTokenCount": 30, "responseTokenCount": 12, "totalTokenCount": 42},
+            },
+        ),
+    )
+    with gateway.scenario() as scenario:
+        handle: Final = _scripted(scenario, interrupted_turn)
+        key: Final = scenario.key()
+        model: Final = _live_deployment(gateway, scenario, handle.scenario_id)
+        session: Final = _drive(
+            _gateway_url(gateway), f"model={model}", key, (Step((APPEND,), "response.output_item.done"),)
+        )
+        item_done: Final = next(event for event in session.events if event["type"] == "response.output_item.done")
+        assert object_value(item_done["item"])["status"] == "incomplete", session
+        assert RESPONSE_DONE not in session.types, session
+        usage_sql: Final = (
+            "SELECT call_type, prompt_tokens, completion_tokens, total_tokens "
+            'FROM "LiteLLM_SpendLogs" WHERE api_key = %s'
+        )
+        rows: Final = eventually(
+            lambda: read_rows(usage_sql, (sha256(key.encode()).hexdigest(),)),
+            lambda found: len(found) == 1,
+            seconds=70,
+        )
+        billed: Final = [
+            (row["call_type"], row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) for row in rows
+        ]
+        assert billed == [("_arealtime", 30, 12, 42)], rows
+
+
 @pytest.mark.parametrize("fields", TRANSCRIPT_FIELDS)
 def test_transcript_field_shape_is_relayed_and_only_the_clients_response_create_follows(
     gateway: Gateway, fields: dict[str, JsonValue]
@@ -982,15 +1016,15 @@ def test_list_mode_transcript_guardrail_still_turns_auto_response_off_and_answer
         assert session.types == (
             "session.created",
             "session.updated",
-            "error",
+            "session.updated",
             TRANSCRIPT_COMPLETED,
             RESPONSE_DONE,
         ), session
         assert session.transcript_fields == ({"transcript": TRANSCRIPT},), session
-        assert session.error_messages == (TURN_DETECTION_TYPE_MISSING,), session
+        assert session.error_messages == (), session
         assert _sent(observed) == (
             _update_frame(INJECTED_UPDATE),
-            _update_frame(VOICE_UPDATE_FORWARDED),
+            _update_frame(VOICE_UPDATE_GATED),
             COMMIT,
             PROXY_RESPONSE_CREATE,
         ), _sent(observed)

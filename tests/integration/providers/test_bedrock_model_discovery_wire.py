@@ -24,6 +24,7 @@ from integration._support.aws_control_plane import (
 )
 from integration._support.bedrock_discovery import (
     CLOSE,
+    CONFIGURED_CONTROL_PLANE_HOST,
     CONTROL_MODEL,
     CONVERSE_MODEL,
     HOSTED_REGIONS,
@@ -54,6 +55,7 @@ from integration._support.bedrock_runtime_peer import MARKER, marker_of, respond
 from integration._support.client import (
     JSON_OBJECT,
     Gateway,
+    Scenario,
     eventually,
     gateway_from_environment,
     list_value,
@@ -84,7 +86,7 @@ class Rig:
 
 @pytest.fixture(scope="module")
 def plane(tmp_path_factory: pytest.TempPathFactory) -> Iterator[ControlPlane]:
-    hosts: Final = tuple(control_plane_host(region) for region in HOSTED_REGIONS)
+    hosts: Final = (*(control_plane_host(region) for region in HOSTED_REGIONS), CONFIGURED_CONTROL_PLANE_HOST)
     with control_plane(tmp_path_factory.mktemp("bedrock_control_plane"), hosts) as value:
         yield value
 
@@ -123,6 +125,69 @@ def test_admin_models_list_the_accounts_invocable_models_signed_for_the_deployme
         requests: Final = mine(rig.plane, key)
         assert_listing_shape(requests)
         assert_sigv4(requests, key=key, secret=secret, region="us-east-1")
+
+
+def _configured_endpoint_answering(status: int, catalog: Catalog) -> Callable[[ControlPlaneRequest], Reply]:
+    def answer(request: ControlPlaneRequest) -> Reply:
+        if request.host == CONFIGURED_CONTROL_PLANE_HOST:
+            return json_reply(status, {"message": f"answered {status} by the configured endpoint"})
+        return catalog.respond(request)
+
+    return answer
+
+
+def _configured_endpoint_deployment(scenario: Scenario, key: str, secret: str) -> None:
+    sigv4_deployment(
+        scenario,
+        key,
+        secret,
+        "us-east-1",
+        litellm_params={"aws_bedrock_control_plane_endpoint": f"https://{CONFIGURED_CONTROL_PLANE_HOST}"},
+    )
+
+
+def test_admin_models_list_through_the_configured_control_plane_endpoint_only(rig: Rig) -> None:
+    key, secret = credential()
+    marker: Final = stem()
+    catalog: Final = catalog_for(marker)
+    with rig.gateway.scenario() as scenario, rig.plane.answering(key, catalog.respond):
+        _configured_endpoint_deployment(scenario, key, secret)
+        assert discovered(rig.gateway, catalog, marker) == catalog.invocable_ids()
+        requests: Final = mine(rig.plane, key)
+        assert_listing_shape(requests)
+        assert_sigv4(requests, key=key, secret=secret, region="us-east-1", host=CONFIGURED_CONTROL_PLANE_HOST)
+
+
+@pytest.mark.parametrize("status", (200, 403, 404, 500))
+def test_configured_endpoint_failure_lists_through_the_regional_host(rig: Rig, status: int) -> None:
+    key, secret = credential()
+    marker: Final = stem()
+    catalog: Final = catalog_for(marker)
+    with rig.gateway.scenario() as scenario, rig.plane.answering(key, _configured_endpoint_answering(status, catalog)):
+        _configured_endpoint_deployment(scenario, key, secret)
+        assert discovered(rig.gateway, catalog, marker) == catalog.invocable_ids()
+        requests: Final = mine(rig.plane, key)
+        assert requests[0].host == CONFIGURED_CONTROL_PLANE_HOST, requests
+        assert {request.host for request in requests} == {CONFIGURED_CONTROL_PLANE_HOST, control_plane_host("us-east-1")}
+
+
+def test_bearer_token_deployment_never_sends_the_token_to_the_configured_endpoint(rig: Rig) -> None:
+    token: Final = f"bearer-{uuid.uuid4().hex}"
+    marker: Final = stem()
+    catalog: Final = catalog_for(marker)
+    with rig.gateway.scenario() as scenario, rig.plane.answering(token, catalog.respond):
+        deployment(
+            scenario,
+            litellm_params={
+                "api_key": token,
+                "aws_region_name": "us-east-1",
+                "aws_bedrock_control_plane_endpoint": f"https://{CONFIGURED_CONTROL_PLANE_HOST}",
+            },
+        )
+        assert discovered(rig.gateway, catalog, marker) == catalog.invocable_ids()
+        requests: Final = mine(rig.plane, token)
+        assert requests, "the proxy never listed with the token"
+        assert {request.host for request in requests} == {control_plane_host("us-east-1")}, requests
 
 
 def _info_rows(gateway: Gateway, path: str, marker: str, identity: str) -> Mapping[str, str]:
@@ -301,11 +366,7 @@ def _spend_row_id(rows: Sequence[Mapping[str, JsonValue]], tag: str) -> str:
 
 
 def _landed_once(served: tuple[tuple[str, str, bool], ...], tags: tuple[str, ...]) -> None:
-    """One spend row per tagged call, carrying the id the client saw.
-
-    FIXME: a streamed /v1/responses row carries the managed `resp_` id LiteLLM built before the proxy encrypted the
-    advertised one, so that row is matched by tag alone until the spend log reads the id the client received.
-    """
+    """One spend row per tagged call, carrying the id the client saw."""
     rows: Final = eventually(
         lambda: read_rows(
             'SELECT request_id, request_tags FROM "LiteLLM_SpendLogs" WHERE request_tags ?| %s',
@@ -316,9 +377,6 @@ def _landed_once(served: tuple[tuple[str, str, bool], ...], tags: tuple[str, ...
     )
     for (identity, path, stream), tag in zip(served, tags, strict=True):
         row_id: Final = _spend_row_id(rows, tag)
-        if path == "/v1/responses" and stream:
-            assert row_id.startswith("resp_"), (row_id, identity)
-            continue
         assert row_id == identity, (path, stream, row_id, identity)
 
 

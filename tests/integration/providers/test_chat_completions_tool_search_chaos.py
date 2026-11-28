@@ -1,6 +1,5 @@
 import asyncio
 import re
-import socket
 import threading
 import uuid
 from collections.abc import Callable, Mapping
@@ -22,6 +21,7 @@ from integration._support.database import read_rows
 from integration._support.openai_wire import chat_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.ports import allocate_port
 from integration.providers.test_chat_completions_tool_search_wire import (
     DEFERRED_NAMES,
     UNLISTED_CLAUDE,
@@ -191,12 +191,6 @@ def _assert_every_call_forwarded(wire: Wire, calls: tuple[_Call, ...]) -> None:
         _assert_forwarded(request, kinds[marker])
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 def _identities(served: tuple[_Served, ...], kind: Kind) -> tuple[str, ...]:
     return tuple(response_id(item.answer) for item in served if item.call.kind == kind)
 
@@ -236,7 +230,7 @@ def _spend_status(model: str, expected: int) -> dict[str, str]:
 async def test_a_vendor_outage_fails_each_call_cleanly_and_the_recovered_vendor_gets_the_regex_tool(
     gateway: Gateway,
 ) -> None:
-    port: Final = _free_port()
+    port: Final = allocate_port()
     while_down: Final = _calls(15, ("search",))
     after: Final = _calls(15, ("search",))
     with gateway.scenario() as scenario:

@@ -10,19 +10,15 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
   "api-keys": { segment: "api-keys", linkName: "Virtual Keys", content: { role: "heading", name: "Virtual Keys" } },
   models: {
     segment: "models-and-endpoints",
-    linkName: "Models + Endpoints",
+    linkName: "Model Management",
     content: { role: "heading", name: "Model Management" },
-  },
-  api_ref: {
-    segment: "api-reference",
-    linkName: "API Reference",
-    content: { role: "heading", name: "OpenAI Compatible Proxy: API Reference" },
   },
   "llm-playground": { segment: "playground", linkName: "Playground", content: { role: "tab", name: "Chat" } },
   projects: {
     segment: "projects",
     linkName: /^Projects(?: Beta)?$/,
     content: { role: "heading", name: "Projects" },
+    unlicensedText: "This is a LiteLLM Enterprise feature, and requires a valid key to use. Get a trial key here.",
   },
   "access-groups": {
     segment: "access-groups",
@@ -62,7 +58,7 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     segment: "vector-stores",
     linkName: "Vector Stores",
     group: "Tools",
-    content: { role: "heading", name: "Vector Store Management" },
+    content: { role: "heading", name: "Vector Stores" },
   },
   memory: { segment: "memory", linkName: "Memory", group: "Agentic", content: { role: "heading", name: "Memory" } },
   policies: { segment: "policies", linkName: "Policies", content: { role: "tab", name: "Policy Simulator" } },
@@ -79,13 +75,13 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     group: "Tools",
     content: { role: "heading", name: "Tool Policies" },
   },
-  skills: { segment: "skills", linkName: "Skills", content: { role: "heading", name: "Skills" } },
+  skills: { segment: "skills", linkName: "Skills Hub", content: { role: "heading", name: "Skills Hub" } },
   caching: { segment: "caching", linkName: "Response Cache", content: { role: "tab", name: "Cache Settings" } },
   "cost-tracking": {
     segment: "cost-tracking",
     linkName: "Cost Tracking",
     group: "Settings",
-    content: { text: "Cost Tracking Settings" },
+    content: { role: "heading", name: "Cost Tracking" },
   },
   "transform-request": {
     segment: "transform-request",
@@ -97,14 +93,14 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     segment: "ui-theme",
     linkName: "UI Theme",
     group: "Settings",
-    content: { role: "heading", name: "UI Theme Customization" },
+    content: { role: "heading", name: "UI Theme" },
   },
   logs: { segment: "logs", linkName: "Logs", content: { role: "tab", name: "Request Logs" } },
   "admin-panel": {
     segment: "admin-panel",
     linkName: "Admin Settings",
     group: "Settings",
-    content: { role: "heading", name: "Admin Access" },
+    content: { role: "heading", name: "Admin Settings" },
   },
   "logging-and-alerts": {
     segment: "logging-and-alerts",
@@ -118,12 +114,6 @@ export const MIGRATED_E2E_PAGES: Readonly<Record<string, MigratedPage>> = {
     content: { role: "heading", name: "AI Hub" },
   },
   new_usage: { segment: "usage", linkName: "Usage", content: { role: "heading", name: "Usage" } },
-  usage: {
-    segment: "old-usage",
-    linkName: "Old Usage",
-    group: "Experimental",
-    content: { role: "tab", name: "All Up" },
-  },
   agents: { segment: "agents", linkName: "Agents", group: "Agentic", content: { role: "heading", name: "Agents" } },
   "router-settings": {
     segment: "router-settings",

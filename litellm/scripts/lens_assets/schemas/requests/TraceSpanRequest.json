@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TraceSpanRequest",
+  "type": "object",
+  "properties": {
+    "team_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "api_key_hash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 256,
+      "default": null
+    },
+    "trace_ref": {
+      "type": "string",
+      "default": ""
+    }
+  }
+}

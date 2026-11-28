@@ -464,6 +464,18 @@ class TestEndUserTable:
         eu = LiteLLM_EndUserTable(user_id="eu2", blocked=True, spend=None)
         assert eu.spend == 0.0
 
+    def test_end_user_from_model_instance(self):
+        class MockPrismaRecord(BaseModel):
+            user_id: str
+            blocked: bool
+            spend: float | None = None
+
+        record = MockPrismaRecord(user_id="u3", blocked=True, spend=None)
+        table = LiteLLM_EndUserTable.model_validate(record, from_attributes=True)
+        assert table.user_id == "u3"
+        assert table.spend == 0.0
+        assert table.blocked is True
+
 
 class TestBudgetTableFull:
     def test_full_adds_server_managed_fields(self):
@@ -533,6 +545,20 @@ class TestMCPServerTable:
     def test_mcp_server_requires_transport(self):
         with pytest.raises(ValidationError):
             LiteLLM_MCPServerTable(server_id="s1")
+
+    @pytest.mark.parametrize(
+        "stored",
+        ('{"enabled": true, "allowed_events": ["build.*"]}', {"enabled": True, "allowed_events": ["build.*"]}),
+    )
+    def test_mcp_server_events_decode_from_the_json_column(self, stored: str | dict[str, object]) -> None:
+        server: Final = LiteLLM_MCPServerTable.model_validate(
+            {"server_id": "s1", "transport": "http", "events": stored}
+        )
+        assert server.events is not None
+        assert (server.events.enabled, server.events.allowed_events) == (True, ("build.*",))
+
+    def test_mcp_server_events_default_to_none(self) -> None:
+        assert LiteLLM_MCPServerTable(server_id="s1", transport="http").events is None
 
 
 class TestSpendLogs:

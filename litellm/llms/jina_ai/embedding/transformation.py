@@ -8,13 +8,14 @@ Docs - https://jina.ai/embeddings/
 
 import types
 from collections.abc import Mapping
-from typing import Final, cast
+from typing import Final, Protocol, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm import LlmProviders
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseEmbeddingConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
@@ -25,6 +26,14 @@ from litellm.utils import is_base64_encoded
 from ..common_utils import JinaAIError
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+
+
+class _JsonResponse(Protocol):
+    def json(self) -> object: ...
+
+
+def _json_body(response: _JsonResponse) -> object:
+    return response.json()
 
 
 class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
@@ -42,9 +51,10 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -63,8 +73,8 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -102,28 +112,23 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        if api_base:
-            clean_api_base: Final = api_base.rstrip("/")
-            if not clean_api_base.endswith("/embeddings"):
-                return f"{clean_api_base}/embeddings"
-            return clean_api_base
-        return "https://api.jina.ai/v1/embeddings"
+        return ensure_api_route(api_base or "https://api.jina.ai/v1", "embeddings")
 
     def transform_embedding_request(
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
-        data: Final = {"model": model, **optional_params}
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
+        data: Final[dict[str, object]] = {"model": model, **optional_params}
         input = cast(list[str], input) if isinstance(input, list) else [input]
         if any(is_base64_encoded(x) for x in input):
-            transformed_input: Final = []
+            transformed_input: Final[list[dict[str, str]]] = []
             for value in input:
                 if isinstance(value, str):
                     if is_base64_encoded(value):
@@ -143,11 +148,11 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
-        response_json: Final = raw_response.json()
+        response_json: Final = _json_body(raw_response)
         ## LOGGING
         logging_obj.post_call(
             input=input,
@@ -159,14 +164,14 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         default_headers: Final = {
             "Content-Type": "application/json",
         }
@@ -175,7 +180,9 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         headers = {**default_headers, **headers}
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return JinaAIError(
             status_code=status_code,
             message=error_message,

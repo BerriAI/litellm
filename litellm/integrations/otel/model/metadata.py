@@ -29,9 +29,10 @@ asks for a *model group* (e.g. ``gpt-4o``) that routes to a concrete deployment
 * ``hidden_params.litellm_model_name`` — a secondary source for the dispatched
   model (populated only on some call paths, e.g. files).
 
-So ``gen_ai.request.model`` is the *group* (falling back to the call model on the
-SDK path, which has no group), and ``litellm.provider.model`` is the *dispatched*
-model. They coincide on the SDK path, which is correct.
+So ``gen_ai.request.model`` is the *group* (the group an auto router picked, when
+one routed the call; the call model on the SDK path, which has no group), and
+``litellm.provider.model`` is the *dispatched* model. They coincide on the SDK
+path, which is correct.
 """
 
 from __future__ import annotations
@@ -39,26 +40,44 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast, get_args
+
+from pydantic import TypeAdapter
 
 from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
-from litellm.integrations.otel.model.semconv import resolve_operation
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation, resolve_operation
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
+from litellm.integrations.otel.routing import routed_model_name
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.types.utils import InternalCallOrigin
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
 
 _INTERNAL_CALL_ORIGINS: Final[frozenset[str]] = frozenset(get_args(InternalCallOrigin))
+_AUTH_ATTRIBUTE: Final = TypeAdapter(object)
+_EXPORTED_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
+IDENTITY_METADATA_FIELDS: Final = (
+    "user_api_key_alias",
+    "user_api_key_user_id",
+    "user_api_key_end_user_id",
+    "user_api_key_team_id",
+    "user_api_key_team_alias",
+    "user_api_key_org_id",
+)
 
 REQUESTER_METADATA_KEY: Final = "requester_metadata"
 REQUESTER_METADATA_PATH: Final = f"{REQUESTER_METADATA_KEY}."
+_USER_ID_METADATA_FIELDS: Final[tuple[str, ...]] = ("user.id", "user_id", "trace_user_id")
+_MAX_USER_ID_LENGTH: Final = 1024
+_NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def allowlisted_metadata(metadata: Mapping[str, str], metadata_keys: tuple[str, ...]) -> Mapping[str, str]:
@@ -87,10 +106,15 @@ class RequestIdentity:
     # auth-time seed and filled only from the payload.
     provider_model: str | None = None
     request_route: str | None = None
-    metadata: Mapping[str, str] = field(default_factory=dict)
+    metadata: Mapping[str, str] = field(default_factory=dict[str, str])
+    user_id: str | None = None
 
     @classmethod
-    def from_payload(cls, payload: StandardLoggingPayload) -> RequestIdentity:
+    def from_payload(
+        cls,
+        payload: StandardLoggingPayload,
+        named_user_id: str | None = None,
+    ) -> RequestIdentity:
         """Parse caller identity out of a closed request's payload metadata.
 
         ``provider_model`` is resolved here too (see :func:`resolve_provider_model`)
@@ -99,6 +123,8 @@ class RequestIdentity:
         """
         raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
         metadata: Final = MappingProxyType(dict(flatten_metadata(raw_meta)))
+        end_user: Final = as_str(payload.get("end_user")) or as_str(raw_meta.get("user_api_key_end_user_id"))
+        params: Final = _as_mapping(cast(Mapping[str, object], payload).get("model_parameters"))  # cast-ok: TypedDict
         return cls(
             call_id=as_str(payload.get("litellm_call_id")) or as_str(payload.get("id")),
             # StandardLoggingMetadata's canonical key is ``user_api_key_team_id``;
@@ -108,10 +134,16 @@ class RequestIdentity:
             team_alias=as_str(raw_meta.get("user_api_key_team_alias")) or as_str(raw_meta.get("team_alias")),
             team_metadata=_team_metadata_dict(raw_meta.get("user_api_key_team_metadata")),
             key_hash=as_str(raw_meta.get("user_api_key_hash")),
-            end_user=as_str(payload.get("end_user")) or as_str(raw_meta.get("user_api_key_end_user_id")),
+            end_user=end_user,
             provider_model=resolve_provider_model(payload),
             request_route=as_str(raw_meta.get("user_api_key_request_route")),
             metadata=metadata,
+            user_id=(
+                named_user_id
+                or caller_user_id(raw_meta)
+                or usable_user_id(end_user)
+                or usable_user_id(params.get("user"))
+            ),
         )
 
     @classmethod
@@ -129,7 +161,7 @@ class RequestIdentity:
         snapshot) is flattened to dotted keys so ``requester_metadata.<key>``
         resolves too.
         """
-        get: Final[Callable[[str], object]] = lambda name: getattr(auth, name, None)  # noqa: E731
+        get: Final[Callable[[str], object]] = lambda name: _AUTH_ATTRIBUTE.validate_python(getattr(auth, name, None))  # noqa: E731
         auth_meta: Final = tuple(
             (meta_key, str(value))
             for meta_key, attr in (
@@ -158,7 +190,8 @@ class RequestIdentity:
 class RequestContext:
     """The fully-resolved view of a closed request, parsed once from the payload.
 
-    ``request_model`` is the user-facing requested model and ``provider_model``
+    ``request_model`` is the user-facing requested model (or the group an auto
+    router picked for it) and ``provider_model``
     (on :attr:`identity`) is the model litellm dispatched to the provider; the two
     differ on the proxy (group vs. deployment) and coincide on the SDK path.
     """
@@ -176,22 +209,29 @@ class RequestContext:
         return self.identity.provider_model
 
     @classmethod
-    def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> RequestContext:
+    def from_standard_logging_payload(
+        cls,
+        payload: StandardLoggingPayload,
+        named_user_id: str | None = None,
+    ) -> RequestContext:
         raw_meta: Final = cast(Mapping[str, object], payload.get("metadata") or {})
         hidden: Final = cast(Mapping[str, object], payload.get("hidden_params") or {})
         raw_response: Final = payload.get("response")
         response: Final = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
         model_group: Final = as_str(payload.get("model_group")) or as_str(raw_meta.get("model_group"))
+        decision: Final = raw_meta.get("routing_decision")
         return cls(
-            # The user asked for the group; fall back to the call model on the SDK
-            # path, which has no group. Empty string (never None) so the span name
-            # builder and the mapper see a plain string.
-            request_model=model_group or as_str(payload.get("model")) or "",
-            response_model=as_str(response.get("model")),
+            # The user asked for the group, or an auto router picked one for it (the
+            # proxy restamps the response model to the requested name, so that gets
+            # the pick too); fall back to the call model on the SDK path, which has no
+            # group. Empty string (never None) so the span name builder and the mapper
+            # see a plain string.
+            request_model=routed_model_name(model_group, model_group, decision) or as_str(payload.get("model")) or "",
+            response_model=routed_model_name(as_str(response.get("model")), model_group, decision),
             model_group=model_group,
             model_id=as_str(payload.get("model_id")) or _model_info_id(raw_meta.get("model_info")),
             api_base=as_str(payload.get("api_base")) or as_str(hidden.get("api_base")),
-            identity=RequestIdentity.from_payload(payload),
+            identity=RequestIdentity.from_payload(payload, named_user_id=named_user_id),
         )
 
 
@@ -246,19 +286,31 @@ class LLMCallEvent:
     # ``InternalCallOrigin`` such as ``autorouter_classifier``), ``None`` for the
     # caller's own provider attempt.
     purpose: str | None
+    # True for a response served from the litellm response cache. A cache hit
+    # never hands off to a provider, so ``upstream_started`` stays False even
+    # though the call completed and is worth a span.
+    cache_hit: bool
+    operation: GenAIOperation
     # A best-effort ``"{operation} {model}"`` name known at ``pre_call`` time. The
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
     provisional_span_name: str
     time_to_first_chunk_seconds: float | None
+    completion_start_seconds: float | None
     trace: TraceControls
     session_id: str | None
+    caller_user_id: str | None = None
+
+    @property
+    def reached_a_provider(self) -> bool:
+        """Whether the call was handed to a provider or answered from the response cache."""
+        return not self.is_no_upstream_call and self.payload is not None and (self.upstream_started or self.cache_hit)
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, object]) -> LLMCallEvent:
         raw_payload: Final = kwargs.get("standard_logging_object")
         payload: Final = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
-        operation: Final = resolve_operation(as_str(kwargs.get("call_type")))
+        operation: Final = resolve_operation(as_str(kwargs.get("call_type")), kwargs.get(PASSTHROUGH_OPERATION_KEY))
         model: Final = as_str(kwargs.get("model")) or ""
         trace: Final = caller_trace_controls(kwargs)
         return cls(
@@ -270,11 +322,71 @@ class LLMCallEvent:
             upstream_started=kwargs.get("api_call_start_time") is not None,
             upstream_start_seconds=_epoch_seconds(kwargs.get("api_call_start_time")),
             purpose=internal_call_origin(payload, kwargs),
+            cache_hit=bool(payload.get("cache_hit")) if payload else False,  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
+            operation=operation,
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
+            completion_start_seconds=_epoch_seconds(kwargs.get("completion_start_time")),
             trace=trace,
             session_id=caller_session_id(kwargs, trace),
+            caller_user_id=caller_user_id_in_call(kwargs),
         )
+
+
+def _as_mapping(value: object) -> Mapping[str, object]:
+    return (
+        cast(Mapping[str, object], value)  # cast-ok: isinstance cannot type the mapping's items
+        if isinstance(value, Mapping)
+        else _NO_METADATA
+    )
+
+
+def caller_user_id_in_call(kwargs: Mapping[str, object]) -> str | None:
+    params: Final = _as_mapping(kwargs.get("litellm_params"))
+    return caller_user_id(params.get("metadata"), params.get("litellm_metadata"))
+
+
+def usable_user_id(value: object) -> str | None:
+    """``value`` as a ``user.id``, or ``None`` when it could not name a user."""
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    text: Final = str(value).strip()
+    return text if 0 < len(text) <= _MAX_USER_ID_LENGTH and text.isprintable() else None
+
+
+def _user_id_field(metadata: Mapping[str, object], field_name: str) -> str | None:
+    named: Final = usable_user_id(metadata.get(field_name))
+    if named is not None or field_name != "user.id":
+        return named
+    return usable_user_id(_as_mapping(metadata.get("user")).get("id"))
+
+
+def _named_user_ids(scopes: tuple[Mapping[str, object], ...]) -> Iterator[str]:
+    for field_name in _USER_ID_METADATA_FIELDS:
+        for scope in scopes:
+            named = _user_id_field(scope, field_name)
+            if named is not None:
+                yield named
+
+
+def _caller_scopes(metadata: Mapping[str, object]) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    return (_as_mapping(metadata.get(REQUESTER_METADATA_KEY)), metadata)
+
+
+def caller_user_id(*sources: object) -> str | None:
+    """The id a caller named in its metadata, by key lookup so the cost never grows with the metadata's size."""
+    scopes: Final = tuple(chain.from_iterable(_caller_scopes(_as_mapping(source)) for source in sources))
+    return next(_named_user_ids(scopes), None)
+
+
+def request_user_id(end_user_id: object, body: Mapping[str, object], inbound_user_id: str | None = None) -> str | None:
+    """A request's ``user.id`` at the auth boundary, which reads the metadata as the caller sent it, JSON-encoded on a
+    multipart or ``extra_body`` request. ``inbound_user_id`` is the id in the request's W3C Baggage."""
+    metadata_sources: Final = tuple(
+        safe_json_loads(value) if isinstance(value, str) else value
+        for value in (body.get("metadata"), body.get("litellm_metadata"))
+    )
+    return caller_user_id(*metadata_sources) or inbound_user_id or usable_user_id(end_user_id)
 
 
 def _epoch_seconds(value: object) -> float | None:
@@ -322,7 +434,7 @@ def caller_session_id(kwargs: Mapping[str, object], trace: TraceControls) -> str
     return (None if echoes_trace_id else explicit) or trace.session_id or None
 
 
-def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
+def time_to_first_chunk_seconds(kwargs: Mapping[str, object]) -> float | None:
     """Seconds from the upstream request being issued (``api_call_start_time``)
     to the first streamed chunk (``completion_start_time``); ``None`` for
     non-streaming calls, where ``completion_start_time`` is backfilled with the
@@ -330,8 +442,8 @@ def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
     optional_params: Final = cast(Mapping[str, object], kwargs.get("optional_params") or {})
     if not optional_params.get("stream"):
         return None
-    api_call_start: Final = to_seconds(kwargs.get("api_call_start_time"))
-    completion_start: Final = to_seconds(kwargs.get("completion_start_time"))
+    api_call_start: Final = _epoch_seconds(kwargs.get("api_call_start_time"))
+    completion_start: Final = _epoch_seconds(kwargs.get("completion_start_time"))
     if api_call_start is None or completion_start is None:
         return None
     return completion_start - api_call_start
@@ -459,6 +571,23 @@ def _model_info_id(model_info: object) -> str | None:
     if isinstance(model_info, Mapping):
         return as_str(model_info.get("id"))
     return None
+
+
+def exported_request_metadata(metadata: Mapping[str, object]) -> Mapping[str, str]:
+    """The non-empty string ``IDENTITY_METADATA_FIELDS`` of ``metadata``, with ``user_api_key_*`` dropped when
+    ``litellm.redact_user_api_key_info`` is on, as the ``langfuse`` callback does."""
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_user_api_key_info as _redact_user_api_key_info,  # pyright: ignore[reportUnknownVariableType]  # helper uses bare dict
+    )
+
+    redact_metadata: Final = cast(  # cast-ok: adapter validates the helper's output below
+        Callable[[dict[str, str]], object],
+        _redact_user_api_key_info,
+    )
+    present: Final = {
+        field: value for field in IDENTITY_METADATA_FIELDS if isinstance(value := metadata.get(field), str) and value
+    }
+    return MappingProxyType(dict(_EXPORTED_METADATA_ADAPTER.validate_python(redact_metadata(present))))
 
 
 def _team_metadata_dict(value: object) -> Mapping[str, object] | None:

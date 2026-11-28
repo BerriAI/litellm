@@ -43,9 +43,10 @@ class AmazonTitanConfig(AmazonInvokeConfig, BaseConfig):
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
             and not isinstance(
@@ -62,11 +63,11 @@ class AmazonTitanConfig(AmazonInvokeConfig, BaseConfig):
 
     def _map_and_modify_arg(
         self,
-        supported_params: dict,
+        supported_params: dict[str, object],
         provider: str,
         model: str,
         stop: list[str] | str,
-    ):
+    ) -> dict[str, object]:
         """
         filter params to fit the required provider format, drop those that don't fit if user sets `litellm.drop_params = True`.
         """
@@ -96,10 +97,10 @@ class AmazonTitanConfig(AmazonInvokeConfig, BaseConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "max_tokens" or k == "max_completion_tokens":
                 optional_params["maxTokenCount"] = v

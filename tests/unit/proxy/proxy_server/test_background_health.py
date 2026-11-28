@@ -15,22 +15,32 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import respx
+from fastapi import Response
+from pydantic import TypeAdapter
 
-import litellm.proxy.proxy_server as proxy_server
+import litellm
+from litellm.caching.redis_cache import RedisCache
 from litellm.constants import BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME
+from litellm.proxy import proxy_server
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
 from litellm.proxy.proxy_server import (
     _adaptive_router_flusher_loop,
     _get_endpoint_exception_status,
     _get_process_rss_mb,
+    _rss_mb_for_log,
     _run_background_health_check,
     _run_direct_health_check_with_instrumentation,
-    _rss_mb_for_log,
     _schedule_background_health_check_db_save,
     _write_health_state_to_router_cache,
 )
+from litellm.router_api import RouterSettings
 
 from .conftest import normalize
 
@@ -418,10 +428,10 @@ def test_get_endpoint_exception_status_invalid_endpoint_type_raises():
 
 def test_write_health_state_to_router_cache_sets_states(monkeypatch):
     fake_router = MagicMock()
-    fake_router.enable_health_check_routing = True
-    fake_router.health_check_ignore_transient_errors = False
-    fake_router.cooldown_time = 30
-    fake_router.health_state_cache = MagicMock()
+    fake_router.settings.return_value = RouterSettings(
+        enable_health_check_routing=True, health_check_ignore_transient_errors=False, cooldown_time=30
+    )
+    health_checks = fake_router.health.return_value.health_checks
 
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
@@ -431,27 +441,16 @@ def test_write_health_state_to_router_cache_sets_states(monkeypatch):
 
     monkeypatch.setattr(hc, "build_deployment_health_states", lambda **_kw: fake_states)
 
-    import litellm.router_utils.cooldown_handlers as cd
-
-    monkeypatch.setattr(cd, "set_cooldown_deployments", lambda **_kw: None)
-
-    import litellm.router_utils.router_callbacks.track_deployment_metrics as tdm
-
-    monkeypatch.setattr(
-        tdm,
-        "increment_deployment_failures_for_current_minute",
-        lambda **_kw: None,
-    )
-
     healthy = [{"model_id": "m1"}]
     unhealthy = [{"model_id": "m2"}]
     exceptions = {"m2": SimpleNamespace(status_code=500)}
 
     _write_health_state_to_router_cache(healthy, unhealthy, exceptions)
 
-    fake_router.health_state_cache.set_deployment_health_states.assert_called_once_with(fake_states)
+    health_checks.set_deployment_health_states.assert_called_once_with(fake_states)
+    fake_router.health.return_value.record_failure.assert_called_once_with("m2", exceptions["m2"], 500)
 
-    call_args = fake_router.health_state_cache.set_deployment_health_states.call_args[0][0]
+    call_args = health_checks.set_deployment_health_states.call_args[0][0]
     assert normalize(
         {
             "states_keys": sorted(call_args.keys()),
@@ -473,24 +472,25 @@ def test_write_health_state_to_router_cache_noop_when_router_none(monkeypatch):
 def test_write_health_state_to_router_cache_noop_when_nothing_opted_in(monkeypatch):
     """Neither health-check routing nor the listing filter: write nothing."""
     fake_router = MagicMock()
-    fake_router.enable_health_check_routing = False
-    fake_router.health_check_ignore_transient_errors = False
+    fake_router.settings.return_value = RouterSettings(
+        enable_health_check_routing=False, health_check_ignore_transient_errors=False
+    )
 
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
     monkeypatch.setattr(proxy_server, "general_settings", {})
 
     _write_health_state_to_router_cache([{"model_id": "m1"}], [{"model_id": "m2"}], {})
 
-    fake_router.health_state_cache.set_deployment_health_states.assert_not_called()
+    fake_router.health.return_value.health_checks.set_deployment_health_states.assert_not_called()
 
 
 def test_write_health_state_to_router_cache_populates_for_listing_filter(monkeypatch):
     """`model_list_healthy_only` needs the health cache, but must not start
     cooling deployments down: that stays behind enable_health_check_routing."""
     fake_router = MagicMock()
-    fake_router.enable_health_check_routing = False
-    fake_router.health_check_ignore_transient_errors = False
-    fake_router.cooldown_time = 30
+    fake_router.settings.return_value = RouterSettings(
+        enable_health_check_routing=False, health_check_ignore_transient_errors=False, cooldown_time=30
+    )
 
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
     monkeypatch.setattr(proxy_server, "general_settings", {"model_list_healthy_only": True})
@@ -501,43 +501,25 @@ def test_write_health_state_to_router_cache_populates_for_listing_filter(monkeyp
 
     monkeypatch.setattr(hc, "build_deployment_health_states", lambda **_kw: fake_states)
 
-    cooldowns: list[str] = []
-
-    import litellm.router_utils.cooldown_handlers as cd
-
-    monkeypatch.setattr(
-        cd,
-        "set_cooldown_deployments",
-        lambda **kw: cooldowns.append(kw.get("deployment")),
-    )
-
-    failures: list[str] = []
-
-    import litellm.router_utils.router_callbacks.track_deployment_metrics as tdm
-
-    monkeypatch.setattr(
-        tdm,
-        "increment_deployment_failures_for_current_minute",
-        lambda **kw: failures.append(kw.get("deployment_id")),
-    )
-
     _write_health_state_to_router_cache(
         [{"model_id": "m1"}],
         [{"model_id": "m2"}],
         {"m2": SimpleNamespace(status_code=500)},
     )
 
-    fake_router.health_state_cache.set_deployment_health_states.assert_called_once_with(fake_states)
-    assert cooldowns == []
-    assert failures == []
+    fake_router.health.return_value.health_checks.set_deployment_health_states.assert_called_once_with(fake_states)
+    fake_router.health.return_value.record_failure.assert_not_called()
 
 
 def test_write_health_state_to_router_cache_swallows_internal_failures(monkeypatch):
     """The function logs and swallows exceptions so a bad cache call never crashes the loop."""
     fake_router = MagicMock()
-    fake_router.enable_health_check_routing = True
-    fake_router.health_check_ignore_transient_errors = False
-    fake_router.health_state_cache.set_deployment_health_states.side_effect = RuntimeError("cache exploded")
+    fake_router.settings.return_value = RouterSettings(
+        enable_health_check_routing=True, health_check_ignore_transient_errors=False
+    )
+    fake_router.health.return_value.health_checks.set_deployment_health_states.side_effect = RuntimeError(
+        "cache exploded"
+    )
 
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
@@ -567,7 +549,9 @@ async def test_adaptive_router_flusher_loop_flushes_each_router(monkeypatch):
     from litellm.types.router import TaggedPreRoutingStrategy
 
     fake_router = MagicMock()
-    fake_router.adaptive_routers = {"alpha": [TaggedPreRoutingStrategy(tags=(), strategy=fake_ar)]}
+    fake_router.registry.return_value.plugins.return_value = {
+        "alpha": [TaggedPreRoutingStrategy(tags=(), strategy=fake_ar)]
+    }
 
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
@@ -595,7 +579,9 @@ async def test_adaptive_router_flusher_loop_flushes_each_router(monkeypatch):
 @pytest.mark.asyncio
 async def test_adaptive_router_flusher_loop_times_out_when_sleep_real(monkeypatch):
     """Confirms the loop is infinite — wait_for must raise TimeoutError."""
-    monkeypatch.setattr(proxy_server, "llm_router", MagicMock(adaptive_routers={}))
+    empty_router = MagicMock()
+    empty_router.registry.return_value.plugins.return_value = {}
+    monkeypatch.setattr(proxy_server, "llm_router", empty_router)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
 
     # Bind the real asyncio.sleep before the patch so the replacement does not
@@ -709,7 +695,9 @@ async def test_run_background_health_check_probes_only_listed_model_groups(monke
     monkeypatch.setattr(
         proxy_server,
         "llm_router",
-        SimpleNamespace(background_health_check_model_groups=frozenset({"prod-openai"})),
+        SimpleNamespace(
+            settings=lambda: RouterSettings(background_health_check_model_groups=frozenset({"prod-openai"}))
+        ),
     )
     monkeypatch.setattr(
         proxy_server,
@@ -761,3 +749,217 @@ async def test_run_background_health_check_probes_only_listed_model_groups(monke
         await _run_background_health_check()
 
     assert probed["ids"] == ["listed-1", "listed-2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shared", [False, True], ids=["direct", "shared"])
+@pytest.mark.parametrize(
+    ("skip_blocked", "blocked", "expected"),
+    [
+        (None, True, ["active", "paused"]),
+        (False, True, ["active", "paused"]),
+        (True, True, ["active"]),
+        (True, False, ["active", "paused"]),
+        ("true", True, ["active"]),
+        ("false", True, ["active", "paused"]),
+    ],
+    ids=["unset", "off", "on", "unblocked", "on_as_string", "off_as_string"],
+)
+async def test_background_health_check_can_skip_blocked_deployments(
+    monkeypatch: pytest.MonkeyPatch,
+    router_redis: tuple[RedisCache, object],
+    shared: bool,
+    skip_blocked: bool | str | None,
+    blocked: bool,
+    expected: list[str],
+) -> None:
+    deployments: Final = [
+        ("active", {}),
+        ("paused", {"blocked": blocked}),
+        ("opted-out", {"disable_background_health_check": True}),
+    ]
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_model_list",
+        [
+            {
+                "model_name": deployment_id,
+                "model_info": {"id": deployment_id, "mode": "chat", **flags},
+                "litellm_params": {
+                    "model": "openai/health-probe",
+                    "api_base": f"https://background-health.example/{deployment_id}/v1",
+                    "api_key": "test-key",
+                },
+            }
+            for deployment_id, flags in deployments
+        ],
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {} if skip_blocked is None else {"health_check_skip_blocked_background_models": skip_blocked},
+    )
+    monkeypatch.setattr(proxy_server, "health_check_interval", 60)
+    monkeypatch.setattr(proxy_server, "use_shared_health_check", shared)
+    monkeypatch.setattr(proxy_server, "use_background_health_checks", True)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", router_redis[0] if shared else None)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "health_check_results", {})
+    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
+    monkeypatch.setattr(proxy_server, "background_health_check_cycle_seq", 0)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    monkeypatch.setattr(proxy_server, "asyncio", SimpleNamespace(sleep=_stop_after_one_cycle))
+    with respx.mock as upstream:
+        upstream.post(host="background-health.example").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-probe",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "health-probe",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                    ],
+                },
+            )
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await _run_background_health_check()
+        response: Final = Response(status_code=200)
+        result: Final = await health_endpoint(
+            response=response,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            model="paused",
+            model_id=None,
+        )
+        paths: Final = sorted(call.request.url.path for call in upstream.calls)
+
+    paused_checked: Final = "paused" in expected
+    assert response.status_code == (200 if paused_checked else 503)
+    assert (result["healthy_count"], result["unhealthy_count"]) == (int(paused_checked), 0)
+    assert paths == [f"/{deployment_id}/v1/chat/completions" for deployment_id in expected]
+    assert proxy_server.health_check_results["healthy_count"] == len(expected)
+    assert proxy_server.health_check_results["unhealthy_count"] == 0
+
+
+_MODEL_INFO: Final = TypeAdapter(dict[str, object])
+
+
+def _ignore_call(*_a: object, **_kw: object) -> None:
+    return None
+
+
+def _no_filter_kwargs(_general_settings: object) -> dict[str, object]:
+    return {}
+
+
+async def _stop_after_one_cycle(_seconds: float) -> NoReturn:
+    raise asyncio.CancelledError()
+
+
+async def _every_deployment_healthy(
+    model_list: list[dict[str, object]], *_a: object, **_kw: object
+) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
+    return [{"model": "m", "model_id": _MODEL_INFO.validate_python(m["model_info"])["id"]} for m in model_list], [], {}
+
+
+def _one_cycle_with(monkeypatch: pytest.MonkeyPatch, router: object, public_model_groups: list[str]) -> None:
+    import litellm
+
+    monkeypatch.setattr(proxy_server, "health_check_interval", 60)
+    monkeypatch.setattr(proxy_server, "health_check_concurrency", 1)
+    monkeypatch.setattr(proxy_server, "health_check_details", True)
+    monkeypatch.setattr(proxy_server, "use_shared_health_check", False)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
+    monkeypatch.setattr(litellm, "public_model_groups", public_model_groups)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_model_list",
+        [{"model_name": "explicit", "litellm_params": {"model": "openai/explicit"}, "model_info": {"id": "explicit"}}],
+    )
+    monkeypatch.setattr(proxy_server, "health_check_results", {"healthy_endpoints": [], "unhealthy_endpoints": []})
+    monkeypatch.setattr(proxy_server, "_run_direct_health_check_with_instrumentation", _every_deployment_healthy)
+    monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", _no_filter_kwargs)
+    monkeypatch.setattr(proxy_server.asyncio, "sleep", _stop_after_one_cycle)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("blocked", "skip_blocked", "include_child"),
+    [(False, True, True), (True, False, True), (True, True, False)],
+    ids=["unblocked", "off", "blocked"],
+)
+async def test_run_background_health_check_saves_eligible_public_wildcard_children_but_keeps_them_out_of_routing(
+    monkeypatch: pytest.MonkeyPatch, blocked: bool, skip_blocked: bool, include_child: bool
+) -> None:
+    from litellm import Router
+
+    served: Final = "openai/gpt-5.5"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*"},
+                "model_info": {"id": "wildcard", "blocked": blocked},
+            },
+            {
+                "model_name": "explicit",
+                "litellm_params": {"model": "openai/explicit"},
+                "model_info": {"id": "explicit"},
+            },
+        ]
+    )
+    saved: Final[dict[str, object]] = {}
+    routed: Final[dict[str, object]] = {}
+
+    def _record_save(
+        _prisma: object, _manager: object, model_list: object, healthy: object, *_a: object, **_kw: object
+    ) -> None:
+        saved.update(model_list=model_list, healthy=healthy)
+
+    def _record_routing(healthy: object, *_a: object) -> None:
+        routed.update(healthy=healthy)
+
+    _one_cycle_with(monkeypatch, router, [served])
+    monkeypatch.setattr(proxy_server, "general_settings", {"health_check_skip_blocked_background_models": skip_blocked})
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", _record_save)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", _record_routing)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_background_health_check()
+
+    saved_names: Final = TypeAdapter(list[dict[str, object]]).validate_python(saved["model_list"])
+    expected_names: Final = ["explicit", served] if include_child else ["explicit"]
+    assert sorted(str(m["model_name"]) for m in saved_names) == expected_names
+    assert len(TypeAdapter(list[object]).validate_python(saved["healthy"])) == len(expected_names)
+    assert routed["healthy"] == [{"model": "m", "model_id": "explicit"}]
+    assert proxy_server.health_check_results["healthy_endpoints"] == [{"model": "m", "model_id": "explicit"}]
+    assert proxy_server.health_check_results["healthy_count"] == 1
+
+
+class _RegistryUnavailableRouter:
+    def settings(self) -> RouterSettings:
+        return RouterSettings()
+
+    def registry(self) -> NoReturn:
+        raise RuntimeError("registry unavailable")
+
+
+@pytest.mark.asyncio
+async def test_run_background_health_check_keeps_checking_when_building_wildcard_children_raises(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _one_cycle_with(monkeypatch, _RegistryUnavailableRouter(), ["openai/gpt-5.5"])
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", _ignore_call)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", _ignore_call)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_background_health_check()
+
+    assert proxy_server.health_check_results["healthy_endpoints"] == [{"model": "m", "model_id": "explicit"}]

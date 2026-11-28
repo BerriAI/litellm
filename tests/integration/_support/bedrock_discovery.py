@@ -23,12 +23,13 @@ from integration._support.aws_control_plane import (
     verified_scope,
 )
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, held, object_value, string_value
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, OwnedState, owned_proxy_process
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from pydantic import JsonValue
 
 HOSTED_REGIONS: Final = ("us-east-1", "us-west-2", "eu-west-1", "us-gov-west-1", "cn-north-1")
 UNHOSTED_REGION: Final = "eu-central-1"
+CONFIGURED_CONTROL_PLANE_HOST: Final = "bedrock-fips.us-east-1.amazonaws.com"
 CONTROL_MODEL: Final = "integration-discovery-control"
 CONVERSE_MODEL: Final = "us.openai.gpt-5.6-sol"
 WORKERS: Final = 2
@@ -115,6 +116,7 @@ def discovery_proxy(
         config=discovery_config(parent, directory, check_provider_endpoint=check_provider_endpoint),
         remove_environment=aws_environment_names(),
         workers=workers,
+        state=OwnedState.SHARED_WITH_WORKER,
     ) as owned:
         wait_for_every_worker(owned.log, workers)
         yield owned
@@ -250,11 +252,13 @@ def assert_listing_shape(requests: tuple[ControlPlaneRequest, ...], *, pages: in
     return counts[FOUNDATION_MODELS]
 
 
-def assert_sigv4(requests: tuple[ControlPlaneRequest, ...], *, key: str, secret: str, region: str) -> None:
-    host: Final = control_plane_host(region)
+def assert_sigv4(
+    requests: tuple[ControlPlaneRequest, ...], *, key: str, secret: str, region: str, host: str | None = None
+) -> None:
+    expected_host: Final = host or control_plane_host(region)
     for request in requests:
-        assert request.host == host, request
-        assert request.headers["host"] == host, request
+        assert request.host == expected_host, request
+        assert request.headers["host"] == expected_host, request
         scope: Final = verified_scope(request, secret)
         assert scope == f"{request.headers['x-amz-date'][:8]}/{region}/bedrock/aws4_request", request
         assert request.headers["authorization"].startswith(f"AWS4-HMAC-SHA256 Credential={key}/"), request

@@ -26,6 +26,23 @@ async def worker_readiness() -> JSONResponse:
     )
 
 
+async def worker_database() -> JSONResponse:
+    """Whether this worker's Prisma client answers a query right now, without the readiness cache."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    connected = False
+    if prisma_client is not None:
+        try:
+            await prisma_client.health_check()
+            connected = True
+        except Exception:
+            connected = False
+    return JSONResponse(
+        content={"db": "connected" if connected else "disconnected"},
+        headers={"x-integration-worker-pid": str(os.getpid())},
+    )
+
+
 async def worker_deployment_ids(model_name: str) -> JSONResponse:
     from litellm.proxy.proxy_server import llm_router
 
@@ -33,8 +50,18 @@ async def worker_deployment_ids(model_name: str) -> JSONResponse:
     return JSONResponse(content={"model_ids": model_ids}, headers={"x-integration-worker-pid": str(os.getpid())})
 
 
+async def worker_general_setting(name: str) -> JSONResponse:
+    from litellm.proxy.proxy_server import proxy_config
+
+    return JSONResponse(
+        content={"value": proxy_config.settings.get(name)}, headers={"x-integration-worker-pid": str(os.getpid())}
+    )
+
+
 def configure_readiness() -> None:
     from litellm.proxy.proxy_server import app
 
     app.add_api_route("/health/integration-readiness", worker_readiness, include_in_schema=False)
+    app.add_api_route("/health/integration-database", worker_database, include_in_schema=False)
     app.add_api_route("/health/integration-deployment-ids", worker_deployment_ids, include_in_schema=False)
+    app.add_api_route("/health/integration-general-setting", worker_general_setting, include_in_schema=False)

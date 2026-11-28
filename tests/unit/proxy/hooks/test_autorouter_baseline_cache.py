@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from collections.abc import AsyncIterator, Callable, Generator, Mapping
 from contextlib import contextmanager
 from datetime import datetime
@@ -20,6 +21,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.prompt_cache_prediction import NativePredictionTarget, TokenCounter
 from litellm.proxy.hooks.autorouter_baseline_cache import AutoRouterBaselineCache, CapturedBaselineObservation
 from litellm.router import Router
+from litellm.router_rust.steps.prerouting import _record_routing_decision  # pyright: ignore[reportPrivateUsage]  # production trusted stamp owner
 from litellm.types.router import RetryPolicy
 from litellm.types.utils import CallTypes, StandardLoggingRoutingDecision
 
@@ -40,7 +42,7 @@ _MESSAGES_JSON: Final = """[{"role":"user","content":[
     {"type":"text","text":"question"}]}]"""
 
 
-_MODELS: Final = _MESSAGES.validate_json("""[
+_MODELS_JSON: Final = """[
     {"model_name":"test-router","litellm_params":{"model":"auto_router/complexity_router",
       "complexity_router_config":{"tiers":{"SIMPLE":"sonnet","MEDIUM":"sonnet","COMPLEX":"sonnet",
       "REASONING":{"model_name":"opus","litellm_params":{"max_tokens":16}}},"session_affinity":false,
@@ -48,7 +50,11 @@ _MODELS: Final = _MESSAGES.validate_json("""[
     {"model_name":"sonnet","litellm_params":{"model":"anthropic/claude-sonnet-5","api_key":"test-selected"},
       "model_info":{"id":"selected"}},
     {"model_name":"opus","litellm_params":{"model":"anthropic/claude-opus-5","api_key":"test-selected"},
-      "model_info":{"id":"baseline"}}]""")
+      "model_info":{"id":"baseline"}}]"""
+_MODELS: Final = _MESSAGES.validate_json(_MODELS_JSON)
+_GOOGLE_METADATA_IDENTITY: Final = (
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
+)
 
 
 def _message(completed: bool, model: str) -> Mapping[str, JsonValue]:
@@ -86,7 +92,7 @@ def _kwargs(logging_obj: Logging, trusted: bool = True, *, explicit_logging: boo
     context: Final = _OBJECTS.validate_json(
         '{"max_tokens":16,"litellm_metadata":{"user_api_key_hash":"test-caller-hash"}}'
     )
-    Router._record_routing_decision(  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage]  # production trusted stamp owner
+    _record_routing_decision(
         context,
         StandardLoggingRoutingDecision(
             router_model_name="test-router",
@@ -287,6 +293,101 @@ async def test_count_failure_preserves_initial_observed_equivalence(monkeypatch:
     assert captured.observation.plan is None and captured.observation.reason == "token_count_unavailable"
 
 
+async def test_baseline_count_uses_the_secret_behind_an_admin_oidc_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BASELINE_SA_TOKEN", "test-selected")
+
+    async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
+        return await _count(model, api_key, body) if api_key == "test-selected" else None
+
+    rig: Final = _Rig(
+        monkeypatch,
+        count=count,
+        models=_MESSAGES.validate_json(
+            _MODELS_JSON.replace('"api_key":"test-selected"', '"api_key":"oidc/env/BASELINE_SA_TOKEN"')
+        ),
+    )
+    with _transport(_upstream):
+        await _call(rig.router, rig.logging(), messages=_MESSAGES_JSON.replace("question", "question USE_OPUS"))
+        captured: Final = _observation(await rig.capture.payload())
+    assert captured.observation.plan is not None and captured.observation.plan.total_tokens == 6000
+
+
+async def test_baseline_lookup_does_not_hold_the_request_on_a_slow_google_metadata_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GCE_METADATA_HOST", raising=False)
+    audience: Final = f"https://baseline.example.test/{uuid4().hex}"
+    released: Final = threading.Event()
+    sent: Final[list[str]] = []
+
+    def identity(request: httpx.Request) -> httpx.Response:
+        sent.append("google")
+        _ = released.wait(timeout=5)
+        return httpx.Response(200, text="test-selected")
+
+    def messages(request: httpx.Request) -> httpx.Response:
+        sent.append("anthropic")
+        return _upstream(request)
+
+    async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
+        return await _count(model, api_key, body) if api_key == "test-selected" else None
+
+    models: Final = _MESSAGES.validate_json(
+        _MODELS_JSON.replace(
+            'claude-opus-5","api_key":"test-selected"', f'claude-opus-5","api_key":"oidc/google/{audience}"'
+        )
+    )
+    with respx.mock() as upstream:
+        _ = upstream.post("https://api.anthropic.com/v1/messages").mock(side_effect=messages)
+        _ = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=identity)
+        while_fetching: Final = _Rig(monkeypatch, count=count, models=models)
+        await _call(while_fetching.router, while_fetching.logging())
+        uncounted: Final = _observation(await while_fetching.capture.payload())
+        released.set()
+        after_fetch: Final = _Rig(monkeypatch, count=count, models=models)
+        await _call(after_fetch.router, after_fetch.logging())
+        counted: Final = _observation(await after_fetch.capture.payload())
+    assert sent == ["anthropic", "google", "anthropic"]
+    assert uncounted.observation.plan is None and uncounted.observation.reason == "provider_credentials_timeout"
+    assert counted.observation.plan is not None and counted.observation.plan.total_tokens == 6000
+
+
+async def test_a_slow_baseline_credential_lookup_fits_inside_a_short_logging_worker_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils import logging_worker
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
+
+    monkeypatch.delenv("GCE_METADATA_HOST", raising=False)
+    audience: Final = f"https://baseline.example.test/{uuid4().hex}"
+    released: Final = threading.Event()
+
+    def identity(request: httpx.Request) -> httpx.Response:
+        _ = released.wait(timeout=5)
+        return httpx.Response(200, text="test-selected")
+
+    models: Final = _MESSAGES.validate_json(
+        _MODELS_JSON.replace(
+            'claude-opus-5","api_key":"test-selected"', f'claude-opus-5","api_key":"oidc/google/{audience}"'
+        )
+    )
+    worker: Final = LoggingWorker(timeout=0.4)
+    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", worker)
+    rig: Final = _Rig(monkeypatch, models=models)
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            _ = upstream.post("https://api.anthropic.com/v1/messages").mock(side_effect=_upstream)
+            _ = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=identity)
+            await _call(rig.router, rig.logging())
+            payload: Final = await rig.capture.payload()
+        observed: Final = _observation(payload).observation
+        assert observed.plan is None and observed.reason == "provider_credentials_timeout"
+        assert worker._timeout_total == 0
+    finally:
+        released.set()
+        await worker.stop()
+
+
 async def test_native_retry_is_uncertain_even_when_final_response_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     rig: Final = _Rig(monkeypatch, retries=1)
 
@@ -481,6 +582,24 @@ async def test_plain_requests_do_not_initialize_or_warn(
     assert logging.baseline_cache_context is None
     assert "baseline observation could not be initialized" not in caplog.text
     assert not rig.hook.counts
+
+
+async def test_the_baseline_context_repr_does_not_print_the_baseline_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    rig: Final = _Rig(
+        monkeypatch,
+        models=_MESSAGES.validate_json(
+            _MODELS_JSON.replace(
+                'claude-opus-5","api_key":"test-selected"', 'claude-opus-5","api_key":"baseline-secret"'
+            )
+        ),
+    )
+    logging: Final = rig.logging()
+
+    await rig.hook.async_pre_call_deployment_hook(_kwargs(logging), CallTypes.anthropic_messages)
+
+    assert logging.baseline_cache_context is not None
+    assert logging.baseline_cache_context.baseline_params.api_key == "baseline-secret"
+    assert "baseline-secret" not in repr(logging.baseline_cache_context)
 
 
 async def test_plain_fallback_invalidates_existing_autorouter_capture(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1097,3 +1216,62 @@ async def test_tier_pins_never_enter_the_caller_snapshot_on_later_routing_passes
     assert context is not None and context.baseline_body is not None
     assert context.baseline_body.get("max_tokens") == 16
     assert "output_config" not in context.baseline_body and "thinking" not in context.baseline_body
+
+
+_NON_NATIVE_MODELS: Final = _MESSAGES.validate_json("""[
+    {"model_name":"test-router","litellm_params":{"model":"auto_router/complexity_router",
+      "complexity_router_config":{"tiers":{"SIMPLE":"flash","MEDIUM":"flash","COMPLEX":"flash",
+      "REASONING":"opus"},"session_affinity":false}}},
+    {"model_name":"flash","litellm_params":{"model":"cloudflare/@cf/deepseek-ai/deepseek-v4.1-flash","api_key":"test-selected",
+      "api_base":"https://chat.example.test/v1"},"model_info":{"id":"selected"}},
+    {"model_name":"opus","litellm_params":{"model":"anthropic/claude-opus-5","api_key":"test-selected"},
+      "model_info":{"id":"baseline"}}]""")
+
+
+def _chat_upstream(request: httpx.Request) -> httpx.Response:
+    stream: Final = _JSON_OBJECT.validate_json(request.content).get("stream") is True
+    chunk: Final = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "deepseek-v4.1-flash",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 2, "total_tokens": 14},
+    }
+    completion: Final = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "deepseek-v4.1-flash",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 12, "completion_tokens": 2, "total_tokens": 14},
+    }
+    content: Final = (
+        f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode() if stream else json.dumps(completion).encode()
+    )
+    return httpx.Response(
+        200,
+        content=content,
+        request=request,
+        headers=MappingProxyType({"content-type": "text/event-stream" if stream else "application/json"}),
+    )
+
+
+@pytest.mark.parametrize("stream", (False, True))
+async def test_a_turn_routed_to_a_non_anthropic_tier_says_its_provider_is_unsupported(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    rig: Final = _Rig(monkeypatch, models=_NON_NATIVE_MODELS)
+    with respx.mock() as transport:
+        transport.route(host="chat.example.test").mock(side_effect=_chat_upstream)
+        await _call(rig.router, rig.logging(stream))
+        captured: Final = _observation(await rig.capture.payload())
+    assert captured.observation.outcome == "uncertain"
+    assert captured.observation.reason == "unsupported_selected_provider"
+
+
+@pytest.fixture(autouse=True)
+def _python_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.anthropic.messages.native import handler as python_messages
+
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)

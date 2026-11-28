@@ -27,6 +27,7 @@ BAD_KEY: Final = "sk-synthetic-bad-key"
 NATIVE_TARGET: Final = "/openai/v1/chat/completions"
 CONVERSE_TARGET: Final = f"/model/{GPT}/converse"
 LONG_VERSION_GPT: Final = "openai.gpt-" + "1" * 30000
+LONG_UNVERSIONED_GPT: Final = "openai.gpt-x" + "1" * 30000
 PNG_DATA_URL: Final = (
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
@@ -258,11 +259,12 @@ def test_thirty_thousand_digit_version_is_classified_quickly_and_served_by_conve
     marker: Final = uuid.uuid4().hex
     control_marker: Final = uuid.uuid4().hex
     with wire_server(respond) as wire, gateway.scenario() as scenario, ThreadPoolExecutor(max_workers=1) as pool:
-        control_model: Final = _deployment(scenario, wire)
+        control_model: Final = _deployment(scenario, wire, model=f"bedrock/{LONG_UNVERSIONED_GPT}")
         model: Final = _deployment(scenario, wire, model=f"bedrock/{LONG_VERSION_GPT}")
         control: Final = timed(lambda: _chat(gateway, control_model, control_marker))
         assert _content(control.value) == answer(control_marker), control.value.text
-        _only_request(wire, control_marker)
+        control_request: Final = _only_request(wire, control_marker)
+        assert target_of(control_request) == f"/model/{LONG_UNVERSIONED_GPT}/converse", control_request.target
         liveliness: Final = pool.submit(_timed_liveliness, gateway)
         served: Final = timed(lambda: _chat(gateway, model, marker))
         response: Final = served.value
@@ -289,25 +291,15 @@ def test_bad_key_on_the_long_version_model_is_refused_before_any_route(gateway: 
         assert refused.status_code == 401, refused.text
         assert_within_factor_of_control(long_refusal.seconds, control=short_refusal.seconds, factor=10)
         assert "Authentication Error" in _error_message(refused), refused.text
-        refused_rows: Final = eventually(
-            lambda: read_rows(
-                "SELECT request_id, status, spend, metadata->'error_information'->>'error_code' AS error_code"
-                ' FROM "LiteLLM_SpendLogs" WHERE model_group=%s AND api_key=%s',
-                (model, sha256(BAD_KEY.encode()).hexdigest()),
-            ),
-            lambda found: len(found) == 1,
-            seconds=70,
-        )
-        assert (refused_rows[0]["status"], refused_rows[0]["spend"], refused_rows[0]["error_code"]) == (
-            "failure",
-            0.0,
-            "401",
-        ), refused_rows
         control: Final = _chat(gateway, model, control_marker)
         control_id: Final = string_value(_payload(control)["id"])
         _assert_row(control_id, model, "success")
         landed: Final = read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (model,))
-        assert {row["request_id"] for row in landed} == {control_id, refused_rows[0]["request_id"]}, landed
+        assert [row["request_id"] for row in landed] == [control_id], landed
+        unauthenticated: Final = read_rows(
+            'SELECT request_id FROM "LiteLLM_SpendLogs" WHERE api_key=%s', (sha256(BAD_KEY.encode()).hexdigest(),)
+        )
+        assert unauthenticated == [], unauthenticated
         received: Final = wire.drain()
         assert [marker_of(request) for request in received] == [control_marker], _routes(received)
 

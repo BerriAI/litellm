@@ -1,20 +1,23 @@
 import time
-from collections.abc import Callable
-from typing import Final
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
 from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
     prompt_factory,
+    render_custom_prompt_template,
 )
 from litellm.utils import ModelResponse, Usage
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 llm = None
 
 
 class VLLMError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: str) -> None:
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="http://0.0.0.0:8000")
@@ -39,13 +42,13 @@ def completion(
     model: str,
     messages: list,
     model_response: ModelResponse,
-    print_verbose: Callable,
-    encoding,
-    logging_obj,
-    optional_params: dict,
-    custom_prompt_dict={},
-    litellm_params=None,
-    logger_fn=None,
+    print_verbose: Callable[[str], object],
+    encoding: object,
+    logging_obj: "LiteLLMLoggingObj",
+    optional_params: Mapping[str, object],
+    custom_prompt_dict: Mapping[str, Mapping[str, object]] = {},
+    litellm_params: object = None,
+    logger_fn: object = None,
 ):
     global llm
     try:
@@ -56,11 +59,8 @@ def completion(
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details: Final = custom_prompt_dict[model]
-        prompt = custom_prompt(
-            role_dict=model_prompt_details["roles"],
-            initial_prompt_value=model_prompt_details["initial_prompt_value"],
-            final_prompt_value=model_prompt_details["final_prompt_value"],
-            messages=messages,
+        prompt = render_custom_prompt_template(
+            template=model_prompt_details, messages=messages, model=model, llm_provider="vllm"
         )
     else:
         prompt = prompt_factory(model=model, messages=messages)
@@ -107,7 +107,12 @@ def completion(
         return model_response
 
 
-def batch_completions(model: str, messages: list, optional_params=None, custom_prompt_dict={}):
+def batch_completions(
+    model: str,
+    messages: list,
+    optional_params: Mapping[str, object] | None = None,
+    custom_prompt_dict: Mapping[str, Mapping[str, object]] = {},
+) -> list[ModelResponse]:
     """
     Example usage:
     import litellm
@@ -139,16 +144,13 @@ def batch_completions(model: str, messages: list, optional_params=None, custom_p
         error_str: Final = str(e)
         raise VLLMError(status_code=0, message=error_str)
     sampling_params: Final = SamplingParams(**optional_params)
-    prompts: Final = []
+    prompts: Final[list[object]] = []
     if model in custom_prompt_dict:
         # check if the model has a registered custom prompt
         model_prompt_details: Final = custom_prompt_dict[model]
         for message in messages:
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=message,
+            prompt = render_custom_prompt_template(
+                template=model_prompt_details, messages=message, model=model, llm_provider="vllm"
             )
             prompts.append(prompt)
     else:
@@ -161,7 +163,7 @@ def batch_completions(model: str, messages: list, optional_params=None, custom_p
     else:
         raise VLLMError(status_code=0, message="Need to pass in a model name to initialize vllm")
 
-    final_outputs: Final = []
+    final_outputs: Final[list[ModelResponse]] = []
     for output in outputs:
         model_response = ModelResponse()
         ## RESPONSE OBJECT

@@ -92,10 +92,10 @@ async def _exchange_env(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
     monkeypatch.setattr(proxy_server, "llm_router", None)
-    user_api_key_cache = SimpleNamespace(
+    ui_settings_cache = SimpleNamespace(
         async_get_cache=AsyncMock(side_effect=_get), async_set_cache=AsyncMock(side_effect=_set)
     )
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(proxy_server, "ui_settings_cache", ui_settings_cache)
 
     prisma = MagicMock()
     prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=SimpleNamespace(ui_settings={}))
@@ -186,11 +186,13 @@ async def test_exchange_without_database_fails_before_nonce(monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_exchange_rejects_tampered_signature(monkeypatch: pytest.MonkeyPatch) -> None:
     from fastapi import HTTPException
-    from litellm.proxy.moyai_endpoints import _sign_connect_code
+    from litellm.proxy.moyai_endpoints import _b64url, _b64url_decode, _sign_connect_code
 
     await _exchange_env(monkeypatch)
     code = _sign_connect_code("sk-master", "https://moyai.example.com", "admin-user")
-    tampered = code[:-2] + ("aa" if not code.endswith("aa") else "bb")
+    payload_b64, signature_b64 = code.split(".", 1)
+    signature = _b64url_decode(signature_b64)
+    tampered = f"{payload_b64}.{_b64url(bytes((signature[0] ^ 1,)) + signature[1:])}"
 
     with pytest.raises(HTTPException) as exc:
         await _exchange_call(tampered, "https://moyai.example.com")
@@ -293,7 +295,7 @@ async def test_persist_moyai_url_writes_ui_settings_cache_under_config_params_ta
     from litellm.proxy.utils import CONFIG_PARAMS_TARGET
 
     cache: Final = DualCache()
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", _target_recording_cache(cache))
+    monkeypatch.setattr(proxy_server, "ui_settings_cache", _target_recording_cache(cache))
 
     prisma: Final = MagicMock()
     prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
@@ -317,7 +319,7 @@ async def test_exchange_replay_survives_fresh_worker_cache(monkeypatch: pytest.M
     code = _sign_connect_code("sk-master", "https://moyai.example.com", "admin-user")
 
     await _exchange_call(code, "https://moyai.example.com")
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "ui_settings_cache", DualCache())
     with pytest.raises(HTTPException) as exc:
         await _exchange_call(code, "https://moyai.example.com")
     assert exc.value.status_code == 400

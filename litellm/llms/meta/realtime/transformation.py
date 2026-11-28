@@ -6,7 +6,6 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
-from urllib.parse import urlparse, urlunparse
 
 from pydantic import JsonValue
 
@@ -16,6 +15,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.realtime.transcription_protocol import (
     RealtimeTranscriptionProtocolError,
     TranscriptionSessionUpdate,
+    build_realtime_wss_url,
     completed_event,
     decode_pcm16_append,
     delta_event,
@@ -26,6 +26,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     speech_event,
     transcription_session,
     transcription_session_created_event,
+    uses_server_vad,
 )
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.secret_managers.main import get_secret_str
@@ -196,20 +197,9 @@ def normalize_access_token(api_key: str) -> str:
 
 
 def build_muse_realtime_url(api_base: str | None) -> str:
-    if api_base is None:
-        return DEFAULT_MUSE_REALTIME_URL
-    parsed: Final = urlparse(api_base.strip())
-    scheme: Final = "wss" if parsed.scheme == "https" else parsed.scheme
-    if (
-        scheme != "wss"
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.fragment
-    ):
-        raise ValueError("Meta api_base must be an absolute wss:// or https:// URL without credentials or a fragment")
-    netloc: Final = f"{parsed.hostname}:{parsed.port}" if parsed.port is not None else parsed.hostname
-    return urlunparse((scheme, netloc, "/v1/asr/realtime", "", "", ""))
+    return build_realtime_wss_url(
+        api_base, default_url=DEFAULT_MUSE_REALTIME_URL, path="/v1/asr/realtime", provider="Meta"
+    )
 
 
 def _parse_sample_rate(update: TranscriptionSessionUpdate) -> MuseSampleRate:
@@ -230,15 +220,7 @@ def _parse_sample_rate(update: TranscriptionSessionUpdate) -> MuseSampleRate:
     return 16_000 if rate == 16_000 else 24_000
 
 
-def _parse_mode(update: TranscriptionSessionUpdate) -> MuseMode:
-    if update.turn_detection_disabled:
-        return "PUSH_TO_TALK"
-    if update.turn_detection_type not in (None, "server_vad"):
-        raise MuseProtocolError("Muse Voice supports server_vad turn detection or null")
-    return "ENDPOINTING"
-
-
-def parse_session_update(payload: str, expected_model: str) -> MuseSessionConfig:
+def parse_session_update(payload: str, expected_model: str, *, drop_params: bool = False) -> MuseSessionConfig:
     update: Final = parse_transcription_session_update(payload, MuseProtocolError)
     if update.session_type not in (None, "transcription", "realtime"):
         raise MuseProtocolError("Muse Voice supports transcription sessions only")
@@ -253,7 +235,7 @@ def parse_session_update(payload: str, expected_model: str) -> MuseSessionConfig
         raise MuseProtocolError("realtime session model cannot be changed")
     return MuseSessionConfig(
         model=normalized_model,
-        mode=_parse_mode(update),
+        mode="ENDPOINTING" if uses_server_vad(update, "Muse Voice", drop_params, MuseProtocolError) else "PUSH_TO_TALK",
         sample_rate=_parse_sample_rate(update),
         language_bias=() if update.language is None else (normalize_language(update.language),),
     )
@@ -441,9 +423,11 @@ class MetaRealtimeConfig(BaseRealtimeConfig):
         *,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        drop_params: bool = False,
     ) -> None:
         self._monotonic: Final = monotonic
         self._sleep: Final = sleep
+        self._drop_params: Final = drop_params
         self._transformer: Final = MuseEventTransformer()
         self._access_token: str | None = None
         self._config: MuseSessionConfig | None = None
@@ -553,7 +537,7 @@ class MetaRealtimeConfig(BaseRealtimeConfig):
         access_token: Final = self._access_token
         if access_token is None:
             raise MuseProtocolError("Meta API key was not validated before the session was configured")
-        config: Final = parse_session_update(message, model)
+        config: Final = parse_session_update(message, model, drop_params=self._drop_params)
         self._config = config
         self._transformer.configure(config)
         return (json.dumps(config.handshake(access_token), separators=(",", ":")),)

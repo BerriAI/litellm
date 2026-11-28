@@ -4,16 +4,22 @@ and non-string objects (e.g. Pydantic BaseModel events from the Responses API) p
 """
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
+from itertools import chain
 from typing import Final
 
 import httpx
 import pytest
+import respx
 from pydantic import BaseModel
 
-from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator, convert_model_response_to_streaming
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
-from litellm.types.utils import GenericStreamingChunk
+from litellm.llms.openai.common_utils import OpenAIError
+from litellm.types.utils import Choices, GenericStreamingChunk, Message, ModelResponse
 
 
 class TestBaseModelResponseIterator:
@@ -314,3 +320,212 @@ def test_close_releases_the_attached_http_response():
     iterator.http_response = response
     iterator.close()
     assert response.is_closed
+
+
+def test_fake_stream_chunk_indexes_thinking_blocks_by_position_without_touching_the_response():
+    """The OpenAI SDK's `.stream()` accumulator merges streamed `thinking_blocks` entries by `index`, so a fake stream
+    numbers them the way a real stream does, redacted blocks included"""
+    thinking_blocks: Final = [
+        {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a"},
+        {"type": "redacted_thinking", "data": "opaque"},
+        {"type": "thinking", "thinking": "Step 2.", "signature": "sig-b"},
+    ]
+    response: Final = ModelResponse(
+        choices=[Choices(message=Message(content="Paris", thinking_blocks=thinking_blocks), finish_reason="stop")]
+    )
+
+    chunk: Final = convert_model_response_to_streaming(response)
+
+    assert chunk.choices[0].delta.thinking_blocks == [
+        {"type": "thinking", "thinking": "Step 1.", "signature": "sig-a", "index": 0},
+        {"type": "redacted_thinking", "data": "opaque", "index": 1},
+        {"type": "thinking", "thinking": "Step 2.", "signature": "sig-b", "index": 2},
+    ]
+    assert [block.get("index") for block in response.choices[0].message.thinking_blocks] == [None, None, None]
+
+
+def test_a_rebuilt_stream_keeps_the_vllm_prompt_fields_of_the_response_it_replays():
+    """A guardrail that buffers a stream replays it through this converter, so the client must still get the prompt
+    fields a non-streamed response carries"""
+    response: Final = ModelResponse(
+        choices=[Choices(message=Message(content="Hi"), finish_reason="stop")],
+        prompt_token_ids=[151644, 872],
+        prompt_text="<|im_start|>user\nSay hi.<|im_end|>",
+    )
+
+    chunk: Final = json.loads(convert_model_response_to_streaming(response).model_dump_json())
+
+    assert chunk["prompt_token_ids"] == [151644, 872]
+    assert chunk["prompt_text"] == "<|im_start|>user\nSay hi.<|im_end|>"
+    assert "prompt_token_ids" not in json.loads(
+        convert_model_response_to_streaming(
+            ModelResponse(choices=[Choices(message=Message(content="Hi"), finish_reason="stop")])
+        ).model_dump_json()
+    )
+
+
+def _sse_chunk(delta: Mapping[str, object], finish_reason: str | None = None) -> str:
+    return "data: " + json.dumps(
+        {
+            "id": "chatcmpl-done",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "mistral-small-latest",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+    )
+
+
+async def _aiter_lines(lines: tuple[str, ...]) -> AsyncIterator[str]:
+    for line in lines:
+        yield line
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_done_inside_streamed_json_is_content_not_the_end_of_stream(sync_mode: bool) -> None:
+    lines: Final = (
+        _sse_chunk({"role": "assistant", "reasoning_content": "Mark it [DONE] once tests pass"}),
+        _sse_chunk({"content": "Checklist: "}),
+        _sse_chunk({"content": "- [DONE] write tests"}),
+        _sse_chunk({"content": " - [ ] ship it"}),
+        _sse_chunk(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "set_status", "arguments": ""},
+                    }
+                ]
+            }
+        ),
+        _sse_chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"status": '}}]}),
+        _sse_chunk({"tool_calls": [{"index": 0, "function": {"arguments": '"[DONE]"'}}]}),
+        _sse_chunk({"tool_calls": [{"index": 0, "function": {"arguments": ', "n": 1}'}}]}),
+        _sse_chunk({}, "tool_calls"),
+        "data: [DONE]",
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=OpenAIChatCompletionStreamingHandler(
+            streaming_response=iter(lines) if sync_mode else _aiter_lines(lines), sync_stream=sync_mode
+        ),
+        model="mistral/mistral-small-latest",
+        custom_llm_provider="mistral",
+        logging_obj=Logging(
+            model="mistral/mistral-small-latest",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=1_790_000_000.0,
+            litellm_call_id="call-id",
+            function_id="function-id",
+        ),
+    )
+
+    chunks: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+
+    deltas: Final = [chunk.choices[0].delta for chunk in chunks if chunk.choices]
+    tool_calls: Final = tuple(chain.from_iterable(delta.tool_calls or () for delta in deltas))
+    assert "".join(getattr(delta, "reasoning_content", None) or "" for delta in deltas) == (
+        "Mark it [DONE] once tests pass"
+    )
+    assert "".join(delta.content or "" for delta in deltas) == "Checklist: - [DONE] write tests - [ ] ship it"
+    assert json.loads("".join(tool_call.function.arguments or "" for tool_call in tool_calls)) == {
+        "status": "[DONE]",
+        "n": 1,
+    }
+    assert [chunk.choices[0].finish_reason for chunk in chunks if chunk.choices and chunk.choices[0].finish_reason] == [
+        "tool_calls"
+    ]
+
+
+@pytest.mark.parametrize("line", ["data: [DONE]", "data:[DONE]", "[DONE]", "data:  [DONE]", "data: [DONE]  "])
+def test_done_marker_ends_the_stream(line: str) -> None:
+    chunks: Final = list(BaseModelResponseIterator(streaming_response=iter((line,)), sync_stream=True))
+
+    assert chunks == [
+        GenericStreamingChunk(text="", is_finished=True, finish_reason="stop", usage=None, index=0, tool_use=None)
+    ]
+
+
+@pytest.mark.parametrize("choices", ["abort", 1, [None], [{"finish_reason": "stop"}, "abort"]])
+def test_chunk_with_unreadable_choices_reaches_the_provider_parser(choices: object) -> None:
+    line: Final = "data: " + json.dumps({"choices": choices})
+
+    chunks: Final = list(BaseModelResponseIterator(streaming_response=iter((line,)), sync_stream=True))
+
+    assert chunks == [
+        GenericStreamingChunk(text="", is_finished=False, finish_reason="", usage=None, index=0, tool_use=None)
+    ]
+
+
+def test_error_frame_mentioning_done_raises_instead_of_ending_the_stream() -> None:
+    line: Final = 'data: {"error": {"message": "prompt too long [DONE]", "code": 400}}'
+
+    with pytest.raises(OpenAIError, match=r"prompt too long \[DONE\]") as error:
+        list(OpenAIChatCompletionStreamingHandler(streaming_response=iter((line,)), sync_stream=True))
+
+    assert error.value.status_code == 400
+
+
+_USAGE_STREAM_HEADER: Final = {"id": "chatcmpl-x", "object": "chat.completion.chunk", "created": 1, "model": "m"}
+_USAGE_STREAM_EVENTS: Final = (
+    {**_USAGE_STREAM_HEADER, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+    {**_USAGE_STREAM_HEADER, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+    {
+        **_USAGE_STREAM_HEADER,
+        "choices": [],
+        "usage": {"prompt_tokens": 74, "completion_tokens": 52, "total_tokens": 126},
+    },
+)
+
+
+async def _stream_chunks(sync_mode: bool) -> list[object]:
+    messages: Final = [{"role": "user", "content": "Reply with the single word: ok"}]
+    if sync_mode:
+        return list(
+            litellm.completion(
+                model="hosted_vllm/m",
+                api_base="http://upstream.test/v1",
+                api_key="sk-test",
+                messages=messages,
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+        )
+    stream: Final = await litellm.acompletion(
+        model="hosted_vllm/m",
+        api_base="http://upstream.test/v1",
+        api_key="sk-test",
+        messages=messages,
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    return [chunk async for chunk in stream]
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "fields",
+    ["id: {n}\nevent: message\n", "retry: 1000\n", ": ping\n", "x-trace: {n}\n", "data: \n\n"],
+    ids=["id-and-event", "retry", "comment", "unknown-field", "empty-data"],
+)
+@pytest.mark.asyncio
+async def test_stream_usage_survives_sse_lines_that_carry_no_data(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool, fields: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    stream_body: Final = "".join(
+        f"{fields.format(n=n)}data: {json.dumps(event)}\n\n" for n, event in enumerate(_USAGE_STREAM_EVENTS, 1)
+    ).encode()
+    respx_mock.post("http://upstream.test/v1/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+    )
+
+    chunks: Final = await _stream_chunks(sync_mode)
+
+    usages: Final = [usage for chunk in chunks if (usage := getattr(chunk, "usage", None))]
+    assert [(usage.prompt_tokens, usage.completion_tokens) for usage in usages] == [(74, 52)]

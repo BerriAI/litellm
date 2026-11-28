@@ -1,9 +1,9 @@
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from httpx import Response
 
 from litellm import verbose_logger
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     parse_content_for_reasoning,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -35,10 +35,10 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -80,7 +80,7 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
 
 
 class AmazonDeepseekR1ResponseIterator(BaseModelResponseIterator):
-    def __init__(self, streaming_response: Any, sync_stream: bool) -> None:
+    def __init__(self, streaming_response: object, sync_stream: bool) -> None:
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream)
         self.has_finished_thinking = False
 

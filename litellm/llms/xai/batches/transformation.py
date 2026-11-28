@@ -20,7 +20,7 @@ from pydantic import ConfigDict
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import XAI_API_BASE
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
@@ -76,10 +76,11 @@ def get_xai_auth_headers(
 
 
 def xai_batches_url(api_base: str | None, batch_id: str | None = None, suffix: str = "") -> str:
-    base: Final = f"{get_xai_api_base(api_base)}/v1/batches"
+    root: Final = get_xai_api_base(api_base)
     if batch_id is None:
-        return base
-    return f"{base}/{encode_url_path_segment(batch_id, field_name='batch_id')}{suffix}"
+        return join_api_base(root, "v1/batches")
+    encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
+    return join_api_base(root, f"v1/batches/{encoded_batch_id}{suffix}")
 
 
 def is_xai_batch_results_id(file_id: str) -> bool:

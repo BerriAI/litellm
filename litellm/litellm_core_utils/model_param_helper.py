@@ -1,5 +1,6 @@
+from collections.abc import Mapping
 from functools import lru_cache
-from typing import ClassVar, Final
+from typing import ClassVar, Final, get_args
 
 from openai.types.chat.completion_create_params import (
     CompletionCreateParamsNonStreaming,
@@ -16,10 +17,65 @@ from openai.types.responses.response_create_params import (
     ResponseCreateParamsNonStreaming,
     ResponseCreateParamsStreaming,
 )
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.secret_redaction import REDACTED
 from litellm.types.llms.anthropic import AnthropicMessagesRequest
+from litellm.types.llms.openai import OpenAIAudioTranscriptionOptionalParams
 from litellm.types.rerank import RerankRequest
+
+
+def peek_reasoning_summary_aliases(optional_params: Mapping[str, object]) -> object | None:
+    """Read AI-SDK-style reasoning summary from optional_params or nested extra_body.
+
+    Uses key membership (not ``or`` chains) so falsy values like ``""`` are not skipped.
+    """
+    if "reasoningSummary" in optional_params:
+        return optional_params["reasoningSummary"]
+    if "reasoning_summary" in optional_params:
+        return optional_params["reasoning_summary"]
+    extra_body: Final = optional_params.get("extra_body")
+    if isinstance(extra_body, dict):
+        if "reasoningSummary" in extra_body:
+            return extra_body["reasoningSummary"]
+        if "reasoning_summary" in extra_body:
+            return extra_body["reasoning_summary"]
+    return None
+
+
+_OPTIONAL_BOOL: Final = TypeAdapter[bool | None](bool | None)
+
+
+def embeds_thought_signature_in_tool_call_id(litellm_params: Mapping[str, object]) -> bool:
+    try:
+        return _OPTIONAL_BOOL.validate_python(litellm_params.get("thought_signature_in_tool_call_id")) is not False
+    except ValidationError:
+        return True
+
+
+_PARAMS_WITH_CREDENTIAL_ENTRIES: Final = frozenset({"tools", "mcp_servers"})
+_ENTRY_CREDENTIAL_KEYS: Final = frozenset({"authorization", "authorization_token", "headers"})
+
+
+_CREDENTIAL_ENTRY: Final = TypeAdapter[dict[str, object]](dict[str, object])
+_CREDENTIAL_ENTRIES: Final = TypeAdapter[list[object]](list[object])
+
+
+def _redact_entry_credentials(entry: object) -> object:
+    try:
+        fields: Final = _CREDENTIAL_ENTRY.validate_python(entry)
+    except ValidationError:
+        return entry
+    return {key: REDACTED if key in _ENTRY_CREDENTIAL_KEYS else value for key, value in fields.items()}
+
+
+def _without_entry_credentials(value: object) -> object:
+    try:
+        entries: Final = _CREDENTIAL_ENTRIES.validate_python(value)
+    except ValidationError:
+        return value
+    return [_redact_entry_credentials(entry) for entry in entries]
 
 
 class ModelParamHelper:
@@ -28,16 +84,14 @@ class ModelParamHelper:
 
     @staticmethod
     def get_standard_logging_model_parameters(
-        model_parameters: dict,
-    ) -> dict:
-        """ """
-        standard_logging_model_parameters: Final[dict] = {}
+        model_parameters: Mapping[str, object],
+    ) -> dict[str, object]:
         supported_model_parameters: Final = ModelParamHelper.relevant_logging_args
-
-        for key, value in model_parameters.items():
-            if key in supported_model_parameters:
-                standard_logging_model_parameters[key] = value
-        return standard_logging_model_parameters
+        return {
+            key: _without_entry_credentials(value) if key in _PARAMS_WITH_CREDENTIAL_ENTRIES else value
+            for key, value in model_parameters.items()
+            if key in supported_model_parameters
+        }
 
     @staticmethod
     def get_exclude_params_for_model_parameters() -> set[str]:
@@ -148,6 +202,7 @@ class ModelParamHelper:
 
         This follows the OpenAI API Spec
         """
+        litellm_transcription_kwargs: Final = set(get_args(OpenAIAudioTranscriptionOptionalParams))
         try:
             from openai.types.audio.transcription_create_params import (
                 TranscriptionCreateParamsNonStreaming,
@@ -157,11 +212,11 @@ class ModelParamHelper:
             non_streaming_kwargs = set(getattr(TranscriptionCreateParamsNonStreaming, "__annotations__", {}).keys())
             streaming_kwargs: Final = set(getattr(TranscriptionCreateParamsStreaming, "__annotations__", {}).keys())
 
-            all_transcription_kwargs: Final = non_streaming_kwargs.union(streaming_kwargs)
+            all_transcription_kwargs: Final = non_streaming_kwargs.union(streaming_kwargs, litellm_transcription_kwargs)
             return all_transcription_kwargs
         except Exception as e:
             verbose_logger.debug("Error getting transcription kwargs %s", str(e))
-            return set()
+            return litellm_transcription_kwargs
 
     @staticmethod
     def _get_litellm_supported_responses_api_kwargs() -> set[str]:

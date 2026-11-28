@@ -12,6 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
@@ -28,6 +29,7 @@ from ...openai.transcriptions.whisper_transformation import (
 from ..common_utils import IBMWatsonXMixin
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTranscriptionConfig):
@@ -41,11 +43,11 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -85,7 +87,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         model: str,
         audio_file: FileTypes,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         """
         Transform the audio transcription request for WatsonX.
@@ -137,8 +139,8 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -150,10 +152,9 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         """
         # Get base URL
         url = self._get_base_url(api_base=api_base)
-        url = url.rstrip("/")
 
         # Add the audio transcription endpoint
-        url = f"{url}/ml/v1/audio/transcriptions"
+        url = join_api_base(url, "ml/v1/audio/transcriptions")
 
         # Add version parameter (only version in query string, not project_id)
         api_version: Final = optional_params.get("api_version", None) or litellm.WATSONX_DEFAULT_API_VERSION
@@ -172,9 +173,9 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         removed before creating the TranscriptionResponse object.
         """
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
-            raise ValueError(f"Error transforming response to json: {e}\nResponse: {raw_response.text}")
+            raise ValueError(f"Error transforming response to json: {e}")
 
         # Extract only valid fields for TranscriptionResponse.__init__()
         # TranscriptionResponse only accepts 'text' and 'usage' in __init__()
@@ -190,10 +191,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
             response_kwargs["usage"] = usage
 
         if not response_kwargs:
-            raise ValueError(
-                "Invalid response format. Received response does not match the expected format. Got: ",
-                response_object,
-            )
+            raise ValueError("Invalid response format. Received response does not match the expected format.")
 
         response: Final = TranscriptionResponse(**response_kwargs)
 

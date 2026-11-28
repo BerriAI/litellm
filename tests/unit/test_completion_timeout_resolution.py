@@ -10,7 +10,10 @@ from openai import Timeout as SDKTimeout
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
-from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+import litellm
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
+from litellm.llms.custom_llm import CustomLLM
+from litellm.main import _completion_supports_httpx_timeout
 from litellm.utils import supports_httpx_timeout
 
 
@@ -22,6 +25,7 @@ def test_explicit_timeout_wins():
             "openai",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.NOT_STREAMED,
         )
         == 12.5
     )
@@ -35,6 +39,7 @@ def test_kwargs_timeout_when_param_none():
             "azure_ai",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.NOT_STREAMED,
         )
         == 21.0
     )
@@ -48,6 +53,7 @@ def test_request_timeout_alias_in_kwargs():
             "bedrock",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.NOT_STREAMED,
         )
         == 33.0
     )
@@ -61,6 +67,7 @@ def test_global_timeout_from_litellm_settings():
             "vertex_ai",
             global_timeout=360.0,
             supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.NOT_STREAMED,
         )
         == 360.0
     )
@@ -76,6 +83,7 @@ def test_explicit_global_timeout_6000_is_preserved():
             "openai",
             global_timeout=6000.0,
             supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.NOT_STREAMED,
         )
         == 6000.0
     )
@@ -90,6 +98,7 @@ def test_explicit_request_timeout_6000_preserved():
             "openai",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.NOT_STREAMED,
         )
         == 6000.0
     )
@@ -103,6 +112,7 @@ def test_explicit_model_timeout_6000_preserved():
             "openai",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.NOT_STREAMED,
         )
         == 6000.0
     )
@@ -116,6 +126,7 @@ def test_fallback_600_when_no_global_timeout():
             "azure_ai",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.NOT_STREAMED,
         )
         == 600.0
     )
@@ -129,6 +140,7 @@ def test_httpx_timeout_coerced_for_provider_without_httpx_timeout_support():
         "azure_ai",
         global_timeout=None,
         supports_httpx_timeout=supports_httpx_timeout,
+        stream_kind=StreamKind.NOT_STREAMED,
     )
     assert out == 50.0
     assert not isinstance(out, httpx.Timeout)
@@ -142,6 +154,7 @@ def test_httpx_timeout_preserved_for_openai():
         "openai",
         global_timeout=None,
         supports_httpx_timeout=supports_httpx_timeout,
+        stream_kind=StreamKind.NOT_STREAMED,
     )
     assert out is t
     assert isinstance(out, httpx.Timeout)
@@ -158,6 +171,7 @@ def test_sdk_timeout_preserves_components_for_httpx_providers(
         "openai",
         global_timeout=None,
         supports_httpx_timeout=supports_httpx_timeout,
+        stream_kind=StreamKind.NOT_STREAMED,
     )
     assert isinstance(resolved, httpx.Timeout)
     assert resolved.as_dict() == timeout.as_dict()
@@ -174,6 +188,88 @@ def test_sdk_timeout_coerces_read_timeout_for_providers_without_httpx_support(
             "azure_ai",
             global_timeout=None,
             supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.NOT_STREAMED,
         )
         == expected
+    )
+
+
+_READ_ONLY_LIMITS: Final = httpx.Timeout(connect=1.0, read=2.0, write=None, pool=None)
+_UNBOUNDED_READ_LIMITS: Final = httpx.Timeout(connect=1.0, read=None, write=3.0, pool=4.0)
+
+
+@pytest.mark.parametrize("provider", ("openai", "azure", "bedrock", "mistral", "azure_ai"))
+@pytest.mark.parametrize("timeout", (_READ_ONLY_LIMITS, _UNBOUNDED_READ_LIMITS), ids=("read_only", "unbounded_read"))
+def test_completion_keeps_every_httpx_timeout_field_for_providers_that_send_it_whole(
+    provider: str, timeout: httpx.Timeout
+) -> None:
+    resolved: Final = CompletionTimeout.resolve(
+        timeout,
+        {},
+        provider,
+        global_timeout=None,
+        supports_httpx_timeout=_completion_supports_httpx_timeout,
+        stream_kind=StreamKind.NOT_STREAMED,
+    )
+    assert resolved is timeout
+
+
+@pytest.mark.parametrize("timeout, expected", ((_READ_ONLY_LIMITS, 2.0), (_UNBOUNDED_READ_LIMITS, 600.0)))
+def test_completion_sends_only_the_read_timeout_to_a_registered_custom_provider(
+    timeout: httpx.Timeout, expected: float, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "timeout-recorder", "custom_handler": CustomLLM()}]
+    )
+    resolved: Final = CompletionTimeout.resolve(
+        timeout,
+        {},
+        "timeout-recorder",
+        global_timeout=None,
+        supports_httpx_timeout=_completion_supports_httpx_timeout,
+        stream_kind=StreamKind.NOT_STREAMED,
+    )
+    assert resolved == expected
+    assert not isinstance(resolved, httpx.Timeout)
+
+
+@pytest.mark.parametrize(
+    "stream_kind, timeout, stream_timeout, expected",
+    (
+        (StreamKind.NOT_STREAMED, 120.0, 15.0, 120.0),
+        (StreamKind.LIVE, 120.0, 15.0, 15.0),
+        (StreamKind.LIVE, 1.0, 15.0, 15.0),
+        (StreamKind.FAKED, 120.0, 15.0, 120.0),
+        (StreamKind.FAKED, 1.0, 15.0, 15.0),
+        (StreamKind.FAKED, httpx.Timeout(5.0, read=None), 15.0, httpx.Timeout(15.0, read=None)),
+        (StreamKind.FAKED, httpx.Timeout(1.0, read=120.0), 15.0, httpx.Timeout(15.0, read=120.0)),
+    ),
+)
+def test_stream_timeout_bounds_a_live_stream_and_never_shortens_a_fake_one(
+    stream_kind: StreamKind, timeout: float | httpx.Timeout, stream_timeout: float, expected: float | httpx.Timeout
+) -> None:
+    assert (
+        CompletionTimeout.resolve(
+            timeout,
+            {"stream_timeout": stream_timeout},
+            "openai",
+            global_timeout=None,
+            supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=stream_kind,
+        )
+        == expected
+    )
+
+
+def test_fake_stream_with_only_a_stream_timeout_keeps_the_global_request_timeout() -> None:
+    assert (
+        CompletionTimeout.resolve(
+            None,
+            {"stream_timeout": 15.0},
+            "bedrock",
+            global_timeout=None,
+            supports_httpx_timeout=supports_httpx_timeout,
+            stream_kind=StreamKind.FAKED,
+        )
+        == 600.0
     )

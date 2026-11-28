@@ -1,6 +1,15 @@
-import pytest
+import array
+import base64
 from typing import Final
+
+import httpx
+import pytest
+import respx
+from pydantic import TypeAdapter
+
+import litellm
 from litellm.llms.bedrock.embed.amazon_nova_transformation import AmazonNovaEmbeddingConfig
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 @pytest.mark.usefixtures("fake_provider_credentials")
@@ -554,3 +563,147 @@ def test_async_invoke_requires_output_s3_uri():
             model_id="amazon.nova-2-multimodal-embeddings-v1:0",
             output_s3_uri=None,
         )
+
+
+NOVA_INVOKE_URL: Final = (
+    "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.nova-2-multimodal-embeddings-v1:0/invoke"
+)
+NOVA_REQUEST_WITHOUT_ENCODING_FORMAT: Final = {
+    "schemaVersion": "nova-multimodal-embed-v1",
+    "taskType": "SINGLE_EMBEDDING",
+    "singleEmbeddingParams": {
+        "embeddingDimension": 256,
+        "embeddingPurpose": "GENERIC_INDEX",
+        "text": {"value": "hello", "truncationMode": "END"},
+    },
+}
+SENT_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _mock_nova_invoke(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(NOVA_INVOKE_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.3, 0.2, 0.1]}]},
+        )
+    )
+
+
+def _decoded_like_the_openai_sdk(embedding: object) -> list[float]:
+    assert isinstance(embedding, str)
+    return array.array("f", base64.b64decode(embedding)).tolist()
+
+
+def test_nova_embedding_with_a_float_encoding_format_sends_no_encoding_format_and_returns_floats(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = _mock_nova_invoke(respx_mock)
+
+    response: Final = litellm.embedding(
+        model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
+        input=["hello"],
+        encoding_format="float",
+        dimensions=256,
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    assert SENT_BODY.validate_json(route.calls.last.request.content) == NOVA_REQUEST_WITHOUT_ENCODING_FORMAT
+    assert [item.embedding for item in response.data] == [[0.3, 0.2, 0.1]]
+
+
+def test_nova_embedding_with_a_base64_encoding_format_returns_each_vector_as_base64_float32_in_input_order(
+    respx_mock: respx.MockRouter,
+) -> None:
+    vectors: Final = ([0.3, 0.2, 0.1], [-0.5, 0.25, 1.0])
+    route: Final = respx_mock.post(NOVA_INVOKE_URL).mock(
+        side_effect=tuple(
+            httpx.Response(200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": vector}]})
+            for vector in vectors
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
+        input=["hello", "world"],
+        encoding_format="base64",
+        dimensions=256,
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    assert SENT_BODY.validate_json(route.calls[0].request.content) == NOVA_REQUEST_WITHOUT_ENCODING_FORMAT
+    assert [_decoded_like_the_openai_sdk(item.embedding) for item in response.data] == [
+        pytest.approx(vector) for vector in vectors
+    ]
+
+
+
+def test_nova_embedding_with_a_base64_encoding_format_passes_an_upstream_base64_vector_through_unchanged(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(NOVA_INVOKE_URL).mock(
+        return_value=httpx.Response(200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": "AAAAPw=="}]})
+    )
+
+    response: Final = litellm.embedding(
+        model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
+        input=["hello"],
+        encoding_format="base64",
+        dimensions=256,
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    assert [item.embedding for item in response.data] == ["AAAAPw=="]
+
+
+def test_async_invoke_nova_embedding_with_a_base64_encoding_format_returns_an_empty_base64_placeholder(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(
+            200, json={"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"}
+        )
+    )
+
+    response: Final = litellm.embedding(
+        model="bedrock/async_invoke/amazon.nova-2-multimodal-embeddings-v1:0",
+        input=["hello"],
+        encoding_format="base64",
+        output_s3_uri="s3://bucket/embeddings/",
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    assert route.called
+    assert [item.embedding for item in response.data] == [""]
+
+
+async def test_async_nova_embedding_with_a_base64_encoding_format_returns_the_vector_as_base64_float32() -> None:
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.3, 0.2, 0.1]}]},
+            request=request,
+        )
+
+    response: Final = await litellm.aembedding(
+        model="bedrock/amazon.nova-2-multimodal-embeddings-v1:0",
+        input=["hello"],
+        encoding_format="base64",
+        dimensions=256,
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    )
+
+    (sent,) = requests
+    assert sent.url.path.endswith("/invoke")
+    assert SENT_BODY.validate_json(sent.content) == NOVA_REQUEST_WITHOUT_ENCODING_FORMAT
+    assert [_decoded_like_the_openai_sdk(item.embedding) for item in response.data] == [
+        pytest.approx([0.3, 0.2, 0.1])
+    ]

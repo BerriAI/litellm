@@ -256,6 +256,12 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         raw: Final = response.choices[0].message.content or "{}"
         return _parse_judge_verdict(raw)
 
+    def supports_structured_messages(self) -> bool:
+        return False
+
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return True
+
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,

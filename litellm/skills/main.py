@@ -5,7 +5,7 @@ Provides create, list, get, and delete operations for skills
 
 import asyncio
 import contextvars
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from functools import partial
 from typing import Any, Final
 
@@ -13,7 +13,8 @@ import httpx
 
 import litellm
 from litellm.constants import request_timeout
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.call_kwargs import http_client_of, logging_obj_of, optional_str, shared_session_of
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.llms.anthropic_skills import (
@@ -45,15 +46,15 @@ def _get_user_api_key_auth_from_kwargs(kwargs: Mapping[str, object]) -> Any | No
 
 def _get_skill_request_metadata(
     kwargs: Mapping[str, object],
-    extra_body: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if extra_body and isinstance(extra_body.get("metadata"), dict):
-        return extra_body["metadata"]
+    extra_body: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    extra_body_metadata: Final = extra_body.get("metadata") if extra_body else None
+    if is_str_keyed_dict(extra_body_metadata):
+        return extra_body_metadata
 
     metadata: Final = kwargs.get("metadata")
-    if isinstance(metadata, dict) and isinstance(metadata.get("requester_metadata"), dict):
-        return metadata["requester_metadata"]
-    return None
+    requester_metadata: Final = metadata.get("requester_metadata") if is_str_keyed_dict(metadata) else None
+    return requester_metadata if is_str_keyed_dict(requester_metadata) else None
 
 
 def _get_litellm_skills_handler():
@@ -70,14 +71,14 @@ def _get_litellm_skills_handler():
 
 @client
 async def acreate_skill(
-    files: list[Any] | None = None,
+    files: Sequence[object] | None = None,
     display_title: str | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Skill:
     """
     Async: Create a new skill
@@ -133,14 +134,14 @@ async def acreate_skill(
 
 @client
 def create_skill(
-    files: list[Any] | None = None,
+    files: Sequence[object] | None = None,
     display_title: str | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,
     extra_body: dict[str, Any] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Skill | Coroutine[object, object, Skill]:
     """
     Create a new skill
@@ -160,8 +161,8 @@ def create_skill(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acreate_skill", False) is True
 
         # Get LiteLLM parameters
@@ -188,15 +189,17 @@ def create_skill(
         if custom_llm_provider == LlmProviders.LITELLM_PROXY.value:
             return _get_litellm_skills_handler().create_skill_handler(
                 display_title=display_title,
-                description=kwargs.get("description") or (extra_body.get("description") if extra_body else None),
-                instructions=kwargs.get("instructions") or (extra_body.get("instructions") if extra_body else None),
+                description=optional_str(kwargs.get("description"))
+                or (extra_body.get("description") if extra_body else None),
+                instructions=optional_str(kwargs.get("instructions"))
+                or (extra_body.get("instructions") if extra_body else None),
                 files=files,
                 metadata=_get_skill_request_metadata(kwargs, extra_body),
-                user_id=kwargs.get("user_id"),
+                user_id=optional_str(kwargs.get("user_id")),
                 user_api_key_dict=_get_user_api_key_auth_from_kwargs(kwargs),
                 _is_async=_is_async,
-                logging_obj=litellm_logging_obj,
-                litellm_call_id=litellm_call_id,
+                logging_obj=logging_obj_of(litellm_logging_obj),
+                litellm_call_id=optional_str(litellm_call_id),
             )
 
         # Get provider config for external providers (Anthropic, etc.)
@@ -225,7 +228,7 @@ def create_skill(
         url: Final = skills_api_provider_config.get_complete_url(api_base=api_base, endpoint="skills")
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params=request_body,
@@ -242,12 +245,12 @@ def create_skill(
             skills_api_provider_config=skills_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -267,10 +270,10 @@ async def alist_skills(
     page: str | None = None,
     source: str | None = None,
     extra_headers: dict[str, str] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ListSkillsResponse:
     """
     Async: List all skills
@@ -330,10 +333,10 @@ def list_skills(
     page: str | None = None,
     source: str | None = None,
     extra_headers: dict[str, str] | None = None,
-    extra_query: dict[str, Any] | None = None,
+    extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ListSkillsResponse | Coroutine[object, object, ListSkillsResponse]:
     """
     List all skills
@@ -353,8 +356,8 @@ def list_skills(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("alist_skills", False) is True
 
         # Get LiteLLM parameters
@@ -371,8 +374,8 @@ def list_skills(
                 offset=0,
                 user_api_key_dict=_get_user_api_key_auth_from_kwargs(kwargs),
                 _is_async=_is_async,
-                logging_obj=litellm_logging_obj,
-                litellm_call_id=litellm_call_id,
+                logging_obj=logging_obj_of(litellm_logging_obj),
+                litellm_call_id=optional_str(litellm_call_id),
             )
 
         # Get provider config for external providers (Anthropic, etc.)
@@ -408,7 +411,7 @@ def list_skills(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params=query_params,
@@ -425,12 +428,12 @@ def list_skills(
             skills_api_provider_config=skills_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -451,7 +454,7 @@ async def aget_skill(
     extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Skill:
     """
     Async: Get a skill by ID
@@ -508,7 +511,7 @@ def get_skill(
     extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Skill | Coroutine[object, object, Skill]:
     """
     Get a skill by ID
@@ -526,8 +529,8 @@ def get_skill(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aget_skill", False) is True
 
         # Get LiteLLM parameters
@@ -543,8 +546,8 @@ def get_skill(
                 skill_id=skill_id,
                 user_api_key_dict=_get_user_api_key_auth_from_kwargs(kwargs),
                 _is_async=_is_async,
-                logging_obj=litellm_logging_obj,
-                litellm_call_id=litellm_call_id,
+                logging_obj=logging_obj_of(litellm_logging_obj),
+                litellm_call_id=optional_str(litellm_call_id),
             )
 
         # Get provider config for external providers (Anthropic, etc.)
@@ -573,7 +576,7 @@ def get_skill(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={"skill_id": skill_id},
@@ -589,12 +592,12 @@ def get_skill(
             skills_api_provider_config=skills_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response
@@ -615,7 +618,7 @@ async def adelete_skill(
     extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteSkillResponse:
     """
     Async: Delete a skill by ID
@@ -672,7 +675,7 @@ def delete_skill(
     extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteSkillResponse | Coroutine[object, object, DeleteSkillResponse]:
     """
     Delete a skill by ID
@@ -690,8 +693,8 @@ def delete_skill(
     """
     local_vars: Final = locals()
     try:
-        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_logging_obj: Final = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("adelete_skill", False) is True
 
         # Get LiteLLM parameters
@@ -707,8 +710,8 @@ def delete_skill(
                 skill_id=skill_id,
                 user_api_key_dict=_get_user_api_key_auth_from_kwargs(kwargs),
                 _is_async=_is_async,
-                logging_obj=litellm_logging_obj,
-                litellm_call_id=litellm_call_id,
+                logging_obj=logging_obj_of(litellm_logging_obj),
+                litellm_call_id=optional_str(litellm_call_id),
             )
 
         # Get provider config for external providers (Anthropic, etc.)
@@ -737,7 +740,7 @@ def delete_skill(
         )
 
         # Pre-call logging
-        litellm_logging_obj.update_from_kwargs(
+        logging_obj_of(litellm_logging_obj).update_from_kwargs(
             kwargs=kwargs,
             model=None,
             optional_params={"skill_id": skill_id},
@@ -753,12 +756,12 @@ def delete_skill(
             skills_api_provider_config=skills_api_provider_config,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            logging_obj=logging_obj_of(litellm_logging_obj),
             extra_headers=headers,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            shared_session=kwargs.get("shared_session"),
+            client=http_client_of(kwargs.get("client")),
+            shared_session=shared_session_of(kwargs.get("shared_session")),
         )
 
         return response

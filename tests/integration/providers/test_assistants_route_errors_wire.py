@@ -14,6 +14,7 @@ import pytest
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.process import OwnedProxy, WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request
+from integration._support.ports import allocate_port
 from integration.providers._assistants_route_errors_support import (
     ASSISTANT_MODEL,
     BODY_ROUTES,
@@ -39,7 +40,6 @@ from integration.providers._assistants_route_errors_support import (
     assert_reached_upstream_once,
     assistants_wire,
     error_reply,
-    free_port,
     held_error_peer,
     held_one_by_one,
     held_upstream_connections,
@@ -89,7 +89,7 @@ class _Scripted:
 @pytest.fixture(scope="module")
 def scripted(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scripted]:
     directory: Final = tmp_path_factory.mktemp("assistants-route-errors-scripted")
-    port: Final = free_port()
+    port: Final = allocate_port()
     config: Final = openai_assistants_config(directory, port, _DEPLOYMENT_TIMEOUT_SECONDS)
     with (
         gateway_from_environment() as shared,
@@ -277,7 +277,9 @@ async def test_upstream_held_past_the_deployment_timeout_answers_408_on_every_ro
         received: Final = wire.drain()
     assert len(answers) == len(ROUTES)
     for answer in answers:
-        assert "litellm.Timeout" in assert_openai_error(answer.response, MAPPED_BY_STATUS[408]), answer.response.text
+        assert "litellm.Timeout" in assert_openai_error(answer.response, Mapped(408, "invalid_request_error", None)), (
+            answer.response.text
+        )
     assert sorted(upstream_trail(received)) == sorted((route.method, proxy_path(route, marker)) for route in ROUTES)
 
 

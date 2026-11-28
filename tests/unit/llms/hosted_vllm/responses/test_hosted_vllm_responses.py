@@ -8,12 +8,17 @@ hosted_vllm (and any OpenAI-compatible provider using add_provider_specific_para
 """
 
 import json
+from collections.abc import Callable, Mapping
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.hosted_vllm.responses.transformation import (
     HostedVLLMResponsesAPIConfig,
 )
@@ -183,3 +188,268 @@ def test_hosted_vllm_validate_environment_custom_api_key():
     )
 
     assert headers.get("Authorization") == "Bearer my-custom-key"
+
+
+_LATER_DEVELOPER_INPUT: Final = (
+    {"role": "user", "content": "Hi there"},
+    {"role": "developer", "content": "Answer with exactly one word."},
+    {"role": "user", "content": "What is the capital of France?"},
+)
+
+
+_VLLM_RESPONSES_URL: Final = "https://test-vllm.example.com/v1/responses"
+
+
+def _vllm_responses_route(output_text: str) -> respx.Route:
+    return respx.post(_VLLM_RESPONSES_URL).mock(
+        return_value=httpx.Response(200, json=_make_mock_responses_api_response(output_text))
+    )
+
+
+def _sent_body(route: respx.Route) -> Mapping[str, object]:
+    return json.loads(route.calls.last.request.content)
+
+
+@respx.mock
+def test_hosted_vllm_responses_folds_a_later_developer_item_into_instructions_for_a_system_first_model(
+    declare_mid_conversation_system: Callable[[str, bool], None],
+) -> None:
+    declare_mid_conversation_system("hosted_vllm/Qwen/Qwen3.6-27B", False)
+    route: Final = _vllm_responses_route("Paris")
+    litellm.responses(
+        model="hosted_vllm/Qwen/Qwen3.6-27B",
+        instructions="You are a terse assistant.",
+        input=list(_LATER_DEVELOPER_INPUT),
+        api_base="https://test-vllm.example.com/v1",
+    )
+    body: Final = _sent_body(route)
+    assert body["instructions"] == "You are a terse assistant.\n\nAnswer with exactly one word."
+    assert tuple(body["input"]) == (_LATER_DEVELOPER_INPUT[0], _LATER_DEVELOPER_INPUT[2])
+
+
+@respx.mock
+def test_hosted_vllm_responses_folds_for_a_deployment_declared_system_first_and_sends_a_closing_developer_as_user() -> None:
+    assistant_turn: Final = {"type": "message", "role": "assistant", "content": "Paris"}
+    route: Final = _vllm_responses_route("PONG")
+    litellm.responses(
+        model="hosted_vllm/Qwen/Qwen3-8B",
+        instructions="You are a terse assistant.",
+        input=[*_LATER_DEVELOPER_INPUT, assistant_turn, {"role": "developer", "content": "Reply with PONG."}],
+        model_info={"id": "deployment-1", "supports_mid_conversation_system": False},
+        api_base="https://test-vllm.example.com/v1",
+    )
+    body: Final = _sent_body(route)
+    assert body["instructions"] == "You are a terse assistant.\n\nAnswer with exactly one word."
+    assert tuple(body["input"]) == (
+        _LATER_DEVELOPER_INPUT[0],
+        _LATER_DEVELOPER_INPUT[2],
+        assistant_turn,
+        {"role": "user", "content": "Reply with PONG.", "type": "message"},
+    )
+
+
+@respx.mock
+def test_hosted_vllm_responses_forwards_a_later_developer_item_in_place_for_an_undeclared_model() -> None:
+    route: Final = _vllm_responses_route("Paris")
+    litellm.responses(
+        model="hosted_vllm/Qwen/Qwen3-8B",
+        instructions="You are a terse assistant.",
+        input=list(_LATER_DEVELOPER_INPUT),
+        api_base="https://test-vllm.example.com/v1",
+    )
+    body: Final = _sent_body(route)
+    assert body["instructions"] == "You are a terse assistant."
+    assert tuple(body["input"]) == _LATER_DEVELOPER_INPUT
+
+
+@respx.mock
+def test_hosted_vllm_responses_forwards_a_developer_item_without_content_on_a_deployment_declared_system_first() -> None:
+    route: Final = _vllm_responses_route("Paris")
+    input_items: Final = (
+        {"role": "user", "content": "What is the capital of France?"},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Paris."}]},
+        {"type": "message", "role": "developer"},
+    )
+    litellm.responses(
+        model="hosted_vllm/Qwen/Qwen3-8B",
+        input=list(input_items),
+        model_info={"id": "deployment-1", "supports_mid_conversation_system": False},
+        api_base="https://test-vllm.example.com/v1",
+    )
+    assert tuple(_sent_body(route)["input"]) == input_items
+
+
+_SYSTEM_FIRST_DEPLOYMENT: Final = {"id": "deployment-1", "supports_mid_conversation_system": False}
+_FIRST_USER_ITEM: Final = {"role": "user", "content": "Hi there"}
+_ASSISTANT_ITEM: Final = {"type": "message", "role": "assistant", "content": "Hello!"}
+_NEXT_USER_ITEM: Final = {"role": "user", "content": "What is the capital of France?"}
+_FUNCTION_CALL_ITEM: Final = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"}
+_FUNCTION_CALL_OUTPUT_ITEM: Final = {"type": "function_call_output", "call_id": "call_1", "output": "21C"}
+_CUSTOM_TOOL_CALL_ITEM: Final = {"type": "custom_tool_call", "call_id": "call_2", "name": "apply_patch", "input": "*"}
+_CUSTOM_TOOL_CALL_OUTPUT_ITEM: Final = {"type": "custom_tool_call_output", "call_id": "call_2", "output": "Done"}
+_REFERENCE_IMAGE_PART: Final = {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto"}
+
+
+def _reminder_as_user_item(*parts: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": CONVERTED_SYSTEM_NOTE}, *parts],
+    }
+
+
+_REMINDER_AS_USER_ITEM: Final = _reminder_as_user_item({"type": "input_text", "text": "Reply in French."})
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("instructions", "input_items", "expected_instructions", "expected_input"),
+    [
+        pytest.param(
+            None,
+            (_FIRST_USER_ITEM, _ASSISTANT_ITEM, {"role": "system", "content": "Reply in French."}, _NEXT_USER_ITEM),
+            None,
+            (_FIRST_USER_ITEM, _ASSISTANT_ITEM, _REMINDER_AS_USER_ITEM, _NEXT_USER_ITEM),
+            id="string-content-without-a-leading-system",
+        ),
+        pytest.param(
+            None,
+            (
+                _FIRST_USER_ITEM,
+                _ASSISTANT_ITEM,
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": "Match this image."}, _REFERENCE_IMAGE_PART],
+                },
+                _NEXT_USER_ITEM,
+            ),
+            None,
+            (
+                _FIRST_USER_ITEM,
+                _ASSISTANT_ITEM,
+                _reminder_as_user_item({"type": "input_text", "text": "Match this image."}, _REFERENCE_IMAGE_PART),
+                _NEXT_USER_ITEM,
+            ),
+            id="list-content-keeps-every-part",
+        ),
+        pytest.param(
+            None,
+            (_FIRST_USER_ITEM, _ASSISTANT_ITEM, {"role": "system", "content": "Reply in French."}),
+            None,
+            (_FIRST_USER_ITEM, _ASSISTANT_ITEM, _REMINDER_AS_USER_ITEM),
+            id="closing-after-the-assistant",
+        ),
+        pytest.param(
+            None,
+            (
+                _FIRST_USER_ITEM,
+                _FUNCTION_CALL_ITEM,
+                {"role": "system", "content": "Reply in French."},
+                _FUNCTION_CALL_OUTPUT_ITEM,
+            ),
+            None,
+            (_FIRST_USER_ITEM, _FUNCTION_CALL_ITEM, _FUNCTION_CALL_OUTPUT_ITEM, _REMINDER_AS_USER_ITEM),
+            id="between-a-function-call-and-its-output",
+        ),
+        pytest.param(
+            None,
+            (
+                _FIRST_USER_ITEM,
+                _CUSTOM_TOOL_CALL_ITEM,
+                {"role": "system", "content": "Reply in French."},
+                _CUSTOM_TOOL_CALL_OUTPUT_ITEM,
+            ),
+            None,
+            (_FIRST_USER_ITEM, _CUSTOM_TOOL_CALL_ITEM, _CUSTOM_TOOL_CALL_OUTPUT_ITEM, _REMINDER_AS_USER_ITEM),
+            id="between-a-custom-tool-call-and-its-output",
+        ),
+        pytest.param(
+            None,
+            (
+                {"role": "system", "content": "You are terse."},
+                _FIRST_USER_ITEM,
+                _ASSISTANT_ITEM,
+                {"role": "developer", "content": "Answer with exactly one word."},
+                {"role": "system", "content": "Reply in French."},
+                _NEXT_USER_ITEM,
+            ),
+            "You are terse.\n\nAnswer with exactly one word.",
+            (_FIRST_USER_ITEM, _ASSISTANT_ITEM, _REMINDER_AS_USER_ITEM, _NEXT_USER_ITEM),
+            id="with-a-leading-system-and-a-later-developer",
+        ),
+        pytest.param(
+            "You are terse.",
+            (_FIRST_USER_ITEM, {"role": "system", "content": "Reply in French."}, _NEXT_USER_ITEM),
+            "You are terse.",
+            (_FIRST_USER_ITEM, _REMINDER_AS_USER_ITEM, _NEXT_USER_ITEM),
+            id="with-instructions",
+        ),
+    ],
+)
+def test_hosted_vllm_responses_sends_a_later_system_item_as_a_user_turn_in_place_on_a_system_first_deployment(
+    instructions: str | None,
+    input_items: tuple[Mapping[str, object], ...],
+    expected_instructions: str | None,
+    expected_input: tuple[Mapping[str, object], ...],
+) -> None:
+    route: Final = _vllm_responses_route("Paris")
+    litellm.responses(
+        model="hosted_vllm/Qwen/Qwen3.8-27B",
+        instructions=instructions,
+        input=list(input_items),
+        model_info=_SYSTEM_FIRST_DEPLOYMENT,
+        api_base="https://test-vllm.example.com/v1",
+    )
+    body: Final = _sent_body(route)
+    assert body.get("instructions") == expected_instructions
+    assert tuple(body["input"]) == expected_input
+
+
+_LATER_SYSTEM_INPUT: Final = (
+    _FIRST_USER_ITEM,
+    _FUNCTION_CALL_ITEM,
+    {"role": "system", "content": "Reply in French."},
+    _FUNCTION_CALL_OUTPUT_ITEM,
+    _ASSISTANT_ITEM,
+    {"role": "system", "content": [{"type": "input_text", "text": "Reply in French."}]},
+)
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("input_value", "model_info"),
+    [
+        pytest.param(list(_LATER_SYSTEM_INPUT), None, id="undeclared"),
+        pytest.param(
+            list(_LATER_SYSTEM_INPUT),
+            {"id": "deployment-1", "supports_mid_conversation_system": True},
+            id="declared-true",
+        ),
+        pytest.param(
+            [_FIRST_USER_ITEM, _FUNCTION_CALL_ITEM, _FUNCTION_CALL_OUTPUT_ITEM, _ASSISTANT_ITEM, _NEXT_USER_ITEM],
+            _SYSTEM_FIRST_DEPLOYMENT,
+            id="system-first-without-a-system-item",
+        ),
+        pytest.param(
+            [_FIRST_USER_ITEM, _ASSISTANT_ITEM, {"type": "message", "role": "system"}],
+            _SYSTEM_FIRST_DEPLOYMENT,
+            id="system-first-with-a-system-item-without-content",
+        ),
+        pytest.param("What is the capital of France?", _SYSTEM_FIRST_DEPLOYMENT, id="system-first-string-input"),
+    ],
+)
+def test_hosted_vllm_responses_forwards_the_input_unchanged_unless_a_system_first_deployment_gets_a_later_system_item(
+    input_value: str | list[Mapping[str, object]], model_info: Mapping[str, object] | None
+) -> None:
+    route: Final = _vllm_responses_route("Paris")
+    litellm.responses(
+        model="hosted_vllm/Qwen/Qwen3.8-27B",
+        instructions="You are terse.",
+        input=input_value,
+        model_info=model_info,
+        api_base="https://test-vllm.example.com/v1",
+    )
+    body: Final = _sent_body(route)
+    assert body["instructions"] == "You are terse."
+    assert body["input"] == input_value

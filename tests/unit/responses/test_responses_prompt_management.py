@@ -15,7 +15,7 @@ Covers:
 
 from importlib import import_module
 import asyncio
-from typing import List, cast
+from typing import Final, List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -69,10 +69,6 @@ def _patch_responses_dispatch():
         patch.object(
             import_module("litellm.responses.main").litellm, "get_llm_provider",
             side_effect=_provider_by_model,
-        ),
-        patch.object(
-            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler, "should_use_litellm_mcp_gateway",
-            return_value=False,
         ),
         patch.object(
             import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config",
@@ -158,7 +154,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2]:
             import litellm
 
             litellm.responses(
@@ -193,7 +189,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2]:
             import litellm
 
             litellm.responses(
@@ -216,7 +212,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2]:
             import litellm
 
             litellm.responses(
@@ -247,7 +243,7 @@ class TestResponsesAPIPromptManagement:
         logging_obj.model_call_details = {}
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+        with patches[0], patches[1], patches[2] as mock_handler:
             import litellm
 
             litellm.responses(
@@ -273,7 +269,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+        with patches[0], patches[1], patches[2] as mock_handler:
             import litellm
 
             litellm.responses(
@@ -305,7 +301,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2]:
             import litellm
 
             litellm.responses(
@@ -328,7 +324,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+        with patches[0], patches[1], patches[2] as mock_handler:
             import litellm
 
             litellm.responses(
@@ -368,7 +364,7 @@ class TestResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+        with patches[0], patches[1], patches[2] as mock_handler:
             import litellm
 
             litellm.responses(
@@ -399,8 +395,7 @@ class TestResponsesAPIPromptManagement:
                 side_effect=_provider_by_model,
             ),
             patches[1],
-            patches[2],
-            patches[3] as mock_handler,
+            patches[2] as mock_handler,
         ):
             import litellm
 
@@ -437,7 +432,7 @@ class TestAsyncResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2]:
             import litellm
 
             await litellm.aresponses(
@@ -467,7 +462,7 @@ class TestAsyncResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+        with patches[0], patches[1], patches[2] as mock_handler:
             import litellm
 
             await litellm.aresponses(
@@ -498,7 +493,7 @@ class TestAsyncResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3]:
+        with patches[0], patches[1], patches[2]:
             import litellm
 
             await litellm.aresponses(
@@ -524,7 +519,7 @@ class TestAsyncResponsesAPIPromptManagement:
         )
 
         patches = _patch_responses_dispatch()
-        with patches[0], patches[1], patches[2], patches[3] as mock_handler:
+        with patches[0], patches[1], patches[2] as mock_handler:
             import litellm
 
             await litellm.aresponses(
@@ -657,7 +652,7 @@ async def test_async_guardrail_block_from_prompt_hook_reaches_caller_unwrapped()
     logging_obj.async_get_chat_completion_prompt = AsyncMock(side_effect=block)
 
     patches = _patch_responses_dispatch()
-    with patches[0], patches[1], patches[2], patches[3], pytest.raises(HTTPException) as exc_info:
+    with patches[0], patches[1], patches[2], pytest.raises(HTTPException) as exc_info:
         await litellm.aresponses(input="Hi", model="gpt-4o", prompt_id="blocked", litellm_logging_obj=logging_obj)
 
     assert exc_info.value is block
@@ -669,7 +664,61 @@ def test_sync_guardrail_block_from_prompt_hook_reaches_caller_unwrapped():
     logging_obj.get_chat_completion_prompt.side_effect = block
 
     patches = _patch_responses_dispatch()
-    with patches[0], patches[1], patches[2], patches[3], pytest.raises(HTTPException) as exc_info:
+    with patches[0], patches[1], patches[2], pytest.raises(HTTPException) as exc_info:
         litellm.responses(input="Hi", model="gpt-4o", prompt_id="blocked", litellm_logging_obj=logging_obj)
 
     assert exc_info.value is block
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_version", ["latest", "\u00b2"])
+async def test_aresponses_hands_the_prompt_hook_no_label_or_version_of_the_wrong_type(
+    prompt_version: str,
+) -> None:
+    logging_obj: Final = _make_logging_obj(merged_model="openai/gpt-4o", merged_messages=[])
+
+    patches: Final = _patch_responses_dispatch()
+    with patches[0], patches[1], patches[2]:
+        await litellm.aresponses(
+            input="Hi",
+            model="gpt-4o",
+            prompt_id="wrong-typed",
+            prompt_label=123,
+            prompt_version=prompt_version,
+            litellm_logging_obj=logging_obj,
+        )
+
+    hook_kwargs: Final = logging_obj.async_get_chat_completion_prompt.call_args.kwargs
+    assert (hook_kwargs["prompt_label"], hook_kwargs["prompt_version"]) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_aresponses_keeps_a_prompt_version_sent_as_a_numeric_string() -> None:
+    logging_obj: Final = _make_logging_obj(merged_model="openai/gpt-4o", merged_messages=[])
+
+    patches: Final = _patch_responses_dispatch()
+    with patches[0], patches[1], patches[2]:
+        await litellm.aresponses(
+            input="Hi",
+            model="gpt-4o",
+            prompt_id="versioned",
+            prompt_version="2",
+            litellm_logging_obj=logging_obj,
+        )
+
+    hook_kwargs: Final = logging_obj.async_get_chat_completion_prompt.call_args.kwargs
+    assert hook_kwargs["prompt_version"] == 2, hook_kwargs
+
+
+def test_responses_ignores_a_shared_session_that_is_not_a_client_session() -> None:
+    responses_main: Final = import_module("litellm.responses.main")
+
+    with patch.object(
+        responses_main.base_llm_http_handler, "response_api_handler", return_value=MagicMock()
+    ) as handler:
+        response: Final = litellm.responses(
+            input="Hi", model="openai/gpt-4o", api_key="sk-test", shared_session="not-a-session"
+        )
+
+    assert response is handler.return_value
+    assert handler.call_args.kwargs["shared_session"] is None

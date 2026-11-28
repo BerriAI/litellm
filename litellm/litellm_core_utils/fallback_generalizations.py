@@ -19,17 +19,11 @@ ones on key conflicts, and the caller backfills ``litellm_provider`` with the
 provider it requested. If no capability rule matches, model-info resolution misses
 as if no rules existed.
 
-LEGACY-SCHEMA SHIM (temporary, until the new-schema JSON reaches main): released
-proxies fetch this JSON remotely from main, whose block still ships the old schema
-where a rule mixes ``litellm_provider`` with capability keys and may inherit a
-parent's ``model_info`` via ``extends``. Such a legacy rule is tolerated rather
-than skipped: ``extends`` is resolved once at install time (single level, against
-raw parents), and the resolved rule acts as BOTH kinds, a routing rule (its
-``litellm_provider`` participates in first-hit inference) and a capability rule
-(its full ``model_info``, provider included, participates in the union). New-schema
-rules never mix the two and never use ``extends``. A rule whose
-``litellm_provider`` is not a string is invalid and is warned about and skipped
-(a warning rather than a crash, for the same remote-fetch reason).
+A rule whose ``model_info`` carries ``litellm_provider`` alongside any other key,
+or carries it as a non-string, is neither kind: it is warned about and skipped
+rather than raising, since released proxies fetch this JSON remotely. A rule
+carrying ``extends`` is skipped the same way. Mixed rules and ``extends`` are the
+old rule format, so their warning points the operator at a current cost map.
 
 Rules are only consulted after exact and case-insensitive lookups miss, so an
 exact cost-map entry always takes precedence over any rule.
@@ -53,7 +47,7 @@ O(number of rules); callers must only invoke them on a cache miss.
 
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
@@ -62,48 +56,19 @@ NAME_FIELD: Final = "name"
 PATTERN_FIELD: Final = "pattern"
 MODEL_INFO_FIELD: Final = "model_info"
 PROVIDER_KEY: Final = "litellm_provider"
-LEGACY_EXTENDS_FIELD: Final = "extends"
 FILL_MISSING_FOR_PROVIDERS_FIELD: Final = "fill_missing_for_providers"
-
-
-def _resolve_legacy_extends(rules: list) -> list:
-    """Expand legacy ``extends`` inheritance so each rule's ``model_info`` is self-contained.
-
-    Compatibility shim for the old remote schema: single level, resolved against each
-    parent's raw ``model_info``, with the child's own keys winning on conflict. Non-dict
-    rules and dangling parents pass through unchanged; new-schema rules carry no
-    ``extends`` and are untouched.
-    """
-    base_by_name: Final = {
-        rule[NAME_FIELD]: rule[MODEL_INFO_FIELD]
-        for rule in rules
-        if isinstance(rule, dict)
-        and isinstance(rule.get(NAME_FIELD), str)
-        and isinstance(rule.get(MODEL_INFO_FIELD), dict)
-    }
-
-    def resolved(rule: object) -> object:
-        if not isinstance(rule, dict):
-            return rule
-        parent_name: Final = rule.get(LEGACY_EXTENDS_FIELD)
-        own_info: Final = rule.get(MODEL_INFO_FIELD)
-        parent_info: Final = base_by_name.get(parent_name) if isinstance(parent_name, str) else None
-        if parent_info is None or not isinstance(own_info, dict):
-            return rule
-        return {**rule, MODEL_INFO_FIELD: {**parent_info, **own_info}}
-
-    return [resolved(rule) for rule in rules]
+EXTENDS_FIELD: Final = "extends"
 
 
 @dataclass(frozen=True, slots=True)
 class _RoutingRule:
-    pattern: re.Pattern
+    pattern: re.Pattern[str]
     provider: str
 
 
 @dataclass(frozen=True, slots=True)
 class _CapabilityRule:
-    pattern: re.Pattern
+    pattern: re.Pattern[str]
     model_info: dict
     fill_missing_for_providers: frozenset[str]
 
@@ -111,7 +76,7 @@ class _CapabilityRule:
 _CompiledRule = _RoutingRule | _CapabilityRule
 
 
-def _parse_fill_missing_for_providers(rule: Mapping[str, object], pattern_label: object) -> frozenset[str] | None:
+def _parse_fill_missing_for_providers(rule: Mapping[object, object], pattern_label: object) -> frozenset[str] | None:
     if FILL_MISSING_FOR_PROVIDERS_FIELD not in rule:
         return frozenset()
     raw_fill_missing_for_providers: Final = rule.get(FILL_MISSING_FOR_PROVIDERS_FIELD)
@@ -127,19 +92,38 @@ def _parse_fill_missing_for_providers(rule: Mapping[str, object], pattern_label:
     return frozenset(raw_fill_missing_for_providers)
 
 
-def _compile_rule(rule: object) -> tuple[_CompiledRule, ...]:
-    if not isinstance(rule, dict):
-        return ()
+def _warn_old_format_rule(rule_label: str, reason: str) -> None:
+    verbose_logger.warning(
+        "LiteLLM: skipping fallback generalization rule %s, written in the old cost map rule format (%s). "
+        "Point LITELLM_MODEL_COST_MAP_URL at a current cost map, or with LITELLM_LOCAL_MODEL_COST_MAP set, "
+        "replace the bundled backup with a current one.",
+        rule_label,
+        reason,
+    )
+
+
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _compile_rule(raw_rule: object) -> _CompiledRule | None:
+    rule: Final = _as_dict(raw_rule)
+    if rule is None:
+        return None
     pattern: Final = rule.get(PATTERN_FIELD)
     model_info: Final = rule.get(MODEL_INFO_FIELD)
+    rule_label: Final = f"{rule.get(NAME_FIELD, pattern)}"
     if not isinstance(pattern, str) or not isinstance(model_info, dict):
         verbose_logger.warning(
             "LiteLLM: skipping malformed fallback generalization rule %s (needs string '%s' and dict '%s').",
-            rule.get(NAME_FIELD, pattern),
+            rule_label,
             PATTERN_FIELD,
             MODEL_INFO_FIELD,
         )
-        return ()
+        return None
+    if EXTENDS_FIELD in rule:
+        _warn_old_format_rule(rule_label, f"'{EXTENDS_FIELD}' is no longer supported")
+        return None
     try:
         compiled: Final = re.compile(pattern, re.IGNORECASE)
     except re.error as e:
@@ -148,52 +132,45 @@ def _compile_rule(rule: object) -> tuple[_CompiledRule, ...]:
             pattern,
             e,
         )
-        return ()
+        return None
     fill_missing_for_providers: Final = _parse_fill_missing_for_providers(rule, pattern)
     if fill_missing_for_providers is None:
-        return ()
+        return None
     if PROVIDER_KEY not in model_info:
-        return (
-            _CapabilityRule(
-                pattern=compiled,
-                model_info=model_info,
-                fill_missing_for_providers=fill_missing_for_providers,
-            ),
+        return _CapabilityRule(
+            pattern=compiled,
+            model_info=model_info,
+            fill_missing_for_providers=fill_missing_for_providers,
         )
     provider: Final = model_info[PROVIDER_KEY]
     if not isinstance(provider, str):
         verbose_logger.warning(
-            "LiteLLM: skipping invalid fallback generalization rule %s: '%s' in '%s' must be a string.",
-            rule.get(NAME_FIELD, pattern),
+            "LiteLLM: skipping malformed fallback generalization rule %s ('%s' must be a string).",
+            rule_label,
             PROVIDER_KEY,
-            MODEL_INFO_FIELD,
         )
-        return ()
-    if len(model_info) == 1:
-        return (_RoutingRule(pattern=compiled, provider=provider),)
-    return (
-        _RoutingRule(pattern=compiled, provider=provider),
-        _CapabilityRule(
-            pattern=compiled,
-            model_info=model_info,
-            fill_missing_for_providers=fill_missing_for_providers,
-        ),
-    )
+        return None
+    if len(model_info) != 1:
+        _warn_old_format_rule(rule_label, f"'{PROVIDER_KEY}' must be the only key in '{MODEL_INFO_FIELD}'")
+        return None
+    return _RoutingRule(pattern=compiled, provider=provider)
 
 
 class _FallbackGeneralizations:
     """Holds the raw rule list and its install-time-compiled routing and capability rules."""
 
     def __init__(self) -> None:
-        self.rules: list = []
-        self.routing_rules: tuple = ()
-        self.capability_rules: tuple = ()
+        self.rules: list[object] = []
+        self.version: int = 0
+        self.routing_rules: tuple[_RoutingRule, ...] = ()
+        self.capability_rules: tuple[_CapabilityRule, ...] = ()
         self.fill_missing_rules: tuple[_CapabilityRule, ...] = ()
 
-    def set_rules(self, rules: list | None) -> None:
+    def set_rules(self, rules: Sequence[object] | None) -> None:
         installed: Final = rules if isinstance(rules, list) else []
-        compiled: Final = tuple(kind for rule in _resolve_legacy_extends(installed) for kind in _compile_rule(rule))
+        compiled: Final = tuple(kind for kind in map(_compile_rule, installed) if kind is not None)
         self.rules = installed
+        self.version = self.version + 1
         self.routing_rules = tuple(rule for rule in compiled if isinstance(rule, _RoutingRule))
         self.capability_rules = tuple(rule for rule in compiled if isinstance(rule, _CapabilityRule))
         self.fill_missing_rules = tuple(rule for rule in self.capability_rules if rule.fill_missing_for_providers)
@@ -206,7 +183,7 @@ class _FallbackGeneralizations:
             None,
         )
 
-    def match_capabilities(self, model: str) -> dict | None:
+    def match_capabilities(self, model: str) -> dict[object, object] | None:
         if not model:
             return None
         matched = tuple(rule.model_info for rule in self.capability_rules if rule.pattern.search(model) is not None)
@@ -224,29 +201,29 @@ class _FallbackGeneralizations:
         )
         if not matched:
             return None
-        fill_missing: Final[Mapping[str, object]] = {
-            key: value for model_info in matched for key, value in model_info.items() if key != PROVIDER_KEY
-        }
-        return fill_missing or None
+        return {key: value for model_info in matched for key, value in model_info.items()} or None
 
 
 _registry: Final = _FallbackGeneralizations()
 
 
-def set_fallback_generalizations(rules: list | None) -> None:
+def set_fallback_generalizations(rules: Sequence[object] | None) -> None:
     """Install the active rule list, compiling and classifying each rule.
 
-    Legacy ``extends`` inheritance is resolved here, once, before classification;
-    a legacy rule mixing ``litellm_provider`` with capability keys installs as both
-    kinds. Malformed and invalid-regex rules are warned about and skipped. Called
-    once when the model cost map is loaded (and again on any reload).
+    Malformed, mixed-kind, and invalid-regex rules are warned about and skipped.
+    Called once when the model cost map is loaded (and again on any reload).
     """
     _registry.set_rules(rules)
 
 
-def get_fallback_generalization_rules() -> list:
+def get_fallback_generalization_rules() -> list[object]:
     """Return the raw rule list (read-only view for callers/tests)."""
     return _registry.rules
+
+
+def fallback_generalizations_version() -> int:
+    """How many rule lists have been installed, so a cache of the compiled rules knows when to drop them."""
+    return _registry.version
 
 
 def match_routing_generalization(model: str) -> str | None:

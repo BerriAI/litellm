@@ -52,6 +52,14 @@ _PROVIDER_MODULES: Final = (
     xai,
 )
 CASES: Final[tuple[CostTrackingTestCase, ...]] = tuple(case for module in _PROVIDER_MODULES for case in module.CASES)
+BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION: Final[frozenset[str]] = frozenset(
+    case.name
+    for case in (
+        *openai.BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION,
+        *anthropic.BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION,
+        *batch_realtime.BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION,
+    )
+)
 PARITY_CASES: Final[tuple[StreamParityTestCase, ...]] = tuple(
     pair for module in _PROVIDER_MODULES for pair in module.PARITY
 )
@@ -60,8 +68,12 @@ REALTIME_CASES: Final[tuple[RealtimeCostCase, ...]] = batch_realtime.REALTIME_CA
 BRIDGE_COST_PARITY_CASES: Final[tuple[BridgeCostParityTestCase, ...]] = (
     *openai.BRIDGE_COST_PARITY,
     *bedrock_converse.BRIDGE_COST_PARITY,
+    *bedrock_mantle.BRIDGE_COST_PARITY,
     *azure.BRIDGE_COST_PARITY,
     *anthropic.BRIDGE_COST_PARITY,
+    *gemini.BRIDGE_COST_PARITY,
+    *vertex_ai.BRIDGE_COST_PARITY,
+    *misc.BRIDGE_COST_PARITY,
 )
 _PARITY_LEGS: Final = frozenset(leg.name for pair in PARITY_CASES for leg in (pair.plain, pair.streamed)) | frozenset(
     leg.name for pair in BRIDGE_COST_PARITY_CASES for leg in (pair.native, pair.bridged)

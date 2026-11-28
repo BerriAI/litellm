@@ -24,6 +24,8 @@ from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue
 
+pytestmark: Final = pytest.mark.shares_worker_state
+
 FORWARDED_IP: Final = "203.0.113.74"
 PROXY_HOP: Final = "198.51.100.23"
 REAL_IP: Final = "203.0.113.75"
@@ -142,7 +144,7 @@ def _assert_not_recorded(row: Mapping[str, JsonValue], text: str, user_id: str) 
     assert FORWARDED_IP not in text, text
 
 
-def test_allowed_ips_denial_row_masks_the_ip_while_the_caller_still_sees_it(gateway: Gateway, tmp_path: Path) -> None:
+def test_allowed_ips_denial_writes_no_row_while_the_caller_still_sees_the_ip(gateway: Gateway, tmp_path: Path) -> None:
     user_agent: Final = f"requester-ip-allowed-ips-{uuid4()}"
     config: Final = _config(tmp_path, {SETTING: True, "allowed_ips": ["127.0.0.1"]})
     with owned_proxy(gateway, tmp_path, {}, config=config) as proxy, proxy.scenario() as scenario:
@@ -156,18 +158,18 @@ def test_allowed_ips_denial_row_masks_the_ip_while_the_caller_still_sees_it(gate
         )
         assert response.status_code == 403, response.text
         assert FORWARDED_IP in response.text, response.text
-        rows: Final = eventually(
-            lambda: read_rows(f"{_ROW_COLUMNS} WHERE s.metadata->>'user_agent' = %s", (user_agent,)),
-            lambda values: len(values) == 1,
-            seconds=70,
+        allowed: Final = proxy.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "requester ip"}]},
+            key=key,
+            headers={"user-agent": user_agent},
         )
+        assert allowed.status_code == 200, allowed.text
+        allowed_row: Final = _row_for_call(allowed.headers["x-litellm-call-id"])
+        rows: Final = read_rows(f"{_ROW_COLUMNS} WHERE s.metadata->>'user_agent' = %s", (user_agent,))
 
-    denied: Final = rows[0]
-    error_information: Final = object_value(object_value(denied["metadata"])["error_information"])
-    assert object_value(denied["metadata"])["status"] == "failure", denied
-    assert denied["requester_ip_address"] is None, denied
-    assert "IP address REDACTED_BY_LITELM not allowed" in string_value(error_information["error_message"]), denied
-    assert FORWARDED_IP not in string_value(denied["row_text"]), denied
+    assert [row["request_id"] for row in rows] == [allowed_row["request_id"]], rows
 
 
 def test_admin_setting_change_applies_to_the_next_request(gateway: Gateway, tmp_path: Path) -> None:
@@ -562,7 +564,7 @@ def test_logs_page_serves_no_ip_when_the_setting_is_on(rigs: Mapping[bool, Rig],
 
 
 @DISABLED
-def test_auth_failure_row_follows_the_setting(rigs: Mapping[bool, Rig], disabled: bool) -> None:
+def test_auth_failure_writes_no_row_under_either_setting(rigs: Mapping[bool, Rig], disabled: bool) -> None:
     rig: Final = rigs[disabled]
     user_agent: Final = f"requester-ip-auth-failure-{uuid4()}"
     response: Final = rig.proxy.request(
@@ -573,16 +575,18 @@ def test_auth_failure_row_follows_the_setting(rigs: Mapping[bool, Rig], disabled
         headers={"x-forwarded-for": FORWARDED_IP, "user-agent": user_agent},
     )
     assert response.status_code == 401, response.text
-
-    rows: Final = eventually(
-        lambda: read_rows(f"{_ROW_COLUMNS} WHERE s.metadata->>'user_agent' = %s", (user_agent,)),
-        lambda values: len(values) == 1,
-        seconds=70,
+    control: Final = rig.proxy.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": rig.chat_model, "messages": [{"role": "user", "content": "requester ip"}]},
+        key=rig.key,
+        headers={"x-forwarded-for": FORWARDED_IP, "user-agent": user_agent},
     )
+    assert control.status_code == 200, control.text
+    control_row: Final = _row_for_call(control.headers["x-litellm-call-id"])
 
-    assert object_value(rows[0]["metadata"])["status"] == "failure", rows[0]
-    assert rows[0]["requester_ip_address"] == (None if disabled else FORWARDED_IP), rows[0]
-    assert _ips_in_row(rows[0]) == (() if disabled else (FORWARDED_IP,)), rows[0]
+    rows: Final = read_rows(f"{_ROW_COLUMNS} WHERE s.metadata->>'user_agent' = %s", (user_agent,))
+    assert [row["request_id"] for row in rows] == [control_row["request_id"]], rows
 
 
 @DISABLED

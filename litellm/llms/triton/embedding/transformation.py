@@ -1,6 +1,8 @@
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.base_llm.chat.transformation import AllMessageValues, BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import (
@@ -14,6 +16,16 @@ from litellm.utils import token_counter
 from ..common_utils import TritonError
 
 
+class _TritonEmbeddingOutput(TypedDict):
+    shape: ReadOnly[Sequence[int]]
+    data: ReadOnly[Sequence[float]]
+
+
+class _TritonEmbeddingResponse(TypedDict):
+    outputs: ReadOnly[Sequence[_TritonEmbeddingOutput]]
+    model_name: NotRequired[ReadOnly[str]]
+
+
 class TritonEmbeddingConfig(BaseEmbeddingConfig):
     """
     Transformations for triton /embeddings endpoint (This is a trtllm model)
@@ -22,16 +34,16 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
     def __init__(self) -> None:
         pass
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return []
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI params to Triton Embedding params
         """
@@ -39,23 +51,23 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {}
 
     def transform_embedding_request(
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         return {
             "inputs": [
                 {
@@ -74,16 +86,16 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: dict[str, object] = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final[_TritonEmbeddingResponse] = raw_response.json()
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
 
-        _embedding_output: Final = []
+        _embedding_output: Final[list[dict[str, object]]] = []
 
         _outputs: Final = raw_response_json["outputs"]
         for output in _outputs:
@@ -130,11 +142,13 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
             total_tokens=prompt_tokens,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return TritonError(message=error_message, status_code=status_code, headers=headers)
 
     @staticmethod
-    def split_embedding_by_shape(data: list[float], shape: list[int]) -> list[list[float]]:
+    def split_embedding_by_shape(data: Sequence[float], shape: Sequence[int]) -> list[Sequence[float]]:
         if len(shape) != 2:
             raise ValueError("Shape must be of length 2.")
         embedding_size: Final = shape[1]

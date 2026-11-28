@@ -19,6 +19,7 @@ else:
     LiteLLMLoggingObj = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class FalAIIdeogramV3Config(FalAIBaseConfig):
@@ -57,11 +58,11 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI-style parameters onto Ideogram's request schema.
         """
@@ -93,7 +94,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
 
         return optional_params
 
-    def _map_image_size(self, size: Any) -> object:
+    def _map_image_size(self, size: object) -> object:
         if isinstance(size, dict):
             width = size.get("width")
             height = size.get("height")
@@ -124,10 +125,10 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Construct the request payload for Ideogram v3.
 
@@ -151,9 +152,9 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -163,7 +164,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         """
 
         try:
-            response_data: Final = raw_response.json()
+            response_data: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",

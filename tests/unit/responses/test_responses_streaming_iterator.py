@@ -7,18 +7,27 @@ crashed with exit 139 whenever any CustomLogger was registered).
 """
 
 import asyncio
+import gc
+import json
 import time
+import weakref
+from collections.abc import AsyncIterator, Mapping
+from datetime import datetime
+from typing import Final, cast
 
 import httpx
 import pytest
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import thread_pool_executor as thread_pool_executor_module
-from litellm.responses import streaming_iterator as responses_streaming_iterator_module
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses import streaming_iterator as responses_streaming_iterator_module
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamingResponse
+from litellm.types.utils import StandardLoggingPayload
 
 
 class RecordingCustomLogger(CustomLogger):
@@ -163,3 +172,840 @@ async def test_sync_callbacks_run_only_after_async_handler_completes(recording_e
     submit_times = recording_executor.submit_times_for(logging_obj)
     assert len(submit_times) == 1
     assert submit_times[0] >= recorder.async_hook_finished
+
+
+class FailureRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure_payloads: tuple[StandardLoggingPayload, ...] = ()
+        self.success_payloads: tuple[StandardLoggingPayload, ...] = ()
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.failure_payloads = (
+            *self.failure_payloads,
+            cast(StandardLoggingPayload, kwargs["standard_logging_object"]),
+        )
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.success_payloads = (
+            *self.success_payloads,
+            cast(StandardLoggingPayload, kwargs["standard_logging_object"]),
+        )
+
+
+class _ChunkRecorder:
+    def __init__(self) -> None:
+        self.chunks: tuple[ResponsesAPIStreamingResponse, ...] = ()
+
+    async def drain(self, iterator: ResponsesAPIStreamingIterator) -> None:
+        async for chunk in iterator:
+            self.chunks = (*self.chunks, chunk)
+
+
+_SEA_DELTAS = ("The sea ", "is wide ", "and deep.")
+_SEA_PROMPT = "Write a 300 word story about the sea."
+_UNREACHABLE_IMAGE_INPUT: list[dict[str, object]] = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "Describe this picture."},
+            {"type": "input_image", "image_url": "http://images.invalid/photo.png", "detail": "high"},
+        ],
+    }
+]
+
+
+_TOOL_ARGUMENT_DELTAS = ('{"city": ', '"Lisbon", ', '"unit": "celsius"}')
+
+
+class _UpstreamThatTimesOutAfterThreeDeltas:
+    headers: dict[str, str] = {}
+
+    def __init__(self, event_type: str = "response.output_text.delta", deltas: tuple[str, ...] = _SEA_DELTAS) -> None:
+        self.event_type = event_type
+        self.deltas = deltas
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        for sequence_number, delta in enumerate(self.deltas):
+            event = {
+                "type": self.event_type,
+                "item_id": "item_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": delta,
+                "sequence_number": sequence_number,
+            }
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+
+class _UpstreamThatFailsWithUsageAfterThreeDeltas:
+    headers: dict[str, str] = {}
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        for sequence_number, delta in enumerate(_SEA_DELTAS):
+            event = {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": delta,
+                "sequence_number": sequence_number,
+            }
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        failed = {
+            "type": "response.failed",
+            "sequence_number": len(_SEA_DELTAS),
+            "response": {
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1700000000,
+                "status": "failed",
+                "model": "gpt-5.4-nano",
+                "output": [],
+                "error": {"code": "server_error", "message": "The model had an internal error"},
+                "usage": {"input_tokens": 400, "output_tokens": 9, "total_tokens": 409},
+            },
+        }
+        yield f"data: {json.dumps(failed)}\n\n".encode()
+
+
+async def _failure_payload_after_mid_stream_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    request_input: str | list[dict[str, object]],
+    upstream: _UpstreamThatTimesOutAfterThreeDeltas | None = None,
+    background_fields: Mapping[str, object] | None = None,
+    replays_stored_stream: bool = False,
+) -> tuple[FailureRecorder, StandardLoggingPayload]:
+    upstream_response: Final = upstream or _UpstreamThatTimesOutAfterThreeDeltas()
+    recorder = FailureRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    logging_obj = _make_logging_obj()
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        optional_params={"stream": True},
+        litellm_params={"custom_llm_provider": "openai", "aresponses": True},
+    )
+    iterator = ResponsesAPIStreamingIterator(
+        response=cast(httpx.Response, upstream_response),
+        model="gpt-5.4-nano",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        request_data={"model": "gpt-5.4-nano", "input": request_input, "stream": True, **(background_fields or {})},
+        replays_stored_stream=replays_stored_stream,
+    )
+    received = _ChunkRecorder()
+
+    with pytest.raises(litellm.Timeout, match="Timeout on reading data from socket"):
+        await received.drain(iterator)
+    assert [getattr(chunk, "delta", None) for chunk in received.chunks] == list(upstream_response.deltas)
+
+    await iterator._await_pending_logging()
+    (payload,) = recorder.failure_payloads
+    return recorder, payload
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_read_timeout_logs_failure_with_partial_usage_and_no_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _SEA_PROMPT)
+
+    assert payload["status"] == "failure"
+    assert payload["prompt_tokens"] == litellm.token_counter(
+        model="gpt-5.4-nano", messages=[{"role": "user", "content": _SEA_PROMPT}]
+    )
+    assert payload["completion_tokens"] == litellm.token_counter(
+        model="gpt-5.4-nano", text="".join(_SEA_DELTAS), count_response_tokens=True
+    )
+    assert payload["response_cost"] > 0
+    assert recorder.success_payloads == ()
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_read_timeout_bills_the_tool_call_arguments_already_streamed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamThatTimesOutAfterThreeDeltas(
+        event_type="response.function_call_arguments.delta", deltas=_TOOL_ARGUMENT_DELTAS
+    )
+    _, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _SEA_PROMPT, upstream)
+
+    assert payload["status"] == "failure"
+    assert payload["completion_tokens"] == litellm.token_counter(
+        model="gpt-5.4-nano", text="".join(_TOOL_ARGUMENT_DELTAS), count_response_tokens=True
+    )
+    assert payload["response_cost"] > 0
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_of_a_background_response_bills_nothing_since_retrieving_it_bills_the_whole_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, payload = await _failure_payload_after_mid_stream_timeout(
+        monkeypatch, _SEA_PROMPT, background_fields={"background": True}
+    )
+
+    assert payload["status"] == "failure"
+    assert payload["completion_tokens"] == 0
+    assert payload["response_cost"] == 0
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_of_a_resumed_background_stream_bills_nothing_since_its_create_bills_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _SEA_PROMPT, replays_stored_stream=True)
+
+    assert payload["status"] == "failure"
+    assert payload["completion_tokens"] == 0
+    assert payload["response_cost"] == 0
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_usage_estimate_never_fetches_image_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, payload = await _failure_payload_after_mid_stream_timeout(monkeypatch, _UNREACHABLE_IMAGE_INPUT)
+
+    assert payload["status"] == "failure"
+    assert payload["prompt_tokens"] == litellm.token_counter(
+        model="gpt-5.4-nano",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this picture."},
+                    {"type": "image_url", "image_url": {"url": "http://images.invalid/photo.png", "detail": "high"}},
+                ],
+            }
+        ],
+        use_default_image_token_count=True,
+    )
+    assert payload["completion_tokens"] > 0
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_keeps_the_usage_the_provider_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorder = FailureRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    logging_obj = _make_logging_obj()
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        optional_params={"stream": True},
+        litellm_params={"custom_llm_provider": "openai", "aresponses": True},
+    )
+    iterator = ResponsesAPIStreamingIterator(
+        response=cast(httpx.Response, _UpstreamThatFailsWithUsageAfterThreeDeltas()),
+        model="gpt-5.4-nano",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        request_data={"model": "gpt-5.4-nano", "input": _SEA_PROMPT, "stream": True},
+    )
+
+    with pytest.raises(MidStreamFallbackError, match="The model had an internal error"):
+        await _ChunkRecorder().drain(iterator)
+    await iterator._await_pending_logging()
+
+    (payload,) = recorder.failure_payloads
+    assert (payload["prompt_tokens"], payload["completion_tokens"]) == (400, 9)
+
+
+_CREATED_RESPONSE_WITH_PRIORITY_TIER: Final[Mapping[str, object]] = {
+    "id": "resp_partial",
+    "object": "response",
+    "created_at": 1700000000.0,
+    "model": "gpt-5.4-nano",
+    "status": "in_progress",
+    "output": [],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "service_tier": "priority",
+}
+_CREATED_WITH_PRIORITY_TIER: Final[Mapping[str, object]] = {
+    "type": "response.created",
+    "sequence_number": 0,
+    "response": _CREATED_RESPONSE_WITH_PRIORITY_TIER,
+}
+
+
+def _text_delta(text: str, sequence_number: int) -> Mapping[str, object]:
+    return {
+        "type": "response.output_text.delta",
+        "sequence_number": sequence_number,
+        "item_id": "msg_partial",
+        "output_index": 0,
+        "content_index": 0,
+        "delta": text,
+    }
+
+
+def _completed_after(text: str) -> Mapping[str, object]:
+    return {
+        "type": "response.completed",
+        "sequence_number": 9,
+        "response": {
+            **_CREATED_RESPONSE_WITH_PRIORITY_TIER,
+            "status": "completed",
+            "usage": {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12},
+        },
+    }
+
+
+def _live_iterator(
+    logging_obj: LitellmLogging, upstream: object = None, background: bool = False
+) -> ResponsesAPIStreamingIterator:
+    return ResponsesAPIStreamingIterator(
+        response=cast(httpx.Response, upstream or httpx.Response(200)),
+        model="gpt-5.4-nano",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4-nano", "input": "tell me a story", "background": background},
+        custom_llm_provider="openai",
+    )
+
+
+class _UpstreamThatTimesOutAfterRelayingText:
+    headers: dict[str, str] = {}
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time", 1)):
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+
+class _UpstreamThatCompletesThenTimesOut:
+    headers: dict[str, str] = {}
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        events: Final = (
+            _CREATED_WITH_PRIORITY_TIER,
+            *(_text_delta(delta, sequence_number) for sequence_number, delta in enumerate(_SEA_DELTAS, start=1)),
+            _completed_after("".join(_SEA_DELTAS)),
+        )
+        for event in events:
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+
+@pytest.mark.asyncio
+async def test_timeout_after_completed_response_ends_the_stream_and_bills_it_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder: Final = FailureRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    logging_obj: Final = _make_logging_obj()
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        optional_params={"stream": True},
+        litellm_params={"custom_llm_provider": "openai", "aresponses": True},
+    )
+    iterator: Final = _live_iterator(logging_obj, upstream=_UpstreamThatCompletesThenTimesOut())
+
+    chunks: Final = _ChunkRecorder()
+    await chunks.drain(iterator)
+    await iterator._await_pending_logging()
+
+    assert chunks.chunks[-1].type == "response.completed"
+    assert len(recorder.success_payloads) == 1
+    success_payload: Final = recorder.success_payloads[0]
+    response_payload: Final = success_payload["response"]
+    assert isinstance(response_payload, dict)
+    usage: Final = cast(dict[str, object], response_payload["usage"])
+    assert (usage["prompt_tokens"], usage["completion_tokens"], usage["total_tokens"]) == (5, 7, 12)
+    assert recorder.failure_payloads == ()
+    assert logging_obj.model_call_details.get("combined_usage_object") is None
+
+
+class _UpstreamThatTimesOutAfterCreated:
+    headers: dict[str, str] = {}
+
+    def __init__(self, **created_fields: object) -> None:
+        self.created_fields = created_fields
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        created: Final = {
+            **_CREATED_WITH_PRIORITY_TIER,
+            "response": {**_CREATED_RESPONSE_WITH_PRIORITY_TIER, **self.created_fields},
+        }
+        for event in (created, _text_delta("Once upon a time", 1)):
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+
+async def _mid_stream_failure_payload(
+    monkeypatch: pytest.MonkeyPatch, requested_tier: str | None, **created_fields: object
+) -> StandardLoggingPayload:
+    recorder: Final = FailureRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    logging_obj: Final = _make_logging_obj()
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        optional_params={"stream": True}
+        if requested_tier is None
+        else {"stream": True, "service_tier": requested_tier},
+        litellm_params={"custom_llm_provider": "openai", "aresponses": True},
+    )
+    iterator: Final = _live_iterator(logging_obj, upstream=_UpstreamThatTimesOutAfterCreated(**created_fields))
+
+    with pytest.raises(litellm.Timeout):
+        await _ChunkRecorder().drain(iterator)
+    await iterator._await_pending_logging()
+
+    (payload,) = recorder.failure_payloads
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_bills_the_relayed_text_at_the_tier_the_provider_served(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flex_requested: Final = await _mid_stream_failure_payload(monkeypatch, "flex", service_tier="default")
+    nothing_requested: Final = await _mid_stream_failure_payload(monkeypatch, None, service_tier="default")
+
+    assert nothing_requested["response_cost"] > 0
+    assert flex_requested["response_cost"] == nothing_requested["response_cost"]
+
+
+@pytest.mark.asyncio
+async def test_mid_stream_failure_bills_nothing_when_the_provider_runs_the_response_in_background(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload: Final = await _mid_stream_failure_payload(monkeypatch, None, background=True)
+
+    assert payload["status"] == "failure"
+    assert (payload["completion_tokens"], payload["response_cost"]) == (0, 0)
+
+
+def test_partial_response_on_disconnect_bills_the_relayed_text_at_the_served_service_tier():
+    iterator: Final = _live_iterator(_make_logging_obj())
+    for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time ", 1), _text_delta("a fox slept.", 2)):
+        iterator._process_chunk(json.dumps(event))
+
+    incomplete_event: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete_event is not None
+    assert incomplete_event.type == "response.incomplete"
+    partial: Final = incomplete_event.response
+    assert partial.status == "incomplete"
+    assert getattr(partial, "service_tier") == "priority"
+    assert partial.output[0].content[0].text == "Once upon a time a fox slept."
+    assert partial.usage.output_tokens == litellm.token_counter(
+        model="gpt-5.4-nano", text="Once upon a time a fox slept."
+    )
+    assert partial.usage.input_tokens == litellm.token_counter(
+        model="gpt-5.4-nano", messages=[{"role": "user", "content": "tell me a story"}]
+    )
+    assert partial.usage.total_tokens == partial.usage.input_tokens + partial.usage.output_tokens
+
+
+def test_disconnecting_from_a_resumed_background_stream_bills_no_partial_answer():
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=_make_logging_obj(),
+        custom_llm_provider="openai",
+        replays_stored_stream=True,
+    )
+    for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time ", 1), _text_delta("a fox slept.", 2)):
+        iterator._process_chunk(json.dumps(event))
+
+    assert iterator.partial_response_on_disconnect() is None
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        (),
+        (_CREATED_WITH_PRIORITY_TIER,),
+        (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time", 1), _completed_after("Once upon a time")),
+    ],
+    ids=["nothing_relayed", "created_only", "already_completed"],
+)
+@pytest.mark.asyncio
+async def test_partial_response_on_disconnect_is_none_when_there_is_nothing_to_bill_or_the_stream_billed_itself(
+    events: tuple[Mapping[str, object], ...],
+):
+    iterator: Final = _live_iterator(_make_logging_obj())
+    for event in events:
+        iterator._process_chunk(json.dumps(event))
+
+    assert iterator.partial_response_on_disconnect() is None
+    await iterator._await_pending_logging()
+
+
+@pytest.mark.asyncio
+async def test_partial_response_on_disconnect_is_none_once_the_failure_log_billed_the_relayed_text():
+    iterator: Final = _live_iterator(_make_logging_obj(), upstream=_UpstreamThatTimesOutAfterRelayingText())
+
+    with pytest.raises(litellm.Timeout):
+        await _ChunkRecorder().drain(iterator)
+
+    assert iterator.partial_response_on_disconnect() is None
+    await iterator._await_pending_logging()
+
+
+def test_partial_response_on_disconnect_reports_the_relayed_text_of_a_background_response():
+    iterator: Final = _live_iterator(_make_logging_obj(), background=True)
+    for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time", 1)):
+        iterator._process_chunk(json.dumps(event))
+
+    incomplete_event: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete_event is not None
+    assert incomplete_event.response.output[0].content[0].text == "Once upon a time"
+
+
+_PROVIDER_USAGE_AFTER_THE_CLIENT_LEFT: Final[Mapping[str, object]] = {
+    "input_tokens": 1200,
+    "input_tokens_details": {"cached_tokens": 1024},
+    "output_tokens": 900,
+    "output_tokens_details": {"reasoning_tokens": 832},
+    "total_tokens": 2100,
+}
+
+
+class _UpstreamThatReasonsUntilReleased:
+    """Sends response.created, then nothing until released, then a reasoning item and the provider's terminal usage."""
+
+    headers: dict[str, str] = {}
+
+    def __init__(self, fails_after_release: bool = False) -> None:
+        self.released: Final = asyncio.Event()
+        self.closed = False
+        self._fails_after_release: Final = fails_after_release
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        yield f"data: {json.dumps(_CREATED_WITH_PRIORITY_TIER)}\n\n".encode()
+        await self.released.wait()
+        if self._fails_after_release:
+            raise httpx.ReadError("connection reset by peer")
+        completed: Final = {
+            "type": "response.completed",
+            "sequence_number": 9,
+            "response": {
+                **_CREATED_RESPONSE_WITH_PRIORITY_TIER,
+                "status": "completed",
+                "usage": _PROVIDER_USAGE_AFTER_THE_CLIENT_LEFT,
+            },
+        }
+        yield f"data: {json.dumps(completed)}\n\n".encode()
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _recorded_stream(
+    monkeypatch: pytest.MonkeyPatch, upstream: _UpstreamThatReasonsUntilReleased
+) -> tuple[ResponsesAPIStreamingIterator, FailureRecorder]:
+    recorder: Final = FailureRecorder()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    logging_obj: Final = _make_logging_obj()
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        optional_params={"stream": True},
+        litellm_params={"custom_llm_provider": "openai", "aresponses": True},
+    )
+    return _live_iterator(logging_obj, upstream=upstream), recorder
+
+
+async def _cancel_the_consumer_while_the_provider_is_reasoning(iterator: ResponsesAPIStreamingIterator) -> None:
+    """What a client disconnect does: the read waiting on the provider is cancelled, then the wrappers close the stream."""
+    assert (await iterator.__anext__()).type == "response.created"
+    waiting_on_the_provider: Final = asyncio.ensure_future(iterator.__anext__())
+    await asyncio.sleep(0)
+    waiting_on_the_provider.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting_on_the_provider
+    await iterator.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_stream_cut_before_any_output_bills_the_usage_the_provider_reports_once_it_is_drained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+    existing_tasks: Final = asyncio.all_tasks()
+
+    await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+    assert upstream.closed is False, "closing here loses the provider's terminal usage"
+    upstream.released.set()
+    drained: Final = await iterator.settle_after_consumer_left(drain=True)
+    await iterator._await_pending_logging()
+    await _await_tasks_spawned_since(existing_tasks)
+
+    assert drained is True
+    assert upstream.closed is True
+    (success_payload,) = recorder.success_payloads
+    assert recorder.failure_payloads == ()
+    assert (
+        success_payload["prompt_tokens"],
+        success_payload["completion_tokens"],
+        success_payload["total_tokens"],
+    ) == (1200, 900, 2100)
+    usage: Final = cast(dict[str, dict[str, object]], cast(dict[str, object], success_payload["response"])["usage"])
+    assert usage["prompt_tokens_details"]["cached_tokens"] == 1024
+    assert usage["completion_tokens_details"]["reasoning_tokens"] == 832
+    assert iterator.partial_response_on_disconnect() is None, "a drained stream must not be billed a second time"
+
+
+@pytest.mark.asyncio
+async def test_a_drained_response_whose_success_logging_raises_stays_billable_with_the_usage_the_provider_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+
+    def success_logging_that_raises(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("logging backend unavailable")
+
+    monkeypatch.setattr(iterator.logging_obj, "dispatch_success_handlers", success_logging_that_raises)
+
+    await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+    upstream.released.set()
+    drained: Final = await iterator.settle_after_consumer_left(drain=True)
+    incomplete_event: Final = iterator.partial_response_on_disconnect()
+
+    assert drained is False, "True has the proxy skip the bill and the slot release for a success event that never ran"
+    assert recorder.success_payloads == ()
+    assert incomplete_event is not None
+    billed: Final = incomplete_event.response.usage
+    assert (billed.input_tokens, billed.output_tokens, billed.total_tokens) == (1200, 900, 2100)
+
+
+@pytest.mark.parametrize("loop_turns_before_the_cancel", range(6))
+@pytest.mark.asyncio
+async def test_a_consumer_cancelled_just_as_the_terminal_event_arrives_still_bills_the_usage_the_provider_reports(
+    monkeypatch: pytest.MonkeyPatch, loop_turns_before_the_cancel: int
+) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+    existing_tasks: Final = asyncio.all_tasks()
+    assert (await iterator.__anext__()).type == "response.created"
+    upstream.released.set()
+    reading_the_terminal_event: Final = asyncio.ensure_future(iterator.__anext__())
+    for _ in range(loop_turns_before_the_cancel):
+        await asyncio.sleep(0)
+    reading_the_terminal_event.cancel()
+    await asyncio.gather(reading_the_terminal_event, return_exceptions=True)
+    await iterator.aclose()
+
+    await iterator.settle_after_consumer_left(drain=True)
+    await iterator._await_pending_logging()
+    await _await_tasks_spawned_since(existing_tasks)
+
+    (success_payload,) = recorder.success_payloads
+    assert recorder.failure_payloads == ()
+    assert (
+        success_payload["prompt_tokens"],
+        success_payload["completion_tokens"],
+        success_payload["total_tokens"],
+    ) == (1200, 900, 2100), "an event the provider already sent must not be dropped by the cancel"
+
+
+@pytest.mark.asyncio
+async def test_a_stream_cut_after_its_terminal_event_was_logged_reports_that_the_success_event_owns_the_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+    existing_tasks: Final = asyncio.all_tasks()
+    upstream.released.set()
+    assert [(await iterator.__anext__()).type for _ in range(2)] == ["response.created", "response.completed"]
+
+    billed_by_the_success_event: Final = await iterator.settle_after_consumer_left(drain=True)
+    await iterator._await_pending_logging()
+    await _await_tasks_spawned_since(existing_tasks)
+
+    assert billed_by_the_success_event is True, "False has the proxy release the parallel-request slot a second time"
+    assert len(recorder.success_payloads) == 1
+    assert upstream.closed is True
+
+
+@pytest.mark.parametrize("outlives_its_consumer", [True, False], ids=["told_to_close", "never_kept_open"])
+@pytest.mark.asyncio
+async def test_a_cut_stream_that_is_not_drained_closes_the_provider_connection_and_bills_no_success(
+    monkeypatch: pytest.MonkeyPatch, outlives_its_consumer: bool
+) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    if outlives_its_consumer:
+        iterator.outlive_consumer_until_settled()
+
+    await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+    assert upstream.closed is not outlives_its_consumer
+    drained: Final = await iterator.settle_after_consumer_left(drain=outlives_its_consumer is False)
+
+    assert drained is False
+    assert upstream.closed is True
+    assert recorder.success_payloads == ()
+
+
+@pytest.mark.asyncio
+async def test_a_kept_open_stream_nobody_settles_closes_the_provider_connection_after_the_grace_period(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(responses_streaming_iterator_module, "RESPONSES_API_UNCLAIMED_STREAM_CLOSE_GRACE_SECONDS", 0)
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, _ = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+    existing_tasks: Final = asyncio.all_tasks()
+
+    await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+    await _await_tasks_spawned_since(existing_tasks)
+
+    assert upstream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_a_drained_stream_is_freed_without_a_cycle_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased()
+    iterator, _ = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+    existing_tasks: Final = asyncio.all_tasks()
+    gc.collect()
+    gc.disable()
+    try:
+        await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+        upstream.released.set()
+        assert await iterator.settle_after_consumer_left(drain=True) is True
+        await iterator._await_pending_logging()
+        await _await_tasks_spawned_since(existing_tasks)
+        freed: Final = weakref.ref(iterator)
+        del iterator
+        assert freed() is None, "a drained stream that waits for the cycle collector keeps its log record until then"
+    finally:
+        gc.enable()
+
+
+@pytest.mark.asyncio
+async def test_a_provider_failure_while_draining_a_cut_stream_logs_no_failure_since_the_proxy_bills_it_as_a_cut(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamThatReasonsUntilReleased(fails_after_release=True)
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+
+    await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+    upstream.released.set()
+    drained: Final = await iterator.settle_after_consumer_left(drain=True)
+    await iterator._await_pending_logging()
+
+    assert drained is False
+    assert upstream.closed is True
+    assert recorder.success_payloads == ()
+    assert recorder.failure_payloads == (), (
+        "a failure log releases the parallel-request slot the proxy's disconnect cleanup releases too"
+    )
+
+
+class _UpstreamWhoseProviderFailsTheResponseOnceReleased:
+    headers: dict[str, str] = {}
+
+    def __init__(self) -> None:
+        self.released: Final = asyncio.Event()
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        yield f"data: {json.dumps(_CREATED_WITH_PRIORITY_TIER)}\n\n".encode()
+        await self.released.wait()
+        failed: Final = {
+            "type": "response.failed",
+            "sequence_number": 9,
+            "response": {
+                **_CREATED_RESPONSE_WITH_PRIORITY_TIER,
+                "status": "failed",
+                "error": {"code": "server_error", "message": "The model had an internal error"},
+                "usage": {"input_tokens": 400, "output_tokens": 9, "total_tokens": 409},
+            },
+        }
+        yield f"data: {json.dumps(failed)}\n\n".encode()
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_a_response_the_provider_fails_while_draining_is_billable_with_the_usage_that_event_reports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamWhoseProviderFailsTheResponseOnceReleased()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+
+    await _cancel_the_consumer_while_the_provider_is_reasoning(iterator)
+    upstream.released.set()
+    drained: Final = await iterator.settle_after_consumer_left(drain=True)
+    await iterator._await_pending_logging()
+    incomplete_event: Final = iterator.partial_response_on_disconnect()
+
+    assert drained is False
+    assert (recorder.success_payloads, recorder.failure_payloads) == ((), ())
+    assert incomplete_event is not None, "no failure log bills a response that failed after its client left"
+    billed: Final = incomplete_event.response.usage
+    assert (billed.input_tokens, billed.output_tokens, billed.total_tokens) == (400, 9, 409)
+
+
+class _UpstreamThatFailsOnceReleasedAfterRelayingText:
+    headers: dict[str, str] = {}
+
+    def __init__(self) -> None:
+        self.released: Final = asyncio.Event()
+
+    async def aiter_bytes(self) -> AsyncIterator[bytes]:
+        for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time", 1)):
+            yield f"data: {json.dumps(event)}\n\n".encode()
+        await self.released.wait()
+        raise httpx.ReadError("connection reset by peer")
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_a_provider_failure_while_draining_leaves_the_relayed_text_billable_as_a_cut_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upstream: Final = _UpstreamThatFailsOnceReleasedAfterRelayingText()
+    iterator, recorder = _recorded_stream(monkeypatch, upstream)
+    iterator.outlive_consumer_until_settled()
+    assert [(await iterator.__anext__()).type for _ in range(2)] == ["response.created", "response.output_text.delta"]
+    waiting_on_the_provider: Final = asyncio.ensure_future(iterator.__anext__())
+    await asyncio.sleep(0)
+    waiting_on_the_provider.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting_on_the_provider
+    await iterator.aclose()
+
+    upstream.released.set()
+    drained: Final = await iterator.settle_after_consumer_left(drain=True)
+    await iterator._await_pending_logging()
+    incomplete_event: Final = iterator.partial_response_on_disconnect()
+
+    assert drained is False
+    assert recorder.failure_payloads == ()
+    assert incomplete_event is not None, "nothing else bills the text relayed before the provider failed"
+    assert incomplete_event.response.output[0].content[0].text == "Once upon a time"

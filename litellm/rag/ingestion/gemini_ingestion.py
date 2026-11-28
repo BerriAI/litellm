@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, cast
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     header_value,
@@ -20,10 +23,27 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.gemini.common_utils import GeminiModelInfo
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.utils import aresolve_api_key_secret_reference
 
 if TYPE_CHECKING:
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _GeminiCreatedStore(TypedDict, total=False):
+    name: ReadOnly[str]
+
+
+class _GeminiUploadedFile(TypedDict, total=False):
+    name: ReadOnly[str]
+
+
+class _GeminiUploadResponse(TypedDict, total=False):
+    name: ReadOnly[str]
+    file: ReadOnly[_GeminiUploadedFile]
 
 
 class _WhiteSpaceConfig(LiteLLMBaseModel):
@@ -97,8 +117,17 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         vector_store_config: Final = self.vector_store_config
 
         # Get API credentials
-        api_key: Final = cast(str | None, vector_store_config.get("api_key")) or GeminiModelInfo.get_api_key()
-        api_base: Final = cast(str | None, vector_store_config.get("api_base")) or GeminiModelInfo.get_api_base()
+        configured_api_base: Final = cast(str | None, vector_store_config.get("api_base"))
+        api_key: Final = (
+            await aresolve_api_key_secret_reference(
+                cast(str | None, vector_store_config.get("api_key")),
+                None,
+                "gemini",
+                {"api_base": configured_api_base},
+            )
+            or GeminiModelInfo.get_api_key()
+        )
+        api_base: Final = configured_api_base or GeminiModelInfo.get_api_base()
 
         if not api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini File Search")
@@ -107,7 +136,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             raise ValueError("GEMINI_API_BASE is required")
 
         api_version: Final = "v1beta"
-        base_url: Final = f"{api_base}/{api_version}"
+        base_url: Final = join_api_base(api_base, api_version)
 
         # Create File Search store if not provided
         if not vector_store_id:
@@ -148,7 +177,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         Returns:
             Store name (format: fileSearchStores/xxxxxxx)
         """
-        url: Final = f"{base_url}/fileSearchStores"
+        url: Final = join_api_base(base_url, "fileSearchStores")
 
         request_body: Final = {"displayName": display_name}
 
@@ -170,7 +199,9 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             verbose_logger.error(error_msg)
             raise Exception(error_msg)
 
-        response_data: Final = response.json()
+        response_data: Final = require_attributes(
+            _DECODED_JSON.validate_python(response.json()), _GeminiCreatedStore, "get"
+        )
         store_name: Final = response_data.get("name", "")
 
         verbose_logger.debug("Created File Search store: %s", store_name)
@@ -236,7 +267,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         # base_url is like: https://generativelanguage.googleapis.com/v1beta
         # We need: https://generativelanguage.googleapis.com/upload/v1beta/{store_id}:uploadToFileSearchStore
         api_base: Final = base_url.replace("/v1beta", "")  # Get base without version
-        url: Final = f"{api_base}/upload/v1beta/{vector_store_id}:uploadToFileSearchStore"
+        url: Final = join_api_base(api_base, f"upload/v1beta/{vector_store_id}:uploadToFileSearchStore")
 
         # Build request body with chunking config and metadata if provided
         request_body: Final[dict[str, object]] = {"displayName": filename}
@@ -332,7 +363,9 @@ class GeminiRAGIngestion(BaseRAGIngestion):
 
         # Parse response to get file/document ID
         try:
-            response_data: Final = response.json()
+            response_data: Final = require_attributes(
+                _DECODED_JSON.validate_python(response.json()), _GeminiUploadResponse, "get"
+            )
             # The response should contain the document name or file reference
             file_id: Final = response_data.get("name", "") or response_data.get("file", {}).get("name", "")
             verbose_logger.debug("Upload complete. File ID: %s", file_id)
