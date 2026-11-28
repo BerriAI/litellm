@@ -1,6 +1,8 @@
 //! What a Messages request carries in its body.
 
+use litellm_gateway_inference::messages::REQUEST_SETTINGS;
 use litellm_llms_types::formats::messages::MessagesOptionalParams;
+use litellm_python_compat::unicode::isspace;
 use serde_json::{Map, Value};
 
 use super::{Admit, Reason, Refused};
@@ -9,12 +11,15 @@ const REQUIRED: [&str; 2] = ["model", "messages"];
 const HOSTED_TOOLS: [&str; 2] = ["mcp", "advisor_20260301"];
 
 /// A key the Messages request type does not name is sent on to the provider by the native route,
-/// and the proxy reads its own (`user`, `tags`, `timeout`, `fallbacks`). The rest are Messages
-/// params the proxy acts on before the provider sees them.
+/// and the proxy reads its own (`user`, `tags`, `timeout`, `fallbacks`). The native route reads
+/// the request's messages settings (`drop_params`, `additional_drop_params`) as the proxy does.
+/// The rest are Messages params the proxy acts on before the provider sees them.
 pub(super) fn fields(_: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let sent = |key: &str| fields.get(key).filter(|value| !value.is_null());
     let is_read = |key: &str| {
-        REQUIRED.contains(&key) || MessagesOptionalParams::fields().any(|name| name == key)
+        REQUIRED.contains(&key)
+            || REQUEST_SETTINGS.contains(&key)
+            || MessagesOptionalParams::fields().any(|name| name == key)
     };
     [
         (
@@ -51,6 +56,14 @@ fn names_a_hosted_tool(fields: &Map<String, Value>) -> bool {
         .any(|kind| HOSTED_TOOLS.contains(&kind))
 }
 
+/// The end user a body's `metadata.user_id` names (`get_end_user_id_from_request_body`), trimmed
+/// of whitespace (`isspace`), and nobody when nothing is left. Every other place the proxy reads an
+/// end user from is a key or a header an earlier check sends to Python.
+pub(in crate::admit) fn end_user_id(fields: &Map<String, Value>) -> Option<&str> {
+    let named = fields.get("metadata")?.get("user_id")?.as_str()?;
+    Some(named.trim_matches(isspace)).filter(|end_user_id| !end_user_id.is_empty())
+}
+
 /// Any other `metadata` is in a shape the proxy rewrites before the provider sees it.
 fn is_a_user_id(metadata: &Value) -> bool {
     metadata.as_object().is_some_and(|fields| {
@@ -85,6 +98,9 @@ mod tests {
     )]
     #[case::a_container_by_id(r#","container":"container_1""#)]
     #[case::a_param_sent_as_null(r#","thread":null,"metadata":null"#)]
+    #[case::the_requests_messages_settings(
+        r#","drop_params":"yes","additional_drop_params":["metadata.user_id"]"#
+    )]
     fn a_body_of_messages_params_is_kept(#[case] rest: &str) {
         assert_eq!(asking(rest), None);
     }
@@ -110,6 +126,24 @@ mod tests {
     )]
     fn a_body_with_something_the_proxy_reads_is_named(#[case] rest: &str, #[case] over: &str) {
         assert_eq!(asking(rest).as_deref(), Some(over));
+    }
+
+    #[rstest]
+    #[case::text(r#"{"user_id":"eu-1"}"#, Some("eu-1"))]
+    #[case::text_inside_whitespace(
+        r#"{"user_id":" \u001c\u0085eu-1\u3000\n"}"#,
+        Some("eu-1")
+    )]
+    #[case::space_alone(r#"{"user_id":" \u001f\t"}"#, None)]
+    #[case::empty_text(r#"{"user_id":""}"#, None)]
+    #[case::no_user_id("{}", None)]
+    fn the_end_user_is_the_user_id_trimmed_of_whitespace(
+        #[case] metadata: &str,
+        #[case] end_user: Option<&str>,
+    ) {
+        let sent: Map<String, Value> =
+            serde_json::from_str(&format!(r#"{{"metadata":{metadata}}}"#)).unwrap();
+        assert_eq!(end_user_id(&sent), end_user);
     }
 
     #[rstest]

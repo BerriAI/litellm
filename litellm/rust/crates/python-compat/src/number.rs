@@ -11,6 +11,12 @@ use crate::{
     repr::{float_repr, str_repr},
 };
 
+/// `round(value, ndigits)` for a finite `float`: the exact binary value rounded half to even at
+/// `ndigits` decimals, read back as the nearest float.
+pub fn round(value: f64, ndigits: usize) -> f64 {
+    fixed(value, ndigits).parse().unwrap_or(value)
+}
+
 /// `int(text)` in base 10, or `None` where Python raises `ValueError`.
 pub fn int(text: &str) -> Option<BigInt> {
     parse(text)
@@ -229,7 +235,7 @@ mod tests {
 
     use std::time::Duration;
 
-    use super::{SecondsError, float, hex_int, int, seconds};
+    use super::{SecondsError, float, hex_int, int, round, seconds};
 
     // Expected values are CPython 3.14 int(text)
     #[rstest]
@@ -318,5 +324,15 @@ mod tests {
         #[case] expected: Result<Duration, SecondsError>,
     ) {
         assert_eq!(seconds(value), expected);
+    }
+
+    // Expected values are CPython 3.14 round(value, 4)
+    #[rstest]
+    #[case::fewer_digits_than_kept(1.5, 1.5)]
+    #[case::rounded_down(12.345_678, 12.3457)]
+    #[case::a_decimal_tie_stored_above_it(2.675_05, 2.6751)]
+    #[case::negative(-0.000_04, -0.0)]
+    fn round_keeps_ndigits_as_python_does(#[case] value: f64, #[case] expected: f64) {
+        assert_eq!(round(value, 4).to_bits(), expected.to_bits());
     }
 }

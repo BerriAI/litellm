@@ -134,6 +134,9 @@ class FakeRateLimits:
     def slot_groups(self, scopes: Sequence[RateLimitScope], force: bool) -> list[list[int]]:
         return self.memory.slot_groups(scopes, force)
 
+    def flush_local(self) -> None:
+        self.memory.flush_local()
+
     def get_local(self, entry: RateLimitEntry) -> LocalValue | None:
         return self.memory.get_local(entry)
 
@@ -252,7 +255,11 @@ class FakeRateLimits:
         return Resolved(reply, send, "parallel_count")
 
     def token_increment(self, increments: Sequence[CounterIncrement], send: object) -> Resolved[list[float]]:
-        keys: Final = [counter_key(increment.counter) for increment in increments]
+        keys: Final = list(
+            chain.from_iterable(
+                (window_key(increment.counter), counter_key(increment.counter)) for increment in increments
+            )
+        )
         args: Final = [arg for increment in increments for arg in (increment.amount, increment.ttl or 0)]
 
         async def reply() -> list[float]:

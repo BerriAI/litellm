@@ -55,7 +55,8 @@ interface ClientUsagePanelProps {
   onRetry?: () => void;
 }
 
-const dateLabel = (date: Date | null) => date?.toLocaleDateString("en-US", { month: "short", day: "numeric" }) ?? "—";
+const dateLabel = (date: Date | null, language: string) =>
+  date?.toLocaleDateString(language, { month: "short", day: "numeric" }) ?? "—";
 const countLabel = (value: number | null, t: TFunction) =>
   value === null ? t("usage.clientPanel.tokenBreakdown.unavailable") : value.toLocaleString();
 
@@ -84,7 +85,7 @@ export default function ClientUsagePanel({
   summaryFailed = false,
   onRetry,
 }: ClientUsagePanelProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const label = client === "claude-desktop" ? "Claude Desktop" : "Claude Code";
   const scopedRequest = Boolean(userId || teamId) && !accessError;
   const personRequest = {
@@ -165,7 +166,7 @@ export default function ClientUsagePanel({
             <div>
               <SheetTitle className="text-sm font-medium">{label}</SheetTitle>
               <SheetDescription className="mt-0.5 text-xs">
-                {dateLabel(startTime)} – {dateLabel(endTime)} · {selectedScopeLabel}
+                {dateLabel(startTime, locale.language)} – {dateLabel(endTime, locale.language)} · {selectedScopeLabel}
               </SheetDescription>
             </div>
           </div>

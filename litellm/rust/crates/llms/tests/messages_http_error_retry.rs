@@ -140,3 +140,57 @@ fn every_messages_provider_drops_rejected_strict_tools_like_the_python_base_conf
         .collect();
     assert_eq!(mismatched, Vec::<&str>::new());
 }
+
+#[rstest]
+#[case::anthropic(&ANTHROPIC_MESSAGES_CONFIG)]
+#[case::azure_ai(&AZURE_AI_MESSAGES_CONFIG)]
+#[case::bedrock_invoke(&BEDROCK_INVOKE_MESSAGES_CONFIG)]
+#[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG)]
+#[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
+#[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG)]
+#[case::deepseek(&DEEPSEEK_MESSAGES_CONFIG)]
+#[case::edenai(&EDENAI_MESSAGES_CONFIG)]
+#[case::minimax(&MINIMAX_MESSAGES_CONFIG)]
+#[case::openrouter(&OPENROUTER_MESSAGES_CONFIG)]
+#[case::tencent(&TENCENT_MESSAGES_CONFIG)]
+#[case::vertex_ai(&VERTEX_AI_MESSAGES_CONFIG)]
+fn every_messages_provider_renames_rejected_tool_use_ids_like_the_python_base_config(
+    #[case] config: &dyn BaseMessagesConfig,
+) {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "fixtures/anthropic_messages_http_error_retry.json"
+    ))
+    .unwrap();
+    let request = &fixture["http_error_retry"]["request"];
+    let table = &fixture["tool_use_id_retry"];
+    let cases = table["cases"].as_array().unwrap();
+    assert!(!cases.is_empty());
+    let mismatched: Vec<&str> = cases
+        .iter()
+        .filter(|case| {
+            let mut body = request.clone();
+            body["messages"] = if case["renamable"].as_bool().unwrap() {
+                table["messages"].clone()
+            } else {
+                table["renamed_messages"].clone()
+            };
+            let status = u16::try_from(case["status"].as_u64().unwrap()).unwrap();
+            let expected = case["retried"].as_bool().unwrap().then(|| {
+                let mut renamed = body.clone();
+                renamed["messages"] = table["renamed_messages"].clone();
+                RetriedRequest {
+                    reasons: Vec::new(),
+                    body: renamed,
+                }
+            });
+            config.retry_after_http_error(
+                status,
+                case["error_text"].as_str().unwrap(),
+                &body,
+                &MessagesTransformContext::default(),
+            ) != expected
+        })
+        .map(|case| case["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(mismatched, Vec::<&str>::new());
+}

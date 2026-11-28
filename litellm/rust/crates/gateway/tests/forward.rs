@@ -73,6 +73,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
     let litellm_gateway::Inference {
         gateway: inference,
         key_limiter,
+        ..
     } = litellm_gateway::build_inference(
         &config,
         &Environment::default(),
@@ -82,6 +83,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
             litellm_gateway_inference::RouterTiers::default(),
         ),
         &litellm_gateway::RedisClients::default(),
+        None,
     )
     .await
     .unwrap();
@@ -98,9 +100,13 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 inference,
                 redis: litellm_gateway::RedisClients::default(),
                 database: None,
-                keys: None,
+                database_unread: false,
+                auth_store: None,
+                spend_logs: None,
                 entitlements: Arc::new(Entitlements::Community),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
+                counters: litellm_gateway::parallel_request_limiter::counters(None),
+                variables: Environment::default(),
                 gateway_requests: None,
                 gateway_requests_flush: None,
             },
@@ -247,13 +253,13 @@ async fn holding_keys(python: SocketAddr, config: &str, keys: Option<AuthStore>)
         .await
         .unwrap();
     let state = litellm_gateway::AppState {
-        keys: keys.map(Arc::new).or(state.keys.clone()),
+        auth_store: keys.map(Arc::new).or(state.auth_store.clone()),
         ..state
     };
     let admit = Arc::new(litellm_gateway::Admit::new(
         &config,
-        &Environment::default(),
         &state,
+        litellm_gateway::StoredConfig::Unused,
     ));
     let native = middleware::global(
         litellm_gateway::router(state, &config),

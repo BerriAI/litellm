@@ -37,9 +37,9 @@ from claude_code.cli_driver import (
 
 
 VERTEX_AI_MODELS = [
-    "claude-haiku-4-5-vertex",
-    "claude-sonnet-4-6-vertex",
-    "claude-opus-4-7-vertex",
+    "claude-haiku-5-5-vertex",
+    "claude-sonnet-5-5-vertex",
+    "claude-opus-5-5-vertex",
 ]
 
 # Minimal 1x1 red PNG, base64-encoded. We embed it directly as the

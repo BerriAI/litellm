@@ -129,7 +129,7 @@ class SkillPromptInjectionHandler:
 
     def inject_skill_content_to_messages(
         self, data: dict, skill_contents: list[str], use_anthropic_format: bool = False
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Inject skill content into the system prompt.
 

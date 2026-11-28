@@ -398,7 +398,7 @@ class ModelInfo(MirroredPricingParams):
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key: str, default=None):
+    def get(self, key: str, default: object = None) -> object:
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
@@ -772,7 +772,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key: str, default=None):
+    def get(self, key: str, default: object = None) -> object:
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
@@ -801,7 +801,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key: str, default=None):
+    def get(self, key: str, default: object = None) -> object:
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 

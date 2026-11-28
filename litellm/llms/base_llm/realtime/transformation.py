@@ -132,6 +132,9 @@ class BaseRealtimeConfig(ABC):
     def unbilled_response_on_session_close(self, model: str) -> OpenAIRealtimeDoneEvent | None:
         return None
 
+    def transcription_addon_pricing_models(self) -> tuple[str, ...]:
+        return ()
+
     def session_refusal(self) -> Exception | None:
         return None
 

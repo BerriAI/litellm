@@ -134,6 +134,7 @@ from litellm.proxy.management_endpoints.team_endpoints import new_team, team_mem
 from litellm.proxy.management_endpoints.types import (
     LITELLM_USER_ROLE_HIERARCHY,
     CustomOpenID,
+    GenericOpenID,
     get_litellm_user_role,
     is_valid_litellm_user_role,
 )
@@ -1404,7 +1405,7 @@ def generic_response_convertor(
             attr_name = attr_name.strip()
             extra_fields[attr_name] = get_nested_value(response, attr_name)
 
-    return CustomOpenID(
+    return GenericOpenID(
         id=get_nested_value(response, generic_user_id_attribute_name),
         display_name=get_nested_value(response, generic_user_display_name_attribute_name),
         email=normalize_email(get_nested_value(response, generic_user_email_attribute_name)),

@@ -2309,6 +2309,7 @@ class MCPRequestHandler:
         resolves as an ordinary caller and cannot re-enter the admitted path."""
         scoped: Final = UserAPIKeyAuth(
             user_id=auth.user_id,
+            end_user_id=auth.end_user_id,
             team_id=team_id,
             org_id=org_id,
             parent_otel_span=auth.parent_otel_span,

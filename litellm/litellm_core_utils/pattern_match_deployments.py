@@ -101,7 +101,7 @@ class PatternMatchRouter:
         self.patterns: dict[str, list] = {}
         self._pattern_utils: Final = pattern_utils
 
-    def add_pattern(self, pattern: str, llm_deployment: dict):
+    def add_pattern(self, pattern: str, llm_deployment: dict[str, object]):
         """
         Add a regex pattern and the corresponding llm deployments to the patterns
 
@@ -263,7 +263,7 @@ class PatternMatchRouter:
 
         return litellm_deployment_litellm_model
 
-    def get_pattern(self, model: str | None, custom_llm_provider: str | None = None) -> list[dict] | None:
+    def get_pattern(self, model: str | None, custom_llm_provider: str | None = None) -> list[dict[str, object]] | None:
         """
         Check if a pattern exists for the given model and custom llm provider
 

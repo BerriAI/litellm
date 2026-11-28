@@ -143,7 +143,7 @@ class HuggingFaceEmbedding(BaseLLM):
 
         return data
 
-    def _process_optional_params(self, data: dict, optional_params: Mapping[str, object]) -> dict:
+    def _process_optional_params(self, data: dict, optional_params: Mapping[str, object]) -> dict[str, object]:
         special_options_keys: Final = config.get_special_options_params()
         special_parameters_keys: Final = [
             "min_length",

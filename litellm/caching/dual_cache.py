@@ -44,7 +44,7 @@ class LimitedSizeOrderedDict(OrderedDict):
         super().__init__(*args, **kwargs)
         self.max_size = max_size
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: object, value: object):
         # If inserting a new key exceeds max size, remove the oldest item
         if len(self) >= self.max_size:
             self.popitem(last=False)

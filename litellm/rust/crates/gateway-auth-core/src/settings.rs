@@ -4,9 +4,10 @@ use crate::{
     MasterKey,
     authn::{jwt::JwtSettings, key::KeySettings},
     authz::RoutePolicy,
+    client_address::ClientAddresses,
     identity::jwt::TeamSettings,
     plan,
-    routes::{RouteGroup, RouteGroups},
+    routes::{ExposedRoutes, RouteGroup, RouteGroups},
 };
 
 /// What the host knows that `general_settings` does not say.
@@ -27,6 +28,22 @@ pub struct HostFacts {
     pub metrics_require_auth: bool,
     /// `LiteLLMRoutes`
     pub route_groups: RouteGroups,
+}
+
+/// The proxy's two allowlists, which it checks before it reads a credential.
+#[derive(Clone, Debug, Default)]
+pub struct Allowlists {
+    pub client_addresses: ClientAddresses,
+    pub exposed_routes: ExposedRoutes,
+}
+
+impl Allowlists {
+    pub fn new(general: &GeneralSettings) -> Self {
+        Self {
+            client_addresses: ClientAddresses::new(general),
+            exposed_routes: ExposedRoutes::new(general),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

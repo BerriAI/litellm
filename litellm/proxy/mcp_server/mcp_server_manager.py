@@ -199,6 +199,7 @@ from litellm.proxy.mcp_server.upstream import (
 from litellm.proxy.mcp_server.utils import (
     MCP_SERVERS_TARGET,
     MCP_TOOL_PREFIX_SEPARATOR,
+    TOOL_DISPLAY_NAME_PATTERN,
     MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
     build_env_var_setup_url,
@@ -444,6 +445,8 @@ class MCPServerConfig(TypedDict, total=False):
     extra_headers: _StringList
     allowed_tools: _StringList
     disallowed_tools: _StringList
+    tool_name_to_display_name: ReadOnly[_StringMap]
+    tool_name_to_description: ReadOnly[_StringMap]
     allowed_params: _ToolParamMap
     access_groups: _StringList
     static_headers: _StringMap
@@ -570,6 +573,39 @@ def _assigned_alias(
     """
     alias: Final = server_config.get("alias")
     return _first_mapped_alias(server_name, mcp_aliases) if alias is None else alias
+
+
+_CONFIG_TOOL_TEXT_MAP: Final = TypeAdapter(Mapping[str, str])
+
+
+def _config_tool_text_map(server_name: str, field: str, value: object) -> _StringMap | None:
+    if value is None:
+        return None
+    try:
+        return dict(_CONFIG_TOOL_TEXT_MAP.validate_python(value))
+    except ValidationError:
+        verbose_logger.warning("MCP server %s: ignoring %s, it must map tool names to text", server_name, field)
+        return None
+
+
+def _config_tool_display_names(server_name: str, value: object) -> _StringMap | None:
+    display_names: Final = _config_tool_text_map(server_name, "tool_name_to_display_name", value)
+    if display_names is None:
+        return None
+    accepted: Final = {
+        tool_name: display_name
+        for tool_name, display_name in display_names.items()
+        if TOOL_DISPLAY_NAME_PATTERN.match(display_name)
+    }
+    for tool_name in display_names.keys() - accepted.keys():
+        verbose_logger.warning(
+            "MCP server %s: ignoring display name %r for tool %r, it must match %s",
+            server_name,
+            display_names[tool_name],
+            tool_name,
+            TOOL_DISPLAY_NAME_PATTERN.pattern,
+        )
+    return accepted
 
 
 def _validate_config_server_names(mcp_servers_config: Mapping[str, MCPServerConfig]) -> None:
@@ -1304,7 +1340,25 @@ def _authorization_is_litellm_admission_credential_with_settings(
     authorization: Final = _raw_header_value(raw_headers, "authorization")
     if admission_header and authorization:
         return strip_auth_scheme(authorization, "Bearer") == strip_auth_scheme(admission_header, "Bearer")
-    return bool(user_api_key_auth and user_api_key_auth.api_key and not admission_header)
+    return bool(
+        user_api_key_auth
+        and (user_api_key_auth.api_key or user_api_key_auth.mcp_authorization_is_admission_credential)
+        and not admission_header
+    )
+
+
+def without_admission_authorization(
+    raw_headers: Mapping[str, str], user_api_key_auth: UserAPIKeyAuth | None
+) -> Mapping[str, str]:
+    """Drop ``Authorization`` when it is the dashboard login an inference request was admitted with, so
+    neither guardrails nor a server listing it in ``extra_headers`` receive it."""
+    if (
+        user_api_key_auth is not None
+        and user_api_key_auth.mcp_authorization_is_admission_credential
+        and _authorization_is_litellm_admission_credential(raw_headers, user_api_key_auth)
+    ):
+        return {name: value for name, value in raw_headers.items() if name.lower() != "authorization"}
+    return raw_headers
 
 
 def _authorization_is_admission_jwt(
@@ -2705,7 +2759,7 @@ class MCPServerManager:
         self,
         mcp_servers_config: dict[str, MCPServerConfig],
         mcp_aliases: dict[str, str] | None = None,
-    ):
+    ) -> None:
         """
         Load the MCP Servers from the config
 
@@ -2959,6 +3013,12 @@ class MCPServerManager:
                 extra_headers=server_config.get("extra_headers", None),
                 allowed_tools=server_config.get("allowed_tools", None),
                 disallowed_tools=server_config.get("disallowed_tools", None),
+                tool_name_to_display_name=_config_tool_display_names(
+                    server_name, server_config.get("tool_name_to_display_name", None)
+                ),
+                tool_name_to_description=_config_tool_text_map(
+                    server_name, "tool_name_to_description", server_config.get("tool_name_to_description", None)
+                ),
                 allowed_params=server_config.get("allowed_params", None),
                 pinned_tools=server_config.get("pinned_tools", None),
                 access_groups=server_config.get("access_groups", None),
@@ -3038,7 +3098,7 @@ class MCPServerManager:
 
         self.initialize_tool_name_to_mcp_server_name_mapping()
 
-    async def hydrate_config_servers_dcr_clients(self, servers: Sequence[MCPServer] | None = None) -> None:
+    async def hydrate_config_servers_dcr_clients(self, servers: Sequence[MCPServer] | None = None) -> bool:
         """Overlay each config-declared server's persisted DCR client (from the server-scoped
         store) onto its in-memory object so token refresh authenticates after a restart. A
         best-effort no-op when the DB is unreachable at config-load time."""
@@ -3046,7 +3106,9 @@ class MCPServerManager:
             hydrate_config_dcr_clients,
         )
 
-        await hydrate_config_dcr_clients(servers if servers is not None else tuple(self.config_mcp_servers.values()))
+        return await hydrate_config_dcr_clients(
+            servers if servers is not None else tuple(self.config_mcp_servers.values())
+        )
 
     async def _register_openapi_tools(self, spec_path: str, server: MCPServer, base_url: str):
         """
@@ -5204,6 +5266,8 @@ class MCPServerManager:
         add_prefix: bool = True,
         raw_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
+        *,
+        for_owner_lookup: bool = False,
     ) -> tuple[Resource, ...] | ResourceListingFailed:
         if self._skip_blocked_stdio_listing(server, "resource"):
             return ()
@@ -5243,9 +5307,12 @@ class MCPServerManager:
             )
 
             async def fetch() -> ListResourcesResult:
-                return await client.list_resources_result(raise_on_error=True)
+                return await client.list_resources_result(raise_on_error=True, for_owner_lookup=for_owner_lookup)
 
-            items: Final = await self._resource_discovery_cache.get(key, fetch)
+            cache_key: Final = (key[0], f"{key[1]}:owner") if for_owner_lookup else key
+            items: Final = await self._resource_discovery_cache.get(
+                cache_key, fetch, default_on_omission=for_owner_lookup, isolate_uncached=for_owner_lookup
+            )
             return tuple(self._create_prefixed_resources(items.resources, server, add_prefix=add_prefix))
         except Exception as error:
             return ResourceListingFailed(server_name=server.name, error=error)
@@ -5309,7 +5376,7 @@ class MCPServerManager:
         self,
         server: MCPServer,
         user_api_key_auth: UserAPIKeyAuth | None,
-        url: AnyUrl,
+        url: AnyUrl | str,
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
@@ -7616,8 +7683,8 @@ class MCPServerManager:
 
     _get_mcp_server_from_tool_name = get_mcp_server_from_tool_name
 
-    async def reload_servers_from_database(self):
-        await self.catalog.reload()
+    async def reload_servers_from_database(self, *, skip_unchanged: bool = False) -> None:
+        await self.catalog.reload(skip_unchanged=skip_unchanged)
 
     def get_mcp_servers_from_ids(self, server_ids: list[str]) -> list[MCPServer]:
         servers: Final = list[MCPServer]()

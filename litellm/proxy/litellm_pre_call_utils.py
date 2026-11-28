@@ -1473,6 +1473,8 @@ def convert_key_logging_metadata_to_callback(
             continue
         if var.startswith("signoz_") and data.callback_name != "signoz":
             continue
+        if var.startswith("mixpanel_") and data.callback_name != "mixpanel":
+            continue
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
         team_callback_settings_obj.callback_vars[var] = str(value)
@@ -2592,7 +2594,11 @@ class LiteLLMProxyRequestSetup:
         )
         if key_opts_out or request_cache.get("use-cache") is not True or not request_is_allowed:
             return MappingProxyType({})
-        return {k: v for k, v in request_cache.items() if not (k == "s-max-age" and "s-maxage" in key_cache)}
+        return {
+            k: v
+            for k, v in request_cache.items()
+            if k != "namespace" and not (k == "s-max-age" and "s-maxage" in key_cache)
+        }
 
     @staticmethod
     def add_key_level_controls(
@@ -4447,7 +4453,7 @@ def _extract_credential_from_entry(entry: object, provider: str | None = None) -
 
 
 def _get_enforced_params(general_settings: dict | None, user_api_key_dict: UserAPIKeyAuth) -> list | None:
-    enforced_params: list | None = None
+    enforced_params: list[object] | None = None
     if general_settings is not None:
         enforced_params = general_settings.get("enforced_params")
         if (
@@ -4482,7 +4488,7 @@ def check_if_token_is_service_account(valid_token: UserAPIKeyAuth) -> bool:
 
 def _enforced_params_check(
     request_body: Mapping[str, object],
-    general_settings: dict | None,
+    general_settings: dict[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     premium_user: bool,
 ) -> bool:

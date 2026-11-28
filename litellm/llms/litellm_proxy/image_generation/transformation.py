@@ -20,7 +20,7 @@ class LiteLLMProxyImageGenerationConfig(GPTImageGenerationConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         api_key = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
         headers.update({"Authorization": f"Bearer {api_key}"})
         return headers

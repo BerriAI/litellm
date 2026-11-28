@@ -1,3 +1,4 @@
+import { displayTimestamp } from "@/i18n/displayDate";
 import React, { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
@@ -33,7 +34,7 @@ interface VectorStoreViewerProps {
 }
 
 export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const [open, setOpen] = useState(true);
   const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
 
@@ -43,7 +44,7 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
 
   const formatTime = (timestamp: number): string => {
     const date = new Date(timestamp * 1000);
-    return date.toLocaleString();
+    return displayTimestamp(date, locale.language);
   };
 
   const calculateDuration = (start: number, end: number): string => {

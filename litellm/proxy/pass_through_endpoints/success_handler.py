@@ -821,10 +821,8 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = transcribe_handler_result["result"]  # rebind-ok: elif-chain
             kwargs = transcribe_handler_result["kwargs"]  # rebind-ok: elif-chain contract
-        elif (
-            self.is_typesafe_route(custom_llm_provider)
-            or custom_llm_provider in ("eu_jev", "laya", "bespoke")
-            or self.is_openrouter_decisions_route(url_route, custom_llm_provider)
+        elif custom_llm_provider in ("eu_jev", "laya", "bespoke") or self.is_openrouter_decisions_route(
+            url_route, custom_llm_provider
         ):
             from .llm_provider_handlers.typesafe_passthrough_logging_handler import (
                 TypeSafePassthroughLoggingHandler,
@@ -1162,9 +1160,6 @@ class PassThroughEndpointLogging:
 
     def is_transcribe_route(self, custom_llm_provider: str | None) -> bool:
         return custom_llm_provider == TRANSCRIBE_CUSTOM_LLM_PROVIDER
-
-    def is_typesafe_route(self, custom_llm_provider: str | None) -> bool:
-        return custom_llm_provider == "typesafe"
 
     def is_openrouter_decisions_route(self, url_route: str, custom_llm_provider: str | None) -> bool:
         return custom_llm_provider == "openrouter" and urlparse(url_route).path.endswith("/alpha/decisions")

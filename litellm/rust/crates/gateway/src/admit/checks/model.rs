@@ -7,8 +7,9 @@
 use axum::http::Uri;
 use litellm_config::{LitellmParams, Model, Spelled};
 use litellm_core_utils::get_llm_provider_logic::LlmProviders;
+use litellm_inference::provider::resolve_llm_provider;
 use litellm_model_catalog::Catalog;
-use litellm_router_core::Reached;
+use litellm_router_core::{Reached, registry::DeploymentFilter};
 use serde_json::{Map, Value};
 
 use super::{
@@ -18,16 +19,43 @@ use super::{
 
 /// The providers the Python proxy itself serves `/v1/messages` through the Rust route for, as
 /// `RULES` in `litellm/rust_bridge/catalog.py` lists them. Python answers any other provider
-/// through an adapter the gateway has not been compared with.
-const MESSAGES_PROVIDERS: [LlmProviders; 2] = [LlmProviders::Anthropic, LlmProviders::AzureAi];
+/// through an adapter the gateway has not been compared with. `bedrock_mantle` stays with Python
+/// until the gateway's cost map pricing prices its calls, which it does not yet, while Mantle
+/// reached through `bedrock/mantle/` is priced as a `bedrock` call.
+const MESSAGES_PROVIDERS: [LlmProviders; 4] = [
+    LlmProviders::Anthropic,
+    LlmProviders::AzureAi,
+    LlmProviders::Bedrock,
+    LlmProviders::VertexAi,
+];
 
-/// The `litellm_params` beyond the typed ones that the router reads as Python's does.
-const HONORED_EXTRA_PARAMS: [&str; 1] = ["weight"];
+/// The `litellm_params` beyond the typed ones that the router or the messages call reads as
+/// Python's does.
+const HONORED_EXTRA_PARAMS: [&str; 3] = ["weight", "additional_drop_params", "request_timeout"];
 
 /// The `model_info` keys the router reads as Python's does. `access_groups` only decides which
 /// models a caller other than the master key may call, and `max_input_tokens` is the context
-/// window the pre-call checks hold a prompt to.
-const HONORED_MODEL_INFO: [&str; 3] = ["id", "access_groups", "max_input_tokens"];
+/// window the pre-call checks hold a prompt to. `db_model` only marks a model the database stores,
+/// and `blocked`, which boot copies from its row, is honored while it is `false`.
+const HONORED_MODEL_INFO: [&str; 5] = [
+    "id",
+    "access_groups",
+    "max_input_tokens",
+    "db_model",
+    "blocked",
+];
+const BLOCKED: &str = "blocked";
+
+/// The `litellm_params` flags Python's `/model/new` stores as `false`, their default, beside the
+/// params it was given. Written `false` they ask for nothing.
+const OFF_BY_DEFAULT_PARAMS: [&str; 4] = [
+    "use_xai_oauth",
+    "use_litellm_proxy",
+    "allow_client_keepalive_override",
+    "merge_reasoning_content_in_choices",
+];
+/// `ModelInfo.member_auto_router`, which `/model/new` stores as `false`, its default.
+const OFF_BY_DEFAULT_MODEL_INFO: [&str; 1] = ["member_auto_router"];
 
 pub(super) fn model(admit: &Admit, fields: &Map<String, Value>) -> Option<Reason> {
     let model = fields.get("model").and_then(Value::as_str)?;
@@ -76,17 +104,52 @@ fn unserved(admit: &Admit, reached: &Reached) -> Option<Box<str>> {
         })
         .or_else(|| {
             admit
-                .aliased
+                .router
+                .registry()
+                .deployments(&DeploymentFilter {
+                    model_name: Some(group),
+                    ..DeploymentFilter::default()
+                })
                 .iter()
-                .find(|(aliased, _)| aliased == group)
-                .map(|(_, alias)| format!("model_list.litellm_params.model alias {alias}").into())
+                .find(|deployment| {
+                    !litellm_inference_messages::serves(
+                        &deployment.params.model,
+                        deployment.params.custom_llm_provider.as_deref(),
+                    )
+                })
+                .map(|deployment| {
+                    format!(
+                        "model_list.litellm_params.model {} is bridged to chat completions",
+                        deployment.params.model
+                    )
+                    .into()
+                })
+        })
+        .or_else(|| {
+            let cost_map = admit.inference.as_ref()?.cost_map();
+            admit
+                .router
+                .registry()
+                .deployments(&DeploymentFilter {
+                    model_name: Some(group),
+                    ..DeploymentFilter::default()
+                })
+                .iter()
+                .find_map(|deployment| {
+                    alias(
+                        cost_map.catalog(),
+                        deployment.provider(),
+                        &deployment.params.model,
+                    )
+                })
+                .map(|alias| format!("model_list.litellm_params.model alias {alias}").into())
         })
 }
 
 /// The name `catalog` holds `model` of `provider` under as another model's alias, as it holds
 /// `claude-haiku-latest`. Python sends the model the alias stands for
 /// (`resolve_model_latest_alias`), and the native app sends the name as written.
-pub(in crate::admit) fn alias(catalog: &Catalog, provider: &str, model: &str) -> Option<Box<str>> {
+fn alias(catalog: &Catalog, provider: &str, model: &str) -> Option<Box<str>> {
     let name = model
         .strip_prefix(provider)
         .and_then(|rest| rest.strip_prefix('/'))
@@ -119,10 +182,36 @@ fn is_not_positive(timeout: &Option<Spelled<f64>>) -> bool {
     matches!(timeout, Some(Spelled::Value(seconds)) if *seconds <= 0.0)
 }
 
-/// `rpm` and `tpm` are honored as the shuffle's weights. A deployment with no `api_key` gets its
-/// credential from a flow the proxy can host and the gateway may not, as Entra and workload
-/// identity are.
+/// A `request_timeout` other than a number of seconds above zero, which Python reads with
+/// `TypeAdapter(float)` and the native call does not read.
+fn is_no_seconds(request_timeout: Option<&Value>) -> bool {
+    request_timeout.is_some_and(|written| {
+        !written.is_null() && !written.as_f64().is_some_and(|seconds| seconds > 0.0)
+    })
+}
+
+/// The providers whose native route signs or logs in from the deployment's own `aws_*` or
+/// `vertex_*` params and the environment, with no host, so they need no `api_key`.
+const CLOUD_CREDENTIAL_PROVIDERS: [LlmProviders; 3] = [
+    LlmProviders::Bedrock,
+    LlmProviders::BedrockMantle,
+    LlmProviders::VertexAi,
+];
+
+fn signs_itself(params: &LitellmParams) -> bool {
+    resolve_llm_provider(
+        &params.model,
+        params.custom_llm_provider.as_deref(),
+        "messages",
+    )
+    .is_ok_and(|resolved| CLOUD_CREDENTIAL_PROVIDERS.contains(&resolved.provider))
+}
+
+/// `rpm` and `tpm` are honored as the shuffle's weights. A deployment with no `api_key` outside
+/// the cloud credential providers gets its credential from a flow the proxy can host and the
+/// gateway may not, as Entra and workload identity are.
 fn params(params: &LitellmParams) -> Vec<Box<str>> {
+    let needs_api_key = !signs_itself(params);
     let LitellmParams {
         model: _,
         api_version: _,
@@ -159,13 +248,17 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
         extra,
     } = params;
     let unsent = [
-        ("api_key unset", api_key.is_none()),
+        ("api_key unset", needs_api_key && api_key.is_none()),
         (
             "api_base",
             api_base.as_deref().is_some_and(|base| !is_sendable(base)),
         ),
         ("timeout", is_not_positive(timeout)),
         ("stream_timeout", is_not_positive(stream_timeout)),
+        (
+            "request_timeout",
+            is_no_seconds(extra.get("request_timeout")),
+        ),
     ]
     .into_iter()
     .filter(|(_, found)| *found)
@@ -192,7 +285,10 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
     .chain(unsent)
     .chain(other(
         "model_list.litellm_params.",
-        extra.keys(),
+        extra.iter().filter_map(|(key, value)| {
+            let off = *value == Value::Bool(false) && OFF_BY_DEFAULT_PARAMS.contains(&key.as_str());
+            (!off).then_some(key)
+        }),
         &HONORED_EXTRA_PARAMS,
     ))
     .collect()
@@ -211,10 +307,18 @@ fn deployment(model: &Model) -> Vec<Box<str>> {
         .into_iter()
         .chain(other(
             "model_list.model_info.",
-            model_info.keys(),
+            model_info.iter().filter_map(|(key, value)| {
+                let off = *value == litellm_config::Value::Bool(false)
+                    && OFF_BY_DEFAULT_MODEL_INFO.contains(&key.as_str());
+                (!off).then_some(key)
+            }),
             &HONORED_MODEL_INFO,
         ))
         .chain((*blocked == Some(true)).then(|| "model_list.blocked".into()))
+        .chain(
+            (model_info.get(BLOCKED) == Some(&litellm_config::Value::Bool(true)))
+                .then(|| "model_list.model_info.blocked".into()),
+        )
         .chain(unknown("model_list.", additional_fields))
         .collect()
 }
@@ -425,6 +529,14 @@ mod tests {
         "      stream_timeout: -1\n",
         "model_list.litellm_params.stream_timeout"
     )]
+    #[case::no_request_timeout_at_all(
+        "      request_timeout: 0\n",
+        "model_list.litellm_params.request_timeout"
+    )]
+    #[case::a_request_timeout_as_text(
+        "      request_timeout: \"30\"\n",
+        "model_list.litellm_params.request_timeout"
+    )]
     #[case::model_info_beyond_the_id(
         "    model_info:\n      id: claude-a\n      base_model: claude-haiku-5-5\n",
         "model_list.model_info.base_model"
@@ -442,7 +554,7 @@ mod tests {
 
     #[rstest]
     fn a_deployment_honoring_every_param_keeps_its_group() {
-        let written = "      api_base: https://api.anthropic.com\n      rpm: 300\n      weight: 2\n      timeout: 30\n    model_info:\n      id: claude-a\n      access_groups: [haiku]\n";
+        let written = "      api_base: https://api.anthropic.com\n      rpm: 300\n      weight: 2\n      timeout: 30\n      request_timeout: 2.5\n      additional_drop_params: [metadata.user_id]\n    model_info:\n      id: claude-a\n      access_groups: [haiku]\n";
 
         assert_eq!(
             one_deployment(&format!("{DEPLOYMENT}{written}"), anthropic(&["claude"])),
@@ -458,6 +570,23 @@ mod tests {
             one_deployment(written, anthropic(&["claude"])).as_deref(),
             Some("model_list.litellm_params.api_key unset")
         );
+    }
+
+    #[rstest]
+    #[case::vertex_ai(
+        "    litellm_params:\n      model: vertex_ai/claude-opus-5-5\n      vertex_project: project\n      vertex_location: us-east5\n"
+    )]
+    #[case::bedrock(
+        "    litellm_params:\n      model: bedrock/us.anthropic.claude-opus-5-5-v1:0\n      aws_region_name: us-west-2\n"
+    )]
+    #[case::bedrock_mantle(
+        "    litellm_params:\n      model: bedrock_mantle/anthropic.claude-opus-5-5\n      aws_role_name: arn:aws:iam::000000000000:role/mantle\n"
+    )]
+    #[case::provider_named_apart(
+        "    litellm_params:\n      model: claude-opus-5-5\n      custom_llm_provider: vertex_ai\n"
+    )]
+    fn a_cloud_deployment_signs_without_a_key(#[case] written: &str) {
+        assert_eq!(one_deployment(written, anthropic(&["claude"])), None);
     }
 
     #[rstest]

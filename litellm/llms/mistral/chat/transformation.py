@@ -270,7 +270,7 @@ class MistralConfig(OpenAIGPTConfig):
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         requested: Final = _MISTRAL_REASONING_EFFORT_PARAMS.validate_python(non_default_params)
         supported_params: Final = frozenset(self.get_supported_openai_params(model))
         reasoning_level: Final = (
@@ -891,7 +891,7 @@ class MistralConfig(OpenAIGPTConfig):
         return all_expected_values_are_empty
 
     @staticmethod
-    def _handle_empty_content_response(response_data: dict) -> dict:
+    def _handle_empty_content_response(response_data: dict) -> dict[str, object]:
         """
         Handle Mistral-specific behavior where empty string content should be converted to None.
 
@@ -920,7 +920,7 @@ class MistralConfig(OpenAIGPTConfig):
         return "\n".join([block.get("text", "") for block in thinking_blocks["thinking"]])
 
     @staticmethod
-    def _handle_content_list_to_str_conversion(response_data: dict) -> dict:
+    def _handle_content_list_to_str_conversion(response_data: dict) -> dict[str, object]:
         """
         Handle Mistral's content list format and extract thinking content.
 
@@ -965,7 +965,7 @@ class MistralConfig(OpenAIGPTConfig):
         optional_params: Mapping[str, object],
         litellm_params: dict[str, object],
         headers: dict[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the overall request to be sent to the API.
 

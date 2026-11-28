@@ -8,7 +8,7 @@ import hashlib
 import json
 import time
 from collections import UserDict
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, MutableMapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Container, Mapping, MutableMapping, Sequence
 from contextlib import ExitStack, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -120,6 +120,7 @@ class CatalogSnapshots:
         self._completed_ticket = 0
         self._shared_snapshot: CatalogSnapshot | None = None
         self._applied_revision: int | None = None
+        self._refresh_complete = False
         self._warned_shadowed_config_server_ids: frozenset[str] = frozenset()
         self._warned_capturing_config_server_ids: frozenset[str] = frozenset()
         self._operation: ContextVar[tuple[CatalogSnapshot, asyncio.Event] | None] = ContextVar(
@@ -270,19 +271,37 @@ class CatalogSnapshots:
         _check_oauth_revision(selected, resolved)
         return resolved
 
-    async def reload(self) -> None:
+    async def reload(self, *, skip_unchanged: bool = False) -> None:
         from litellm.proxy.mcp_server.db import get_mcp_catalog_revision
         from litellm.proxy.proxy_server import prisma_client
 
         revision: Final = await get_mcp_catalog_revision(prisma_client) if prisma_client is not None else None
         async with self._refresh_lock:
+            if skip_unchanged and self._can_skip_scheduled_reload(revision):
+                self.manager.clear_initialize_instructions()
+                return
             await self._publish_refresh(revision)
+
+    def _can_skip_scheduled_reload(self, revision: int | None) -> bool:
+        from litellm.proxy.mcp_server.mcp_server_manager import oauth_endpoints_unresolved
+
+        snapshot: Final = self._shared_snapshot
+        if snapshot is None or not self._refresh_complete:
+            return False
+        if revision is None or revision != self._applied_revision:
+            return False
+        return (
+            snapshot.servers == (self.manager.config_mcp_servers | self.manager.registry)
+            and not any(server.spec_path for server in self.manager.registry.values())
+            and not any(oauth_endpoints_unresolved(server) for server in snapshot.servers.values())
+        )
 
     async def _publish_refresh(self, revision: int | None, *, reuse_unchanged: bool = False) -> None:
         covered: Final = self._arrival_ticket
         token: Final = self._operation.set(None)
+        self._refresh_complete = False
         try:
-            await self._reload_and_publish(reuse_unchanged=reuse_unchanged)
+            complete: Final = await self._reload_and_publish(reuse_unchanged=reuse_unchanged)
         except Exception:
             self._shared_snapshot = None
             self._completed_ticket = covered
@@ -290,11 +309,12 @@ class CatalogSnapshots:
         else:
             self._shared_snapshot = _snapshot(self.manager, self._database_identity)
             self._applied_revision = revision
+            self._refresh_complete = complete
             self._completed_ticket = covered
         finally:
             self._operation.reset(token)
 
-    async def _reload_and_publish(self, *, reuse_unchanged: bool) -> None:
+    async def _reload_and_publish(self, *, reuse_unchanged: bool) -> bool:
         from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
         from litellm.proxy.mcp_server.utils import normalize_server_name
 
@@ -311,7 +331,7 @@ class CatalogSnapshots:
         staged_config: Final = MappingProxyType(
             {key: value.model_copy(deep=True) for key, value in previous_config.items()}
         )
-        await self.manager.hydrate_config_servers_dcr_clients(tuple(staged_config.values()))
+        hydrated: Final = await self.manager.hydrate_config_servers_dcr_clients(tuple(staged_config.values()))
         initial_routing: Final = MappingProxyType(dict(self.manager.published_tool_routes))
         staged_routing: Final = dict(initial_routing)
         closed: Final = asyncio.Event()
@@ -319,7 +339,7 @@ class CatalogSnapshots:
         initial_tools: Final = MappingProxyType(dict(global_mcp_tool_registry.published_tools))
         try:
             with global_mcp_tool_registry.catalog_scope(initial_tools) as staged_tools:
-                await self._reload(reuse_unchanged=reuse_unchanged)
+                registered_all: Final = await self._reload(reuse_unchanged=reuse_unchanged)
                 refreshed_openapi: Final = (
                     server
                     for server in self.manager.registry.values()
@@ -393,6 +413,7 @@ class CatalogSnapshots:
                     | concurrent_tools
                 )
                 self.manager.published_tool_routes = live_routes | retained_staged_routes | concurrent_routes
+                return hydrated and registered_all
         finally:
             closed.set()
             self._staged_routing.reset(routing_token)
@@ -464,7 +485,7 @@ class CatalogSnapshots:
 
         return new_registry
 
-    async def _reload(self, *, reuse_unchanged: bool) -> None:
+    async def _reload(self, *, reuse_unchanged: bool) -> bool:
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             get_prisma_client_or_throw,
         )
@@ -567,6 +588,7 @@ class CatalogSnapshots:
                 ", ".join(sorted(capturing_config_server_ids)),
             )
         self._warned_capturing_config_server_ids = capturing_config_server_ids
+        return len(registered_registry) == len(raw_rows)
 
 
 def catalog_operation(
@@ -1347,6 +1369,9 @@ class _Expiring(Protocol):
     @property
     def ttl_ms(self) -> int: ...
 
+    @property
+    def model_fields_set(self) -> Container[str]: ...
+
     def model_copy(self, *, update: Mapping[str, object] | None = None, deep: bool = False) -> Self: ...
 
 
@@ -1397,15 +1422,21 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
                 self._pending.pop(key)
 
     @staticmethod
-    def _observe_completion(task: asyncio.Task[_DiscoveryPage]) -> None:
+    def _observe_completion(task: asyncio.Future[_DiscoveryPage]) -> None:
         if not task.cancelled():
             task.exception()
 
     async def get(
-        self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]], *, capped: bool = True
+        self,
+        key: _DiscoveryKey,
+        fetch: Callable[[], Awaitable[_DiscoveryPage]],
+        *,
+        capped: bool = True,
+        default_on_omission: bool = False,
+        isolate_uncached: bool = False,
     ) -> _DiscoveryPage:
         if self._ttl <= 0:
-            return await fetch()
+            return await (self._fetch_uncached(fetch) if isolate_uncached else fetch())
         entry: Final[object] = self._entries.get_cache(json.dumps(key))
         if entry is not None:
             expires_at, payload = _DISCOVERY_ENTRY.validate_python(entry)
@@ -1417,11 +1448,20 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         if pending is not None:
             return await self._await_fetch(key, pending)
         if len(self._pending) >= _DISCOVERY_CACHE_LIMIT:
-            return await fetch()
-        task: Final = asyncio.create_task(self._fetch(key, fetch, capped))
+            return await (self._fetch_uncached(fetch) if isolate_uncached else fetch())
+        task: Final = asyncio.create_task(self._fetch(key, fetch, capped, default_on_omission))
         self._pending[key] = task
         task.add_done_callback(self._observe_completion)
         return await self._await_fetch(key, task)
+
+    async def _fetch_uncached(self, fetch: Callable[[], Awaitable[_DiscoveryPage]]) -> _DiscoveryPage:
+        task: Final = asyncio.ensure_future(fetch())
+        task.add_done_callback(self._observe_completion)
+        try:
+            return await asyncio.shield(task)
+        finally:
+            if not task.done():
+                task.cancel()
 
     async def _await_fetch(self, key: _DiscoveryKey, task: asyncio.Task[_DiscoveryPage]) -> _DiscoveryPage:
         self._waiters[task] = self._waiters.get(task, 0) + 1
@@ -1439,19 +1479,27 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
                     task.cancel()
 
     async def _fetch(
-        self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]], capped: bool
+        self,
+        key: _DiscoveryKey,
+        fetch: Callable[[], Awaitable[_DiscoveryPage]],
+        capped: bool,
+        default_on_omission: bool,
     ) -> _DiscoveryPage:
         try:
             items: Final = await fetch()
             if self._pending.get(key) is asyncio.current_task():
-                self.keep(key, items, capped=capped)
+                self.keep(key, items, capped=capped, default_on_omission=default_on_omission)
             return items
         finally:
             if self._pending.get(key) is asyncio.current_task():
                 self._pending.pop(key)
 
-    def keep(self, key: _DiscoveryKey, items: _DiscoveryPage, *, capped: bool = True) -> None:
-        declared: Final = items.ttl_ms / 1000
+    def keep(
+        self, key: _DiscoveryKey, items: _DiscoveryPage, *, capped: bool = True, default_on_omission: bool = False
+    ) -> None:
+        declared: Final = (
+            self._ttl if default_on_omission and "ttl_ms" not in items.model_fields_set else items.ttl_ms / 1000
+        )
         ttl: Final = min(self._ttl, declared) if capped else declared
         if ttl <= 0 or (self._storable is not None and not self._storable(items)):
             return

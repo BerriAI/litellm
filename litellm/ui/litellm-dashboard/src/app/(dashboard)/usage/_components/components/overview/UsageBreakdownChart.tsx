@@ -48,14 +48,17 @@ export default function UsageBreakdownChart({
   colorByModel,
   dimension = "model_groups",
 }: UsageBreakdownChartProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [metric, setMetric] = useState<UsageMetric>("spend");
   const state: BreakdownState = { metric, dimension };
   const [granularity, setGranularity] = useState<Granularity>("day");
   const [scale, setScale] = useState<StackedUsageScale>("linear");
   const modelColors = useMemo(() => colorByModel ?? modelColorMap(results), [colorByModel, results]);
   const { series: dailySeries, ranking } = useBreakdown(results, state, 8, modelColors);
-  const series = useMemo(() => bucketSeries(dailySeries, granularity), [dailySeries, granularity]);
+  const series = useMemo(
+    () => bucketSeries(dailySeries, granularity, i18n.language, t),
+    [dailySeries, granularity, i18n.language, t],
+  );
   const totalsByBucket = useMemo(() => bucketTotals(series), [series]);
   const format = (value: number) => formatMetricValue(value, state.metric);
 

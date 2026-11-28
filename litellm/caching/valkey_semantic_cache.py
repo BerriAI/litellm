@@ -160,7 +160,7 @@ class ValkeySemanticCache(RedisSemanticCache):
                     return int(flat[i + 1])
         return None
 
-    def _assert_dim_matches(self, info: dict, dim: int) -> None:
+    def _assert_dim_matches(self, info: dict[str, object], dim: int) -> None:
         existing_dim: Final = self._extract_index_dim(info)
         if existing_dim is not None and existing_dim != dim:
             raise ValueError(

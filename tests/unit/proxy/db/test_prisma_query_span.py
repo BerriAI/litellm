@@ -39,6 +39,7 @@ _MODEL_METHODS: Final = frozenset(
     }
 )
 _MODEL_BY_ACCESSOR: Final[Mapping[str, str]] = {relation.lower(): relation for relation in PRISMA_RELATIONS}
+_CALL_SITE_ATTRIBUTES: Final = _RAW_METHODS | frozenset(_MODEL_BY_ACCESSOR)
 _GENERIC_CRUD_HELPERS: Final = frozenset({"get_data", "get_generic_data", "insert_data", "update_data", "delete_data"})
 _TRANSACTION_BODIES: Final[Mapping[str, str]] = {"litellm/proxy/db/baseline_accounting.py": "baseline_accounting"}
 _RENDERED_NAME: Final = re.compile(
@@ -164,7 +165,10 @@ def _modules() -> Iterator[_Module]:
         for path in sorted((_REPO / root).rglob("*.py")):
             if "tests" in path.parts or "node_modules" in path.parts:
                 continue
-            tree: Final = ast.parse(path.read_text(encoding="utf-8"))
+            source: Final = path.read_text(encoding="utf-8")
+            if not any(name in source for name in _CALL_SITE_ATTRIBUTES):
+                continue
+            tree: Final = ast.parse(source)
             yield _Module(path, tree, _assignments(tree.body))
 
 

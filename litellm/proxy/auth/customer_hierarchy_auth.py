@@ -49,6 +49,7 @@ from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import CustomerTeamRepository
 from litellm.rust_bridge._native import jwt_claims
 from litellm.types.proxy.auth.customer_hierarchy import (
+    CustomerBudgetWindowUsage,
     CustomerHierarchyAuth,
     CustomerHierarchyIds,
     CustomerRequestIdentity,
@@ -498,61 +499,109 @@ def check_customer_hierarchy_budget(hierarchy: CustomerHierarchyAuth) -> None:
             )
 
 
+async def _read_customer_hierarchy_windows(
+    hierarchy: CustomerHierarchyAuth,
+    now: datetime | None = None,
+) -> tuple[CustomerHierarchyAuth, ProxyException | None]:
+    """The hierarchy with every level's budget windows read, so one refused level still reports the others, and the
+    first window that could not be read. Windows are read in enforcement order and the ones before a failed read keep
+    their readings, so a cap already exhausted there is still refused as a budget error."""
+    from itertools import accumulate, chain
+
+    from litellm.proxy.proxy_server import get_current_spend, spend_counter_store
+    from litellm.proxy.spend_tracking.budget_reservation import BudgetCounter, customer_window_counters
+    from litellm.proxy.spend_tracking.spend_counter_batch import spend_counter_batch_scope
+
+    async def usage(counter: BudgetCounter) -> CustomerBudgetWindowUsage | ProxyException:
+        if counter.window_start is None or counter.window_duration is None:
+            return ProxyException(
+                message="Customer budget window is unavailable.",
+                type=ProxyErrorTypes.internal_server_error,
+                param="budget_limits",
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        try:
+            spend: Final = await get_current_spend(
+                counter_key=counter.counter_key,
+                fallback_spend=0.0,
+                max_budget=counter.max_budget,
+                window_entity_type=counter.entity_type,
+                window_entity_id=counter.entity_id,
+                window_duration=counter.window_duration,
+                window_start=counter.window_start,
+                require_authoritative_window=True,
+            )
+        except HTTPException:
+            return ProxyException(
+                message="Customer budget window spend is unavailable.",
+                type=ProxyErrorTypes.internal_server_error,
+                param="budget_limits",
+                code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return CustomerBudgetWindowUsage(
+            budget_duration=counter.window_duration,
+            spend=spend,
+            max_budget=counter.max_budget,
+            reset_at=counter.reset_at,
+        )
+
+    counters: Final = tuple(
+        customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now) for scope in hierarchy.scopes
+    )
+    flat: Final = tuple(chain.from_iterable(counters))
+    with spend_counter_batch_scope(
+        spend_counter_store, counter_keys=frozenset(counter.counter_key for counter in flat)
+    ):
+        readings: Final = tuple([await usage(counter) for counter in flat])
+    failed: Final = next(
+        (index for index, reading in enumerate(readings) if isinstance(reading, ProxyException)), len(readings)
+    )
+    offsets: Final = tuple(accumulate((len(level) for level in counters), initial=0))
+    return (
+        hierarchy.model_copy(
+            update={
+                "scopes": tuple(
+                    scope.model_copy(
+                        update={
+                            "budget_window_usage": tuple(
+                                reading
+                                for reading in readings[start : min(end, failed)]
+                                if isinstance(reading, CustomerBudgetWindowUsage)
+                            )
+                        }
+                    )
+                    for scope, start, end in zip(hierarchy.scopes, offsets, offsets[1:], strict=False)
+                )
+            }
+        ),
+        next((reading for reading in readings[failed:] if isinstance(reading, ProxyException)), None),
+    )
+
+
 async def check_customer_hierarchy_windows(
     hierarchy: CustomerHierarchyAuth,
     now: datetime | None = None,
-) -> None:
-    from itertools import chain
+) -> CustomerHierarchyAuth:
+    measured, unavailable = await _read_customer_hierarchy_windows(hierarchy, now)
+    _check_customer_window_usage(measured)
+    if unavailable is not None:
+        raise unavailable
+    return measured
 
-    from litellm.proxy.proxy_server import get_current_spend, spend_counter_store
-    from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
-    from litellm.proxy.spend_tracking.spend_counter_batch import spend_counter_batch_scope
 
-    counters: Final = tuple(
-        chain.from_iterable(
-            customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now)
-            for scope in hierarchy.scopes
-        )
-    )
-    with spend_counter_batch_scope(
-        spend_counter_store, counter_keys=frozenset(counter.counter_key for counter in counters)
-    ):
-        for counter in counters:
-            if counter.window_start is None:
-                raise ProxyException(
-                    message="Customer budget window is unavailable.",
-                    type=ProxyErrorTypes.internal_server_error,
-                    param="budget_limits",
-                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-            try:
-                spend = await get_current_spend(
-                    counter_key=counter.counter_key,
-                    fallback_spend=0.0,
-                    max_budget=counter.max_budget,
-                    window_entity_type=counter.entity_type,
-                    window_entity_id=counter.entity_id,
-                    window_duration=counter.window_duration,
-                    window_start=counter.window_start,
-                    require_authoritative_window=True,
-                )
-            except HTTPException as error:
-                raise ProxyException(
-                    message="Customer budget window spend is unavailable.",
-                    type=ProxyErrorTypes.internal_server_error,
-                    param="budget_limits",
-                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                ) from error
-            if spend >= counter.max_budget:
+def _check_customer_window_usage(hierarchy: CustomerHierarchyAuth) -> None:
+    for scope in hierarchy.scopes:
+        for window in scope.budget_window_usage:
+            if window.spend >= window.max_budget:
                 raise litellm.BudgetExceededError(
-                    current_cost=spend,
-                    max_budget=counter.max_budget,
+                    current_cost=window.spend,
+                    max_budget=window.max_budget,
                     message=(
-                        f"ExceededBudget: {counter.entity_type}={counter.entity_id} over {counter.window_duration} budget."
-                        f"{cap_policy_hint(hierarchy, counter.entity_type, counter.entity_id)}"
+                        f"ExceededBudget: {scope.key}={scope.entity_id} over {window.budget_duration} budget."
+                        f"{cap_policy_hint(hierarchy, scope.key, scope.entity_id)}"
                     ),
-                    entity_type=counter.entity_type,
-                    entity_id=counter.entity_id,
+                    entity_type=scope.key,
+                    entity_id=scope.entity_id,
                 )
 
 
@@ -811,14 +860,14 @@ async def resolve_customer_hierarchy(
     )
     if cached is None:
         return None
-    hierarchy: Final = await current_customer_spend(cached, get_current_spend)
-    try:
-        await check_customer_hierarchy_access(
-            hierarchy, llm_router, request_model, route, key_metadata, member_header=header_names.member_id
-        )
-    except litellm.BudgetExceededError as error:
-        raise CustomerBudgetExceededError(hierarchy, error) from error
-    return hierarchy
+    return await check_customer_hierarchy_access(
+        await current_customer_spend(cached, get_current_spend),
+        llm_router,
+        request_model,
+        route,
+        key_metadata,
+        member_header=header_names.member_id,
+    )
 
 
 async def check_customer_hierarchy_access(
@@ -829,17 +878,30 @@ async def check_customer_hierarchy_access(
     key_metadata: Mapping[str, object] | None = None,
     *,
     member_header: str = CUSTOMER_MEMBER_ID_HEADER,
-) -> None:
+    now: datetime | None = None,
+) -> CustomerHierarchyAuth:
+    """The admitted hierarchy with its budget windows read. A level over budget raises
+    ``CustomerBudgetExceededError`` carrying the same readings."""
     check_customer_hierarchy_key_scope(hierarchy, key_metadata or {}, member_header=member_header)
     requested: Final = (request_model,) if isinstance(request_model, str) else tuple(request_model or ())
     for model in requested:
         if model:
             check_customer_hierarchy_model_access(hierarchy, model, llm_router)
     if RouteChecks.is_info_route(route):
-        return
-    check_customer_hierarchy_budget(hierarchy)
-    if any(scope.budget_limits for scope in hierarchy.scopes):
-        await check_customer_hierarchy_windows(hierarchy)
+        return hierarchy
+    measured, unavailable = (
+        await _read_customer_hierarchy_windows(hierarchy, now)
+        if any(scope.budget_limits for scope in hierarchy.scopes)
+        else (hierarchy, None)
+    )
+    try:
+        check_customer_hierarchy_budget(measured)
+        _check_customer_window_usage(measured)
+    except litellm.BudgetExceededError as error:
+        raise CustomerBudgetExceededError(measured, error) from error
+    if unavailable is not None:
+        raise unavailable
+    return measured
 
 
 def check_customer_hierarchy_key_scope(

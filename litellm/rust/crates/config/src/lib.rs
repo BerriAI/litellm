@@ -1,4 +1,5 @@
 mod auth;
+pub mod db;
 mod environment;
 mod error;
 mod layer;
@@ -33,7 +34,7 @@ pub use priority::{
     PriorityReservation, PriorityReservationSettings, ReservationUnit,
 };
 pub use redis::{CacheSettings, RedisSettings};
-pub use routes::RouteList;
+pub use routes::{AddressList, RouteList};
 pub use settings::{
     ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, TracingSettings,
     TracingStoreSettings, UserHeaderMapping,

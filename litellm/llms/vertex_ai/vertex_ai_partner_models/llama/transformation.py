@@ -170,12 +170,17 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
     the final chunk has finish_reason but no role.
     """
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse | None,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> None:
+        super().__init__(streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode)
         self.sent_role = False
         self._pending_chunk: ModelResponseStream | None = None
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:
         result: Final = super().chunk_parser(chunk)
         if not self.sent_role and result.choices:
             delta: Final = result.choices[0].delta

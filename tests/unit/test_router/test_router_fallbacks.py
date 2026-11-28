@@ -1735,10 +1735,21 @@ def _mantle_stream_answer() -> httpx.Response:
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
+@pytest.mark.parametrize(
+    ("mantle_auth", "expected_authorization"),
+    (
+        pytest.param({}, "AWS4-HMAC-SHA256 ", id="iam"),
+        pytest.param({"api_key": "mantle-bearer"}, "Bearer mantle-bearer", id="deployment-bearer"),
+    ),
+)
 async def test_mid_stream_continuation_from_an_aws_hop_does_not_bring_the_caller_key_back(
-    respx_mock: respx.MockRouter,
+    respx_mock: respx.MockRouter, mantle_auth: dict[str, str], expected_authorization: str
 ) -> None:
-    mantle_params: Final = {"model": _AWS_FALLBACK_TARGETS["bedrock_mantle"][0], **_AWS_DEPLOYMENT_CREDENTIALS}
+    mantle_params: Final = {
+        "model": _AWS_FALLBACK_TARGETS["bedrock_mantle"][0],
+        **_AWS_DEPLOYMENT_CREDENTIALS,
+        **mantle_auth,
+    }
     router: Final = Router(
         model_list=[
             {
@@ -1769,68 +1780,87 @@ async def test_mid_stream_continuation_from_an_aws_hop_does_not_bring_the_caller
     )
     _ = [chunk async for chunk in response]
 
-    assert tuple(call.request.headers["authorization"][:17] for call in mantle.calls) == (
-        "AWS4-HMAC-SHA256 ",
-        "AWS4-HMAC-SHA256 ",
-    )
+    sent: Final = tuple(call.request.headers["authorization"] for call in mantle.calls)
+    assert tuple(header[: len(expected_authorization)] for header in sent) == (expected_authorization,) * 2
     assert not any(_carries_caller_key(call.request) for call in mantle.calls)
     assert json.loads(mantle.calls[1].request.content)["messages"][-1]["role"] == "assistant"
 
 
+_OPAQUE_CALLER_KEY: Final = "caller-destination-key"
+_SIGV4: Final = "AWS4-HMAC-SHA256 "
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller_key", "caller_kind"),
+    ((_CALLER_ANTHROPIC_KEY, "anthropic"), (_OPAQUE_CALLER_KEY, "opaque")),
+    ids=("anthropic-caller-key", "opaque-caller-key"),
+)
 @pytest.mark.parametrize(
     ("target", "deployment_key", "env_bearers", "expected_authorization"),
     (
-        pytest.param("bedrock", "gateway-key", {}, f"Bearer {_CALLER_ANTHROPIC_KEY}", id="bedrock-deployment-bearer"),
         pytest.param(
-            "bedrock_mantle", "gateway-key", {}, f"Bearer {_CALLER_ANTHROPIC_KEY}", id="mantle-deployment-bearer"
+            "bedrock",
+            "gateway-key",
+            {},
+            {"anthropic": "Bearer gateway-key", "opaque": f"Bearer {_OPAQUE_CALLER_KEY}"},
+            id="bedrock-deployment-bearer",
+        ),
+        pytest.param(
+            "bedrock_mantle",
+            "gateway-key",
+            {},
+            {"anthropic": "Bearer gateway-key", "opaque": f"Bearer {_OPAQUE_CALLER_KEY}"},
+            id="mantle-deployment-bearer",
         ),
         pytest.param(
             "bedrock",
             None,
             {"AWS_BEARER_TOKEN_BEDROCK": "env-bearer"},
-            f"Bearer {_CALLER_ANTHROPIC_KEY}",
+            {"anthropic": "Bearer env-bearer", "opaque": f"Bearer {_OPAQUE_CALLER_KEY}"},
             id="bedrock-env-bearer",
         ),
         pytest.param(
             "bedrock_mantle",
             None,
             {"BEDROCK_MANTLE_API_KEY": "env-bearer"},
-            f"Bearer {_CALLER_ANTHROPIC_KEY}",
+            {"anthropic": "Bearer env-bearer", "opaque": f"Bearer {_OPAQUE_CALLER_KEY}"},
             id="mantle-env-bearer",
         ),
         pytest.param(
             "bedrock_mantle",
             None,
             {"AWS_BEARER_TOKEN_BEDROCK": "env-bearer"},
-            f"Bearer {_CALLER_ANTHROPIC_KEY}",
+            {"anthropic": "Bearer env-bearer", "opaque": f"Bearer {_OPAQUE_CALLER_KEY}"},
             id="mantle-falls-back-to-the-bedrock-env-bearer",
         ),
         pytest.param(
             "bedrock_mantle",
             "",
             {"BEDROCK_MANTLE_API_KEY": "env-bearer"},
-            f"Bearer {_CALLER_ANTHROPIC_KEY}",
+            {"anthropic": "Bearer env-bearer", "opaque": f"Bearer {_OPAQUE_CALLER_KEY}"},
             id="mantle-empty-key-still-reads-its-env-bearer",
         ),
         pytest.param(
             "bedrock",
             "",
             {"AWS_BEARER_TOKEN_BEDROCK": "env-bearer"},
-            "AWS4-HMAC-SHA256 ",
+            {"anthropic": _SIGV4, "opaque": _SIGV4},
             id="bedrock-empty-key-is-iam",
         ),
-        pytest.param("bedrock_mantle", None, {}, "AWS4-HMAC-SHA256 ", id="mantle-iam-only"),
+        pytest.param("bedrock_mantle", None, {}, {"anthropic": _SIGV4, "opaque": _SIGV4}, id="mantle-iam-only"),
     ),
 )
-async def test_anthropic_fallback_onto_aws_drops_the_caller_key_only_where_the_deployment_signs_with_iam(
+async def test_anthropic_fallback_onto_aws_uses_its_own_auth_unless_a_bearer_meets_an_opaque_caller_key(
     _aws_without_env_bearers_or_endpoints: None,
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
+    caller_key: str,
+    caller_kind: str,
     target: str,
     deployment_key: str | None,
     env_bearers: dict[str, str],
-    expected_authorization: str,
+    expected_authorization: dict[str, str],
 ) -> None:
     for name, value in env_bearers.items():
         monkeypatch.setenv(name, value)
@@ -1853,12 +1883,12 @@ async def test_anthropic_fallback_onto_aws_drops_the_caller_key_only_where_the_d
     respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded())
     aws: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS[target][1]).mock(return_value=_aws_answer(target))
 
-    await router.acompletion(
-        model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
-    )
+    await router.acompletion(model="claude", messages=[{"role": "user", "content": "hi"}], api_key=caller_key)
 
     sent: Final = aws.calls[0].request.headers["authorization"]
-    assert sent[: len(expected_authorization)] == expected_authorization, sent
+    expected: Final = expected_authorization[caller_kind]
+    assert sent[: len(expected)] == expected, sent
+    assert not _carries_caller_key(aws.calls[0].request)
 
 
 def _gateway_requiring_the_caller_bearer(target: str) -> Callable[[httpx.Request], httpx.Response]:
@@ -1978,8 +2008,15 @@ def _bedrock_member_fails_fallback_answers(request: httpx.Request) -> httpx.Resp
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
+@pytest.mark.parametrize(
+    ("fallback_auth", "expected_authorization"),
+    (
+        pytest.param({}, "AWS4-HMAC-SHA256 ", id="iam-fallback"),
+        pytest.param({"api_key": "fallback-bearer"}, "Bearer fallback-bearer", id="bearer-fallback"),
+    ),
+)
 async def test_mixed_provider_group_keeps_the_caller_key_on_its_own_aws_member_and_drops_it_on_the_fallback(
-    respx_mock: respx.MockRouter,
+    respx_mock: respx.MockRouter, fallback_auth: dict[str, str], expected_authorization: str
 ) -> None:
     router: Final = Router(
         model_list=[
@@ -1993,7 +2030,7 @@ async def test_mixed_provider_group_keeps_the_caller_key_on_its_own_aws_member_a
             },
             {
                 "model_name": "claude-aws",
-                "litellm_params": {"model": _MIXED_GROUP_AWS_FALLBACK, **_AWS_DEPLOYMENT_CREDENTIALS},
+                "litellm_params": {"model": _MIXED_GROUP_AWS_FALLBACK, **_AWS_DEPLOYMENT_CREDENTIALS, **fallback_auth},
             },
         ],
         fallbacks=[{"claude": ["claude-aws"]}],
@@ -2012,7 +2049,7 @@ async def test_mixed_provider_group_keeps_the_caller_key_on_its_own_aws_member_a
     sent: Final = tuple(("haiku" in call.request.url.path, call.request.headers["authorization"]) for call in aws.calls)
     assert len(sent) == 2, sent
     assert sent[0] == (True, f"Bearer {_CALLER_ANTHROPIC_KEY}")
-    assert (sent[1][0], sent[1][1].startswith("AWS4-HMAC-SHA256 ")) == (False, True)
+    assert (sent[1][0], sent[1][1][: len(expected_authorization)]) == (False, expected_authorization)
 
 
 @pytest.mark.asyncio
@@ -2117,15 +2154,43 @@ def _gateway_answering_bedrock_with_the_caller_bearer(request: httpx.Request) ->
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
 @pytest.mark.parametrize(
-    ("router_defaults", "served_by"),
+    ("router_defaults", "caller_key", "served_by", "expected_key"),
     (
-        pytest.param({"api_base": "https://aws-gateway.local"}, "gateway", id="default-gateway-base"),
-        pytest.param({"api_key": "router-default-key"}, "aws", id="default-bearer"),
-        pytest.param({"extra_headers": {"Authorization": "Bearer gateway-token"}}, "aws", id="default-authorization"),
+        pytest.param(
+            {"api_base": "https://aws-gateway.local"},
+            _CALLER_ANTHROPIC_KEY,
+            "gateway",
+            _CALLER_ANTHROPIC_KEY,
+            id="default-gateway-base",
+        ),
+        pytest.param(
+            {"api_key": "router-default-key"}, _CALLER_ANTHROPIC_KEY, "aws", "router-default-key", id="default-bearer"
+        ),
+        pytest.param(
+            {"api_key": "router-default-key"},
+            _OPAQUE_CALLER_KEY,
+            "aws",
+            _OPAQUE_CALLER_KEY,
+            id="default-bearer-with-an-opaque-caller-key",
+        ),
+        pytest.param(
+            {"api_key": 123}, _CALLER_ANTHROPIC_KEY, "aws", _CALLER_ANTHROPIC_KEY, id="non-string-default-key"
+        ),
+        pytest.param(
+            {"extra_headers": {"Authorization": "Bearer gateway-token"}},
+            _CALLER_ANTHROPIC_KEY,
+            "aws",
+            _CALLER_ANTHROPIC_KEY,
+            id="default-authorization",
+        ),
     ),
 )
-async def test_router_defaults_keep_the_caller_key_where_they_set_the_aws_endpoint_or_auth(
-    respx_mock: respx.MockRouter, router_defaults: dict[str, object], served_by: str
+async def test_router_defaults_decide_the_aws_endpoint_and_bearer_of_a_fallback(
+    respx_mock: respx.MockRouter,
+    router_defaults: dict[str, object],
+    caller_key: str,
+    served_by: str,
+    expected_key: str,
 ) -> None:
     router: Final = Router(
         model_list=[
@@ -2148,12 +2213,10 @@ async def test_router_defaults_keep_the_caller_key_where_they_set_the_aws_endpoi
     )
     aws: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS["bedrock"][1]).mock(return_value=_aws_answer("bedrock"))
 
-    await router.acompletion(
-        model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
-    )
+    await router.acompletion(model="claude", messages=[{"role": "user", "content": "hi"}], api_key=caller_key)
 
     served: Final = {"gateway": gateway, "aws": aws}[served_by].calls[-1].request
-    assert served.headers["authorization"] == f"Bearer {_CALLER_ANTHROPIC_KEY}"
+    assert served.headers["authorization"] == f"Bearer {expected_key}"
 
 
 @pytest.mark.asyncio
@@ -2237,3 +2300,331 @@ async def test_claude_platform_fallback_preserves_the_callers_key_and_workspace(
     assert platform.call_count == 1
     assert platform.calls[0].request.headers["x-api-key"] == _CALLER_ANTHROPIC_KEY
     assert platform.calls[0].request.headers["anthropic-workspace-id"] == "wrkspc_test"
+
+
+_OPENAI_GATEWAY: Final = "https://openai-gateway.local/v1"
+_OPENAI_DEPLOYMENT_KEY: Final = {"api_key": "sk-openai-deployment"}
+
+
+@pytest.fixture
+def _openai_without_env_or_global_credentials(
+    _aws_without_env_bearers_or_endpoints: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    for name in ("api_key", "openai_key", "api_base"):
+        monkeypatch.setattr(litellm, name, None)
+
+
+def _anthropic_to_openai_router(
+    openai_params: dict[str, str], fallback_target: object = "gpt", **settings: object
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "sk-ant-deployment"},
+            },
+            {"model_name": "gpt", "litellm_params": {"model": "openai/gpt-5.6", **openai_params}},
+        ],
+        fallbacks=[{"claude": [fallback_target]}, {"claude-latest": [fallback_target]}],
+        model_group_alias={"claude-latest": "claude"},
+        num_retries=0,
+        **settings,
+    )
+
+
+def _anthropic_fails_openai_answers(stream: bool) -> Callable[[httpx.Request], httpx.Response]:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/messages"):
+            return _anthropic_overloaded()
+        return _mantle_stream_answer() if stream else _fallback_chat_response("gpt-5.6", "served by openai")
+
+    return answer
+
+
+def _mock_anthropic_and_openai_hosts(respx_mock: respx.MockRouter, stream: bool) -> respx.Route:
+    return respx_mock.route(host__in=("api.anthropic.com", "api.openai.com", "openai-gateway.local")).mock(
+        side_effect=_anthropic_fails_openai_answers(stream)
+    )
+
+
+def _openai_calls(route: respx.Route) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (call.request.url.host, call.request.headers["authorization"])
+        for call in route.calls
+        if not call.request.url.path.endswith("/messages")
+    )
+
+
+async def _complete_after_anthropic_fails(router: Router, model: str, stream: bool, **request: object) -> None:
+    response: Final = await router.acompletion(
+        model=model, messages=[{"role": "user", "content": "hi"}], stream=stream, **request
+    )
+    if stream:
+        _ = [chunk async for chunk in response]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_openai_without_env_or_global_credentials")
+@pytest.mark.parametrize("stream", (False, True), ids=("non-stream", "stream"))
+@pytest.mark.parametrize(
+    ("openai_params", "router_defaults", "credential_env", "credential_globals", "requested", "expected_key"),
+    (
+        pytest.param(_OPENAI_DEPLOYMENT_KEY, {}, {}, {}, "claude", "sk-openai-deployment", id="deployment-key"),
+        pytest.param(
+            _OPENAI_DEPLOYMENT_KEY, {}, {}, {}, "claude-latest", "sk-openai-deployment", id="through-a-group-alias"
+        ),
+        pytest.param({}, {"api_key": "sk-openai-default"}, {}, {}, "claude", "sk-openai-default", id="router-default"),
+        pytest.param({}, {}, {"OPENAI_API_KEY": "sk-openai-env"}, {}, "claude", "sk-openai-env", id="env-key"),
+        pytest.param(
+            {"api_key": ""},
+            {},
+            {"OPENAI_API_KEY": "sk-openai-env"},
+            {},
+            "claude",
+            "sk-openai-env",
+            id="blank-deployment-key-reads-the-env-key",
+        ),
+        pytest.param({}, {}, {}, {"api_key": "sk-openai-global"}, "claude", "sk-openai-global", id="litellm-api-key"),
+        pytest.param(
+            {}, {}, {}, {"openai_key": "sk-openai-global"}, "claude", "sk-openai-global", id="litellm-openai-key"
+        ),
+    ),
+)
+async def test_anthropic_caller_key_fallback_onto_openai_sends_the_key_the_deployment_resolves(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    openai_params: dict[str, str],
+    router_defaults: dict[str, object],
+    credential_env: dict[str, str],
+    credential_globals: dict[str, str],
+    requested: str,
+    expected_key: str,
+) -> None:
+    for name, value in credential_env.items():
+        monkeypatch.setenv(name, value)
+    for name, value in credential_globals.items():
+        monkeypatch.setattr(litellm, name, value)
+    router: Final = _anthropic_to_openai_router(openai_params, default_litellm_params=router_defaults)
+    route: Final = _mock_anthropic_and_openai_hosts(respx_mock, stream)
+
+    await _complete_after_anthropic_fails(router, requested, stream, api_key=_CALLER_ANTHROPIC_KEY)
+
+    assert _openai_calls(route) == (("api.openai.com", f"Bearer {expected_key}"),)
+    assert not any(_carries_caller_key(call.request) for call in route.calls[1:])
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_openai_without_env_or_global_credentials")
+@pytest.mark.parametrize(
+    ("caller_key", "openai_params", "fallback_target", "settings", "endpoint_env", "expected_call"),
+    (
+        pytest.param(
+            _OPAQUE_CALLER_KEY,
+            _OPENAI_DEPLOYMENT_KEY,
+            "gpt",
+            {},
+            {},
+            ("api.openai.com", f"Bearer {_OPAQUE_CALLER_KEY}"),
+            id="opaque-caller-key",
+        ),
+        pytest.param(
+            _CALLER_ANTHROPIC_KEY,
+            {},
+            "gpt",
+            {},
+            {},
+            ("api.openai.com", f"Bearer {_CALLER_ANTHROPIC_KEY}"),
+            id="no-credential-of-its-own",
+        ),
+        pytest.param(
+            _CALLER_ANTHROPIC_KEY,
+            {},
+            "gpt",
+            {"default_litellm_params": {"api_key": 123}},
+            {},
+            ("api.openai.com", f"Bearer {_CALLER_ANTHROPIC_KEY}"),
+            id="non-string-default-key",
+        ),
+        pytest.param(
+            _CALLER_ANTHROPIC_KEY,
+            {**_OPENAI_DEPLOYMENT_KEY, "api_base": _OPENAI_GATEWAY},
+            "gpt",
+            {},
+            {},
+            ("openai-gateway.local", f"Bearer {_CALLER_ANTHROPIC_KEY}"),
+            id="deployment-api-base",
+        ),
+        pytest.param(
+            _CALLER_ANTHROPIC_KEY,
+            _OPENAI_DEPLOYMENT_KEY,
+            {"model": "gpt", "base_url": _OPENAI_GATEWAY},
+            {},
+            {},
+            ("openai-gateway.local", f"Bearer {_CALLER_ANTHROPIC_KEY}"),
+            id="dict-target-base-url",
+        ),
+        pytest.param(
+            _CALLER_ANTHROPIC_KEY,
+            {},
+            "gpt",
+            {"default_litellm_params": {"api_key": "sk-openai-default", "api_base": _OPENAI_GATEWAY}},
+            {},
+            ("openai-gateway.local", f"Bearer {_CALLER_ANTHROPIC_KEY}"),
+            id="router-default-api-base",
+        ),
+        pytest.param(
+            _CALLER_ANTHROPIC_KEY,
+            _OPENAI_DEPLOYMENT_KEY,
+            "gpt",
+            {},
+            {"OPENAI_BASE_URL": _OPENAI_GATEWAY},
+            ("openai-gateway.local", f"Bearer {_CALLER_ANTHROPIC_KEY}"),
+            id="env-base-url",
+        ),
+        pytest.param(
+            _CALLER_ANTHROPIC_KEY,
+            _OPENAI_DEPLOYMENT_KEY,
+            "gpt",
+            {},
+            {"OPENAI_API_BASE": _OPENAI_GATEWAY},
+            ("openai-gateway.local", f"Bearer {_CALLER_ANTHROPIC_KEY}"),
+            id="env-api-base",
+        ),
+        pytest.param(
+            _CALLER_ANTHROPIC_KEY,
+            _OPENAI_DEPLOYMENT_KEY,
+            {"model": "gpt", "api_key": "sk-openai-target"},
+            {},
+            {},
+            ("api.openai.com", "Bearer sk-openai-target"),
+            id="dict-target-api-key",
+        ),
+    ),
+)
+async def test_openai_fallback_keeps_the_caller_key_where_it_may_be_the_intended_credential(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    caller_key: str,
+    openai_params: dict[str, str],
+    fallback_target: object,
+    settings: dict[str, object],
+    endpoint_env: dict[str, str],
+    expected_call: tuple[str, str],
+) -> None:
+    for name, value in endpoint_env.items():
+        monkeypatch.setenv(name, value)
+    router: Final = _anthropic_to_openai_router(openai_params, fallback_target, **settings)
+    route: Final = _mock_anthropic_and_openai_hosts(respx_mock, stream=False)
+
+    await _complete_after_anthropic_fails(router, "claude", False, api_key=caller_key)
+
+    assert _openai_calls(route) == (expected_call,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_openai_without_env_or_global_credentials")
+async def test_litellm_api_base_keeps_the_caller_key_on_an_openai_fallback(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "api_base", _OPENAI_GATEWAY)
+    router: Final = _anthropic_to_openai_router(_OPENAI_DEPLOYMENT_KEY)
+    route: Final = _mock_anthropic_and_openai_hosts(respx_mock, stream=False)
+
+    await _complete_after_anthropic_fails(router, "claude", False, api_key=_CALLER_ANTHROPIC_KEY)
+
+    assert _openai_calls(route) == (("openai-gateway.local", f"Bearer {_CALLER_ANTHROPIC_KEY}"),)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_openai_without_env_or_global_credentials")
+@pytest.mark.parametrize(
+    ("caller_key", "expected"),
+    (
+        pytest.param(_CALLER_ANTHROPIC_KEY, ("Bearer sk-openai-deployment", None), id="anthropic-caller-key"),
+        pytest.param(_OPAQUE_CALLER_KEY, (f"Bearer {_OPAQUE_CALLER_KEY}", _OPAQUE_CALLER_KEY), id="opaque-caller-key"),
+    ),
+)
+async def test_openai_fallback_drops_the_proxy_forwarded_key_header_only_with_the_left_behind_key(
+    respx_mock: respx.MockRouter, caller_key: str, expected: tuple[str, str | None]
+) -> None:
+    from litellm.types.router import ForwardedClientHeaders
+
+    stamp: Final = ForwardedClientHeaders.of({"x-api-key": caller_key}, model_group_scoped=False).model_dump()
+    router: Final = _anthropic_to_openai_router(_OPENAI_DEPLOYMENT_KEY)
+    route: Final = _mock_anthropic_and_openai_hosts(respx_mock, stream=False)
+
+    await _complete_after_anthropic_fails(
+        router,
+        "claude",
+        False,
+        api_key=caller_key,
+        headers={"x-api-key": caller_key},
+        proxy_server_request={"forwarded_client_headers": stamp},
+    )
+
+    sent: Final = route.calls[-1].request.headers
+    assert (sent["authorization"], sent.get("x-api-key")) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_openai_without_env_or_global_credentials")
+async def test_explicit_authorization_header_keeps_the_forwarded_caller_key_on_an_openai_fallback(
+    respx_mock: respx.MockRouter,
+) -> None:
+    from litellm.types.router import ForwardedClientHeaders
+
+    stamp: Final = ForwardedClientHeaders.of(
+        {"x-api-key": _CALLER_ANTHROPIC_KEY}, model_group_scoped=False
+    ).model_dump()
+    router: Final = _anthropic_to_openai_router(_OPENAI_DEPLOYMENT_KEY)
+    route: Final = _mock_anthropic_and_openai_hosts(respx_mock, stream=False)
+
+    await _complete_after_anthropic_fails(
+        router,
+        "claude",
+        False,
+        api_key=_CALLER_ANTHROPIC_KEY,
+        headers={"Authorization": "Bearer gateway-token", "x-api-key": _CALLER_ANTHROPIC_KEY},
+        proxy_server_request={"forwarded_client_headers": stamp},
+    )
+
+    sent: Final = route.calls[-1].request.headers
+    assert (sent["authorization"], sent.get("x-api-key")) == ("Bearer gateway-token", _CALLER_ANTHROPIC_KEY)
+
+
+def _primary_openai_fails(request: httpx.Request) -> httpx.Response:
+    if json.loads(request.content)["model"] == "gpt-5.5":
+        return httpx.Response(500, json={"error": {"message": "primary unavailable", "type": "server_error"}})
+    return _fallback_chat_response("gpt-5.6", "served by openai")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_openai_without_env_or_global_credentials")
+@pytest.mark.parametrize(
+    ("requested", "expected_models"),
+    (
+        pytest.param("gpt", frozenset({"gpt-5.6"}), id="direct-openai-group"),
+        pytest.param("gpt-primary", frozenset({"gpt-5.5", "gpt-5.6"}), id="openai-to-openai-fallback"),
+    ),
+)
+async def test_anthropic_shaped_caller_key_stays_on_openai_without_an_anthropic_origin(
+    respx_mock: respx.MockRouter, requested: str, expected_models: frozenset[str]
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "gpt-primary", "litellm_params": {"model": "openai/gpt-5.5", **_OPENAI_DEPLOYMENT_KEY}},
+            {"model_name": "gpt", "litellm_params": {"model": "openai/gpt-5.6", **_OPENAI_DEPLOYMENT_KEY}},
+        ],
+        fallbacks=[{"gpt-primary": ["gpt"]}],
+        num_retries=0,
+    )
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=_primary_openai_fails)
+
+    await _complete_after_anthropic_fails(router, requested, False, api_key=_CALLER_ANTHROPIC_KEY)
+
+    models: Final = frozenset(json.loads(call.request.content)["model"] for call in route.calls)
+    authorizations: Final = frozenset(call.request.headers["authorization"] for call in route.calls)
+    assert (models, authorizations) == (expected_models, frozenset({f"Bearer {_CALLER_ANTHROPIC_KEY}"}))

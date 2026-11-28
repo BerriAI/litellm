@@ -170,7 +170,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         extra_body: Final = {}
         for k, v in non_default_params.items():
             if k == "max_tokens":

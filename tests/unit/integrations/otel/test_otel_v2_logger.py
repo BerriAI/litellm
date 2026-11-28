@@ -12,18 +12,20 @@ import contextlib
 import contextvars
 import os
 import re
+from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, NoReturn
 from unittest.mock import patch
 
 import pytest
 
 pytest.importorskip("opentelemetry")
 
-from opentelemetry import trace  # noqa: E402
+from opentelemetry import baggage, trace  # noqa: E402  # imported after the importorskip guard so the module skips without opentelemetry
+from opentelemetry.context import attach  # noqa: E402  # imported after the importorskip guard so the module skips without opentelemetry
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
 )
@@ -45,7 +47,7 @@ from litellm.integrations.otel import (  # noqa: E402
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
-from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterSpec  # noqa: E402
+from litellm.integrations.otel.model.config import CaptureMessageContent, ExporterOwner, ExporterSpec  # noqa: E402  # imported after the importorskip guard so the module skips without opentelemetry
 from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
@@ -126,8 +128,8 @@ def _kwargs(payload=None):
     }
 
 
-def _logger(legacy_compat=True, team_metadata_keys=None):
-    cfg = OpenTelemetryV2Config(
+def _logger(legacy_compat=True, team_metadata_keys=None, *, config: OpenTelemetryV2Config | None = None):
+    cfg = config or OpenTelemetryV2Config(
         exporter="in_memory",
         legacy_compat=legacy_compat,
         baggage_team_metadata_keys=team_metadata_keys or [],
@@ -154,6 +156,39 @@ def _emit_llm(logger, kwargs=None, *, ambient=None, fail=False):
 # --------------------------------------------------------------------------- #
 #  Time helpers
 # --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("call_metadata", "in_baggage", "expected"),
+    [
+        ({"user.id": "named-in-call"}, "in-baggage", "named-in-call"),
+        ({}, "in-baggage", "in-baggage"),
+        ({}, None, None),
+    ],
+    ids=["the-call-wins", "baggage-when-the-call-names-nobody", "neither"],
+)
+def test_an_sdk_call_names_its_user_in_the_call_or_in_the_baggage_around_it(
+    monkeypatch: pytest.MonkeyPatch, call_metadata: dict[str, str], in_baggage: str | None, expected: str | None
+) -> None:
+    exporter: Final = InMemorySpanExporter()
+    monkeypatch.setitem(providers._EXPORTER_FACTORIES, "sdk_mixpanel", lambda _spec: exporter)
+    cfg: Final = OpenTelemetryV2Config(
+        mapper_names=["genai", "mixpanel"],
+        exporters=[ExporterSpec(kind="sdk_mixpanel", owner=ExporterOwner.MIXPANEL)],
+    )
+    logger: Final = OpenTelemetryV2(
+        config=cfg, tracer_provider=providers.build_tracer_provider(cfg, use_simple_processor=True)
+    )
+
+    def emit() -> None:
+        if in_baggage is not None:
+            attach(baggage.set_baggage("user.id", in_baggage))
+        _emit_llm(logger, {**_kwargs(), "litellm_params": {"metadata": call_metadata}})
+
+    contextvars.copy_context().run(emit)
+
+    model_calls: Final = [span for span in exporter.get_finished_spans() if "gen_ai.operation.name" in span.attributes]
+    assert [span.attributes.get("user.id") for span in model_calls] == [expected]
 
 
 def test_to_ns_handles_datetime_and_float():
@@ -2339,9 +2374,10 @@ def test_metrics_only_ping_without_timing_or_parent_is_noop():
     assert exporter.get_finished_spans() == ()
 
 
-def test_background_service_call_with_timing_emits_root_span():
+def test_background_service_call_with_timing_emits_root_span(monkeypatch):
     """A background datastore call (no request → no parent) but with real timing
     still emits — as its own root trace — instead of being dropped."""
+    monkeypatch.delenv("LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS", raising=False)
     logger, exporter = _logger()
     asyncio.run(
         logger.async_service_success_hook(
@@ -2356,6 +2392,299 @@ def test_background_service_call_with_timing_emits_root_span():
     # No parent → it's a root span of its own trace.
     assert spans[0].parent is None
     assert spans[0].kind is SpanKind.CLIENT
+
+
+@pytest.fixture
+def set_background_job_tracing(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[bool], None]]:
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+    def set_enabled(enabled: bool) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_V2", str(enabled))
+        is_otel_v2_enabled.cache_clear()
+
+    yield set_enabled
+    is_otel_v2_enabled.cache_clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("v2_enabled", "config_value", "db_override", "tracing"),
+    [
+        (True, True, None, "grouped"),
+        (True, False, True, "grouped"),
+        (True, False, None, "off"),
+        (True, True, False, "off"),
+        (False, True, None, "unchanged"),
+    ],
+)
+async def test_each_background_job_run_groups_service_spans_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    set_background_job_tracing: Callable[[bool], None],
+    v2_enabled: bool,
+    config_value: bool,
+    db_override: bool | None,
+    tracing: Literal["grouped", "off", "unchanged"],
+) -> None:
+    from litellm.integrations.otel.runtime import background_job_span, traced_background_job
+    from litellm.proxy import proxy_server
+
+    set_background_job_tracing(v2_enabled)
+    logger, exporter = _logger(
+        config=OpenTelemetryV2Config(exporter="in_memory", emit_background_service_spans=config_value)
+    )
+    logger.background_service_spans_db_override = db_override
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+
+    async def flush(*, operation: str) -> str:
+        with background_job_span("nested_flush"):
+            for service in ("postgres", "redis"):
+                await logger.async_service_success_hook(
+                    payload=_ServicePayload(service, operation), start_time=1.0, end_time=2.0
+                )
+        return operation
+
+    run = traced_background_job("spend_flush", flush)
+    assert await run(operation="first") == "first"
+    assert await run(operation="second") == "second"
+    spans = exporter.get_finished_spans()
+    roots = [span for span in spans if span.parent is None]
+    if tracing == "grouped":
+        assert [(span.name, span.kind, span.links) for span in roots] == [
+            ("litellm.background.spend_flush", SpanKind.INTERNAL, ()),
+            ("litellm.background.spend_flush", SpanKind.INTERNAL, ()),
+        ]
+        assert roots[0].context.trace_id != roots[1].context.trace_id
+        assert len(spans) == 6
+        for root, operation in zip(roots, ("first", "second"), strict=True):
+            assert {span.name for span in spans if span.parent == root.context} == {
+                f"postgres {operation}",
+                f"redis {operation}",
+            }
+    elif tracing == "off":
+        assert spans == ()
+    else:
+        assert len(spans) == len(roots) == 4
+        assert {span.name for span in roots} == {"postgres first", "redis first", "postgres second", "redis second"}
+
+
+@pytest.mark.asyncio
+async def test_idle_spend_monitor_recovery_groups_the_baseline_transaction(
+    monkeypatch: pytest.MonkeyPatch, set_background_job_tracing: Callable[[bool], None]
+) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.baseline_accounting import flush_baseline_accounting
+    from litellm.proxy.db.log_db_metrics import record_db_io
+
+    set_background_job_tracing(True)
+    logger, exporter = _logger()
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    monkeypatch.setattr(litellm, "service_callback", [logger])
+
+    async def claim(_statement: str) -> tuple[()]:
+        record_db_io()
+        return ()
+
+    @contextlib.asynccontextmanager
+    async def transaction(*, timeout: timedelta) -> AsyncIterator[SimpleNamespace]:
+        yield SimpleNamespace(execute_raw=AsyncMock(), query_raw=claim)
+
+    client = SimpleNamespace(
+        db=SimpleNamespace(tx=transaction),
+        baseline_accounting_lock=asyncio.Lock(),
+        baseline_accounting_transactions=[],
+        baseline_accounting_recovery_due_at=float("-inf"),
+    )
+    await flush_baseline_accounting(client)
+    await asyncio.sleep(0)
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    assert set(spans) == {
+        "litellm.background.flush_baseline_accounting",
+        "postgres.transaction LiteLLM_AutoRouterBaselineComparison",
+    }
+    root = spans["litellm.background.flush_baseline_accounting"]
+    assert root.parent is None
+    assert spans["postgres.transaction LiteLLM_AutoRouterBaselineComparison"].parent == root.context
+
+
+@pytest.mark.asyncio
+async def test_background_response_sweep_groups_the_prune_and_lookup(
+    monkeypatch: pytest.MonkeyPatch, set_background_job_tracing: Callable[[bool], None]
+) -> None:
+    from types import SimpleNamespace
+
+    import litellm
+    from litellm.proxy import proxy_server
+    from litellm.proxy.db.db_span import db_span
+    from litellm.proxy.db.log_db_metrics import record_db_io
+    from litellm.proxy.pass_through_endpoints.background_response_polling import (
+        BackgroundResponsePoller,
+        sweep_background_response_polls,
+    )
+
+    set_background_job_tracing(True)
+    logger, exporter = _logger()
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    monkeypatch.setattr(litellm, "service_callback", [logger])
+
+    async def prune(_created_before: datetime) -> None:
+        async with db_span("delete_many", "LiteLLM_BackgroundResponseCreator"):
+            record_db_io()
+
+    async def unleased(_created_after: datetime, _now: datetime) -> tuple[()]:
+        async with db_span("find_many", "LiteLLM_BackgroundResponseCreator"):
+            record_db_io()
+            return ()
+
+    async def unused(*_args: object) -> NoReturn:
+        pytest.fail("An empty sweep must not start polling")
+
+    assert await sweep_background_response_polls(
+        SimpleNamespace(prune=prune, unleased=unleased),
+        BackgroundResponsePoller(now=lambda: datetime(2025, 1, 1, tzinfo=timezone.utc)),
+        unused,
+        "https://api.example.com",
+        unused,
+    ) == ()
+    await asyncio.sleep(0)
+
+    spans = {span.name: span for span in exporter.get_finished_spans()}
+    root = spans.pop("litellm.background.sweep_background_response_polls")
+    assert root.parent is None
+    assert {name: span.parent for name, span in spans.items()} == {
+        "postgres.delete LiteLLM_BackgroundResponseCreator": root.context,
+        "postgres.select LiteLLM_BackgroundResponseCreator": root.context,
+    }
+
+
+@pytest.mark.asyncio
+async def test_background_job_scope_does_not_change_request_service_parenting(
+    monkeypatch: pytest.MonkeyPatch, set_background_job_tracing: Callable[[bool], None]
+) -> None:
+    from litellm.integrations.otel.runtime import background_job_span
+    from litellm.proxy import proxy_server
+
+    set_background_job_tracing(True)
+    logger, exporter = _logger()
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    with logger.tracer_provider.get_tracer("test").start_as_current_span("request") as request:
+        with background_job_span("redis_cache_flush"):
+            await logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "write"), start_time=1.0, end_time=2.0
+            )
+
+    redis, request_span = exporter.get_finished_spans()
+    assert redis.name == "redis write"
+    assert redis.parent == request_span.context == request.get_span_context()
+
+
+@pytest.mark.parametrize("config_source", ["env", "yaml"])
+def test_disabled_background_service_spans_drop_parentless_successes_and_failures(monkeypatch, config_source):
+    if config_source == "env":
+        monkeypatch.setenv("LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS", "false")
+        logger, exporter = _logger()
+    else:
+        logger, exporter = _logger(
+            config=OpenTelemetryV2Config(exporter="in_memory", emit_background_service_spans=False)
+        )
+
+    payload = _ServicePayload("postgres", "query")
+    asyncio.run(logger.async_service_success_hook(payload=payload, start_time=1.0, end_time=2.0))
+    asyncio.run(logger.async_service_failure_hook(payload=payload, error="failed", start_time=1.0, end_time=2.0))
+
+    assert exporter.get_finished_spans() == ()
+
+
+@pytest.mark.parametrize("yaml_setting", [None, True])
+def test_admin_background_service_span_toggle_updates_existing_logger_unless_yaml_configures_it(
+    monkeypatch, yaml_setting
+):
+    from litellm.proxy import proxy_server
+
+    env_var = "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS"
+    monkeypatch.setenv(env_var, "true")
+    settings = {} if yaml_setting is None else {"emit_background_service_spans": yaml_setting}
+    monkeypatch.setattr(proxy_server.litellm, "callback_settings", {"otel": settings})
+    logger, exporter = _logger(config=OpenTelemetryV2Config(exporter="in_memory", **settings))
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+    proxy_server.ProxyConfig()._apply_db_environment_variables(
+        {env_var: "false"}, revision=None, environment_before_db={}, read=1
+    )
+
+    asyncio.run(
+        logger.async_service_success_hook(payload=_ServicePayload("postgres", "query"), start_time=1.0, end_time=2.0)
+    )
+
+    assert [span.name for span in exporter.get_finished_spans()] == ([] if yaml_setting is None else ["postgres query"])
+
+
+@pytest.mark.parametrize(
+    ("startup_env", "saved_value", "before", "after"),
+    [
+        (None, "false", [], ["postgres after"]),
+        ("true", "false", [], ["postgres after"]),
+        ("false", "true", ["postgres before"], []),
+    ],
+)
+def test_removing_saved_background_service_span_setting_restores_env_or_default(
+    monkeypatch, startup_env, saved_value, before, after
+):
+    from litellm.proxy import proxy_server
+
+    env_var = "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS"
+    monkeypatch.delenv(env_var, raising=False)
+    if startup_env is not None:
+        monkeypatch.setenv(env_var, startup_env)
+    environment_before_db = {} if startup_env is None else {env_var: startup_env}
+    monkeypatch.setattr(proxy_server.litellm, "callback_settings", {"otel": {}})
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", None)
+    proxy_config = proxy_server.ProxyConfig()
+    proxy_config._apply_db_environment_variables({env_var: saved_value}, 1, environment_before_db, 1)
+    logger, exporter = _logger()
+    monkeypatch.setattr(proxy_server, "open_telemetry_logger", logger)
+
+    asyncio.run(
+        logger.async_service_success_hook(payload=_ServicePayload("postgres", "before"), start_time=1.0, end_time=2.0)
+    )
+    assert [span.name for span in exporter.get_finished_spans()] == before
+    proxy_config._apply_db_environment_variables({}, 2, environment_before_db, 2)
+    asyncio.run(
+        logger.async_service_success_hook(payload=_ServicePayload("postgres", "after"), start_time=3.0, end_time=4.0)
+    )
+    assert [span.name for span in exporter.get_finished_spans()] == before + after
+
+
+@pytest.mark.parametrize(
+    "yaml_keys", [(), ("emit_background_service_spans",), ("LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS",)]
+)
+def test_otel_callback_applies_yaml_background_span_setting_to_reused_preset(monkeypatch, yaml_keys):
+    import litellm
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    monkeypatch.setenv("LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS", "true")
+    monkeypatch.setattr(litellm, "callback_settings", {"otel": dict.fromkeys(yaml_keys, False)})
+    preset, exporter = _logger()
+    preset.callback_name = "langfuse_otel"
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [preset])
+    is_otel_v2_enabled.cache_clear()
+    try:
+        logger = litellm_logging.init_custom_logger_compatible_class_at_startup("otel", None, None)
+        assert logger is preset
+        asyncio.run(
+            preset.async_service_success_hook(
+                payload=_ServicePayload("postgres", "query"), start_time=1.0, end_time=2.0
+            )
+        )
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+    assert [span.name for span in exporter.get_finished_spans()] == ([] if yaml_keys else ["postgres query"])
 
 
 def test_internal_service_call_is_internal_kind_without_db_attrs():
@@ -2392,7 +2721,9 @@ def test_metrics_only_services_emit_no_span():
         assert exporter.get_finished_spans() == (), f"{service} should emit no span"
 
 
-def test_service_span_inherits_parent_when_provided():
+@pytest.mark.parametrize("emit_background", ["true", "false"])
+def test_service_span_inherits_parent_when_provided(monkeypatch, emit_background):
+    monkeypatch.setenv("LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS", emit_background)
     logger, exporter = _logger()
     parent = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     try:
@@ -2536,13 +2867,17 @@ def _service_hook_from_post_response_task(logger, payload, *, parent, ambient, e
 
 
 @pytest.mark.parametrize("parent_source", ["ambient", "threaded"])
+@pytest.mark.parametrize("emit_background", ["true", "false"])
 def test_service_call_from_the_post_response_phase_detaches_before_the_server_span_ends(
+    monkeypatch,
     parent_source,
+    emit_background,
 ):
     """The streaming tail: the response-cache write and the success callbacks run
     after the client has the whole response but before the ASGI server span closes,
     so the call ends before its parent does. Timing alone would keep it a child;
     being dispatched from the post-response phase is what detaches it, with a link."""
+    monkeypatch.setenv("LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS", emit_background)
     logger, exporter = _logger()
     server = logger._emitter.start_span(SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME)
     assert server.is_recording()

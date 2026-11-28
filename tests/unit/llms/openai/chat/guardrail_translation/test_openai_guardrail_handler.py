@@ -2550,6 +2550,52 @@ class TestPerMessageTextWriteBack:
         assert data["messages"] == original_messages, "a rejected rewrite must leave the request untouched"
 
 
+class _LegacyFunctionCallRewriter(CustomGuardrail):
+    def __init__(self, returned_tool_calls: list[object]) -> None:
+        super().__init__(guardrail_name="legacy-function-call-rewriter")
+        self.scan_tool_calls_as_text = True
+        self.returned_tool_calls: Final = returned_tool_calls
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "tool_calls": self.returned_tool_calls}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "returned_tool_calls",
+    [
+        pytest.param(
+            [{"type": "function", "function": {"name": "send_payment", "arguments": "{}"}}] * 2, id="call-count-changed"
+        ),
+        pytest.param([{"type": "function", "function": "send_payment(card=<masked>)"}], id="function-not-an-object"),
+        pytest.param([], id="call-dropped"),
+    ],
+)
+async def test_legacy_function_call_rewrite_the_request_cannot_carry_is_rejected(
+    returned_tool_calls: list[object],
+) -> None:
+    from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+    original_messages: Final = [
+        {"role": "user", "content": "pay the invoice"},
+        {"role": "assistant", "content": None, "function_call": {"name": "send_payment", "arguments": "{}"}},
+    ]
+    data: Final = {"messages": json.loads(json.dumps(original_messages))}
+
+    with pytest.raises(UnappliableRequestRewrite):
+        await OpenAIChatCompletionsHandler().process_input_messages(
+            data=data, guardrail_to_apply=_LegacyFunctionCallRewriter(returned_tool_calls)
+        )
+
+    assert data["messages"] == original_messages
+
+
 class TestBuildBlockSseChunks:
     """build_block_sse_chunks turns a streaming ModifyResponseException into 200 SSE chunks"""
 

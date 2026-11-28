@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
-from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
+from typing import TYPE_CHECKING, Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 from litellm.rust_bridge import execution
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class MessagesStreamHead(dict[str, object]):
@@ -17,6 +20,7 @@ class MessagesStreamHead(dict[str, object]):
     relayed: bool = False
     cached: object | None = None
     cache_writer: Callable[[object], object] | None = None
+    logger: LiteLLMLoggingObj | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +29,7 @@ class _Undelivered:
     deliver: Callable[[object], Awaitable[object]]
 
 
-def _public_stream(stream: execution.AsyncStream) -> object:
+def _public_stream(stream: execution.AsyncStream, logger: LiteLLMLoggingObj | None) -> object:
     from litellm.llms.anthropic.messages.native.streaming_iterator import (
         AnthropicMessagesStreamHiddenParams,
         AnthropicMessagesStreamingResponse,
@@ -39,6 +43,7 @@ def _public_stream(stream: execution.AsyncStream) -> object:
             AnthropicMessagesStreamHiddenParams,
             stream._hidden_params,  # pyright: ignore[reportPrivateUsage]  # the native stream's own hidden params
         ),
+        litellm_logging_obj=logger,
     )
 
 
@@ -51,7 +56,7 @@ def _opened(native: execution.Execution, head: object) -> object:
     agentic: Final = head.agentic if isinstance(head, MessagesStreamHead) else None
     if agentic is not None:
         return agentic(stream)
-    return _public_stream(stream) if isinstance(head, MessagesStreamHead) and head.python_types else stream
+    return _public_stream(stream, head.logger) if isinstance(head, MessagesStreamHead) and head.python_types else stream
 
 
 def _open_stream(native: execution.Execution, head: object) -> object:

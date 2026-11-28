@@ -86,7 +86,7 @@ def _mock_http_handler_post(
     self: "HTTPHandler",
     url: str,
     data: "dict[str, object] | str | bytes | None" = None,
-    json=None,
+    json: "dict[str, object] | None" = None,  # mutable-ok: dict-typed callees take it
     params: "dict[str, object] | None" = None,
     headers: "dict[str, object] | None" = None,
     timeout: "float | httpx.Timeout | None" = None,

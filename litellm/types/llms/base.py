@@ -44,7 +44,7 @@ class BaseLiteLLMOpenAIResponseObject(LiteLLMBaseModel):
     def __getitem__(self, key: str) -> object:
         return _ATTRIBUTE_VALUE.validate_python(self.__dict__[key])
 
-    def get(self, key: str, default=None):
+    def get(self, key: str, default: object = None):
         return self.__dict__.get(key, default)
 
     def __contains__(self, key: object) -> bool:

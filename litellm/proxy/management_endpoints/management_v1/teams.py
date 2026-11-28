@@ -51,6 +51,10 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
 router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 
 
+def _is_none(value: object) -> bool:
+    return value is None
+
+
 class _RosterEntry(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -66,8 +70,8 @@ class TeamMemberListItem(_RosterEntry):
     team_id: str
     spend: float | None = 0.0
     total_spend: float | None = 0.0
-    rollover_credit: float | None = Field(default=None, exclude_if=lambda value: value is None)
-    effective_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    rollover_credit: float | None = Field(default=None, exclude_if=_is_none)
+    effective_max_budget: float | None = Field(default=None, exclude_if=_is_none)
     budget_id: str | None = None
     litellm_budget_table: LiteLLM_BudgetTableFull | LiteLLM_BudgetTable | None = None
     budget_source: TeamMemberBudgetSource

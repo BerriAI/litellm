@@ -40,6 +40,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3_native import (
     PreCallAuthScope,
     native_parallel_request_limiter,
 )
+from litellm.proxy.utils import HookRun, hook_fields
 from litellm.proxy.v2_proxy_fields import DERIVED_POST_CALL_FAILURE_PROXY_FIELDS, PRE_CALL_SOURCES, proxy_call_facts
 from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.rust_bridge._native import NativeParallelRequestLimiter
@@ -57,6 +58,16 @@ def _view(
             KwargsFields(data, PROXY_REQUEST_KEYS),
             sources,
             HookArgs(auth=auth, request=data, call_type=call_type),
+        )
+    )
+
+
+def _failure_view(data: dict[str, object], auth: object, error: Exception) -> FieldView:
+    return FieldView(
+        with_sources(
+            hook_fields(data, HookRun(response=error), Field.error),
+            DERIVED_POST_CALL_FAILURE_PROXY_FIELDS,
+            HookArgs(auth=auth, request=data, result=error),
         )
     )
 
@@ -198,7 +209,7 @@ class RustParallelRequestLimiter(ParallelRequestLimiterHook):
         await self.native_logger.run_rust(
             Hook.post_call_failure,
             declared_reads(self.native_logger, Hook.post_call_failure),
-            _view(request_data, user_api_key_dict, None, DERIVED_POST_CALL_FAILURE_PROXY_FIELDS),
+            _failure_view(request_data, user_api_key_dict, original_exception),
             _context(Hook.post_call_failure, request_data, None, user_api_key_dict, EndpointType.GENERIC.value),
         )
         return await super().async_post_call_failure_hook(

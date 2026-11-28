@@ -73,6 +73,8 @@ const SELECT_FILTERS: {
   value: string;
 }[] = [
   { label: "Action", comboboxIndex: 0, option: "Created", paramKey: "action", value: "created" },
+  { label: "Action", comboboxIndex: 0, option: "Blocked", paramKey: "action", value: "blocked" },
+  { label: "Action", comboboxIndex: 0, option: "Unblocked", paramKey: "action", value: "unblocked" },
   { label: "Table", comboboxIndex: 1, option: "Teams", paramKey: "table_name", value: "LiteLLM_TeamTable" },
 ];
 

@@ -104,7 +104,7 @@ def initialize_guardrails(
     guardrails_config: list[dict[str, GuardrailItemSpec]],
     premium_user: bool,
     config_file_path: str,
-    litellm_settings: dict,
+    litellm_settings: dict[str, object],
 ) -> dict[str, GuardrailItem]:
     try:
         verbose_proxy_logger.debug("validating  guardrails passed %s", guardrails_config)
