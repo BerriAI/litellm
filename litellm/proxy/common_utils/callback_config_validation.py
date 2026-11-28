@@ -48,11 +48,19 @@ _ARIZE_SAMPLING_RATE_VARS: Final[frozenset[str]] = frozenset(
     {"arize_success_sampling_rate", "arize_error_sampling_rate"}
 )
 _LOGGING_METADATA: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
-_CREDENTIAL_HINT: Final = (
-    "\nTo keep a separate secret per key, team or user, save it as a credential and name it with "
-    "litellm_credential_name in the logging entry."
-)
 EnvReferenceSource: TypeAlias = Literal["key metadata", "team metadata", "user metadata"]
+_KEY_SECRET_HINT: Final = (
+    "\nTo keep a separate secret per key, save it as a credential and name it with "
+    "litellm_credential_name in the key's logging entry."
+)
+_ENV_REFERENCE_HINTS: Final[Mapping[EnvReferenceSource, str]] = MappingProxyType(
+    {
+        "key metadata": _KEY_SECRET_HINT,
+        "user metadata": _KEY_SECRET_HINT,
+        "team metadata": "\nTo keep a separate secret per team, configure the callback for that team under "
+        "litellm_settings.default_team_settings in the proxy config.yaml.",
+    }
+)
 
 
 def callback_config_error(
@@ -342,9 +350,11 @@ def logging_metadata_env_reference_error(
     metadata: Mapping[str, object] | None, *, source: EnvReferenceSource = "key metadata"
 ) -> str | None:
     reference: Final = next(iter(_metadata_env_references(metadata)), None)
-    if reference is None:
-        return None
-    return f"{callback_env_reference_error(*reference, source=source)}{_CREDENTIAL_HINT}"
+    return None if reference is None else _env_reference_write_error(reference, source)
+
+
+def _env_reference_write_error(reference: tuple[str, str], source: EnvReferenceSource) -> str:
+    return f"{callback_env_reference_error(*reference, source=source)}{_ENV_REFERENCE_HINTS[source]}"
 
 
 def raise_on_logging_metadata_env_reference(metadata: object, *, source: EnvReferenceSource) -> None:
@@ -359,15 +369,16 @@ def raise_on_stored_metadata_env_reference(
     requested: Final = _object_metadata_env_references(requested_metadata)
     if not requested:
         return
-    error: Final = _metadata_env_reference_error(requested_metadata, source)
-    if requested[0] not in _object_metadata_env_references(stored_metadata):
-        raise HTTPException(status_code=400, detail={"error": error})
+    stored: Final = frozenset(_object_metadata_env_references(stored_metadata))
+    already_stored: Final = next((reference for reference in requested if reference in stored), None)
+    if already_stored is None:
+        raise HTTPException(status_code=400, detail={"error": _env_reference_write_error(requested[0], source)})
     raise HTTPException(
         status_code=400,
         detail={
             "error": f"{owner} already stores this reference in its metadata, so it must be removed "
             "before metadata can be saved. Send metadata.logging or metadata.callback_settings without "
-            f"it to clear it. {error}"
+            f"it to clear it. {_env_reference_write_error(already_stored, source)}"
         },
     )
 

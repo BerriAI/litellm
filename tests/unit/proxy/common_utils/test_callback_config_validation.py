@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.proxy.common_utils.callback_config_validation import (
+    EnvReferenceSource,
     callback_config_error,
     conflicting_callback_var_error,
     conflicting_span_scope_error,
@@ -563,11 +564,21 @@ def test_an_env_reference_raises_a_400_carrying_the_error() -> None:
     assert raised.value.detail == {"error": logging_metadata_env_reference_error(metadata, source="user metadata")}
 
 
-def test_the_rejection_names_the_writer_and_points_at_credentials() -> None:
+@pytest.mark.parametrize(
+    ("source", "remedy", "wrong_remedy"),
+    [
+        ("key metadata", "litellm_credential_name", "default_team_settings"),
+        ("user metadata", "litellm_credential_name", "default_team_settings"),
+        ("team metadata", "default_team_settings", "litellm_credential_name"),
+    ],
+)
+def test_the_rejection_names_the_writer_and_a_remedy_that_writer_can_use(
+    source: EnvReferenceSource, remedy: str, wrong_remedy: str
+) -> None:
     metadata: Final = {"logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
-    error: Final = logging_metadata_env_reference_error(metadata, source="team metadata")
-    assert error is not None and "(from team metadata)" in error
-    assert "litellm_credential_name" in error
+    error: Final = logging_metadata_env_reference_error(metadata, source=source)
+    assert error is not None and f"(from {source})" in error
+    assert remedy in error and wrong_remedy not in error
 
 
 def _stored_reference_error(requested: dict[str, object], stored: dict[str, object]) -> str:
@@ -582,12 +593,20 @@ def test_resending_the_stored_reference_says_it_is_already_stored() -> None:
     assert "Team t1 already stores this reference" in _stored_reference_error(stored, stored)
 
 
+def test_a_stored_reference_after_a_new_one_is_still_called_already_stored() -> None:
+    stored: Final = {"logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
+    requested: Final = {
+        "logging": [_arize_entry(arize_api_key="os.environ/NEW_KEY"), *stored["logging"]],
+    }
+    error: Final = _stored_reference_error(requested, stored)
+    assert "Team t1 already stores this reference" in error and "Callback param 'arize_space_id'" in error
+
+
 def test_a_new_reference_under_a_stored_param_is_not_called_already_stored() -> None:
     stored: Final = {"logging": [_arize_entry(arize_space_id="os.environ/ARIZE_SPACE_ID")]}
     requested: Final = {"logging": [_arize_entry(arize_space_id="os.environ/OTHER_SPACE")]}
     error: Final = _stored_reference_error(requested, stored)
     assert "already stores" not in error and "Callback param 'arize_space_id'" in error
-
 
 
 _REFERENCE: Final = {"callback_name": "arize", "callback_type": "success", "litellm_credential_name": "space-a"}

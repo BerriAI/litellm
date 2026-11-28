@@ -30,6 +30,13 @@ def _logging_with(field: str, value: str) -> dict[str, JsonValue]:
     }
 
 
+_REMEDIES: Final = {
+    "key metadata": "litellm_credential_name",
+    "user metadata": "litellm_credential_name",
+    "team metadata": "litellm_settings.default_team_settings",
+}
+
+
 def _refusal(field: str, source: str) -> str:
     return f"Callback param '{field}' (from {source}) contains an 'os.environ/' reference."
 
@@ -38,7 +45,7 @@ def _assert_refused(response: httpx.Response, field: str, source: str) -> None:
     assert response.status_code == 400, response.text
     message: Final = string_value(object_value(response.json()["error"])["message"])
     assert _refusal(field, source) in message, response.text
-    assert "litellm_credential_name" in message, response.text
+    assert _REMEDIES[source] in message, response.text
 
 
 def _team_metadata(team: str) -> JsonValue:
@@ -244,6 +251,18 @@ def test_a_key_storing_an_env_reference_names_it_when_its_metadata_is_resent(gat
         cleared: Final = gateway.request("POST", "/key/update", {"key": key, "metadata": {"logging": []}})
         assert cleared.status_code == 200, cleared.text
         assert object_value(_key_metadata(key))["logging"] == []
+
+
+def test_a_user_storing_an_env_reference_names_it_when_its_metadata_is_resent(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        user: Final = scenario.user()
+        legacy: Final = _logging(SPACE_ID)
+        write_rows('UPDATE "LiteLLM_UserTable" SET metadata = %s::jsonb WHERE user_id = %s', (json.dumps(legacy), user))
+        resent: Final = gateway.request("POST", "/user/update", {"user_id": user, "metadata": legacy})
+        _assert_refused(resent, SPACE_ID, "user metadata")
+        assert f"User {user} already stores this reference" in resent.text, resent.text
+        rows: Final = read_rows('SELECT metadata FROM "LiteLLM_UserTable" WHERE user_id = %s', (user,))
+        assert rows == [{"metadata": legacy}], rows
 
 
 def test_key_bulk_update_cannot_store_an_env_reference(gateway: Gateway) -> None:
