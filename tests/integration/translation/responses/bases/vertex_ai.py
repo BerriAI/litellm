@@ -12,7 +12,19 @@ from integration.translation.templates.vertex_ai import (
 )
 
 GEMINI_3_5_FLASH_THOUGHT_SIGNATURE: Final = "AY89a1+kriNs9YsPegJQxgjTWsMlxsqPU/UkHDyz4EK+3FRrE52ygqPIHTvkblgKKiO5Fn8R9D3iu//i+YnuuZ+e7W0yxUoFScas89b5rn3vZHsihnUA7VTe3b7beth1IftteoTGZ3F8OSLrSIP8HKn4xTIx35eeNEt5oiD3K5rTQrdklqO277HvTDhu/LuZhZ0pzaWciGQEc61epIBBpC2ygu8V4L8TekUVZnz6qzSzxipdiQStQ8dZou43334hMnxOR6JjJCGxqt/1K+C0vXX6YP6f+Bph5VhPSnvy2Z1uApi3TUxAcsDDyVewIr+ha2G6DPhN1Oi5uZZNhmbvH01Uq5OOquF1uEICq2m/35LhJIbDNM9N7oI1Z6L94P9xdugeFXM2S7wdJfc8sdg09vEzNeA++GK25zRuB4hU7XyaG4XnWjmu2kswi4sf+EyrO/K0P2tb/ZCJu7kJTtWTiD1wgSIl1eqS8ORKKsXDN2hIbFrtsNR50WIvVzd6"
-CLAUDE_HAIKU_5_5_RESPONSES_THINKING_SIGNATURE: Final = "CAQS0gYKEggSEAIYAjgBQgh0aGlua2luZxIMcbnLkNvj2D6NoBl7Ggw+Qgax2/68TAR1maEiMH6XEeKEqR1ewAiuj01fMNuD1KI7pCTXUsWWr6H7nSzP5BiRGXRrDCIxPYu2Xbvx7yrtBbbyId4ReZzx21wZ2+d0vkkpZM82PXY72wQRJOHLR4JNLRjiR2Jn+FrZ8mBo2mofFrlTSuioOVHc1hheiH4InRK57w2X9xaTXa+mwoWW5epPieHD26+NNJirF9vB832fvqDVOd+f8N0ZDUXUut8zl/Jxx+0BMOktMqyfehIOGumQmyv49E3JHVQGrx+Dd3KZjaQXrsRFf1K3AJ7p5XElR+cYis40W7EL3DE9EAtriZuDEt0fTct79fzZIZgHd6Dnua/rGRnjNjaaZKxGjnhfkVHwsZW4HqTNgwWQiD3lt2ncoLfsfd2IWwMEI5uWpN3GtvRkQvfzidmgGmx3dI8g0nBvLPuq0jzVIuuoKIKqzT7A5ae3Gs9eTlSDr2wOGfdyNf6Q2TLw0w7EegI4wYSExKhFkx0EytCGHJcbN0WClXXmHsRtrXnP7sxCMMY7B8TIpAoN7SXyNjJizOGgzoYL7PNUgqp5nVz/C9vTvudhSWbjLITdxFJ5hearL2rMhryfHBKvRGYC9RMy/EjjtINNwYpxdVX29mUE+8KT+41HymtJ1Ewjtoo8V/7XQnQk3cB7X2RFHcR89hAM/pSsB14ofMFoDk+jJitS+sCDZI0Xh7/ySU0o/OI4l+oD/yctZTHx/mIOiWRtnAOrveNT1ms0/2+4tcO0wi3pRrOB2s5ugYc1I3+GcRwILEIM3a4ABd5Dw2nW2fgUhfSTTGURm4Z91ciih8pKUS1ZPatFTOJ1ehKeUCXflkqY2PHnftiNB/8GzlomsQ2NoRw8UXD00oMmBvSvZpPN7khFLxWHtxLjleKkeKCzN7QZkOqvjAnUwy9TacT2ZvSXIxrvaep7dOyrlMEta/1KsYEcWuBxLr87Va4txXnmoV4RqGgaauNcR2wOGyRFJppxKAgYbmMnxams7cv/7IY2RVSgSQf2k4hFQYzRwrHngjapuZzgNS7UCMjvJJs4VdIypVOATsZdPzJToMgWaiEoRZ3zApQDgYhhGAE="
+CLAUDE_HAIKU_5_5_RESPONSES_THINKING_SIGNATURE: Final = (
+    "CAQSnQYKEggUEAIYAjgBQgh0aGlua2luZxIMkVDSVxiTnd+9SfQfGgzwTUI2p4UsBx3DEsoiMNjpaFYOWnhwVaL3/Eryb0c8fnMn"
+    "ti6UJ7fYeYlGswrt9vI0qWxkxp6RPGQWSeGc1yq4BWRvXHaCDMKPCCPdKE8d+PYABUgl95dkyR4icTz4lL576OVydhVIZ5AZCcdb"
+    "3rH6aGBCT6KKgzqecwexnMan1ksmnDcZaQ4Od+EgeWSfoomtXP2tQl4yNk3JHvD1aANRm38lTTcyRH+i7gTfxNdlUAwa82Jmfmks"
+    "dIpAhOfy48wk/M06bCFR8Cj42CPnXPQXQONmlickYZx4vmFUx5knpJhN63e3geWQ9yQ/y1NgXwbmPieK8cf6hgmNDUJ5d+6ZQusM"
+    "vnzDD3oPLbjcz70UrgaB6e602cGpjjFL6foHDEPiu9/jdoWe4vzXT5xLwZCrx66RCc6RT+MTjDmf0SbMovTK2ZCTa8gcXGwnKGjH"
+    "Tblya/EOkSLO9s12UxeYy0mrpRp5mjhVynkLkftR4hIRvZtcp3CYPScINhrM0svXE1RZ4VdSNL9TA5ZW9ba0rr8886iuCgGzEmKp"
+    "v1KMaqp5v91VUNZ8v26P9n4+qawMkfcE50n04mrZHaMlW8pClEBVfMj5MlpGyI4illQH7KlEtPluo2PpWjTaB+tAjKgO/bvNdyGS"
+    "fr4vnjWgWfzMndOSY1UcvKruVgkizBrr53sSj+YshGjECCUt5/S46irNPDgGpMSgbmo9O33C8vt1wOi6yhJrGAYfKIlj+Uhf664S"
+    "oiDj6si+rCcpLkqrZEEarCLhMKNT6CsMjmB5LaUGtMG60h7s+3Yzvf0dpj0JNMcVksYQ/n+4hnLLVSz78DdNYujHMV8cEYd3UCRA"
+    "PBDqOpl1qocZVHmWDAMEfx18+JVFUdssDiIx1cc2Ja1LQPm2qUaUr8cTHOy9zYCZEZCZ3eSzFvii8fiRiELdX+QTWHNqXFTdCNKO"
+    "VGlegzhhbAynXLzC3YSaRwoiTT2IBRR7tgfeh4sRXZPyRdyUphGTrWE29aXtbtX2O5N4yhgB"
+)
 
 CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
@@ -39,7 +51,7 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-haiku-4-5-20251001",
-        "id": "msg_vrtx_011CfjuySsPewSSfasuPiaHg",
+        "id": "msg_vrtx_011ChJAfDJfPTELa9d6zjHZQ",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello."}],
@@ -53,6 +65,7 @@ CLAUDE_HAIKU_4_5_TEST_CASE: Final = TranslationTestCase(
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 5,
+            "speed": "standard",
         },
     },
     expected_litellm_status_code=200,
@@ -133,7 +146,7 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-sonnet-4-6",
-        "id": "msg_vrtx_011CfjuxUbJsRvQZCN21qNQq",
+        "id": "msg_vrtx_011ChJAfExswMfbMU9g7MHdR",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello!"}],
@@ -147,6 +160,7 @@ CLAUDE_SONNET_4_6_TEST_CASE: Final = TranslationTestCase(
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 5,
+            "speed": "standard",
         },
     },
     expected_litellm_status_code=200,
@@ -227,7 +241,7 @@ CLAUDE_SONNET_5_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-sonnet-5",
-        "id": "msg_vrtx_011CfjuygPVDgzuMXdyyW9UP",
+        "id": "msg_vrtx_011ChJAfFEjdYucFpDiyMtgB",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello."}],
@@ -242,6 +256,7 @@ CLAUDE_SONNET_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 6,
             "output_tokens_details": {"thinking_tokens": 0},
+            "speed": "standard",
         },
     },
     expected_litellm_status_code=200,
@@ -322,7 +337,7 @@ CLAUDE_OPUS_4_8_TEST_CASE: Final = TranslationTestCase(
     },
     mock_provider_response={
         "model": "claude-opus-4-8",
-        "id": "msg_vrtx_011CfjuyofoMgSaV8Pbt16N9",
+        "id": "msg_vrtx_011ChJAfK6urZiDs3aHUbRCF",
         "type": "message",
         "role": "assistant",
         "content": [{"type": "text", "text": "Hello."}],
@@ -337,6 +352,7 @@ CLAUDE_OPUS_4_8_TEST_CASE: Final = TranslationTestCase(
             "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
             "output_tokens": 6,
             "output_tokens_details": {"thinking_tokens": 0},
+            "speed": "standard",
         },
     },
     expected_litellm_status_code=200,
@@ -485,58 +501,64 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
 )
 
 CLAUDE_SONNET_5_5_RESPONSES_THINKING_SIGNATURE_0: Final = (
-    "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"
+    "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"
 )
 
 CLAUDE_SONNET_5_5_RESPONSES_THINKING_SIGNATURE_1: Final = (
-    "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"
+    "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"
+    "6B3RfpMBcWTkABgVS4p66Goq6B0YAQ=="
 )
 
 CLAUDE_OPUS_5_5_RESPONSES_THINKING_SIGNATURE_0: Final = (
-    "CAQSiAUKEggSEAIYAjgBQgh0aGlua2luZxIM5V4+5UUDIuxI11UEGgyO9SbnX7cSxGWVS+IiMD/+JMqCQUMJv+EWD6oB6YZwwIG6"
-    "O5aIuop3rY1uYL76W3SEEhu5PI8DTabb70ki6yqjBLQCRri5xHeVVrEpRiH91RBZghREaOtv/TE8aiJYQ8njspRXIUbTj7PGxmgQ"
-    "6xZ7bAK1WyljtD0zG3VTxFx1dSw5a/25/WJuYz/6D8gMXPQhG0j8lZzKfIvxhOq2mB5KBmnB+2agzXsyyws8nQ+tT7s/Yfyi7SbY"
-    "dH+jysWNoKj/0pLiuGQE8gmmhkYfHdyOl518sVn/C/yJ6mB3i2Klkg8WifS0l1crRejKy3Er1nD2HBvwVpoTiXAe1v5ugB9NmSve"
-    "pgg/5E6sewMCAnGLvL0Z9lfNPxpRTp9n0yP61Q49Z4kvSB9lcbZC5wN5/fjZTMNRQNDAEqhtXkWnA5SSW3N9r4Pcls67XcYGLI6f"
-    "kjmJU6GOXiRbFIbptxjv/UBHmXPNBqqnIRioPi2RE8eGBbsNIjYrxBD/oJHb8Zd2RYeaM19UtkkYoOh/NaX9iZ0Nek2rYf55YOlo"
-    "GowYdz6aYoo6E2xPQOFh8HAqF0Jzj6KCYodjidlI5jQHZlaE7901Q/u9y7AP0aQXrfAgeVxEPdPUfnp1ROVzK7A6K5O63Ozh+3jB"
-    "KeZRW44jj5vA/+H2+uEVyv1x3eED2eK9j1wcCw2vIE3vTDvPbh3g7RkraTcrkdkuRHu2KS4kkQWppEeHqiJEmEFwwbCFHj41dsj1"
-    "G1pWc9elR+oogW3sYKHQriwykjTCD5IaZi0H+tb8cNegqngv6kGWF10HCSM/4yaFqeATeWEYAQ=="
+    "CAQSrQUKEggUEAIYAjgBQgh0aGlua2luZxIMdji7Q6XlLNBgAS1vGgxGN7FjuexLN6BcfpkiME3pKyBqlvuw4KCfaiQBCLeGugSh"
+    "bOVBc/RrPbq1Ta2C74JIUDhSO9Q0j4KDog+yNSrIBIW4fE5E566Kgzmtg5DUjKfqJNTAYvUyaHrXLkw3hgZOjV2+PvoUh8zlZcfq"
+    "iqkP/rxTYVN9/oaS6kpoZcllOQkIf6pyUzZSHISbqSo+9ZnxgZ6wvK8LVsRHdDsvQiExtPtd1DR45LjrqKzSHXPY1p+gpOntaAcU"
+    "N69R29CeVy1J+Q0tWOY1++hSd9jloPli/6ORx8QmfttLtRfudpLynccDjluHgWjlnY4ImDX/22R/yP72NxjHNMcigSH5dAa0VCy2"
+    "JkNMnwggojgqRy8EU6yBeYOrnnnMkJ8Gj7khVKJ5akAOfh0m0pAbwTam3pksx2wp/fDr54Nspi9w7tGL6PUDnoQ/Px9Xq2Xg9z5k"
+    "rEPuzejpkOPnZxEXzgf5evlHXdMY6YcsRoVfF4o92x4Ajk4jdV2MDmcopPz+GD3JnfaiSn/ge5HjYhIXw5Kyl5yEeyBRA0y+wyTK"
+    "loxLE0/cxbiKTc2wB/+tIGVGY3zj2pvSZUSgdYslOpuGfDk7HxCN16CecnKl0jiQHstGcR6DILwCz+Fwvw55DDt3RfFMSC9t/qB8"
+    "X0VqRNysiemdKgdAgLsN4V0GYxgXaI4owIft8PfJRv+1HSP6b/6i21F1WzlPkRy3uzIUxF6iC+v1/+dnLpIwdSx4Yx+VpbayTARq"
+    "jLJB1tKTv5zHxXFk8Cbs118jL8sIthyjR04qaUgQ3y1bL1vcKLTvMASz7yRt7Mo3JtbyIkk+F1aKmFje0BTFeu3NLwfv6+AUztoK"
+    "vxdLjJtGh0G+eH7PGXy9GAE="
 )
 
 CLAUDE_OPUS_5_5_RESPONSES_THINKING_SIGNATURE_1: Final = (
-    "CAQS1AUKEwgSEAIYAjgBQgluYXJyYXRpb24SDE/QqOK1lGVBzGebvRoMg39CM/sTiL2sWeIEIjDK82bOn+vjF6wbbaDm2uaqcCAx"
-    "GlVUbC3CIx+rc3Wzsy7+0FhVIMf0D1k4GYnCN5Iq7gREgQE5RcQoQ7LQ8HO2ato0KeXeJosd/8ChrqGphPMNQPepQDjydUBgG8Z9"
-    "BdfyxAaoAjxJwSgPe515bk9xajqoTBOlQWELydQyoSo93+SCnHQcCquftqsHbx05i1mgJZTm4L/8ON0jodnY6+Pg7yHW2QixEAht"
-    "fpaLYEH0+a9/rYEiScsBls7gGPxcm4PuXJNt0+ymg3JmbcQ0KQ1sWW0FoLbfVSr0hQV64TahV6FfOVjug/hht/EyPJcSscrC6tbc"
-    "e6VuW/n/LCRub62yHgJHQ0bqiDGi+uQgyhe5UgeugSFoSzmgLq8yf8TeKyA9+Pgy2VHFN+BOlW+M3s/9UFze0BBKgESOS9AxxwEF"
-    "AEFWMG7UxksDvsbJ9s+rlXDpR6Zm8SfvfvQR60BAWQjyntxSd+F5RsmaFb369VRkVxUtCU6zrZpdkmAqmjHTgdBksBIEz+u/otTa"
-    "TcdDNPsPVCqf+wSpTqY56X5eWWDXXimQGGzKZM7ELLHr7tvTDKfBmRsOqTisRf7EBnxRgD3IAw+nDaVweu+hVOiMdF/vLlc9MOSg"
-    "75fnDILOJcmd/QiCrB2gAoUFzqLpNkyLUPOiqWaDkyWgpeD/34/hKZ0OmPZDuF55pEWQ0YwBxcw9YOx0yT5vqOhp+g4DP2dm4OUu"
-    "ndhJRSGLBFJSCVdWdezujMQKacV+fOlidp7s797i7efNUzMyZqg056dN9l29fcU/0GKrpBXv7+Ne3vl2RE+4TcPuN9i2SWDsku9N"
-    "yfwIS2Qy/LluH9ROHmoFTv5CSKxmskP2265nOWrdWbv4YUedA7spiQG/OxMuqF9NtriPexQeGAE="
+    "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"
 )
 
 CLAUDE_FABLE_5_1_RESPONSES_THINKING_SIGNATURE_0: Final = (
@@ -637,42 +659,35 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
                     "client for this project review. Consider zero, negative and non-integer quantities before choosing "
                     "the next file to inspect."
                 ),
-            },
+            }
         ],
     },
     mock_provider_response={
         **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
         "model": "claude-sonnet-5-5",
-        "id": "msg_vrtx_011Cg38ropcTjx8YNUg3LxXa",
+        "id": "msg_vrtx_011ChJAfXeibANtUZMM6eNQx",
         "content": [
             {
                 "type": "thinking",
-                "thinking": (
-                    "Since the validation and tests files are independent of each other, I can go ahead and read both in "
-                    "the same call rather than waiting sequentially—that still satisfies the request to look at "
-                    "validation first while being efficient.\n\n"
-                ),
+                "thinking": "I need to read validation.py before anything else, since the user asked for it first. I'm also weighing whether the test file could be read in the same batch, since those reads don't depend on each other, though the user's ordering makes me lean toward validation alone.\n\nI'll check whether reading the tests alongside validation.py is fine, since they don't depend on each other, but the user asked for validation first, so I'll go ahead and read both to move things along.\n\n",
                 "signature": CLAUDE_SONNET_5_5_RESPONSES_THINKING_SIGNATURE_0,
             },
             {
                 "type": "thinking",
-                "thinking": (
-                    "I'm reading `shop/validation.py` and `tests/test_validation.py` together to see how quantity "
-                    "validation handles zero, negative, and non-integer values, and what the tests expect.\n\n"
-                ),
+                "thinking": "Next I'm reading `shop/validation.py` to see how `validate_quantity` handles zero, negative and non-integer values, and `tests/test_validation.py` alongside it.\n\n",
                 "signature": CLAUDE_SONNET_5_5_RESPONSES_THINKING_SIGNATURE_1,
             },
             {
                 "type": "tool_use",
-                "id": "toolu_vrtx_014c2eZQXGiRtzh9KvDXRhRh",
+                "id": "toolu_vrtx_01MgSj33NjzUQH1GHcBapZdP",
                 "name": "read_file",
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
             },
             {
                 "type": "tool_use",
-                "id": "toolu_vrtx_01VoiC4J2kb7yivWHYGqvRRm",
+                "id": "toolu_vrtx_01PKoiHzUkfqVMiybYwkpGQy",
                 "name": "read_file",
-                "input": {"path": "tests/test_validation.py", "start_line": 1, "end_line": 50},
+                "input": {"path": "tests/test_validation.py", "start_line": 1, "end_line": 40},
             },
         ],
         "usage": {
@@ -680,8 +695,9 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation_input_tokens": 873,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 414,
-            "output_tokens_details": {"thinking_tokens": 218},
+            "output_tokens": 506,
+            "output_tokens_details": {"thinking_tokens": 228},
+            "speed": "standard",
         },
     },
     expected_litellm_response={
@@ -697,14 +713,16 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
                     {
                         "type": "output_text",
                         "text": (
-                            "Since the validation and tests files are independent of each other, I can go ahead and read both in "
-                            "the same call rather than waiting sequentially—that still satisfies the request to look at "
-                            "validation first while being efficient.\n\nI'm reading `shop/validation.py` and "
-                            "`tests/test_validation.py` together to see how quantity validation handles zero, negative, and "
-                            "non-integer values, and what the tests expect.\n\n"
+                            "I need to read validation.py before anything else, since the user asked for it first. I'm also w"
+                            "eighing whether the test file could be read in the same batch, since those reads don't depend on"
+                            " each other, though the user's ordering makes me lean toward validation alone.\n\nI'll check wheth"
+                            "er reading the tests alongside validation.py is fine, since they don't depend on each other, but"
+                            " the user asked for validation first, so I'll go ahead and read both to move things along.\n\nNext"
+                            " I'm reading `shop/validation.py` to see how `validate_quantity` handles zero, negative and non-"
+                            "integer values, and `tests/test_validation.py` alongside it.\n\n"
                         ),
                         "annotations": [],
-                    },
+                    }
                 ],
                 "phase": None,
                 "encrypted_content": json.dumps(
@@ -712,17 +730,19 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
                         {
                             "type": "thinking",
                             "thinking": (
-                                "Since the validation and tests files are independent of each other, I can go ahead and read both in "
-                                "the same call rather than waiting sequentially—that still satisfies the request to look at "
-                                "validation first while being efficient.\n\n"
+                                "I need to read validation.py before anything else, since the user asked for it first. I'm also w"
+                                "eighing whether the test file could be read in the same batch, since those reads don't depend on"
+                                " each other, though the user's ordering makes me lean toward validation alone.\n\nI'll check wheth"
+                                "er reading the tests alongside validation.py is fine, since they don't depend on each other, but"
+                                " the user asked for validation first, so I'll go ahead and read both to move things along.\n\n"
                             ),
                             "signature": CLAUDE_SONNET_5_5_RESPONSES_THINKING_SIGNATURE_0,
                         },
                         {
                             "type": "thinking",
                             "thinking": (
-                                "I'm reading `shop/validation.py` and `tests/test_validation.py` together to see how quantity "
-                                "validation handles zero, negative, and non-integer values, and what the tests expect.\n\n"
+                                "Next I'm reading `shop/validation.py` to see how `validate_quantity` handles zero, negative and "
+                                "non-integer values, and `tests/test_validation.py` alongside it.\n\n"
                             ),
                             "signature": CLAUDE_SONNET_5_5_RESPONSES_THINKING_SIGNATURE_1,
                         },
@@ -732,19 +752,19 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
             },
             {
                 "arguments": '{"path": "shop/validation.py", "start_line": 1, "end_line": 60}',
-                "call_id": "toolu_vrtx_014c2eZQXGiRtzh9KvDXRhRh",
+                "call_id": "toolu_vrtx_01MgSj33NjzUQH1GHcBapZdP",
                 "name": "read_file",
                 "type": "function_call",
-                "id": "fc_toolu_vrtx_014c2eZQXGiRtzh9KvDXRhRh",
+                "id": "fc_toolu_vrtx_01MgSj33NjzUQH1GHcBapZdP",
                 "namespace": None,
                 "status": "completed",
             },
             {
-                "arguments": '{"path": "tests/test_validation.py", "start_line": 1, "end_line": 50}',
-                "call_id": "toolu_vrtx_01VoiC4J2kb7yivWHYGqvRRm",
+                "arguments": '{"path": "tests/test_validation.py", "start_line": 1, "end_line": 40}',
+                "call_id": "toolu_vrtx_01PKoiHzUkfqVMiybYwkpGQy",
                 "name": "read_file",
                 "type": "function_call",
-                "id": "fc_toolu_vrtx_01VoiC4J2kb7yivWHYGqvRRm",
+                "id": "fc_toolu_vrtx_01PKoiHzUkfqVMiybYwkpGQy",
                 "namespace": None,
                 "status": "completed",
             },
@@ -755,14 +775,14 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
                 "audio_tokens": None,
                 "cached_tokens": 0,
                 "cached_tokens_details": None,
+                "cache_write_tokens": 873,
                 "image_tokens": None,
                 "text_tokens": 4,
                 "video_tokens": None,
-                "cache_write_tokens": 873,
             },
-            "output_tokens": 414,
-            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 218, "text_tokens": 196},
-            "total_tokens": 1291,
+            "output_tokens": 506,
+            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 228, "text_tokens": 278},
+            "total_tokens": 1383,
             "cost": None,
         },
         "provider_specific_fields": {
@@ -771,17 +791,19 @@ CLAUDE_SONNET_5_5_TEST_CASE: Final = TranslationTestCase(
                 {
                     "type": "thinking",
                     "thinking": (
-                        "Since the validation and tests files are independent of each other, I can go ahead and read both in "
-                        "the same call rather than waiting sequentially—that still satisfies the request to look at "
-                        "validation first while being efficient.\n\n"
+                        "I need to read validation.py before anything else, since the user asked for it first. I'm also w"
+                        "eighing whether the test file could be read in the same batch, since those reads don't depend on"
+                        " each other, though the user's ordering makes me lean toward validation alone.\n\nI'll check wheth"
+                        "er reading the tests alongside validation.py is fine, since they don't depend on each other, but"
+                        " the user asked for validation first, so I'll go ahead and read both to move things along.\n\n"
                     ),
                     "signature": CLAUDE_SONNET_5_5_RESPONSES_THINKING_SIGNATURE_0,
                 },
                 {
                     "type": "thinking",
                     "thinking": (
-                        "I'm reading `shop/validation.py` and `tests/test_validation.py` together to see how quantity "
-                        "validation handles zero, negative, and non-integer values, and what the tests expect.\n\n"
+                        "Next I'm reading `shop/validation.py` to see how `validate_quantity` handles zero, negative and "
+                        "non-integer values, and `tests/test_validation.py` alongside it.\n\n"
                     ),
                     "signature": CLAUDE_SONNET_5_5_RESPONSES_THINKING_SIGNATURE_1,
                 },
@@ -813,31 +835,26 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
                     "client for this project review. Consider zero, negative and non-integer quantities before choosing "
                     "the next file to inspect."
                 ),
-            },
+            }
         ],
     },
     mock_provider_response={
         **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
         "model": "claude-haiku-5-5",
-        "id": "msg_vrtx_011Cg8BhBrWmiX5ZtMxpM9zA",
+        "id": "msg_vrtx_011ChJAfYKtmiiNeYQHNwyEv",
         "content": [
             {
                 "type": "thinking",
-                "thinking": (
-                    "I should read shop/validation.py to check how it handles zero, negative, and non-integer values "
-                    "before moving to the next file—I'll grab the first 60 lines since I don't know the full length yet.\n\n"
-                ),
+                "thinking": "I'm going to read shop/validation.py, starting with lines 1-60 since I don't know its full length yet. I'll make a single read call, and I should first say which file I need next. I also want to check how it handles zero, negative, and non-integer quantities. The tests could be pulled in alongside, but the user asked for validation first, so I'll stick to that.\n\n",
                 "signature": CLAUDE_HAIKU_5_5_RESPONSES_THINKING_SIGNATURE,
             },
             {
                 "type": "text",
-                "text": (
-                    "I'll read the validation function in `shop/validation.py`, starting around the match on line 18."
-                ),
+                "text": "I'll read `shop/validation.py` first, since `validate_quantity` is where zero and negative quantities should be handled.",
             },
             {
                 "type": "tool_use",
-                "id": "toolu_vrtx_01Jxxsojf34b9skuGH47XkJd",
+                "id": "toolu_vrtx_01HivpBXDNZ4qTbRKPHwxZzX",
                 "name": "read_file",
                 "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
             },
@@ -847,8 +864,9 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation_input_tokens": 873,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 255,
-            "output_tokens_details": {"thinking_tokens": 126},
+            "output_tokens": 249,
+            "output_tokens_details": {"thinking_tokens": 110},
+            "speed": "standard",
         },
     },
     expected_litellm_response={
@@ -864,12 +882,13 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
                     {
                         "type": "output_text",
                         "text": (
-                            "I should read shop/validation.py to check how it handles zero, negative, and non-integer "
-                            "values before moving to the next file—I'll grab the first 60 lines since I don't know the "
-                            "full length yet.\n\n"
+                            "I'm going to read shop/validation.py, starting with lines 1-60 since I don't know its full lengt"
+                            "h yet. I'll make a single read call, and I should first say which file I need next. I also want "
+                            "to check how it handles zero, negative, and non-integer quantities. The tests could be pulled in"
+                            " alongside, but the user asked for validation first, so I'll stick to that.\n\n"
                         ),
                         "annotations": [],
-                    },
+                    }
                 ],
                 "phase": None,
                 "encrypted_content": json.dumps(
@@ -877,12 +896,13 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
                         {
                             "type": "thinking",
                             "thinking": (
-                                "I should read shop/validation.py to check how it handles zero, negative, and non-integer "
-                                "values before moving to the next file—I'll grab the first 60 lines since I don't know the "
-                                "full length yet.\n\n"
+                                "I'm going to read shop/validation.py, starting with lines 1-60 since I don't know its full lengt"
+                                "h yet. I'll make a single read call, and I should first say which file I need next. I also want "
+                                "to check how it handles zero, negative, and non-integer quantities. The tests could be pulled in"
+                                " alongside, but the user asked for validation first, so I'll stick to that.\n\n"
                             ),
                             "signature": CLAUDE_HAIKU_5_5_RESPONSES_THINKING_SIGNATURE,
-                        },
+                        }
                     ],
                     separators=(",", ":"),
                 ),
@@ -895,18 +915,21 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
                 "content": [
                     {
                         "type": "output_text",
-                        "text": "I'll read the validation function in `shop/validation.py`, starting around the match on line 18.",
+                        "text": (
+                            "I'll read `shop/validation.py` first, since `validate_quantity` is where zero and negative quant"
+                            "ities should be handled."
+                        ),
                         "annotations": [],
-                    },
+                    }
                 ],
                 "phase": None,
             },
             {
                 "arguments": '{"path": "shop/validation.py", "start_line": 1, "end_line": 60}',
-                "call_id": "toolu_vrtx_01Jxxsojf34b9skuGH47XkJd",
+                "call_id": "toolu_vrtx_01HivpBXDNZ4qTbRKPHwxZzX",
                 "name": "read_file",
                 "type": "function_call",
-                "id": "fc_toolu_vrtx_01Jxxsojf34b9skuGH47XkJd",
+                "id": "fc_toolu_vrtx_01HivpBXDNZ4qTbRKPHwxZzX",
                 "namespace": None,
                 "status": "completed",
             },
@@ -917,14 +940,14 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
                 "audio_tokens": None,
                 "cached_tokens": 0,
                 "cached_tokens_details": None,
+                "cache_write_tokens": 873,
                 "image_tokens": None,
                 "text_tokens": 4,
                 "video_tokens": None,
-                "cache_write_tokens": 873,
             },
-            "output_tokens": 255,
-            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 126, "text_tokens": 129},
-            "total_tokens": 1132,
+            "output_tokens": 249,
+            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 110, "text_tokens": 139},
+            "total_tokens": 1126,
             "cost": None,
         },
         "provider_specific_fields": {
@@ -933,12 +956,13 @@ CLAUDE_HAIKU_5_5_TEST_CASE: Final = TranslationTestCase(
                 {
                     "type": "thinking",
                     "thinking": (
-                        "I should read shop/validation.py to check how it handles zero, negative, and non-integer "
-                        "values before moving to the next file—I'll grab the first 60 lines since I don't know the "
-                        "full length yet.\n\n"
+                        "I'm going to read shop/validation.py, starting with lines 1-60 since I don't know its full lengt"
+                        "h yet. I'll make a single read call, and I should first say which file I need next. I also want "
+                        "to check how it handles zero, negative, and non-integer quantities. The tests could be pulled in"
+                        " alongside, but the user asked for validation first, so I'll stick to that.\n\n"
                     ),
                     "signature": CLAUDE_HAIKU_5_5_RESPONSES_THINKING_SIGNATURE,
-                },
+                }
             ],
         },
     },
@@ -967,35 +991,29 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
                     "client for this project review. Consider zero, negative and non-integer quantities before choosing "
                     "the next file to inspect."
                 ),
-            },
+            }
         ],
     },
     mock_provider_response={
         **VERTEX_AI_ANTHROPIC_MESSAGES_RESPONSE,
         "model": "claude-opus-5-5",
-        "id": "msg_vrtx_011Cg38rY7YVYxBPGMbH9jaS",
+        "id": "msg_vrtx_011ChJAfbF1xaabUQHbX9KTY",
         "content": [
             {
                 "type": "thinking",
-                "thinking": (
-                    "The user wants me to read the validation file first, so I'll open validation.py and focus around "
-                    "line 18 to see what's there.\n\n"
-                ),
+                "thinking": "I'm going to read the validation file first, as the user asked, and I'm leaving the test file for later. I'll call read_file on the validation file to start.\n\n",
                 "signature": CLAUDE_OPUS_5_5_RESPONSES_THINKING_SIGNATURE_0,
             },
             {
                 "type": "thinking",
-                "thinking": (
-                    "I'll check `validate_quantity` in `shop/validation.py` around line 18 to see how it handles zero, "
-                    "negative, and non-integer inputs before looking at the tests.\n\n"
-                ),
+                "thinking": "I'm opening shop/validation.py around line 18 to check how validate_quantity handles zero, negative, non-integer and non-numeric inputs.\n\n",
                 "signature": CLAUDE_OPUS_5_5_RESPONSES_THINKING_SIGNATURE_1,
             },
             {
                 "type": "tool_use",
-                "id": "toolu_vrtx_01GFi5nAbXNTTfSxopXwNNPp",
+                "id": "toolu_vrtx_016XqZQZ1bkRjw6xdLRvC7Rq",
                 "name": "read_file",
-                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 45},
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 50},
             },
         ],
         "usage": {
@@ -1003,8 +1021,9 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
             "cache_creation_input_tokens": 873,
             "cache_read_input_tokens": 0,
             "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
-            "output_tokens": 224,
-            "output_tokens_details": {"thinking_tokens": 126},
+            "output_tokens": 261,
+            "output_tokens_details": {"thinking_tokens": 65},
+            "speed": "standard",
         },
     },
     expected_litellm_response={
@@ -1020,12 +1039,13 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
                     {
                         "type": "output_text",
                         "text": (
-                            "The user wants me to read the validation file first, so I'll open validation.py and focus around "
-                            "line 18 to see what's there.\n\nI'll check `validate_quantity` in `shop/validation.py` around line 18 "
-                            "to see how it handles zero, negative, and non-integer inputs before looking at the tests.\n\n"
+                            "I'm going to read the validation file first, as the user asked, and I'm leaving the test file fo"
+                            "r later. I'll call read_file on the validation file to start.\n\nI'm opening shop/validation.py ar"
+                            "ound line 18 to check how validate_quantity handles zero, negative, non-integer and non-numeric "
+                            "inputs.\n\n"
                         ),
                         "annotations": [],
-                    },
+                    }
                 ],
                 "phase": None,
                 "encrypted_content": json.dumps(
@@ -1033,16 +1053,16 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
                         {
                             "type": "thinking",
                             "thinking": (
-                                "The user wants me to read the validation file first, so I'll open validation.py and focus around "
-                                "line 18 to see what's there.\n\n"
+                                "I'm going to read the validation file first, as the user asked, and I'm leaving the test file fo"
+                                "r later. I'll call read_file on the validation file to start.\n\n"
                             ),
                             "signature": CLAUDE_OPUS_5_5_RESPONSES_THINKING_SIGNATURE_0,
                         },
                         {
                             "type": "thinking",
                             "thinking": (
-                                "I'll check `validate_quantity` in `shop/validation.py` around line 18 to see how it handles zero, "
-                                "negative, and non-integer inputs before looking at the tests.\n\n"
+                                "I'm opening shop/validation.py around line 18 to check how validate_quantity handles zero, negat"
+                                "ive, non-integer and non-numeric inputs.\n\n"
                             ),
                             "signature": CLAUDE_OPUS_5_5_RESPONSES_THINKING_SIGNATURE_1,
                         },
@@ -1051,11 +1071,11 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
                 ),
             },
             {
-                "arguments": '{"path": "shop/validation.py", "start_line": 1, "end_line": 45}',
-                "call_id": "toolu_vrtx_01GFi5nAbXNTTfSxopXwNNPp",
+                "arguments": '{"path": "shop/validation.py", "start_line": 1, "end_line": 50}',
+                "call_id": "toolu_vrtx_016XqZQZ1bkRjw6xdLRvC7Rq",
                 "name": "read_file",
                 "type": "function_call",
-                "id": "fc_toolu_vrtx_01GFi5nAbXNTTfSxopXwNNPp",
+                "id": "fc_toolu_vrtx_016XqZQZ1bkRjw6xdLRvC7Rq",
                 "namespace": None,
                 "status": "completed",
             },
@@ -1066,14 +1086,14 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
                 "audio_tokens": None,
                 "cached_tokens": 0,
                 "cached_tokens_details": None,
+                "cache_write_tokens": 873,
                 "image_tokens": None,
                 "text_tokens": 4,
                 "video_tokens": None,
-                "cache_write_tokens": 873,
             },
-            "output_tokens": 224,
-            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 126, "text_tokens": 98},
-            "total_tokens": 1101,
+            "output_tokens": 261,
+            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 65, "text_tokens": 196},
+            "total_tokens": 1138,
             "cost": None,
         },
         "provider_specific_fields": {
@@ -1082,16 +1102,16 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
                 {
                     "type": "thinking",
                     "thinking": (
-                        "The user wants me to read the validation file first, so I'll open validation.py and focus around "
-                        "line 18 to see what's there.\n\n"
+                        "I'm going to read the validation file first, as the user asked, and I'm leaving the test file fo"
+                        "r later. I'll call read_file on the validation file to start.\n\n"
                     ),
                     "signature": CLAUDE_OPUS_5_5_RESPONSES_THINKING_SIGNATURE_0,
                 },
                 {
                     "type": "thinking",
                     "thinking": (
-                        "I'll check `validate_quantity` in `shop/validation.py` around line 18 to see how it handles zero, "
-                        "negative, and non-integer inputs before looking at the tests.\n\n"
+                        "I'm opening shop/validation.py around line 18 to check how validate_quantity handles zero, negat"
+                        "ive, non-integer and non-numeric inputs.\n\n"
                     ),
                     "signature": CLAUDE_OPUS_5_5_RESPONSES_THINKING_SIGNATURE_1,
                 },
