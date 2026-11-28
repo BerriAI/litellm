@@ -452,6 +452,22 @@ def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[
     )
 
 
+_HOSTED_TOOL_ITEM_TYPES: Final = frozenset(
+    {"web_search_call", "file_search_call", "mcp_list_tools", "mcp_call", "code_interpreter_call"}
+)
+
+
+def _is_hosted_tool_item(item: object) -> bool:
+    raw: Final[object] = item.model_dump() if isinstance(item, BaseModel) else item
+    return _json_field(raw, "type") in _HOSTED_TOOL_ITEM_TYPES
+
+
+def _holds_only_reasoning_and_hosted_tool_calls(output_items: Sequence[object]) -> bool:
+    reasoning_count: Final = len(_reasoning_items_from_output_items(output_items))
+    hosted_count: Final = sum(map(_is_hosted_tool_item, output_items))
+    return 0 < reasoning_count and reasoning_count + hosted_count == len(output_items)
+
+
 _TOOL_SEARCH_ITEM_TYPES: Final = frozenset({"tool_search_call", "tool_search_output"})
 _TOOL_SEARCH_REPLAY_ITEM_TYPES: Final = frozenset({"reasoning", *_TOOL_SEARCH_ITEM_TYPES})
 _TOOL_SEARCH_ITEMS_KEY: Final = "tool_search_items"
@@ -1778,13 +1794,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         tool_search_items: Final = _tool_search_items_from_output_items(output_items)
         if not choices and not accumulated_tool_calls:
-            if not tool_search_items:
-                return choices
-            return [
-                LiteLLMResponsesTransformationHandler._build_empty_choice(
-                    output_items, "stop", tool_search_items=tool_search_items
+            return list(
+                LiteLLMResponsesTransformationHandler._choices_without_an_answer(
+                    output_items,
+                    tool_search_items,
+                    completed=completed,
+                    replay_openai_history=replay_openai_history,
+                    structured_output=structured_output,
                 )
-            ]
+            )
         folded: Final = _fold_choices_into_one(
             choices=choices,
             tool_calls=accumulated_tool_calls,
@@ -1819,6 +1837,28 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             provider_specific_fields=_tool_search_provider_fields(tool_search_items),
         )
         return Choices(message=message, finish_reason=finish_reason, index=0)
+
+    @staticmethod
+    def _choices_without_an_answer(
+        output_items: Sequence[object],
+        tool_search_items: Sequence[Mapping[str, object]],
+        *,
+        completed: bool,
+        replay_openai_history: bool,
+        structured_output: bool,
+    ) -> tuple["Choices", ...]:
+        if tool_search_items:
+            return (
+                LiteLLMResponsesTransformationHandler._build_empty_choice(
+                    output_items, "stop", tool_search_items=tool_search_items
+                ),
+            )
+        if not (completed and _holds_only_reasoning_and_hosted_tool_calls(output_items)):
+            return ()
+        empty: Final = LiteLLMResponsesTransformationHandler._build_empty_choice(output_items, "stop")
+        if not replay_openai_history:
+            return (empty,)
+        return (_with_replay_fields(empty, output_items, completed=completed, structured_output=structured_output),)
 
     @classmethod
     def _extract_output_from_completed_event(cls, parsed_chunk: Mapping[str, object]) -> list[dict[str, object]] | None:

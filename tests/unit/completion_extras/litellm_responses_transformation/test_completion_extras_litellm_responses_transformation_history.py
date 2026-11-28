@@ -542,6 +542,22 @@ def test_an_incomplete_or_unsupported_output_records_no_replay(
     assert _types(sent[1:-1]) == ["reasoning", "reasoning", "message", "function_call"]
 
 
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+def test_a_reasoning_only_turn_replays_its_reasoning_without_an_empty_assistant_message(stream: bool) -> None:
+    assistant: Final = _assistant_turn((FIRST_REASONING,), stream=stream)
+    follow_up: Final = {"role": "user", "content": "Go on."}
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=OPENAI_RESPONSES_URL).mock(
+            return_value=httpx.Response(200, json=_response((FOLLOW_UP,)))
+        )
+        litellm.completion(model=OPENAI_MODEL, messages=[USER, assistant, follow_up], api_key="sk-test")
+    sent: Final = json.loads(upstream.calls[0].request.content)["input"]
+
+    assert assistant["content"] == ""
+    assert sent[1:-1] == [REPLAYED[1]]
+
+
 def _chunks_before_error(stream: Iterator[object]) -> Iterator[object]:
     try:
         yield from stream
