@@ -2,13 +2,16 @@ import asyncio
 import os
 from collections.abc import Mapping
 from types import SimpleNamespace
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from tests._module_state import collect_flushable_caches, flush_caches, restore_mutable_state, snapshot_mutable_state
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
 
 _LITELLM_STATE: Final = snapshot_mutable_state(litellm)
 _FLUSHABLE_CACHES: Final = collect_flushable_caches((litellm,))
@@ -187,3 +190,10 @@ def credentials_prisma(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     prisma: Final = SimpleNamespace(db=database, writer_db=database)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     return prisma
+
+
+@pytest.fixture
+def grants_database(monkeypatch: pytest.MonkeyPatch) -> dict[str, "LiteLLM_ObjectPermissionTable"]:
+    from tests._support.mcp_auth_profiles import install_grants_database
+
+    return install_grants_database(monkeypatch)

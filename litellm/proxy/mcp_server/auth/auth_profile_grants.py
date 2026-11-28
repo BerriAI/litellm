@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
@@ -112,3 +113,47 @@ async def caller_auth_profile_grants(caller: UserAPIKeyAuth | None) -> tuple[Pro
         verbose_proxy_logger.warning("Could not read MCP auth profile grants (%s)", type(exc).__name__)
         verbose_proxy_logger.debug("MCP auth profile grant read failure", exc_info=True)
         return UnreadableGrants()
+
+
+async def _readable_key_permission(caller: UserAPIKeyAuth) -> LiteLLM_ObjectPermissionTable | None:
+    try:
+        return await MCPRequestHandler.key_object_permission_hydrated(caller)
+    except Exception as exc:  # noqa: BLE001  # store and cache backends can raise different read failures
+        verbose_proxy_logger.warning("Could not read the key permission for a toolset scope (%s)", type(exc).__name__)
+        return None
+
+
+def _scope_needs_key_grants(mcp_servers: Sequence[str]) -> bool:
+    if not mcp_servers:
+        return False
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    for server_id in mcp_servers:
+        server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if server is None or server.additional_auth or server.auth_profiles_unreadable:
+            return True
+    return False
+
+
+async def toolset_scope_permission(
+    caller: UserAPIKeyAuth, mcp_servers: Sequence[str], mcp_tool_permissions: Mapping[str, list[str]]
+) -> LiteLLM_ObjectPermissionTable:
+    """The permission that pins a key with no loaded permission row to a toolset, keeping the key's profile grants."""
+    key: Final = (
+        await _readable_key_permission(caller)
+        if caller.object_permission_id is not None and _scope_needs_key_grants(mcp_servers)
+        else None
+    )
+    grants: Final = (
+        {"mcp_auth_profiles": key.mcp_auth_profiles}
+        if key is not None and "mcp_auth_profiles" in key.model_fields_set
+        else {}
+    )
+    return LiteLLM_ObjectPermissionTable.model_validate(
+        {
+            "object_permission_id": "toolset-scope" if key is None else key.object_permission_id,
+            "mcp_servers": list(mcp_servers),
+            "mcp_tool_permissions": dict(mcp_tool_permissions),
+            **grants,
+        }
+    )

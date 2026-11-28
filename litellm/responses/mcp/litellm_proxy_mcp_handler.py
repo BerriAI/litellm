@@ -270,9 +270,8 @@ class LiteLLM_Proxy_MCP_Handler:
         user_api_key_auth: "UserAPIKeyAuth",
     ) -> "UserAPIKeyAuth":
         """Apply resolved toolset permissions to user_api_key_auth and return updated auth."""
-        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
-
         try:
+            from litellm.proxy.mcp_server.auth.auth_profile_grants import toolset_scope_permission
             from litellm.proxy.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
@@ -295,11 +294,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     }
                 )
             else:
-                updated_op = LiteLLM_ObjectPermissionTable(
-                    object_permission_id="toolset-scope",
-                    mcp_servers=all_server_ids,
-                    mcp_tool_permissions=tool_permissions,
-                )
+                updated_op = await toolset_scope_permission(user_api_key_auth, all_server_ids, tool_permissions)
             return user_api_key_auth.model_copy(
                 update={"object_permission": updated_op, "mcp_explicit_grants_only": True}
             )

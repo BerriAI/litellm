@@ -2451,3 +2451,37 @@ async def test_apply_toolset_permissions_pins_the_auth_to_explicit_grants_only(m
     assert scoped.object_permission is not None
     assert scoped.object_permission.mcp_servers == ["srv-1"]
     assert scoped.object_permission.mcp_tool_permissions == {"srv-1": ["add"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("granted", "permission_loaded", "profile"),
+    [
+        pytest.param("bots", False, "bots", id="a-granted-profile-survives-when-the-permission-was-not-loaded"),
+        pytest.param("bots", True, "bots", id="a-granted-profile-survives-when-the-permission-was-loaded"),
+        pytest.param(None, False, None, id="a-key-with-no-grant-keeps-the-default-credential"),
+    ],
+)
+async def test_apply_toolset_permissions_keeps_the_keys_auth_profile_grant(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, permission_loaded: bool, profile: str | None
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.auth_profile_selection import resolve_effective_server
+    from tests._support.mcp_auth_profiles import install_grants_database, stored_caller_granted, tickets_server
+
+    permissions: Final = install_grants_database(monkeypatch)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(
+        "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        types.SimpleNamespace(resolve_toolset_tool_permissions=AsyncMock(return_value={"tickets": ["add"]})),
+    )
+    caller: Final = stored_caller_granted(granted).model_copy(
+        update={"object_permission": permissions[f"perm-{granted}"] if permission_loaded else None}
+    )
+
+    scoped: Final = await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
+        resolved_toolset_ids=["ts-1"], resolved_mcp_servers=[], user_api_key_auth=caller
+    )
+
+    effective: Final = await resolve_effective_server(tickets_server(), scoped)
+    assert getattr(effective, "auth_profile_id", type(effective).__name__) == profile

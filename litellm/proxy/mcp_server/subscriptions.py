@@ -200,7 +200,7 @@ async def _targets(context: OperationContext) -> tuple[SubscriptionTarget, ...]:
     manager: Final = operations.global_mcp_server_manager
     auth, token, servers, server_headers, oauth_headers, headers, ip = context.legacy_auth()
     async with manager.catalog.operation():
-        allowed: Final = await operations._get_allowed_mcp_servers(auth, servers, ip)
+        allowed: Final = await operations.get_usable_mcp_servers(auth, servers, ip)
 
         async def prepare(server: MCPServer) -> SubscriptionTarget:
             server_auth, extra = operations._prepare_mcp_server_headers(

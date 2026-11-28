@@ -57,8 +57,7 @@ class TestApplyToolsetScope:
             "server-b": ["tool3"],
         }
         with patch(
-            "litellm.proxy.mcp_server.server."
-            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            "litellm.proxy.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=AsyncMock(return_value=toolset_perms),
         ):
             # Key has been explicitly granted toolset-123 — access check passes.
@@ -96,8 +95,7 @@ class TestApplyToolsetScope:
 
         toolset_perms = {"server-a": ["tool1"]}
         with patch(
-            "litellm.proxy.mcp_server.server."
-            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            "litellm.proxy.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=AsyncMock(return_value=toolset_perms),
         ):
             auth = UserAPIKeyAuth(
@@ -138,8 +136,7 @@ class TestApplyToolsetScope:
         toolset_perms = {"server-a": ["tool1"]}
         auth = UserAPIKeyAuth(api_key="sk-test", team_id="team-a", object_permission=None)
         with patch(
-            "litellm.proxy.mcp_server.server."
-            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            "litellm.proxy.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=AsyncMock(return_value=toolset_perms),
         ):
             result = await apply_toolset_scope(auth, "toolset-123", granted=_granted_through_team("toolset-123"))
@@ -164,8 +161,7 @@ class TestApplyToolsetScope:
         granted = AsyncMock(return_value=frozenset({"toolset-123"}))
         resolve = AsyncMock(return_value={"server-team": ["tool1"]})
         with patch(
-            "litellm.proxy.mcp_server.server."
-            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            "litellm.proxy.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=resolve,
         ):
             result = await apply_toolset_scope(
@@ -270,14 +266,11 @@ class TestApplyToolsetScope:
             mcp_servers=["no-mcp-servers"],
             mcp_toolsets=["toolset-123"],
         )
-        auth = UserAPIKeyAuth(
-            api_key="sk-test", object_permission=op, user_role=user_role
-        )
+        auth = UserAPIKeyAuth(api_key="sk-test", object_permission=op, user_role=user_role)
 
         resolve = AsyncMock(return_value={"server-a": ["tool1"]})
         with patch(
-            "litellm.proxy.mcp_server.server."
-            "global_mcp_server_manager.resolve_toolset_tool_permissions",
+            "litellm.proxy.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
             new=resolve,
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -554,9 +547,7 @@ class TestToolsetPrefixResolution:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("alias, server_name, server_id", PREFIX_CASES)
-    async def test_filter_keeps_tools_when_prefix_contains_separator(
-        self, alias, server_name, server_id
-    ):
+    async def test_filter_keeps_tools_when_prefix_contains_separator(self, alias, server_name, server_id):
         from mcp.types import Tool as MCPTool
 
         from litellm.proxy.mcp_server.server import (
@@ -581,13 +572,11 @@ class TestToolsetPrefixResolution:
 
         with (
             patch(
-                "litellm.proxy.mcp_server.server."
-                "MCPRequestHandler.get_allowed_tools_for_server",
+                "litellm.proxy.mcp_server.server.MCPRequestHandler.get_allowed_tools_for_server",
                 new=AsyncMock(return_value=allowed),
             ),
             patch(
-                "litellm.proxy.mcp_server.operations."
-                "global_mcp_server_manager.get_mcp_server_by_id",
+                "litellm.proxy.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_id",
                 return_value=server,
             ),
         ):
@@ -598,15 +587,12 @@ class TestToolsetPrefixResolution:
             )
 
         assert sorted(t.name for t in result) == sorted(
-            add_server_prefix_to_name(name, prefix)
-            for name in ("read_wiki_contents", "read_wiki_structure")
+            add_server_prefix_to_name(name, prefix) for name in ("read_wiki_contents", "read_wiki_structure")
         )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("alias, server_name, server_id", PREFIX_CASES)
-    async def test_resolve_uses_the_stored_name_as_written(
-        self, alias, server_name, server_id
-    ):
+    async def test_resolve_uses_the_stored_name_as_written(self, alias, server_name, server_id):
         """The row names a tool; resolution must not rewrite that name.
 
         A name that merely looks prefixed is still the tool's own name, and the
@@ -620,9 +606,7 @@ class TestToolsetPrefixResolution:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("alias, server_name, server_id", PREFIX_CASES)
-    async def test_resolve_keeps_a_name_that_looks_like_its_own_server_prefix(
-        self, alias, server_name, server_id
-    ):
+    async def test_resolve_keeps_a_name_that_looks_like_its_own_server_prefix(self, alias, server_name, server_id):
         from litellm.proxy.mcp_server.utils import (
             add_server_prefix_to_name,
             get_server_prefix,
@@ -631,9 +615,7 @@ class TestToolsetPrefixResolution:
         server = self._server(alias, server_name, server_id)
         # A native tool whose own name begins with what the gateway would use as
         # this server's wire prefix.
-        stored = add_server_prefix_to_name(
-            "read_wiki_contents", get_server_prefix(server)
-        )
+        stored = add_server_prefix_to_name("read_wiki_contents", get_server_prefix(server))
 
         assert await self._resolve(server, server_id, stored) == {server_id: [stored]}
 
@@ -652,8 +634,7 @@ class TestToolsetPrefixResolution:
         )
         with (
             patch(
-                "litellm.proxy.mcp_server.mcp_server_manager."
-                "global_mcp_server_manager.get_mcp_server_by_id",
+                "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager.get_mcp_server_by_id",
                 return_value=server,
             ),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
@@ -663,9 +644,7 @@ class TestToolsetPrefixResolution:
                 new=AsyncMock(return_value=[toolset]),
             ),
         ):
-            return await global_mcp_server_manager.resolve_toolset_tool_permissions(
-                toolset_ids=["ts-1"]
-            )
+            return await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"])
 
     @pytest.mark.asyncio
     async def test_bare_stored_name_starting_with_server_prefix_stays_granted(self):
@@ -708,13 +687,11 @@ class TestToolsetPrefixResolution:
 
         with (
             patch(
-                "litellm.proxy.mcp_server.server."
-                "MCPRequestHandler.get_allowed_tools_for_server",
+                "litellm.proxy.mcp_server.server.MCPRequestHandler.get_allowed_tools_for_server",
                 new=AsyncMock(return_value=resolved["srv-collide"]),
             ),
             patch(
-                "litellm.proxy.mcp_server.server."
-                "global_mcp_server_manager.get_mcp_server_by_id",
+                "litellm.proxy.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
                 return_value=server,
             ),
         ):
@@ -765,13 +742,11 @@ class TestToolsetPrefixResolution:
 
         with (
             patch(
-                "litellm.proxy.mcp_server.server."
-                "MCPRequestHandler.get_allowed_tools_for_server",
+                "litellm.proxy.mcp_server.server.MCPRequestHandler.get_allowed_tools_for_server",
                 new=AsyncMock(return_value=resolved["srv-lonely"]),
             ),
             patch(
-                "litellm.proxy.mcp_server.server."
-                "global_mcp_server_manager.get_mcp_server_by_id",
+                "litellm.proxy.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_id",
                 return_value=server,
             ),
         ):
@@ -842,9 +817,7 @@ class TestMCPActiveToolsetContextVar:
         with (
             patch(
                 "litellm.proxy.mcp_server.server.extract_mcp_auth_context",
-                new=AsyncMock(
-                    return_value=(mock_auth, None, [], {}, {}, scope["headers"])
-                ),
+                new=AsyncMock(return_value=(mock_auth, None, [], {}, {}, scope["headers"])),
             ),
             patch(
                 "litellm.proxy.mcp_server.server.IPAddressUtils",
@@ -879,3 +852,151 @@ class TestMCPActiveToolsetContextVar:
         assert b"x-mcp-toolset-id" not in header_keys
         assert b"authorization" in header_keys
         assert b"content-type" in header_keys
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+@pytest.mark.parametrize(
+    ("granted", "permission_loaded", "profile"),
+    [
+        pytest.param("bots", False, "bots", id="a-key-whose-permission-was-not-loaded-keeps-its-grant"),
+        pytest.param("bots", True, "bots", id="a-key-whose-permission-was-loaded-keeps-its-grant"),
+        pytest.param(None, False, None, id="a-key-with-no-grant-keeps-the-default-credential"),
+    ],
+)
+async def test_a_toolset_scope_keeps_the_keys_auth_profile_grant(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, permission_loaded: bool, profile: str | None
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.auth_profile_selection import resolve_effective_server
+    from litellm.proxy.mcp_server.server import apply_toolset_scope
+    from tests._support.mcp_auth_profiles import stored_caller_granted, tickets_server
+
+    async def acting_as_itself(caller: UserAPIKeyAuth) -> UserAPIKeyAuth:
+        return caller
+
+    async def granted_the_toolset(caller: UserAPIKeyAuth) -> frozenset[str]:
+        return frozenset({"tickets-toolset"})
+
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    loaded: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id=f"perm-{granted}", mcp_auth_profiles=None if granted is None else {"tickets": granted}
+    )
+    caller: Final = stored_caller_granted(granted).model_copy(
+        update={"object_permission": loaded if permission_loaded else None}
+    )
+    with patch(
+        "litellm.proxy.mcp_server.server.global_mcp_server_manager.resolve_toolset_tool_permissions",
+        new=AsyncMock(return_value={"tickets": ["add"]}),
+    ):
+        scoped: Final = await apply_toolset_scope(
+            caller, "tickets-toolset", acting_user=acting_as_itself, granted=granted_the_toolset
+        )
+
+    effective: Final = await resolve_effective_server(tickets_server(), scoped)
+
+    assert getattr(effective, "auth_profile_id", type(effective).__name__) == profile
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+@pytest.mark.parametrize(
+    ("cached_without_grants", "carried"),
+    [
+        pytest.param(False, ({"tickets": "bots"}, True), id="grants-read-with-the-key-are-carried"),
+        pytest.param(True, (None, False), id="grants-not-read-with-the-key-are-left-for-the-grant-reader"),
+    ],
+)
+async def test_a_toolset_scope_carries_the_keys_grants_only_when_they_were_read(
+    monkeypatch: pytest.MonkeyPatch, cached_without_grants: bool, carried: tuple[dict[str, str] | None, bool]
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.auth.auth_profile_grants import toolset_scope_permission
+    from litellm.proxy.mcp_server.auth_profile_selection import resolve_effective_server
+    from litellm.redis.stores.auth_cache import AuthObject
+    from tests._support.mcp_auth_profiles import (
+        ProfileUpstream,
+        install_profile_manager,
+        profile_manager,
+        stored_caller_granted,
+        tickets_server,
+    )
+
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), ProfileUpstream()))
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    if cached_without_grants:
+        await proxy_server.user_api_key_cache.async_set_cache(
+            key=AuthObject.object_permission("perm-bots"),
+            value=LiteLLM_ObjectPermissionTable(object_permission_id="perm-bots"),
+            model_type=LiteLLM_ObjectPermissionTable,
+        )
+    caller: Final = stored_caller_granted("bots")
+
+    scoped: Final = await toolset_scope_permission(caller, ["tickets"], {"tickets": ["add"]})
+    effective: Final = await resolve_effective_server(
+        tickets_server(), caller.model_copy(update={"object_permission": scoped})
+    )
+
+    assert (scoped.object_permission_id, scoped.mcp_auth_profiles, "mcp_auth_profiles" in scoped.model_fields_set) == (
+        "perm-bots",
+        *carried,
+    )
+    assert getattr(effective, "auth_profile_id", None) == "bots"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("grants_database")
+async def test_a_toolset_scope_still_applies_when_the_keys_permission_row_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.auth.auth_profile_grants import toolset_scope_permission
+    from tests._support.mcp_auth_profiles import (
+        ProfileUpstream,
+        install_profile_manager,
+        profile_manager,
+        tickets_server,
+    )
+
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), ProfileUpstream()))
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    fresh_caller_with_a_missing_row: Final = UserAPIKeyAuth(
+        api_key="hashed-key", object_permission_id="perm-missing"
+    ).model_copy(update={"requires_fresh_policy": True})
+
+    scoped: Final = await toolset_scope_permission(fresh_caller_with_a_missing_row, ["tickets"], {"tickets": ["add"]})
+
+    assert (scoped.object_permission_id, scoped.mcp_servers, scoped.mcp_tool_permissions) == (
+        "toolset-scope",
+        ["tickets"],
+        {"tickets": ["add"]},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_toolset_scope_with_no_profiled_servers_skips_reading_the_keys_permission_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.mcp_server.auth.auth_profile_grants import toolset_scope_permission
+    from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from tests._support.mcp_auth_profiles import (
+        ProfileUpstream,
+        install_profile_manager,
+        profile_manager,
+        tickets_server,
+    )
+
+    bare_server: Final = tickets_server(overrides={"additional_auth": None, "auth_profiles_unreadable": False})
+    install_profile_manager(monkeypatch, profile_manager(bare_server, ProfileUpstream()))
+    hydrated_read: Final = AsyncMock(side_effect=AssertionError("must not read key permission for bare servers"))
+    monkeypatch.setattr(MCPRequestHandler, "key_object_permission_hydrated", hydrated_read)
+    caller_with_unloaded_permission: Final = UserAPIKeyAuth(api_key="hashed-key", object_permission_id="perm-missing")
+
+    scoped: Final = await toolset_scope_permission(caller_with_unloaded_permission, ["tickets"], {"tickets": ["add"]})
+
+    assert (scoped.object_permission_id, scoped.mcp_servers, scoped.mcp_tool_permissions) == (
+        "toolset-scope",
+        ["tickets"],
+        {"tickets": ["add"]},
+    )
+    hydrated_read.assert_not_awaited()

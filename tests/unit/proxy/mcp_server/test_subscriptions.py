@@ -16,8 +16,16 @@ from litellm.mcp_client.client import MCPClient
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server import subscriptions
 from litellm.proxy.mcp_server.contracts import OperationContext
+from litellm.proxy.mcp_server.operations import prepare_context
 from litellm.types.mcp import MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from tests._support.mcp_auth_profiles import (
+    ProfileUpstream,
+    caller_granted,
+    install_profile_manager,
+    profile_manager,
+    tickets_server,
+)
 
 
 def allow_one_request(monkeypatch: pytest.MonkeyPatch, user_id: str, server_id: str) -> None:
@@ -534,3 +542,15 @@ async def test_tools_listing_propagates_other_mcp_errors(monkeypatch: pytest.Mon
         await subscriptions._listing(ToolsListChanged(), listener_context)
 
     assert exc_info.value is failure
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("granted", [None, "bots"])
+async def test_a_subscription_target_connects_with_the_callers_selected_credential(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None
+) -> None:
+    install_profile_manager(monkeypatch, profile_manager(tickets_server(), ProfileUpstream()))
+    reference: Final = await subscriptions._targets(prepare_context(caller_granted(None)))
+    selected: Final = await subscriptions._targets(prepare_context(caller_granted(granted)))
+
+    assert (selected[0].credential == reference[0].credential) == (granted is None)

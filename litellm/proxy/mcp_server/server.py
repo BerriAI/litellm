@@ -1234,11 +1234,23 @@ if MCP_AVAILABLE:
         client_ip: str | None,
         scoped_server_endpoint: bool = False,
         is_initialize: bool = False,
+        is_tool_call: bool = False,
     ) -> AsyncIterator[None]:
-        allowed: Final = await operations._get_allowed_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
-            mcp_servers=mcp_servers,
-            client_ip=client_ip,
+        allowed: Final = (
+            (
+                await operations.split_usable_mcp_servers(
+                    await operations._get_allowed_mcp_servers(
+                        user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
+                    ),
+                    user_api_key_auth,
+                )
+            )[0]
+            if is_tool_call
+            else await operations.get_usable_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_servers=mcp_servers,
+                client_ip=client_ip,
+            )
         )
         if is_initialize:
             await operations._raise_if_initialize_grants_no_mcp_servers(
@@ -1252,7 +1264,7 @@ if MCP_AVAILABLE:
                 *[
                     operations.global_mcp_server_manager.ensure_upstream_initialize_instructions_cached(s)
                     for s in allowed
-                    if s is not None
+                    if s is not None and not s.uses_auth_profile
                 ],
                 return_exceptions=True,
             )
@@ -1861,7 +1873,7 @@ if MCP_AVAILABLE:
         Raises HTTPException(403) unless the principal holds toolset_id through one
         of its grant sources. Admins pass unless the key is bound to a real team.
         """
-        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+        from litellm.proxy.mcp_server.auth.auth_profile_grants import toolset_scope_permission
         from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import has_team_unbound_mcp_admin_view
 
         # A key scoped to no MCP servers opts out of every MCP path. Enforce it
@@ -1911,11 +1923,7 @@ if MCP_AVAILABLE:
                 }
             )
         else:
-            updated_op = LiteLLM_ObjectPermissionTable(
-                object_permission_id="toolset-scope",
-                mcp_servers=server_ids,
-                mcp_tool_permissions=tool_permissions,
-            )
+            updated_op = await toolset_scope_permission(acting, server_ids, tool_permissions)
         return acting.model_copy(update={"object_permission": updated_op, "mcp_toolset_id": toolset_id})
 
     _apply_toolset_scope: Final = apply_toolset_scope
@@ -2853,6 +2861,8 @@ if MCP_AVAILABLE:
                         _client_ip,
                         scoped_server_endpoint=scoped_server_endpoint,
                         is_initialize=is_initialize,
+                        is_tool_call=_jsonrpc_text_method(body.decode("utf-8", errors="replace"))
+                        in {"tools/call", "tools/list"},
                     )
                 ):
                     await target_manager.handle_request(scope, receive, local_send)
