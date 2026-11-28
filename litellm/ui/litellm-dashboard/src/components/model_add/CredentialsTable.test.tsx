@@ -1,8 +1,8 @@
-import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CredentialItem } from "@/components/networking";
+import { fireEvent, render, screen, within } from "../../../tests/test-utils";
 
 import CredentialsTable from "./CredentialsTable";
 
@@ -46,8 +46,9 @@ describe("CredentialsTable", () => {
 
   it("should render the data column headers", () => {
     render(<CredentialsTable {...defaultProps} />);
-    for (const header of ["Credential Name", "Provider"]) {
-      expect(screen.getByText(header)).toBeInTheDocument();
+    const headers = screen.getAllByRole("columnheader").map((header) => header.textContent);
+    for (const header of ["Credential Name", "Provider", "Source"]) {
+      expect(headers).toContain(header);
     }
   });
 
@@ -215,5 +216,91 @@ describe("CredentialsTable", () => {
     // ...but there is no per-row actions trigger.
     expect(screen.queryByTestId("credential-actions-b-openai-key")).not.toBeInTheDocument();
     expect(screen.queryByTestId("credential-actions-a-azure-key")).not.toBeInTheDocument();
+  });
+
+  describe("search and provider filter", () => {
+    const filterableCredentials: CredentialItem[] = [
+      {
+        credential_name: "prod-openai-key",
+        display_name: "Payments Chat",
+        credential_values: {},
+        credential_info: { custom_llm_provider: "openai" },
+      },
+      {
+        credential_name: "prod-azure-key",
+        display_name: "Payments Foundry",
+        credential_values: {},
+        credential_info: { custom_llm_provider: "azure" },
+      },
+      {
+        credential_name: "support-anthropic-key",
+        credential_values: {},
+        credential_info: { custom_llm_provider: "anthropic" },
+      },
+    ];
+
+    const search = (value: string) => fireEvent.change(screen.getByTestId("datatable-search"), { target: { value } });
+
+    const chooseProviders = async (user: ReturnType<typeof userEvent.setup>, ...labels: string[]) => {
+      await user.click(screen.getByPlaceholderText("Filter by providers"));
+      for (const label of labels) {
+        await user.click(await screen.findByRole("option", { name: label }));
+      }
+      await user.keyboard("{Escape}");
+    };
+
+    const renderFilterable = () => render(<CredentialsTable {...defaultProps} credentials={filterableCredentials} />);
+
+    it("should keep only the rows whose display name matches the search", () => {
+      renderFilterable();
+      search("payments chat");
+
+      expect(screen.getByText("Payments Chat")).toBeInTheDocument();
+      expect(screen.queryByText("Payments Foundry")).not.toBeInTheDocument();
+      expect(screen.queryByText("support-anthropic-key")).not.toBeInTheDocument();
+    });
+
+    it("should keep a display-named credential findable by its credential name", () => {
+      renderFilterable();
+      search("prod-azure");
+
+      expect(screen.getByText("Payments Foundry")).toBeInTheDocument();
+      expect(screen.queryByText("Payments Chat")).not.toBeInTheDocument();
+    });
+
+    it("should keep only the rows whose provider is selected", async () => {
+      const user = userEvent.setup();
+      renderFilterable();
+      await chooseProviders(user, "Azure");
+
+      expect(screen.getByText("Payments Foundry")).toBeInTheDocument();
+      expect(screen.queryByText("Payments Chat")).not.toBeInTheDocument();
+      expect(screen.queryByText("support-anthropic-key")).not.toBeInTheDocument();
+    });
+
+    it("should keep rows from every selected provider", async () => {
+      const user = userEvent.setup();
+      renderFilterable();
+      await chooseProviders(user, "Azure", "anthropic");
+
+      expect(screen.getByText("Payments Foundry")).toBeInTheDocument();
+      expect(screen.getByText("support-anthropic-key")).toBeInTheDocument();
+      expect(screen.queryByText("Payments Chat")).not.toBeInTheDocument();
+    });
+
+    it("should show the no-matches state when the filters exclude every credential", () => {
+      renderFilterable();
+      search("nothing-matches-this");
+
+      expect(screen.getByText("No matching credentials")).toBeInTheDocument();
+      expect(screen.queryByText("No credentials configured")).not.toBeInTheDocument();
+    });
+
+    it("should show the unfiltered empty state when there are no credentials at all", () => {
+      render(<CredentialsTable {...defaultProps} credentials={[]} />);
+
+      expect(screen.getByText("No credentials configured")).toBeInTheDocument();
+      expect(screen.queryByText("No matching credentials")).not.toBeInTheDocument();
+    });
   });
 });

@@ -19680,6 +19680,11 @@
     "credentialsTable": {
       "emptyTitle": "No credentials configured",
       "emptyDescription": "Add a credential to connect an AI provider.",
+      "noMatchesTitle": "No matching credentials",
+      "noMatchesDescription": "No credentials match your search or provider filter.",
+      "searchPlaceholder": "Search by credential name or display name…",
+      "providerFilter": "Filter by providers",
+      "providersEmpty": "No providers found",
       "loading": "Loading credentials…"
     },
     "federationField": {
