@@ -375,6 +375,149 @@ def test_standalone_advances_window_and_redis_counter_while_python_is_paused(
     assert rust[2:] == pytest.approx(python[2:])
 
 
+def _direct_lifetime_reset(proxies: Proxies, scope: str, ended: datetime) -> None:
+    identity: Final = _identity(proxies.database, Case(owner=scope != "team"))
+    token: Final = hashlib.sha256(identity.token.encode()).hexdigest()
+    entity: Final = {"key": token, "user": identity.user, "team": identity.team}[scope]
+    assert entity is not None
+    update: Final = {
+        "key": """UPDATE "LiteLLM_VerificationToken"
+                  SET spend = 14, max_budget = 10, budget_duration = '1h', budget_reset_at = %s WHERE token = %s""",
+        "user": """UPDATE "LiteLLM_UserTable"
+                   SET spend = 14, max_budget = 10, budget_duration = '1h', budget_reset_at = %s WHERE user_id = %s""",
+        "team": """UPDATE "LiteLLM_TeamTable"
+                   SET spend = 14, max_budget = 10, budget_duration = '1h', budget_reset_at = %s WHERE team_id = %s""",
+    }[scope]
+    select: Final = {
+        "key": 'SELECT spend, budget_duration, budget_reset_at::text FROM "LiteLLM_VerificationToken" WHERE token = %s',
+        "user": 'SELECT spend, budget_duration, budget_reset_at::text FROM "LiteLLM_UserTable" WHERE user_id = %s',
+        "team": 'SELECT spend, budget_duration, budget_reset_at::text FROM "LiteLLM_TeamTable" WHERE team_id = %s',
+    }[scope]
+    counter: Final = f"spend:{scope}:{entity}"
+    proxies.redis.set(counter, 14)
+    with psycopg.connect(proxies.database) as connection:
+        connection.execute(update, (ended, entity))
+
+    def state() -> tuple[dict[str, JsonValue], object]:
+        rows: Final = read_rows(select, (entity,), database_url=proxies.database)
+        return rows[0], proxies.redis.get(counter)
+
+    expected: Final = (
+        {"spend": 4, "budget_duration": "1h", "budget_reset_at": str(ended + timedelta(hours=1))},
+        None,
+    )
+    assert (
+        eventually(state, lambda current: current[0]["budget_reset_at"] != str(ended) and current[1] is None)
+        == expected
+    )
+
+
+@pytest.mark.parametrize("scope", ["key", "user", "team"])
+def test_lifetime_reset_advances_direct_entity_budget(proxies: Proxies, scope: str) -> None:
+    ended: Final = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None) - timedelta(minutes=2)
+    with _paused_between_sweeps(proxies.rust_pid, proxies.redis):
+        _direct_lifetime_reset(proxies, scope, ended)
+    with _paused_between_sweeps(proxies.python_pid, proxies.redis):
+        _direct_lifetime_reset(proxies, scope, ended)
+
+
+def _shared_tier_lifetime_reset(proxies: Proxies, ended: datetime) -> None:
+    identity: Final = _identity(proxies.database, Case())
+    assert identity.team is not None
+    user: Final = identity.user
+    token: Final = hashlib.sha256(identity.token.encode()).hexdigest()
+    tier: Final = PROXY_END_USER_TIER
+    created: Final = ended - timedelta(days=1)
+    counters: Final = (
+        f"spend:key:{token}",
+        f"spend:org:{user}",
+        f"spend:project:{user}",
+        f"spend:team_member:{user}:{identity.team}",
+        f"spend:end_user:{user}-explicit",
+        f"spend:end_user:{user}-default",
+    )
+    proxies.redis.mset(dict.fromkeys(counters, 14))
+    with psycopg.connect(proxies.database) as connection:
+        connection.execute(
+            """INSERT INTO "LiteLLM_BudgetTable"
+                   (budget_id, budget_duration, budget_reset_at, max_budget, rollover_max_budget,
+                    created_at, updated_at, created_by, updated_by)
+               VALUES (%s, '1h', %s, 10, 15, %s, NOW(), 'parity', 'parity')
+               ON CONFLICT (budget_id) DO UPDATE SET budget_reset_at = EXCLUDED.budget_reset_at, budget_reset_count = 0""",
+            (tier, ended, created),
+        )
+        connection.execute(
+            'UPDATE "LiteLLM_VerificationToken" SET budget_id = %s, spend = 14 WHERE token = %s', (tier, token)
+        )
+        connection.execute(
+            """INSERT INTO "LiteLLM_OrganizationTable"
+                   (organization_id, organization_alias, budget_id, spend, created_by, updated_by)
+               VALUES (%s, %s, %s, 14, 'parity', 'parity')""",
+            (user, user, tier),
+        )
+        connection.execute(
+            """INSERT INTO "LiteLLM_ProjectTable" (project_id, budget_id, spend, created_by, updated_by)
+               VALUES (%s, %s, 14, 'parity', 'parity')""",
+            (user, tier),
+        )
+        connection.execute(
+            """UPDATE "LiteLLM_TeamMembership" SET budget_id = %s, spend = 11, rollover_credit = 3
+               WHERE user_id = %s AND team_id = %s""",
+            (tier, user, identity.team),
+        )
+        connection.execute(
+            'INSERT INTO "LiteLLM_EndUserTable" (user_id, budget_id, spend) VALUES (%s, %s, 14), (%s, NULL, 14)',
+            (f"{user}-explicit", tier, f"{user}-default"),
+        )
+
+    def state() -> tuple[dict[str, JsonValue], tuple[object, ...]]:
+        rows: Final = read_rows(
+            """SELECT b.budget_duration, b.budget_reset_at::text, b.budget_reset_count,
+                      k.spend AS key_spend, o.spend AS org_spend, p.spend AS project_spend,
+                      m.spend AS member_spend, m.total_spend, m.rollover_credit,
+                      e.spend AS explicit_spend, d.spend AS default_spend,
+                      e.spend_reset_window AS explicit_window, d.spend_reset_window AS default_window
+               FROM "LiteLLM_BudgetTable" b, "LiteLLM_VerificationToken" k, "LiteLLM_OrganizationTable" o,
+                    "LiteLLM_ProjectTable" p, "LiteLLM_TeamMembership" m, "LiteLLM_EndUserTable" e,
+                    "LiteLLM_EndUserTable" d
+               WHERE b.budget_id = %s AND k.token = %s AND o.organization_id = %s AND p.project_id = %s
+                 AND m.user_id = %s AND m.team_id = %s AND e.user_id = %s AND d.user_id = %s""",
+            (tier, token, user, user, user, identity.team, f"{user}-explicit", f"{user}-default"),
+            database_url=proxies.database,
+        )
+        return rows[0], tuple(proxies.redis.mget(counters))
+
+    closing: Final = f"{tier}:{created.isoformat()}+00:00:0:{ended.isoformat()}+00:00"
+    expected: Final = (
+        {
+            "budget_duration": "1h",
+            "budget_reset_at": str(ended + timedelta(hours=1)),
+            "budget_reset_count": 1,
+            "key_spend": 4,
+            "org_spend": 4,
+            "project_spend": 4,
+            "member_spend": 0,
+            "total_spend": 11,
+            "rollover_credit": 2,
+            "explicit_spend": 4,
+            "default_spend": 4,
+            "explicit_window": closing,
+            "default_window": closing,
+        },
+        (None, None, None, None, None, None),
+    )
+    assert eventually(state, lambda current: current[0]["budget_reset_count"] == 1 and not any(current[1])) == expected
+
+
+@pytest.mark.parametrize("proxies", ["end-user-default"], indirect=True)
+def test_lifetime_reset_advances_shared_tier_and_linked_spend(proxies: Proxies) -> None:
+    ended: Final = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None) - timedelta(minutes=2)
+    with _paused_between_sweeps(proxies.rust_pid, proxies.redis):
+        _shared_tier_lifetime_reset(proxies, ended)
+    with _paused_between_sweeps(proxies.python_pid, proxies.redis):
+        _shared_tier_lifetime_reset(proxies, ended)
+
+
 @pytest.mark.parametrize("proxies", [False], ids=["postgres"], indirect=True)
 def test_key_window_refuses_using_maintained_spend_without_redis(proxies: Proxies) -> None:
     identity: Final = _identity(proxies.database, Case(owner=True))
