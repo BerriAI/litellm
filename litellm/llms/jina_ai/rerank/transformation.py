@@ -14,7 +14,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
-from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig, per_token_rerank_cost
 from litellm.types.rerank import (
     OptionalRerankParams,
     RerankBilledUnits,
@@ -167,17 +167,4 @@ class JinaAIRerankConfig(BaseRerankConfig):
         billed_units: RerankBilledUnits | None = None,
         model_info: ModelInfo | None = None,
     ) -> tuple[float, float]:
-        if (
-            model_info is None
-            or "input_cost_per_token" not in model_info
-            or model_info["input_cost_per_token"] is None
-            or billed_units is None
-        ):
-            return 0.0, 0.0
-
-        total_tokens: Final = billed_units.get("total_tokens")
-        if total_tokens is None:
-            return 0.0, 0.0
-
-        input_cost: Final = model_info["input_cost_per_token"] * total_tokens
-        return input_cost, 0.0
+        return per_token_rerank_cost(billed_units=billed_units, model_info=model_info)

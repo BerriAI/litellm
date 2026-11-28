@@ -13,7 +13,7 @@ from pydantic import ConfigDict, TypeAdapter
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
-from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig, per_token_rerank_cost
 from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
 from litellm.types.rerank import (
     RerankBilledUnits,
@@ -176,17 +176,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         billed_units: RerankBilledUnits | None = None,
         model_info: ModelInfo | None = None,
     ) -> tuple[float, float]:
-        if (
-            model_info is None
-            or "input_cost_per_token" not in model_info
-            or model_info["input_cost_per_token"] is None
-            or billed_units is None
-        ):
-            return 0.0, 0.0
-        total_tokens: Final = billed_units.get("total_tokens")
-        if total_tokens is None:
-            return 0.0, 0.0
-        return model_info["input_cost_per_token"] * total_tokens, 0.0
+        return per_token_rerank_cost(billed_units=billed_units, model_info=model_info)
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers):
         return VoyageError(message=error_message, status_code=status_code, headers=headers)
