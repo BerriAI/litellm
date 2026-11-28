@@ -1,6 +1,6 @@
 use crate::{AuthHost, Error, Named, authn::key::KeyRecord, host::ProjectRow};
 
-pub(super) async fn read<H: AuthHost>(
+pub(crate) async fn read<H: AuthHost>(
     host: &H,
     record: &KeyRecord,
 ) -> Result<Option<Named<ProjectRow<H>>>, Error> {

@@ -2783,7 +2783,7 @@ async def test_jwt_path_skips_user_model_budget_only_for_zero_spend_mcp_methods(
     )
     user_model_budget_check: Final = AsyncMock()
 
-    with patch("litellm.proxy.auth.host.steps.budgets.check_user_model_budget", user_model_budget_check):
+    with patch("litellm.proxy.auth.host.steps.budgets.enforce_user_model_budget", user_model_budget_check):
         result: Final = await user_api_key_auth_builder(
             request=request,
             api_key=f"Bearer {token}",

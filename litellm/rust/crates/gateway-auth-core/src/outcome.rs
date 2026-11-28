@@ -3,7 +3,7 @@ use crate::{
     authn::jwt::MappedJwt,
     host::Rows,
     identity::{
-        jwt::JwtIdentity,
+        jwt::{AutoRegisteredJwt, JwtIdentity},
         key::{KeyContext, KeyIdentity},
     },
 };
@@ -13,10 +13,10 @@ pub enum Identity<R: Rows> {
     Key(KeyIdentity<R>),
     /// A JWT mapped onto a virtual key that then passed the key checks.
     MappedJwtKey(MappedJwt<R::User>, Box<KeyContext<R>>),
-    /// A proxy admin's JWT, with the rows the host converts.
-    AdminJwt(Box<JwtIdentity<R>>),
-    /// The token the host finished for a JWT, or for the key auto-registered for it.
-    FinishedJwt(R::Key),
+    /// A JWT that acts as itself, with the rows the host converts.
+    Jwt(Box<JwtIdentity<R>>),
+    /// A key auto-registered for a JWT that stands in for it without the virtual-key checks.
+    AutoRegisteredJwt(Box<AutoRegisteredJwt<R>>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
