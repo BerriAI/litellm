@@ -26,8 +26,14 @@ def add_team_member_key_duration(
     # A shorter requested duration is kept.
     if data.duration is None or data.duration.strip() == "":
         data.duration = team_duration
-    elif duration_in_seconds(data.duration) > duration_in_seconds(team_duration):
-        data.duration = team_duration
+    else:
+        try:
+            exceeds_team = duration_in_seconds(data.duration) > duration_in_seconds(team_duration)
+        except ValueError:
+            # Either value can't be parsed. Use the team value so the cap is never skipped.
+            exceeds_team = True
+        if exceeds_team:
+            data.duration = team_duration
 
     return data
 

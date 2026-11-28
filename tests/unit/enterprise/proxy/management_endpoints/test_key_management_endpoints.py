@@ -47,3 +47,16 @@ def test_service_account_key_is_not_changed():
     data = GenerateKeyRequest(duration="90d")
     result = add_team_member_key_duration(_team("30d"), data)
     assert result.duration == "90d"
+
+
+@pytest.mark.parametrize("member_duration", ["365d", "7d"])
+def test_unparseable_team_duration_is_applied_not_skipped(member_duration):
+    data = GenerateKeyRequest(user_id="member-1", duration=member_duration)
+    result = add_team_member_key_duration(_team("30D"), data)
+    assert result.duration == "30D"
+
+
+def test_unparseable_member_duration_is_replaced_by_team_duration():
+    data = GenerateKeyRequest(user_id="member-1", duration="soon")
+    result = add_team_member_key_duration(_team("30d"), data)
+    assert result.duration == "30d"
