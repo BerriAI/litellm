@@ -279,11 +279,9 @@ class ModelsManagementClient:
         url: Final = f"{self._base_url}/model/update"
 
         data: Final = {
-            "id": model_id,
             "litellm_params": model_params,
+            "model_info": {**(model_info or {}), "id": model_id},
         }
-        if model_info:
-            data["model_info"] = model_info
 
         request: Final = requests.Request("POST", url, headers=self._get_headers(), json=data)
 
