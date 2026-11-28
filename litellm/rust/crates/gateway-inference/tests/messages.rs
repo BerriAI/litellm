@@ -542,9 +542,10 @@ async fn sent_under(
     }
 }
 
-/// A request's `drop_params` decides for its call over the deployment's, and
-/// `litellm_settings.drop_params` keeps dropping on whatever the request says. The key never
-/// reaches the provider.
+/// The narrowest `drop_params` written decides for a call: the request's own, then the
+/// deployment's, then `litellm_settings.drop_params`, where the proxy keeps dropping under the
+/// setting whatever the other two say. A request's `null` writes nothing. The key never reaches
+/// the provider.
 #[rstest]
 #[case::the_request_turning_it_on(json!({}), json!({}), json!(true), Ok(()))]
 #[case::a_flag_word(json!({}), json!({}), json!("yes"), Ok(()))]
@@ -554,10 +555,22 @@ async fn sent_under(
     json!(false),
     Err(400)
 )]
-#[case::the_config_over_the_request(
+#[case::the_request_turning_the_settings_off(
     json!({}),
     json!({"drop_params": true}),
     json!(false),
+    Err(400)
+)]
+#[case::the_deployment_turning_the_settings_off(
+    json!({"drop_params": false}),
+    json!({"drop_params": true}),
+    json!(null),
+    Err(400)
+)]
+#[case::null_leaving_the_deployments_on(
+    json!({"drop_params": true}),
+    json!({}),
+    json!(null),
     Ok(())
 )]
 #[tokio::test]

@@ -7,6 +7,7 @@
 mod asked;
 mod caching;
 mod checked;
+mod drop_params;
 mod error;
 mod group_usage;
 mod headers;
@@ -34,7 +35,7 @@ use arc_swap::ArcSwap;
 use axum::{Router, routing::post};
 use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
 use litellm_inference::resources::CoreResources;
-use litellm_inference_messages::{MessagesRoute, MessagesSettings};
+use litellm_inference_messages::MessagesRoute;
 use litellm_inference_ocr::OcrRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_model_catalog::CostMap;
@@ -59,7 +60,7 @@ pub struct Gateway<H> {
     /// The cost map every request reads. It starts as the bundled one.
     cost_map: Arc<ArcSwap<CostMap>>,
     /// What `litellm_settings` sets for a messages call to any deployment.
-    messages_settings: MessagesSettings,
+    configured: messages::Configured,
     pub messages: MessagesRoute,
     pub ocr: OcrRoute,
     pub router: litellm_router_core::Router,
@@ -112,7 +113,7 @@ impl<H: Host> Gateway<H> {
         http: HttpClientConfig,
         secrets: Arc<dyn SecretSource>,
         router: litellm_router_core::Router,
-        messages_settings: MessagesSettings,
+        configured: messages::Configured,
         routing: impl Into<Arc<RoutingCache>>,
         host: H,
     ) -> Result<Self, litellm_http::Error> {
@@ -123,7 +124,7 @@ impl<H: Host> Gateway<H> {
             host,
             cache: None,
             routing: routing.into(),
-            messages_settings,
+            configured,
             messages: MessagesRoute::new(provider, auth.clone(), secrets.clone())
                 .with_pricing(Arc::new(pricing::CostMapPricing::new(cost_map.clone()))),
             cost_map,
