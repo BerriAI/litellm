@@ -1566,6 +1566,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if log_span is not None:
                 self._emit_semantic_logs(kwargs, response_obj, log_span)
 
+        # Stamp team attributes onto the SERVER (root) span before it is
+        # closed, so the trace root carries them like every child span.
+        self._set_team_attributes_on_proxy_span_from_kwargs(kwargs)
+
         # 6. Do NOT end parent span - it should be managed by its creator
         # External spans (from Langfuse, user code, HTTP headers, global context) must not be closed by LiteLLM
         # However, proxy-created spans should be closed here.
@@ -1577,10 +1581,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             and parent_span.is_recording()
         ):
             self._close_proxy_span_ok(parent_span, end_time)
-
-        # Stamp team attributes onto the SERVER (root) span before it is
-        # closed, so the trace root carries them like every child span.
-        self._set_team_attributes_on_proxy_span_from_kwargs(kwargs)
 
         # close the proxy span explicitly from kwargs metadata
         # after all child spans (litellm_request, guardrail, raw_request)
@@ -1700,7 +1700,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         """
         litellm_params: Final = require_attributes(kwargs.get("litellm_params") or {}, _SupportsGetWithDefault, "get")
         metadata: Final = require_attributes(litellm_params.get("metadata") or {}, _SupportsGetWithDefault, "get")
-        proxy_span: Final = metadata.get("litellm_parent_otel_span")
+        litellm_metadata: Final = require_attributes(
+            litellm_params.get("litellm_metadata") or {}, _SupportsGetWithDefault, "get"
+        )
+        proxy_span: Final = metadata.get("litellm_parent_otel_span") or litellm_metadata.get(
+            "litellm_parent_otel_span"
+        )
         if (
             proxy_span is not None
             and getattr(proxy_span, "name", None) == LITELLM_PROXY_REQUEST_SPAN_NAME
