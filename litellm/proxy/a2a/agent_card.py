@@ -72,13 +72,28 @@ def point_agent_card_at_proxy(
 # Security scheme exposed by the LiteLLM-fronted agent card. Always replaces
 # whatever upstream advertised — the client must authenticate to the proxy,
 # not the upstream agent.
-LITELLM_SECURITY_SCHEMES: Final[dict[str, dict[str, str]]] = {
+#
+# A2A 0.3 uses OpenAPI flat format (type, scheme, description at top level).
+# A2A 1.0 uses Protobuf oneof format (keyed by httpAuthSecurityScheme).
+LITELLM_SECURITY_SCHEMES_0_3: Final[dict[str, dict[str, str]]] = {
     "LiteLLMKey": {
         "type": "http",
         "scheme": "bearer",
         "description": "LiteLLM virtual key",
     },
 }
+
+LITELLM_SECURITY_SCHEMES_1_0: Final[dict[str, dict[str, dict[str, str]]]] = {
+    "LiteLLMKey": {
+        "httpAuthSecurityScheme": {
+            "scheme": "bearer",
+            "description": "LiteLLM virtual key",
+        },
+    },
+}
+
+# Backward compatibility alias
+LITELLM_SECURITY_SCHEMES: Final[dict[str, dict[str, str]]] = LITELLM_SECURITY_SCHEMES_0_3
 
 LITELLM_SECURITY_REQUIREMENTS: Final[list[dict[str, list[str]]]] = [{"LiteLLMKey": []}]
 
@@ -225,7 +240,11 @@ def merge_agent_card(
         }
     ]
 
-    base["securitySchemes"] = deepcopy(LITELLM_SECURITY_SCHEMES)
+    if served_version == "0.3":
+        base["securitySchemes"] = deepcopy(LITELLM_SECURITY_SCHEMES_0_3)
+    else:
+        base["securitySchemes"] = deepcopy(LITELLM_SECURITY_SCHEMES_1_0)
+
     # Use the standard A2A/OpenAPI ``security`` field for requirements, not
     # the non-standard ``securityRequirements`` alias. The upstream's own
     # ``security`` selector is overwritten here because the proxy enforces its

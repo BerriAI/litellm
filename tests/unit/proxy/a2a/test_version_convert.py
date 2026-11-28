@@ -121,9 +121,7 @@ def test_request_params_lowering_is_noop_for_0_3():
 
 
 def test_request_params_lowering_get_task_to_0_3():
-    out = normalize_request_params(
-        {"id": "t1", "historyLength": 5}, "1.0", method="tasks/get"
-    )
+    out = normalize_request_params({"id": "t1", "historyLength": 5}, "1.0", method="tasks/get")
     assert out["id"] == "t1"
     assert out["historyLength"] == 5
 
@@ -319,7 +317,55 @@ def test_detect_card_version_normalizes_semver_protocol_version():
     from litellm.proxy.a2a.version_convert import _detect_card_version
 
     assert _detect_card_version({"protocolVersion": "1.0.0"}) == "1.0"
-    assert (
-        _detect_card_version({"protocolVersion": "0.3.0", "supportedInterfaces": []})
-        == "0.3"
-    )
+    assert _detect_card_version({"protocolVersion": "0.3.0", "supportedInterfaces": []}) == "0.3"
+
+
+def test_normalize_agent_card_converts_security_schemes():
+    card_03 = {
+        "name": "Card",
+        "description": "d",
+        "version": "1.0.0",
+        "protocolVersion": "1.0",
+        "supportedInterfaces": [
+            {
+                "url": "https://upstream.example",
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "1.0",
+            }
+        ],
+        "securitySchemes": {
+            "LiteLLMKey": {
+                "type": "http",
+                "scheme": "bearer",
+                "description": "LiteLLM virtual key",
+            }
+        },
+    }
+    out_10 = normalize_agent_card(card_03, "1.0")
+    assert out_10["securitySchemes"]["LiteLLMKey"] == {
+        "httpAuthSecurityScheme": {
+            "scheme": "bearer",
+            "description": "LiteLLM virtual key",
+        }
+    }
+
+    card_10 = {
+        "name": "Card",
+        "description": "d",
+        "version": "1.0.0",
+        "protocolVersion": "0.3",
+        "securitySchemes": {
+            "LiteLLMKey": {
+                "httpAuthSecurityScheme": {
+                    "scheme": "bearer",
+                    "description": "LiteLLM virtual key",
+                }
+            }
+        },
+    }
+    out_03 = normalize_agent_card(card_10, "0.3")
+    assert out_03["securitySchemes"]["LiteLLMKey"] == {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "LiteLLM virtual key",
+    }

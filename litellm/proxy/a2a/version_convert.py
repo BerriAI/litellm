@@ -115,6 +115,44 @@ def _detect_card_version(card: JsonDict) -> A2AVersion:
     return "1.0" if "supportedInterfaces" in card else "0.3"
 
 
+def _normalize_security_schemes(card: JsonDict, target: A2AVersion) -> JsonDict:
+    """Normalize securitySchemes to the target A2A protocol version format."""
+    schemes = card.get("securitySchemes")
+    if not isinstance(schemes, dict):
+        return card
+
+    new_schemes = dict(schemes)
+    modified = False
+
+    for name, scheme in schemes.items():
+        if not isinstance(scheme, dict):
+            continue
+        if target == "1.0" and "type" in scheme:
+            scheme_type = scheme.get("type")
+            if scheme_type == "http":
+                oneof_entry: dict[str, str] = {}
+                if "scheme" in scheme:
+                    oneof_entry["scheme"] = str(scheme["scheme"])
+                if "description" in scheme:
+                    oneof_entry["description"] = str(scheme["description"])
+                new_schemes[name] = {"httpAuthSecurityScheme": oneof_entry}
+                modified = True
+        elif target == "0.3" and "httpAuthSecurityScheme" in scheme:
+            nested = scheme["httpAuthSecurityScheme"]
+            if isinstance(nested, dict):
+                flat_entry: dict[str, str] = {"type": "http"}
+                if "scheme" in nested:
+                    flat_entry["scheme"] = str(nested["scheme"])
+                if "description" in nested:
+                    flat_entry["description"] = str(nested["description"])
+                new_schemes[name] = flat_entry
+                modified = True
+
+    if modified:
+        return {**card, "securitySchemes": new_schemes}
+    return card
+
+
 def normalize_agent_card(card: JsonDict, target: A2AVersion) -> JsonDict:
     """Convert an extended agent card to ``target``.
 
@@ -124,6 +162,7 @@ def normalize_agent_card(card: JsonDict, target: A2AVersion) -> JsonDict:
     if not isinstance(card, dict):
         return card
 
+    card = _normalize_security_schemes(card, target)
     current: Final = _detect_card_version(card)
     if current == target and not (target == "0.3" and "supportedInterfaces" in card):
         return card
