@@ -2,12 +2,14 @@
 Unit tests for litellm/llms/oci/chat/generic.py — error paths and stream handling.
 """
 
+import json
+
 import pytest
 from unittest.mock import MagicMock
 
 import httpx
 
-from litellm import ModelResponse
+from litellm import ModelResponse, stream_chunk_builder
 from litellm.llms.oci.chat.generic import (
     adapt_messages_to_generic_oci_standard,
     adapt_messages_to_generic_oci_standard_content_message,
@@ -311,6 +313,128 @@ class TestHandleGenericStreamChunk:
         }
         result = handle_generic_stream_chunk(chunk)
         assert result.choices[0].delta.tool_calls is not None
+
+
+# ---------------------------------------------------------------------------
+# GENERIC streams — each tool call gets its own index across chunks
+# ---------------------------------------------------------------------------
+
+
+def _tool_call_chunk(**tool_call: str) -> str:
+    payload = {
+        "apiFormat": "GENERIC",
+        "index": 0,
+        "message": {"role": "ASSISTANT", "toolCalls": [{"type": "FUNCTION", **tool_call}]},
+    }
+    return f"data: {json.dumps(payload)}"
+
+
+def _stream_wrapper() -> OCIStreamWrapper:
+    return OCIStreamWrapper(
+        completion_stream=iter([]),
+        model="openai.gpt-4.1",
+        custom_llm_provider="oci",
+        logging_obj=MagicMock(),
+    )
+
+
+def _streamed_tool_calls(chunks: list[str]) -> list[tuple[int, str | None, str | None, str]]:
+    wrapper = _stream_wrapper()
+    seen = []
+    for chunk in chunks:
+        result = wrapper.chunk_creator(chunk)
+        assert result is not None
+        seen.extend(
+            (tc.index, tc.id, tc.function.name, tc.function.arguments)
+            for tc in result.choices[0].delta.tool_calls or []
+        )
+    return seen
+
+
+class TestGenericStreamToolCallIndexes:
+    def test_parallel_calls_streamed_in_fragments_get_their_own_index(self):
+        """The shape OCI sends for OpenAI models: id and name once, then fragments."""
+        seen = _streamed_tool_calls(
+            [
+                _tool_call_chunk(id="call_a", name="list_dir", arguments=""),
+                _tool_call_chunk(arguments='{"pa'),
+                _tool_call_chunk(arguments='th": "repo"}'),
+                _tool_call_chunk(id="call_b", name="glob", arguments=""),
+                _tool_call_chunk(arguments='{"path": "repo", '),
+                _tool_call_chunk(arguments='"pattern": "**/*"}'),
+            ]
+        )
+        assert seen == [
+            (0, "call_a", "list_dir", ""),
+            (0, None, None, '{"pa'),
+            (0, None, None, 'th": "repo"}'),
+            (1, "call_b", "glob", ""),
+            (1, None, None, '{"path": "repo", '),
+            (1, None, None, '"pattern": "**/*"}'),
+        ]
+
+    def test_parallel_calls_sent_whole_get_their_own_index(self):
+        """The shape OCI sends for Gemini: one complete call per chunk."""
+        seen = _streamed_tool_calls(
+            [
+                _tool_call_chunk(id="call_a", name="list_dir", arguments='{"path": "repo"}'),
+                _tool_call_chunk(id="call_b", name="glob", arguments='{"path": "repo"}'),
+                _tool_call_chunk(id="call_c", name="glob", arguments='{"path": "docs"}'),
+            ]
+        )
+        assert [(index, call_id) for index, call_id, _, _ in seen] == [(0, "call_a"), (1, "call_b"), (2, "call_c")]
+
+    def test_chunks_that_repeat_the_id_stay_on_one_call(self):
+        seen = _streamed_tool_calls(
+            [
+                _tool_call_chunk(id="call_a", name="glob", arguments='{"path": '),
+                _tool_call_chunk(id="call_a", name="glob", arguments='"repo"}'),
+            ]
+        )
+        assert seen == [(0, "call_a", "glob", '{"path": '), (0, None, None, '"repo"}')]
+
+    def test_calls_without_an_id_are_told_apart_by_name(self):
+        seen = _streamed_tool_calls(
+            [
+                _tool_call_chunk(name="list_dir", arguments='{"path": "repo"}'),
+                _tool_call_chunk(name="glob", arguments='{"path": '),
+                _tool_call_chunk(arguments='"docs"}'),
+            ]
+        )
+        assert [index for index, _, _, _ in seen] == [0, 1, 1]
+        first, second, fragment = (call_id for _, call_id, _, _ in seen)
+        assert first and second and first != second
+        assert fragment is None
+
+    def test_merged_stream_has_every_call_with_its_own_arguments(self):
+        wrapper = _stream_wrapper()
+        chunks = [
+            wrapper.chunk_creator(chunk)
+            for chunk in [
+                _tool_call_chunk(id="call_a", name="list_dir", arguments=""),
+                _tool_call_chunk(arguments='{"path": "repo"}'),
+                _tool_call_chunk(id="call_b", name="glob", arguments=""),
+                _tool_call_chunk(arguments='{"pattern": "**/*", "path": "repo"}'),
+            ]
+        ]
+        merged = stream_chunk_builder(chunks)
+        calls = merged.choices[0].message.tool_calls
+        assert [(c.id, c.function.name, json.loads(c.function.arguments)) for c in calls] == [
+            ("call_a", "list_dir", {"path": "repo"}),
+            ("call_b", "glob", {"pattern": "**/*", "path": "repo"}),
+        ]
+
+    def test_a_chunk_handled_alone_is_numbered_from_zero(self):
+        result = handle_generic_stream_chunk(
+            {
+                "apiFormat": "GENERIC",
+                "index": 0,
+                "message": {"role": "ASSISTANT", "toolCalls": [{"type": "FUNCTION", "arguments": '{"a": 1}'}]},
+            }
+        )
+        (call,) = result.choices[0].delta.tool_calls
+        assert call.index == 0
+        assert call.id.startswith("call_")
 
 
 # ---------------------------------------------------------------------------
