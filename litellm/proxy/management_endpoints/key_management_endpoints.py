@@ -73,6 +73,7 @@ from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import *
 from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    TeamNotFoundError,
     _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_team_access_model,
     delete_cache_key_object,
@@ -3357,6 +3358,38 @@ async def _check_key_semantic_cache_update(
     validate_semantic_cache_metadata(requested_metadata, stored_metadata)
 
 
+async def _team_capped_duration(
+    requested: str | None,
+    data: UpdateKeyRequest | RegenerateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    prisma_client: PrismaClient | None,
+) -> str | None:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    if requested == "" or prisma_client is None:
+        return requested
+    team_id: Final = data.team_id if "team_id" in data.model_fields_set else existing_key_row.team_id
+    if team_id is None:
+        return requested
+    try:
+        from litellm_enterprise.proxy.management_endpoints.key_management_endpoints import (
+            cap_team_member_key_duration,
+        )
+    except ImportError:
+        return requested
+    try:
+        team: Final = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+    except TeamNotFoundError:
+        return requested
+    user_id: Final = data.user_id if "user_id" in data.model_fields_set else existing_key_row.user_id
+    return cap_team_member_key_duration(team, user_id, requested)
+
+
 async def prepare_key_update_data(
     data: UpdateKeyRequest | RegenerateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -3432,7 +3465,9 @@ async def prepare_key_update_data(
         non_default_values[k] = v
 
     if "duration" in non_default_values:
-        duration: Final = non_default_values.pop("duration")
+        duration: Final = await _team_capped_duration(
+            non_default_values.pop("duration"), data, existing_key_row, prisma_client
+        )
         if duration is None or duration == "-1":
             # Set expires to None to indicate the key never expires
             non_default_values["expires"] = None
