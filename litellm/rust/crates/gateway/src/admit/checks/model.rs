@@ -207,7 +207,8 @@ fn signs_itself(params: &LitellmParams) -> bool {
     .is_ok_and(|resolved| CLOUD_CREDENTIAL_PROVIDERS.contains(&resolved.provider))
 }
 
-/// `rpm` and `tpm` are honored as the shuffle's weights. A deployment with no `api_key` outside
+/// `rpm` and `tpm` are honored as the shuffle's weights, and `tags` as the tags a served call is
+/// logged and charged under. A deployment with no `api_key` outside
 /// the cloud credential providers gets its credential from a flow the proxy can host and the
 /// gateway may not, as Entra and workload identity are.
 fn params(params: &LitellmParams) -> Vec<Box<str>> {
@@ -235,7 +236,7 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
         otpm,
         max_parallel_requests,
         organization,
-        tags,
+        tags: _,
         tag_regex,
         max_budget,
         budget_duration,
@@ -271,7 +272,6 @@ fn params(params: &LitellmParams) -> Vec<Box<str>> {
             otpm,
             max_parallel_requests,
             organization,
-            tags,
             tag_regex,
             max_budget,
             budget_duration,
@@ -332,7 +332,7 @@ mod tests {
     use super::*;
     use crate::admit::Deployed;
 
-    const TAGS: &str = "model_list.litellm_params.tags";
+    const TAG_REGEX: &str = "model_list.litellm_params.tag_regex";
     const GROUPS: [&str; 4] = ["claude", "backup", "last", "other"];
     const DEPLOYMENT: &str = "    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: provider-key\n";
 
@@ -354,12 +354,12 @@ mod tests {
         let models: String = GROUPS
             .iter()
             .map(|group| {
-                let tags = if *group == "backup" {
-                    "      tags: [paid]\n"
+                let unhonored = if *group == "backup" {
+                    "      tag_regex: ['^paid']\n"
                 } else {
                     ""
                 };
-                format!("  - model_name: {group}\n{DEPLOYMENT}{tags}")
+                format!("  - model_name: {group}\n{DEPLOYMENT}{unhonored}")
             })
             .collect();
         let config = Config::from_yaml(&format!(
@@ -381,7 +381,7 @@ mod tests {
 
         assert_eq!(
             GROUPS.map(|group| asking(&admit, group)),
-            [None, Some(TAGS.to_owned()), None, None]
+            [None, Some(TAG_REGEX.to_owned()), None, None]
         );
     }
 
@@ -412,7 +412,7 @@ mod tests {
     ) {
         assert_eq!(
             asking(&backup_tagged(router_settings), asked),
-            Some(format!("router_settings fallback to backup: {TAGS}"))
+            Some(format!("router_settings fallback to backup: {TAG_REGEX}"))
         );
     }
 
@@ -481,7 +481,7 @@ mod tests {
         "  model_group_alias:\n    sonnet: {model: claude, hidden: true}\n",
         None
     )]
-    #[case::of_a_named_group("  model_group_alias:\n    sonnet: backup\n", Some(TAGS))]
+    #[case::of_a_named_group("  model_group_alias:\n    sonnet: backup\n", Some(TAG_REGEX))]
     fn an_alias_is_judged_as_the_group_it_names(
         #[case] router_settings: &str,
         #[case] over: Option<&str>,
@@ -554,7 +554,7 @@ mod tests {
 
     #[rstest]
     fn a_deployment_honoring_every_param_keeps_its_group() {
-        let written = "      api_base: https://api.anthropic.com\n      rpm: 300\n      weight: 2\n      timeout: 30\n      request_timeout: 2.5\n      additional_drop_params: [metadata.user_id]\n    model_info:\n      id: claude-a\n      access_groups: [haiku]\n";
+        let written = "      api_base: https://api.anthropic.com\n      rpm: 300\n      weight: 2\n      timeout: 30\n      request_timeout: 2.5\n      additional_drop_params: [metadata.user_id]\n      tags: [paid]\n    model_info:\n      id: claude-a\n      access_groups: [haiku]\n";
 
         assert_eq!(
             one_deployment(&format!("{DEPLOYMENT}{written}"), anthropic(&["claude"])),

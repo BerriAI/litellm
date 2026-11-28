@@ -112,7 +112,8 @@ struct Metadata<'a> {
     model_info: ModelInfo<'a>,
     deployment: &'a str,
     /// The tags Python logs and charges the call under. A served request names none of its own,
-    /// since `admit` sends one that does to Python, so these are its user agent's.
+    /// since `admit` sends one that does to Python, so these are the tags of the deployments it
+    /// was attempted on, which Python adds as it picks each one, and then its user agent's.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tags: Vec<String>,
     status: &'static str,
@@ -178,6 +179,7 @@ pub(super) struct Served<'a> {
     pub(super) end: SystemTime,
     pub(super) provider: Option<&'a str>,
     pub(super) user_agent: Option<&'a str>,
+    pub(super) deployment_tags: &'a [String],
     pub(super) call: &'a ServedCall,
 }
 
@@ -217,9 +219,10 @@ pub(super) fn success(served: &Served<'_>) -> Option<serde_json::Value> {
             model_info: ModelInfo { id: &deployment.id },
             deployment: model,
             tags: served
-                .user_agent
-                .into_iter()
-                .flat_map(user_agent_tags)
+                .deployment_tags
+                .iter()
+                .cloned()
+                .chain(served.user_agent.into_iter().flat_map(user_agent_tags))
                 .collect(),
             status: "success",
         },
@@ -324,6 +327,16 @@ mod tests {
         call: &ServedCall,
         stream: bool,
     ) -> Value {
+        tagged(&[], user_agent, charged, call, stream)
+    }
+
+    fn tagged(
+        deployment_tags: &[String],
+        user_agent: Option<&str>,
+        charged: &Charged,
+        call: &ServedCall,
+        stream: bool,
+    ) -> Value {
         success(&Served {
             call_type: CallType::AnthropicMessages,
             route: "/v1/messages",
@@ -335,6 +348,7 @@ mod tests {
             end: at(1_795_000_002, 0),
             provider: Some("anthropic"),
             user_agent,
+            deployment_tags,
             call,
         })
         .unwrap()
@@ -445,6 +459,18 @@ mod tests {
         #[case] logged: &str,
     ) {
         let row = row(&sent_by(user_agent, &key(), &call(None), false));
+        assert_eq!(row.request_tags, logged);
+    }
+
+    #[rstest]
+    #[case::alone(None, r#"["down", "up"]"#)]
+    #[case::before_its_user_agents(Some("probe"), r#"["down", "up", "User-Agent: probe"]"#)]
+    fn a_served_calls_row_carries_the_tags_of_the_deployments_it_was_attempted_on(
+        #[case] user_agent: Option<&str>,
+        #[case] logged: &str,
+    ) {
+        let tags = ["down".to_owned(), "up".to_owned()];
+        let row = row(&tagged(&tags, user_agent, &key(), &call(None), false));
         assert_eq!(row.request_tags, logged);
     }
 

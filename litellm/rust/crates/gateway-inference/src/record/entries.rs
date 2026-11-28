@@ -176,6 +176,24 @@ impl CallState {
         }
     }
 
+    /// The `tags` of every deployment the call was attempted on, each once in the order first
+    /// met. Python adds a deployment's tags to the request before each attempt and never takes
+    /// them back, so a call that retried is logged under the failed deployments' tags too.
+    pub fn deployment_tags(&self) -> Vec<String> {
+        let tags = self
+            .failed_attempts
+            .iter()
+            .chain(&self.attempt)
+            .filter_map(|attempt| attempt.deployment.params.tags.as_deref())
+            .flatten();
+        tags.fold(Vec::new(), |mut seen, tag| {
+            if !seen.contains(tag) {
+                seen.push(tag.clone());
+            }
+            seen
+        })
+    }
+
     /// What the router did for the call once it served it, the deployment that served it and
     /// what the served attempt recorded. An attempt that failed is in [`Self::failed_attempts`]
     /// instead, a held stream that failed before it sent content among them.
@@ -335,6 +353,25 @@ mod tests {
             ("model".to_owned(), json!("claude")),
             ("stream".to_owned(), json!(stream)),
         ])
+    }
+
+    #[rstest]
+    fn each_attempted_deployments_tags_are_kept_once_in_the_order_first_met() {
+        let on = |tags: Value| {
+            let spec = serde_json::from_value(json!({
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude", "tags": tags},
+            }))
+            .unwrap();
+            AttemptRecord::on(std::sync::Arc::new(
+                litellm_router_core::Deployment::from_spec(spec).unwrap(),
+            ))
+        };
+        let mut entries = CallState::new("trace-1".to_owned());
+        entries.failed_attempts = vec![on(json!(["down", "paid", "down"])), on(json!(null))];
+        entries.attempt = Some(on(json!(["up", "paid"])));
+
+        assert_eq!(entries.deployment_tags(), ["down", "paid", "up"]);
     }
 
     #[rstest]

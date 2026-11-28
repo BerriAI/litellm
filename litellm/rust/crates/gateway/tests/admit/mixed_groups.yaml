@@ -1,5 +1,6 @@
-# The live proof config: one native group, a group with a deployment setting, a group that falls
-# back to it, and a provider the native route was not compared on.
+# The live proof config: one native group, a group whose deployment names tags, a group with a
+# deployment setting, a group that falls back to it, and a provider the native route was not
+# compared on.
 config:
   model_list:
     - model_name: claude
@@ -13,6 +14,11 @@ config:
         model: anthropic/claude-haiku-5-5
         api_key: provider-key
         tags: [paid]
+    - model_name: claude-tag-routed
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        tag_regex: ['^paid']
     - model_name: claude-backed
       litellm_params:
         model: anthropic/claude-haiku-5-5
@@ -23,7 +29,7 @@ config:
         api_key: provider-key
   router_settings:
     fallbacks:
-      - claude-backed: [claude-tagged]
+      - claude-backed: [claude-tag-routed]
   general_settings:
     master_key: gateway-key
 
@@ -109,18 +115,23 @@ requests:
     expect: python
     reason: body
 
-  - name: tagged group
+  - name: group whose deployment names tags
     headers: {authorization: Bearer gateway-key}
     body: {model: claude-tagged, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: group whose deployment routes by tag
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-tag-routed, max_tokens: 16, messages: []}
     expect: python
     reason: model
 
-  - name: group that falls back to the tagged one
+  - name: group that falls back to the tag routed one
     headers: {authorization: Bearer gateway-key}
     body: {model: claude-backed, max_tokens: 16, messages: []}
     expect: python
     reason: model
-    over: 'router_settings fallback to claude-tagged: model_list.litellm_params.tags'
+    over: 'router_settings fallback to claude-tag-routed: model_list.litellm_params.tag_regex'
 
   - name: other provider
     headers: {authorization: Bearer gateway-key}
