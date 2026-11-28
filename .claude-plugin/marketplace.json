@@ -1,0 +1,17 @@
+{
+  "name": "litellm-native-integration",
+  "owner": {
+    "name": "LiteLLM contributors"
+  },
+  "metadata": {
+    "description": "Experimental managed Claude Code integration with LiteLLM"
+  },
+  "plugins": [
+    {
+      "name": "litellm-native-gateway",
+      "source": "./plugins/litellm-native-gateway",
+      "description": "Experimental managed inference routing that retains native Claude login",
+      "version": "0.1.2"
+    }
+  ]
+}

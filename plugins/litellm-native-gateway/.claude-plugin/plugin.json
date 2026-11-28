@@ -1,0 +1,26 @@
+{
+  "name": "litellm-native-gateway",
+  "version": "0.1.2",
+  "description": "Experimental managed inference routing. Mandatory enforcement requires a client loading guarantee.",
+  "userConfig": {
+    "gatewayUrl": {
+      "type": "string",
+      "title": "LiteLLM gateway URL",
+      "description": "HTTPS gateway base URL. Missing configuration denies inference after this module loads.",
+      "required": false,
+      "default": ""
+    },
+    "gatewayKey": {
+      "type": "string",
+      "title": "LiteLLM user credential",
+      "description": "Separate per-user LiteLLM credential. Never use native Claude OAuth here.",
+      "sensitive": true,
+      "required": false,
+      "default": ""
+    }
+  },
+  "license": "MIT",
+  "author": {
+    "name": "LiteLLM native gateway contributors"
+  }
+}

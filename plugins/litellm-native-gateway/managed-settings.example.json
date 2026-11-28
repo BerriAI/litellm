@@ -1,0 +1,36 @@
+{
+  "extraKnownMarketplaces": {
+    "litellm-native-integration": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/BerriAI/litellm.git",
+        "ref": "REPLACE_WITH_REVIEWED_COMMIT_SHA"
+      },
+      "autoUpdate": false
+    }
+  },
+  "enabledPlugins": {
+    "litellm-native-gateway@litellm-native-integration": true
+  },
+  "prependPlugins": [
+    "litellm-native-gateway@litellm-native-integration",
+    "sec-default@builtin"
+  ],
+  "pluginConfigs": {
+    "litellm-native-gateway@litellm-native-integration": {
+      "options": {
+        "gatewayUrl": "https://litellm.example.com"
+      }
+    },
+    "cc-plugin-sec-default@builtin": {
+      "options": {
+        "allowManagedModsOnly": true
+      }
+    }
+  },
+  "disableSideloadFlags": true,
+  "env": {
+    "CLAUDE_CODE_SYNC_PLUGIN_INSTALL": "1",
+    "CLAUDE_CODE_MAX_RETRIES": "1"
+  }
+}

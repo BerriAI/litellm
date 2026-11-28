@@ -544,6 +544,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Node.js for the Claude Code plugin tests
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: "22.23.2"
+
+      - name: Test native Claude gateway routing
+        run: node --test plugins/litellm-native-gateway/policy.test.mjs
+
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:

@@ -1,0 +1,11 @@
+{
+  "name": "litellm-native-gateway",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test policy.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
