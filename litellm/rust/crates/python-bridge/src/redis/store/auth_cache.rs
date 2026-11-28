@@ -213,12 +213,18 @@ impl PyAuthObject {
 
     /// `jwt_key_mapping_cache_key`: an empty issuer is the issuer-agnostic scope.
     #[staticmethod]
-    #[pyo3(signature = (claim_name, claim_value, issuer = None))]
-    fn jwt_key_mapping(claim_name: String, claim_value: String, issuer: Option<String>) -> Self {
+    #[pyo3(signature = (claim_name, claim_value, issuer = None, *, strict = false))]
+    fn jwt_key_mapping(
+        claim_name: String,
+        claim_value: String,
+        issuer: Option<String>,
+        strict: bool,
+    ) -> Self {
         Self(AuthObject::JwtKeyMapping {
             issuer: issuer.filter(|issuer| !issuer.is_empty()),
             claim_name,
             claim_value,
+            strict,
         })
     }
 

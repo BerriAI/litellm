@@ -94,6 +94,10 @@ _WRITTEN: Final[tuple[tuple[object, str, str], ...]] = (
         (AuthObject.jwt_key_mapping("sub", "a:b"), "jwt_key_mapping:sub:a:b"),
         (AuthObject.jwt_key_mapping("sub", "a", issuer=""), "jwt_key_mapping:sub:a"),
         (AuthObject.jwt_key_mapping("sub", "a", issuer="https://idp"), "jwt_key_mapping:https://idp:sub:a"),
+        (
+            AuthObject.jwt_key_mapping("sub", "a:b", issuer="https://idp", strict=True),
+            'jwt_key_mapping_strict:["https://idp", "sub", "a:b"]',
+        ),
         (AuthObject.agent_identity("t\u00e9", 'c"1'), 'agent_identity:["t\\u00e9", "c\\"1"]'),
         (AuthObject.global_proxy_spend(), "default_user_id:spend"),
     ],

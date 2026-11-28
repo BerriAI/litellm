@@ -135,15 +135,24 @@ async def _jwt_io(call: RustAuth, step: RustAuthStep, host: PythonAuthHost) -> b
         case RustAuthStep.CacheDocument(key=key, value=value, ttl_seconds=ttl_seconds):
             await host.cache_document(key, value, ttl_seconds)
             call.done()
-        case RustAuthStep.CachedKeyMapping(claim_field=claim_field, claim_value=claim_value, issuer=issuer):
-            call.json(await host.cached_key_mapping(claim_field, claim_value, issuer))
-        case RustAuthStep.CacheKeyMapping(
-            claim_field=claim_field, claim_value=claim_value, issuer=issuer, value=value, ttl_seconds=ttl_seconds
+        case RustAuthStep.CachedKeyMapping(
+            claim_field=claim_field, claim_value=claim_value, issuer=issuer, strict=strict
         ):
-            await host.cache_key_mapping(claim_field, claim_value, issuer, value, ttl_seconds)
+            call.json(await host.cached_key_mapping(claim_field, claim_value, issuer, strict=strict))
+        case RustAuthStep.CacheKeyMapping(
+            claim_field=claim_field,
+            claim_value=claim_value,
+            issuer=issuer,
+            strict=strict,
+            value=value,
+            ttl_seconds=ttl_seconds,
+        ):
+            await host.cache_key_mapping(claim_field, claim_value, issuer, value, ttl_seconds, strict=strict)
             call.done()
-        case RustAuthStep.ForgetKeyMapping(claim_field=claim_field, claim_value=claim_value, issuer=issuer):
-            await host.forget_key_mapping(claim_field, claim_value, issuer)
+        case RustAuthStep.ForgetKeyMapping(
+            claim_field=claim_field, claim_value=claim_value, issuer=issuer, strict=strict
+        ):
+            await host.forget_key_mapping(claim_field, claim_value, issuer, strict=strict)
             call.done()
         case _:
             return False

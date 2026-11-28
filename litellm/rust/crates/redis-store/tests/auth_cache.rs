@@ -276,11 +276,11 @@ async fn redis_ttl(raw: &RedisClient, key: &str) -> Duration {
 )]
 #[case(AuthObject::ManagedVectorStore("vs-1".to_owned()), "managed_vector_store_id:vs-1")]
 #[case(
-    AuthObject::JwtKeyMapping { issuer: None, claim_name: "sub".to_owned(), claim_value: "a:b".to_owned() },
+    AuthObject::JwtKeyMapping { issuer: None, claim_name: "sub".to_owned(), claim_value: "a:b".to_owned(), strict: false },
     "jwt_key_mapping:sub:a:b"
 )]
 #[case(
-    AuthObject::JwtKeyMapping { issuer: Some(String::new()), claim_name: "sub".to_owned(), claim_value: "a".to_owned() },
+    AuthObject::JwtKeyMapping { issuer: Some(String::new()), claim_name: "sub".to_owned(), claim_value: "a".to_owned(), strict: false },
     "jwt_key_mapping:sub:a"
 )]
 #[case(
@@ -288,8 +288,18 @@ async fn redis_ttl(raw: &RedisClient, key: &str) -> Duration {
         issuer: Some("https://idp".to_owned()),
         claim_name: "sub".to_owned(),
         claim_value: "a".to_owned(),
+        strict: false,
     },
     "jwt_key_mapping:https://idp:sub:a"
+)]
+#[case::strict_mapping(
+    AuthObject::JwtKeyMapping {
+        issuer: Some("https://idp".to_owned()),
+        claim_name: "sub".to_owned(),
+        claim_value: "a:b".to_owned(),
+        strict: true,
+    },
+    r#"jwt_key_mapping_strict:["https://idp", "sub", "a:b"]"#
 )]
 #[case(
     AuthObject::AgentIdentity { tenant_id: "t\u{e9}".to_owned(), client_id: "c\"1".to_owned() },

@@ -13,6 +13,7 @@ _FIELD_VALUES: Final = {
     "upsert": True,
     "explicit_team": True,
     "ttl_seconds": 1.0,
+    "strict": True,
     "add": ["a"],
     "remove": ["r"],
     "allowed_team_ids": ["t"],
@@ -40,7 +41,7 @@ class _AskingHost:
     """Fails on the first method `answer` reaches for, naming it."""
 
     def __getattr__(self, method: str) -> object:
-        async def ask(*args: object) -> NoReturn:
+        async def ask(*args: object, **kwargs: object) -> NoReturn:
             raise _Asked(method)
 
         return ask

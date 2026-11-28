@@ -55,6 +55,7 @@ pub struct MappedClaim<'a> {
     pub field: &'a str,
     pub value: &'a str,
     pub issuer: Option<&'a str>,
+    pub strict: bool,
 }
 
 /// `IdentityStore.resolve(hashed_token)` as the mapping reads it.
@@ -124,6 +125,7 @@ impl Pending {
             field: &self.claim_field,
             value: &self.claim_value,
             issuer: self.issuer.as_deref(),
+            strict: false,
         }
     }
 }
@@ -152,6 +154,13 @@ async fn cache(
     mapping: &CachedMapping,
     settings: &JwtSettings,
 ) -> Result<(), Error> {
+    let claim = MappedClaim {
+        strict: !matches!(mapping, CachedMapping::Key(_))
+            && settings
+                .config
+                .disables_global_key_mapping_fallback(claim.issuer),
+        ..claim
+    };
     host.cache_key_mapping(claim, &mapping.value(), ttl(settings))
         .await
 }
@@ -173,7 +182,7 @@ async fn lookup_hash(
         cache(host, pending.claim(), &mapping, settings).await?;
         return Ok(Some(hash));
     }
-    if issuer.is_none() {
+    if issuer.is_none() || settings.config.disables_global_key_mapping_fallback(issuer) {
         return Ok(None);
     }
     let global_claim = MappedClaim {
@@ -249,8 +258,22 @@ pub(crate) async fn resolve<H: AuthHost>(
     };
     let needs_db = JwtDenial::MappingNeedsDb { behavior };
 
-    let cached = host.cached_key_mapping(pending.claim()).await?;
-    match CachedMapping::read(cached.as_ref()) {
+    let shared_claim = pending.claim();
+    let cached = host.cached_key_mapping(shared_claim).await?;
+    let shared = CachedMapping::read(cached.as_ref());
+    let (cached_claim, cached) = if settings.config.disables_global_key_mapping_fallback(issuer)
+        && !matches!(shared, Some(CachedMapping::Key(_)))
+    {
+        let strict_claim = MappedClaim {
+            strict: true,
+            ..shared_claim
+        };
+        let strict = host.cached_key_mapping(strict_claim).await?;
+        (strict_claim, CachedMapping::read(strict.as_ref()))
+    } else {
+        (shared_claim, shared)
+    };
+    match cached {
         Some(CachedMapping::ProxyAdmin) if behavior == Behavior::AutoRegister => {
             return Ok(Resolved::Unmapped);
         }
@@ -260,7 +283,7 @@ pub(crate) async fn resolve<H: AuthHost>(
                 Unregistered::Reject => Err(no_mapping().into()),
                 Unregistered::NeedsDb => Err(needs_db.into()),
                 Unregistered::Pending => {
-                    host.forget_key_mapping(pending.claim()).await?;
+                    host.forget_key_mapping(cached_claim).await?;
                     Ok(Resolved::Pending(pending))
                 }
                 Unregistered::Fallback => Ok(Resolved::Unmapped),
@@ -369,7 +392,15 @@ pub(crate) async fn registered<H: AuthHost>(
         }
     };
     let mapping = CachedMapping::Key(hash.clone());
-    cache(host, registration.pending.claim(), &mapping, settings).await?;
+    let claim = registration.pending.claim();
+    cache(host, claim, &mapping, settings).await?;
+    if claim.issuer.is_some() {
+        host.forget_key_mapping(MappedClaim {
+            strict: true,
+            ..claim
+        })
+        .await?;
+    }
     Ok(host
         .key_by_hash(&hash)
         .await?
@@ -723,6 +754,168 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::global_database_row(None)]
+    #[case::cached_global_key(Some(json!("global")))]
+    #[case::global_proxy_admin_sentinel(Some(json!(PROXY_ADMIN_SENTINEL)))]
+    #[tokio::test]
+    async fn strict_issuer_does_not_read_any_global_mapping(#[case] cached: Option<Value>) {
+        let host = ScriptedHost {
+            mappings: HashMap::from([("client_id=7 -".to_owned(), "global".to_owned())]),
+            keys: HashMap::from([("global", mapped("global"))]),
+            json_cache: cached
+                .map(|value| HashMap::from([("jwt_key_mapping:client_id:7".to_owned(), value)]))
+                .unwrap_or_default()
+                .into(),
+            ..ScriptedHost::default()
+        };
+        let mut settings = settings(Behavior::AutoRegister, true);
+        settings.config.disable_global_key_mapping_fallback = true;
+        settings.config.issuers = Some(Box::new([JwtIssuerConfig {
+            issuer: "idp".to_owned(),
+            ..JwtIssuerConfig::default()
+        }]));
+        let claims = claims(json!({"client_id": 7, "_litellm_jwt_issuer": "idp"}));
+        let resolved = resolve(&host, &claims, &settings).await;
+
+        assert_eq!(
+            resolved,
+            Ok(Resolved::Pending(Pending {
+                claim_field: FIELD.to_owned(),
+                claim_value: "7".to_owned(),
+                issuer: Some("idp".to_owned()),
+                behavior: Behavior::AutoRegister,
+            }))
+        );
+        assert_eq!(
+            host.calls(),
+            [
+                "get jwt_key_mapping:idp:client_id:7",
+                "get jwt_key_mapping_strict:idp:client_id:7",
+                "mapping client_id=7 idp"
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case::reject(Behavior::Reject)]
+    #[case::fallback_team(Behavior::FallbackTeamMapping)]
+    #[case::proxy_admin(Behavior::AutoRegister)]
+    #[tokio::test]
+    async fn strict_miss_does_not_change_a_permissive_replica(#[case] behavior: Behavior) {
+        let host = ScriptedHost {
+            mappings: HashMap::from([("client_id=7 -".to_owned(), "global".to_owned())]),
+            keys: HashMap::from([("global", mapped("global"))]),
+            ..ScriptedHost::default()
+        };
+        let mut settings = settings(behavior, true);
+        settings.config.disable_global_key_mapping_fallback = true;
+        settings.config.issuers = Some(Box::new([JwtIssuerConfig {
+            issuer: "idp".to_owned(),
+            ..JwtIssuerConfig::default()
+        }]));
+        let claims = claims(json!({"client_id": 7, "_litellm_jwt_issuer": "idp"}));
+
+        match (behavior, resolve(&host, &claims, &settings).await) {
+            (Behavior::Reject, Err(Error::Jwt(JwtDenial::NoMapping { .. })))
+            | (Behavior::FallbackTeamMapping, Ok(Resolved::Unmapped)) => {}
+            (Behavior::AutoRegister, Ok(Resolved::Pending(pending))) => {
+                remember_proxy_admin(&host, &pending, &settings)
+                    .await
+                    .unwrap();
+            }
+            (_, result) => panic!("unexpected strict mapping result: {result:?}"),
+        }
+
+        let calls = host.calls();
+        assert_eq!(
+            calls.last().unwrap(),
+            "set jwt_key_mapping_strict:idp:client_id:7 300"
+        );
+        assert_eq!(
+            resolve(&host, &claims, &settings).await,
+            if behavior == Behavior::Reject {
+                Err(JwtDenial::NoMapping {
+                    claim_field: FIELD.to_owned(),
+                    claim_value: "7".to_owned(),
+                }
+                .into())
+            } else {
+                Ok(Resolved::Unmapped)
+            },
+        );
+        assert_eq!(
+            &host.calls()[calls.len()..],
+            [
+                "get jwt_key_mapping:idp:client_id:7",
+                "get jwt_key_mapping_strict:idp:client_id:7",
+            ]
+        );
+
+        settings.config.disable_global_key_mapping_fallback = false;
+        assert_eq!(
+            resolve(&host, &claims, &settings).await,
+            Ok(Resolved::Key(mapped("global")))
+        );
+    }
+
+    #[rstest]
+    #[case::shared_cache_empty(None)]
+    #[case::shared_cache_has_permissive_miss(Some(json!(NO_MAPPING_SENTINEL)))]
+    #[case::shared_cache_has_permissive_admin(Some(json!(PROXY_ADMIN_SENTINEL)))]
+    #[tokio::test]
+    async fn strict_issuer_still_uses_its_scoped_mapping(#[case] cached: Option<Value>) {
+        let host = ScriptedHost {
+            mappings: HashMap::from([("client_id=7 idp".to_owned(), "scoped".to_owned())]),
+            keys: HashMap::from([("scoped", mapped("scoped"))]),
+            json_cache: cached
+                .map(|value| HashMap::from([("jwt_key_mapping:idp:client_id:7".to_owned(), value)]))
+                .unwrap_or_default()
+                .into(),
+            ..ScriptedHost::default()
+        };
+        let mut settings = settings(Behavior::AutoRegister, true);
+        settings.config.disable_global_key_mapping_fallback = true;
+        settings.config.issuers = Some(Box::new([JwtIssuerConfig {
+            issuer: "idp".to_owned(),
+            ..JwtIssuerConfig::default()
+        }]));
+        let claims = claims(json!({"client_id": 7, "_litellm_jwt_issuer": "idp"}));
+
+        assert_eq!(
+            resolve(&host, &claims, &settings).await,
+            Ok(Resolved::Key(mapped("scoped")))
+        );
+        let calls = host.calls();
+        assert_eq!(
+            &calls[calls.len() - 2..],
+            [
+                "set jwt_key_mapping:idp:client_id:7 300",
+                "key_by_hash scoped",
+            ]
+        );
+
+        assert_eq!(
+            resolve(&host, &claims, &settings).await,
+            Ok(Resolved::Key(mapped("scoped")))
+        );
+        assert_eq!(
+            &host.calls()[calls.len()..],
+            ["get jwt_key_mapping:idp:client_id:7", "key_by_hash scoped"]
+        );
+
+        let calls = host.calls();
+        settings.config.disable_global_key_mapping_fallback = false;
+        assert_eq!(
+            resolve(&host, &claims, &settings).await,
+            Ok(Resolved::Key(mapped("scoped")))
+        );
+        assert_eq!(
+            &host.calls()[calls.len()..],
+            ["get jwt_key_mapping:idp:client_id:7", "key_by_hash scoped",]
+        );
+    }
+
     fn registering(behavior: Behavior) -> Pending {
         let Resolved::Pending(pending) = pending(behavior) else {
             unreachable!()
@@ -808,5 +1001,32 @@ mod tests {
                     .to_owned()
             })
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn scoped_registration_evicts_a_strict_replicas_miss() {
+        let strict_key = "jwt_key_mapping_strict:idp:client_id:app";
+        let host = ScriptedHost {
+            keys: HashMap::from([("minted", mapped("minted"))]),
+            json_cache: HashMap::from([(strict_key.to_owned(), json!(NO_MAPPING_SENTINEL))]).into(),
+            ..ScriptedHost::default()
+        };
+        let pending = Pending {
+            issuer: Some("idp".to_owned()),
+            ..registering(Behavior::AutoRegister)
+        };
+
+        assert_eq!(
+            auto_register(
+                &host,
+                &pending,
+                &identity(),
+                &settings(Behavior::AutoRegister, true),
+            )
+            .await,
+            Ok(Some((mapped("minted"), true)))
+        );
+        assert!(!host.json_cache.lock().unwrap().contains_key(strict_key));
     }
 }

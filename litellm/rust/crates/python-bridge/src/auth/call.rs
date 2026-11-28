@@ -354,11 +354,13 @@ pub(crate) enum AuthStep {
         claim_field: String,
         claim_value: String,
         issuer: Option<String>,
+        strict: bool,
     },
     CacheKeyMapping {
         claim_field: String,
         claim_value: String,
         issuer: Option<String>,
+        strict: bool,
         value: Py<PyAny>,
         ttl_seconds: f64,
     },
@@ -366,6 +368,7 @@ pub(crate) enum AuthStep {
         claim_field: String,
         claim_value: String,
         issuer: Option<String>,
+        strict: bool,
     },
     Team {
         team_id: String,
@@ -1098,6 +1101,7 @@ impl AuthStep {
                 claim_field: claim.field.clone(),
                 claim_value: claim.value.clone(),
                 issuer: claim.issuer.clone(),
+                strict: claim.strict,
             },
             Ask::CacheKeyMapping {
                 claim, value, ttl, ..
@@ -1105,6 +1109,7 @@ impl AuthStep {
                 claim_field: claim.field.clone(),
                 claim_value: claim.value.clone(),
                 issuer: claim.issuer.clone(),
+                strict: claim.strict,
                 value: to_py(py, &**value)?,
                 ttl_seconds: ttl.as_secs_f64(),
             },
@@ -1112,6 +1117,7 @@ impl AuthStep {
                 claim_field: claim.field.clone(),
                 claim_value: claim.value.clone(),
                 issuer: claim.issuer.clone(),
+                strict: claim.strict,
             },
             Ask::Team {
                 team_id, upsert, ..
