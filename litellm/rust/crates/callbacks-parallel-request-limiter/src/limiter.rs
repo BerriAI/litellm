@@ -20,7 +20,7 @@ use crate::{
     arithmetic::{OutputCapFacts, output_cap},
     batch::{self, BatchFacts},
     builder::{AuthMetadata, BuildError, Lookups, Request, RequestFacts},
-    descriptor::{Descriptor, PROJECT_ITPM, PROJECT_OTPM, PTU_TEAM},
+    descriptor::{Descriptor, ITPM_KEYS, OTPM_KEYS, PTU_TEAM},
     engine::{Ctx, Engine, Now, Op, Policy, Settlement, SlotAcquisition, Unverifiable},
     enqueued::{EnqueuedOutcome, EnqueuedTokens, process_monotonic},
     hosted::Reservation,
@@ -33,7 +33,7 @@ use crate::{
 
 pub const NAME: &str = "parallel_request_limiter_v3";
 
-const PER_MODEL_KEYS: [&str; 7] = [
+const PER_MODEL_KEYS: [&str; 11] = [
     "model_per_key",
     "model_per_team",
     "model_per_end_user",
@@ -41,6 +41,10 @@ const PER_MODEL_KEYS: [&str; 7] = [
     "model_per_project",
     "model_per_project_itpm",
     "model_per_project_otpm",
+    "model_per_key_itpm",
+    "model_per_key_otpm",
+    "model_per_team_itpm",
+    "model_per_team_otpm",
 ];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -493,18 +497,18 @@ fn cap_decision(input: &HookInput, call: &CallFacts) -> Result<CapDecision, Call
     })
 }
 
-fn scopes_keyed(descriptors: &[Descriptor], key: &str) -> BTreeSet<(String, String)> {
+fn scopes_keyed(descriptors: &[Descriptor], keys: &[&str]) -> BTreeSet<(String, String)> {
     descriptors
         .iter()
-        .filter(|descriptor| descriptor.key == key)
+        .filter(|descriptor| keys.contains(&descriptor.key.as_str()))
         .map(|descriptor| (descriptor.key.clone(), descriptor.value.clone()))
         .collect()
 }
 
-fn windows_keyed(windows: &[WindowIdentity], key: &str) -> Vec<WindowIdentity> {
+fn windows_keyed(windows: &[WindowIdentity], keys: &[&str]) -> Vec<WindowIdentity> {
     windows
         .iter()
-        .filter(|identity| identity.counter.scope.descriptor == key)
+        .filter(|identity| keys.contains(&identity.counter.scope.descriptor.as_str()))
         .cloned()
         .collect()
 }
@@ -690,7 +694,7 @@ impl ParallelRequestLimiter {
     fn reserves_tokens(&self, facts: &PreCallFacts) -> bool {
         self.engine.settings().tpm_reservation_enabled
             && facts.descriptors.iter().any(|descriptor| {
-                !descriptor.is_project_io() && descriptor.limits().tokens_per_unit.is_some()
+                !descriptor.is_io() && descriptor.limits().tokens_per_unit.is_some()
             })
     }
 
@@ -758,7 +762,7 @@ impl ParallelRequestLimiter {
         } else {
             descriptors
                 .iter()
-                .filter(|descriptor| !descriptor.is_project_io())
+                .filter(|descriptor| !descriptor.is_io())
                 .cloned()
                 .collect()
         };
@@ -832,13 +836,13 @@ impl ParallelRequestLimiter {
             stash.reserved_tokens = estimated;
             stash.reservation_counts_unpriced_media = facts.counts_unpriced_media;
             stash.ptu_reserved_tokens = ptu_estimated;
-            stash.ptu_windows = windows_keyed(tpm_response.windows(), PTU_TEAM);
+            stash.ptu_windows = windows_keyed(tpm_response.windows(), &[PTU_TEAM]);
             stash.reserved_windows = tpm_response.windows().to_vec();
             stash.reserved_model = facts.reserved_model.clone();
             stash.reserved_scopes = descriptors
                 .iter()
                 .filter(|descriptor| {
-                    !descriptor.is_project_io() && descriptor.limits().tokens_per_unit.is_some()
+                    !descriptor.is_io() && descriptor.limits().tokens_per_unit.is_some()
                 })
                 .map(|descriptor| (descriptor.key.clone(), descriptor.value.clone()))
                 .collect();
@@ -944,7 +948,7 @@ impl ParallelRequestLimiter {
         let descriptors: Vec<Descriptor> = facts
             .descriptors
             .iter()
-            .filter(|descriptor| descriptor.is_project_io())
+            .filter(|descriptor| descriptor.is_io())
             .cloned()
             .collect();
         if descriptors.is_empty() {
@@ -993,15 +997,15 @@ impl ParallelRequestLimiter {
         if itpm_reserved > 0 {
             stash.itpm = IoReservation {
                 tokens: itpm_reserved,
-                scopes: scopes_keyed(&descriptors, PROJECT_ITPM),
-                windows: windows_keyed(response.windows(), PROJECT_ITPM),
+                scopes: scopes_keyed(&descriptors, &ITPM_KEYS),
+                windows: windows_keyed(response.windows(), &ITPM_KEYS),
             };
         }
         if otpm_reserved > 0 {
             stash.otpm = IoReservation {
                 tokens: otpm_reserved,
-                scopes: scopes_keyed(&descriptors, PROJECT_OTPM),
-                windows: windows_keyed(response.windows(), PROJECT_OTPM),
+                scopes: scopes_keyed(&descriptors, &OTPM_KEYS),
+                windows: windows_keyed(response.windows(), &OTPM_KEYS),
             };
         }
         match stash.rate_limit_response.as_mut() {
@@ -2071,7 +2075,7 @@ impl ParallelRequestLimiter {
         });
         let tpm_limits: Vec<i64> = descriptors
             .iter()
-            .filter(|descriptor| !descriptor.is_project_io())
+            .filter(|descriptor| !descriptor.is_io())
             .filter_map(|descriptor| {
                 let limit = descriptor.limits().tokens_per_unit?;
                 Some(match ceiling {
@@ -2085,10 +2089,10 @@ impl ParallelRequestLimiter {
             min_tpm_limit: tpm_limits.iter().min().copied(),
             min_otpm_limit: descriptors
                 .iter()
-                .filter(|descriptor| descriptor.key == PROJECT_OTPM)
+                .filter(|descriptor| descriptor.is_otpm())
                 .filter_map(|descriptor| descriptor.limits().tokens_per_unit)
                 .min(),
-            has_io: descriptors.iter().any(Descriptor::is_project_io),
+            has_io: descriptors.iter().any(Descriptor::is_io),
             ptu: ceiling.is_some(),
         }
     }

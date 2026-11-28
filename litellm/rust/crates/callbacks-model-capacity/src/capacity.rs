@@ -48,9 +48,13 @@ pub enum Frame {
 const UNCOUNTABLE_GROUP: &str = "failed to extract field PyIncrement.counter";
 const UNLICENSED_PRIORITY: &str = "PREMIUM FEATURE: Reserving tpm/rpm by priority is a premium feature. Please add a 'LITELLM_LICENSE' to your .env to enable this.\nGet a license: https://docs.litellm.ai/docs/enterprise.";
 
-const SOCKET_TURN_UNCOUNTED: [&str; 3] = [
+const SOCKET_TURN_UNCOUNTED: [&str; 7] = [
     "model_per_project_itpm",
     "model_per_project_otpm",
+    "model_per_key_itpm",
+    "model_per_key_otpm",
+    "model_per_team_itpm",
+    "model_per_team_otpm",
     "model_per_team_ptu",
 ];
 

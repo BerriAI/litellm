@@ -49,14 +49,26 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     resolve_batch_enqueued_token_scopes,
     resolve_project_model_batch_enqueued_token_scopes,
 )
-from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    ITPM_DESCRIPTOR_KEYS,
+    OTPM_DESCRIPTOR_KEYS,
+)
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PROJECT_OTPM_DESCRIPTOR_KEY as V3_PROJECT_OTPM_DESCRIPTOR_KEY,
+)
+from litellm.proxy.hooks.rate_limiter_utils import (
+    mapping_entries,
+    metadata_member,
+    resolve_llm_provider_for_rate_limit,
+    valid_io_limit,
+)
 from litellm.rust_bridge.execution import drive
 from litellm.types.integrations.custom_logger_v2 import Record
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, Usage
 
-_IO_KEYS: Final = frozenset({"model_per_project_itpm", "model_per_project_otpm"})
+_IO_KEYS: Final = ITPM_DESCRIPTOR_KEYS | OTPM_DESCRIPTOR_KEYS
 _AGENT_DESCRIPTOR_KEYS: Final = frozenset({"agent", "agent_session"})
-PROJECT_OTPM_DESCRIPTOR_KEY: Final = "model_per_project_otpm"
+PROJECT_OTPM_DESCRIPTOR_KEY: Final = V3_PROJECT_OTPM_DESCRIPTOR_KEY
 PTU_TEAM_DESCRIPTOR_KEY: Final = "model_per_team_ptu"
 
 if TYPE_CHECKING:
@@ -304,8 +316,8 @@ def _raise_rejected(view: object, data: Mapping[str, object], auth: UserAPIKeyAu
                 _raise_as_python(_member(source, name))
     if "resolved_agent_id" in _rejected(_member(view, Field.limiter_request.value)):
         _raise_as_python(
-            _metadata_member(data.get("metadata"), "agent_id")
-            or _metadata_member(data.get("litellm_metadata"), "agent_id")
+            metadata_member(data.get("metadata"), "agent_id")
+            or metadata_member(data.get("litellm_metadata"), "agent_id")
         )
 
 
@@ -620,13 +632,21 @@ def _forced_grouping() -> object:
     return _scalar_setting(litellm.force_redis_hash_tag_grouping)
 
 
-def _entries(value: object) -> Mapping[object, object] | None:
-    return value if isinstance(value, dict) else None  # pyright: ignore[reportUnknownVariableType]  # auth and request metadata are untyped
+def _io_limit(source: str, model: object, value: object) -> int | None:
+    limit: Final = valid_io_limit(value)
+    if limit is None and value is not None:
+        verbose_proxy_logger.warning("Ignoring %s[%s]: expected an integer", source, model)
+    return limit
 
 
-def _metadata_member(metadata: object, name: str) -> object:
-    entries: Final = _entries(metadata)
-    return entries.get(name) if entries else None
+def _io_limits(auth: UserAPIKeyAuth, scope: str, name: str) -> Mapping[str, int | None] | None:
+    limits: Final = metadata_member(_member(auth, scope), name)
+    entries: Final = mapping_entries(limits)
+    if entries is None:
+        if limits is not None:
+            verbose_proxy_logger.warning("Ignoring %s.%s: expected a mapping of model group to integer", scope, name)
+        return None
+    return {str(model): _io_limit(f"{scope}.{name}", model, value) for model, value in entries.items()}
 
 
 def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
@@ -634,23 +654,27 @@ def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
 
     if auth is None:
         return MappingProxyType({})
-    budgets: Final = _entries(_member(auth, "model_max_budget"))
+    budgets: Final = mapping_entries(_member(auth, "model_max_budget"))
     return {
-        "key_model_rpm_limit": _metadata_member(_member(auth, "metadata"), "model_rpm_limit"),
-        "key_model_tpm_limit": _metadata_member(_member(auth, "metadata"), "model_tpm_limit"),
-        "key_tag_rpm_limit": _metadata_member(_member(auth, "metadata"), "tag_rpm_limit"),
-        "model_max_budget": {model: budget for model, budget in budgets.items() if _entries(budget) is not None}
+        "key_model_rpm_limit": metadata_member(_member(auth, "metadata"), "model_rpm_limit"),
+        "key_model_tpm_limit": metadata_member(_member(auth, "metadata"), "model_tpm_limit"),
+        "key_model_itpm_limit": _io_limits(auth, "metadata", "model_itpm_limit"),
+        "key_model_otpm_limit": _io_limits(auth, "metadata", "model_otpm_limit"),
+        "key_tag_rpm_limit": metadata_member(_member(auth, "metadata"), "tag_rpm_limit"),
+        "model_max_budget": {model: budget for model, budget in budgets.items() if mapping_entries(budget) is not None}
         if budgets
         else None,
-        "team_model_rpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_rpm_limit"),
-        "team_model_tpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_tpm_limit"),
+        "team_model_rpm_limit": metadata_member(_member(auth, "team_metadata"), "model_rpm_limit"),
+        "team_model_tpm_limit": metadata_member(_member(auth, "team_metadata"), "model_tpm_limit"),
+        "team_model_itpm_limit": _io_limits(auth, "team_metadata", "model_itpm_limit"),
+        "team_model_otpm_limit": _io_limits(auth, "team_metadata", "model_otpm_limit"),
         "team_model_tpm_limit_counts_cached_tokens": team_models_counting_cached_tokens(_member(auth, "team_metadata")),
-        "organization_model_rpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_rpm_limit"),
-        "organization_model_tpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_tpm_limit"),
-        "project_model_rpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_rpm_limit"),
-        "project_model_tpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_tpm_limit"),
-        "project_model_itpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_itpm_limit"),
-        "project_model_otpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_otpm_limit"),
+        "organization_model_rpm_limit": metadata_member(_member(auth, "organization_metadata"), "model_rpm_limit"),
+        "organization_model_tpm_limit": metadata_member(_member(auth, "organization_metadata"), "model_tpm_limit"),
+        "project_model_rpm_limit": metadata_member(_member(auth, "project_metadata"), "model_rpm_limit"),
+        "project_model_tpm_limit": metadata_member(_member(auth, "project_metadata"), "model_tpm_limit"),
+        "project_model_itpm_limit": metadata_member(_member(auth, "project_metadata"), "model_itpm_limit"),
+        "project_model_otpm_limit": metadata_member(_member(auth, "project_metadata"), "model_otpm_limit"),
         "end_user_model_rpm_limit": _member(auth, "end_user_model_rpm_limit"),
         "end_user_model_tpm_limit": _member(auth, "end_user_model_tpm_limit"),
     }
@@ -706,8 +730,8 @@ async def _lookups(
             for agent_id in (
                 _member(identity, "agent_id"),
                 _member(identity, "invoked_agent_id"),
-                _metadata_member(data.get("metadata"), "agent_id"),
-                _metadata_member(data.get("litellm_metadata"), "agent_id"),
+                metadata_member(data.get("metadata"), "agent_id"),
+                metadata_member(data.get("litellm_metadata"), "agent_id"),
             )
             if isinstance(agent_id, str) and agent_id
         )
@@ -864,22 +888,30 @@ async def _prepared_batch(
                 if not project_covers_batch or descriptor["key"].endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
             )
         )
-        io_descriptors, io_increments = (
-            await batch._create_project_io_descriptors_for_models(  # pyright: ignore[reportPrivateUsage]  # the batch limiter's own descriptors
-                user_api_key_dict=auth, per_model_usage=usage.per_model_usage
+        io_charges: Final = (
+            ()
+            if uncharged
+            else tuple(
+                (descriptor, increment)
+                for descriptor, increment in zip(
+                    *await batch._create_project_io_descriptors_for_models(  # pyright: ignore[reportPrivateUsage]  # the batch limiter's own descriptors
+                        user_api_key_dict=auth,
+                        per_model_usage=usage.per_model_usage,
+                        include_project_io_limits=not project_covers_batch,
+                    ),
+                    strict=True,
+                )
             )
-            if not (enqueued_scopes and key_and_team_scopes) and not project_covers_batch
-            else ([], [])
         )
     except HTTPException as error:
         return Abort(status=error.status_code, message=str(error.detail), exception=error)
     except Exception:  # noqa: BLE001  # the Python batch limiter lets the request through when its preparation fails
         return None
     return {
-        "descriptors": [dict(descriptor) for descriptor in (*charged, *io_descriptors)],
+        "descriptors": [dict(descriptor) for descriptor in (*charged, *(descriptor for descriptor, _ in io_charges))],
         "increments": [
             *((usage.request_count, usage.total_tokens) for _ in charged),
-            *((increment["requests"], increment["tokens"]) for increment in io_increments),
+            *((increment["requests"], increment["tokens"]) for _, increment in io_charges),
         ],
         "request_count": usage.request_count,
         "total_tokens": usage.total_tokens,
@@ -891,7 +923,7 @@ async def _prepared_batch(
         "enqueued_scopes": [dataclasses.asdict(scope) for scope in enqueued_scopes],
         "counters_after_reservation": bool(enqueued_scopes)
         and not key_and_team_scopes
-        and (bool(charged) or not project_covers_batch),
+        and (bool(charged or io_charges) or not project_covers_batch),
     }
 
 

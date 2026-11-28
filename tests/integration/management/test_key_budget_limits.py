@@ -22,7 +22,7 @@ A response-body check is deliberately avoided per parent plan's anti-snapshot
 rule.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Final
 
 import pytest
 
@@ -165,6 +165,20 @@ _TEAM_MODEL_LIMIT_SCENARIOS = [
         400,
         "TPM",
     ),
+    (
+        "model_itpm/over_bound",
+        {"model_itpm_limit": {"gpt-4": 500}},
+        {"metadata": {"model_itpm_limit": {"gpt-4": 600}}, "tpm_limit_type": "guaranteed_throughput"},
+        400,
+        "ITPM limit=500",
+    ),
+    (
+        "model_otpm/over_bound",
+        {"model_otpm_limit": {"gpt-4": 500}},
+        {"metadata": {"model_otpm_limit": {"gpt-4": 600}}, "rpm_limit_type": "guaranteed_throughput"},
+        400,
+        "OTPM limit=500",
+    ),
 ]
 
 
@@ -208,6 +222,57 @@ async def test_check_team_key_limits_model_specific(
         where={"key_alias": resources.prefix}
     )
     assert len(rows) == (1 if expected_status == 200 else 0)
+
+
+async def test_check_team_key_limits_sums_io_allocations_across_the_team_keys_and_excludes_the_updated_key(
+    gateway_client,
+    db,
+    resources,
+    actors,
+):
+    team_id: Final = await create_scratch_team(
+        db, team_id=resources.tag("team"), metadata={"model_otpm_limit": {"gpt-4": 100}}
+    )
+    admin: Final = {"Authorization": f"Bearer {actors.keys[Actor.PROXY_ADMIN].cleartext}"}
+
+    async def generate(alias: str, otpm: int):
+        return await gateway_client.post(
+            "/key/generate",
+            headers=admin,
+            json={
+                "key_alias": alias,
+                "team_id": team_id,
+                "metadata": {"model_otpm_limit": {"gpt-4": otpm}},
+                "tpm_limit_type": "guaranteed_throughput",
+            },
+        )
+
+    async def update(key: str, otpm: int):
+        return await gateway_client.post(
+            "/key/update",
+            headers=admin,
+            json={
+                "key": key,
+                "metadata": {"model_otpm_limit": {"gpt-4": otpm}},
+                "tpm_limit_type": "guaranteed_throughput",
+            },
+        )
+
+    first: Final = await generate(resources.tag("first"), 60)
+    assert first.status_code == 200, first.text
+    overallocated: Final = await generate(resources.tag("over"), 50)
+    assert overallocated.status_code == 400, overallocated.text
+    assert "Allocated OTPM limit=60" in overallocated.text, overallocated.text
+    assert await db.db.litellm_verificationtoken.find_many(where={"key_alias": resources.tag("over")}) == []
+    second: Final = await generate(resources.tag("second"), 40)
+    assert second.status_code == 200, second.text
+
+    first_key: Final = first.json()["key"]
+    resized_over: Final = await update(first_key, 61)
+    assert resized_over.status_code == 400, resized_over.text
+    assert "Allocated OTPM limit=40" in resized_over.text, resized_over.text
+    resized_within: Final = await update(first_key, 55)
+    assert resized_within.status_code == 200, resized_within.text
 
 
 # ---------------------------------------------------------------------------

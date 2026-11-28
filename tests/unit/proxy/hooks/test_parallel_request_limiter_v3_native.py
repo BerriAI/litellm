@@ -13,12 +13,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from fractions import Fraction
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final
 
 import httpx
 import pytest
 import redis
+from fastapi import HTTPException
 from pydantic import TypeAdapter
 
 import litellm
@@ -60,6 +61,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     increment_reservation_aware_tokens,
     raise_if_over_limit_before_body,
     request_capacity,
+    run_scoped,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3_native import (
     ParallelRequestLimiterNativeLogger,
@@ -956,6 +958,278 @@ async def test_project_io_without_reservation_still_reserves_like_python(
     )
 
 
+_KEY_AND_TEAM_IO_SCOPES: Final = (
+    ("model_per_key_itpm", f"{_KEY}:gpt-4o"),
+    ("model_per_key_otpm", f"{_KEY}:gpt-4o"),
+    ("model_per_team_itpm", "t1:gpt-4o"),
+    ("model_per_team_otpm", "t1:gpt-4o"),
+)
+
+
+def _io_tokens(side: Side) -> list[int | None]:
+    counters: Final = (RateLimitScope(key, value).counter("tokens") for key, value in _KEY_AND_TEAM_IO_SCOPES)
+    stored: Final = (
+        side.limiter.rate_limits.local(tuple(counters))
+        if side.remote is None
+        else [side.remote.get(f"{{{key}:{value}}}:tokens") for key, value in _KEY_AND_TEAM_IO_SCOPES]
+    )
+    return [None if tokens is None else int(tokens) for tokens in stored]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("limited", "built"), [("metadata", 0), ("team_metadata", 2)], ids=["key", "team"])
+async def test_key_and_team_io_limits_reserve_the_requested_output_then_settle_to_the_usage_billed(
+    backend: int | None, limited: str, built: int
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    request: Final = Request(
+        _auth(team_id="t1", **{limited: {"model_itpm_limit": {"gpt-4o": 400}, "model_otpm_limit": {"gpt-4o": 100}}}),
+        {**_CHAT, "max_tokens": 20},
+    )
+
+    assert await _run(side, 0, _admit, request) is None
+    reserved: Final = _io_tokens(side)
+    await _run(side, 0, _end, request)
+
+    assert reserved[built + 1] == 20
+    assert _io_tokens(side)[built : built + 2] == [request.usage.prompt_tokens, request.usage.completion_tokens]
+
+
+@pytest.mark.asyncio
+async def test_a_key_with_its_own_output_limit_is_not_held_to_the_lower_team_output_limit(
+    backend: int | None,
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    request: Final = Request(
+        _auth(
+            team_id="t1",
+            metadata={"model_otpm_limit": {"gpt-4o": 1000}},
+            team_metadata={"model_otpm_limit": {"gpt-4o": 300}},
+        ),
+        {**_CHAT, "max_tokens": 500},
+    )
+
+    assert await _run(side, 0, _admit, request) is None
+
+    assert _io_tokens(side) == [None, 500, None, None]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("own", [{}, {"model_itpm_limit": {"gpt-4o": 400}}], ids=["no own limit", "own input limit"])
+async def test_keys_without_their_own_output_limit_share_the_team_output_limit(
+    backend: int | None, own: dict[str, object]
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    team: Final = {"team_id": "t1", "team_metadata": {"model_otpm_limit": {"gpt-4o": 300}}}
+
+    outcomes: Final = await _admitted(
+        side,
+        [
+            Request(UserAPIKeyAuth(api_key=key, metadata=own, **team), {**_CHAT, "max_tokens": 200})  # pyright: ignore[reportArgumentType]  # pydantic fields by keyword
+            for key in (_KEY, "another-key-of-the-team")
+        ],
+    )
+
+    assert outcomes[0] is None
+    assert outcomes[1] is not None and "model_per_team_otpm" in str(outcomes[1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "second"),
+    [("100", "model_per_key_otpm"), (100.9, "model_per_key_otpm"), (" 1_00 ", "model_per_key_otpm"), (True, None)],
+    ids=["numeric text", "fractional number", "padded text", "boolean"],
+)
+async def test_a_key_output_limit_is_read_like_python_int_and_a_boolean_is_ignored(
+    backend: int | None, configured: object, second: str | None
+) -> None:
+    request: Final = Request(_auth(metadata={"model_otpm_limit": {"gpt-4o": configured}}), {**_CHAT, "max_tokens": 60})
+
+    outcomes: Final = await _admitted(_side(_clock(backend), port=backend), [request, request])
+
+    assert outcomes[0] is None
+    assert (outcomes[1] is None) if second is None else (second in str(outcomes[1]))
+
+
+@pytest.mark.asyncio
+async def test_a_key_without_a_team_gets_no_team_io_counter_from_its_own_metadata(backend: int | None) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    request: Final = Request(_auth(metadata={"model_otpm_limit": {"gpt-4o": 100}}), {**_CHAT, "max_tokens": 20})
+
+    assert await _run(side, 0, _admit, request) is None
+
+    assert _io_tokens(side) == [None, 20, None, None]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["metadata", "team_metadata"], ids=["key", "team"])
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        "abc",
+        ["x"],
+        {"gpt-4o": "abc"},
+        {"gpt-4o": ["x"]},
+        {"gpt-4o": True},
+        {"gpt-4o": "100.0"},
+        {"gpt-4o": float("nan")},
+        {"gpt-4o": float("inf")},
+    ],
+    ids=[
+        "text",
+        "list",
+        "text limit",
+        "list limit",
+        "boolean limit",
+        "decimal text limit",
+        "not a number limit",
+        "infinite limit",
+    ],
+)
+async def test_malformed_key_or_team_io_limit_metadata_is_ignored_and_the_request_is_admitted(
+    backend: int | None, scope: str, malformed: object
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    request: Final = Request(
+        _auth(team_id="t1", **{scope: {"model_itpm_limit": malformed, "model_otpm_limit": malformed}}),
+        {**_CHAT, "max_tokens": 20},
+    )
+
+    assert await _run(side, 0, _admit, request) is None
+
+    assert _io_tokens(side) == [None, None, None, None]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("scope", "counter"), [("metadata", 1), ("team_metadata", 3)], ids=["key", "team"])
+@pytest.mark.parametrize("other", [None, "abc"], ids=["unset", "text"])
+async def test_a_malformed_io_limit_for_another_model_leaves_the_valid_limit_enforced(
+    backend: int | None, scope: str, counter: int, other: object
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    request: Final = Request(
+        _auth(team_id="t1", **{scope: {"model_otpm_limit": {"gpt-4o": 20, "other": other}}}),
+        {**_CHAT, "max_tokens": 20},
+    )
+
+    assert await _run(side, 0, _admit, request) is None
+
+    assert _io_tokens(side)[counter] == 20
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limited", "built", "refusing"),
+    [("metadata", 0, "model_per_key_otpm"), ("team_metadata", 2, "model_per_team_otpm")],
+    ids=["key", "team"],
+)
+async def test_a_responses_websocket_frame_is_held_to_key_and_team_io_limits_and_refunded_when_refused(
+    backend: int | None, limited: str, built: int, refusing: str
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    auth: Final = _auth(
+        team_id="t1", **{limited: {"model_itpm_limit": {"gpt-4o": 400}, "model_otpm_limit": {"gpt-4o": 100}}}
+    )
+
+    refund: Final = await side.limiter.enforce_project_io_token_quota_for_frame(auth, "gpt-4o", 30, 60)
+    with pytest.raises(HTTPException) as refused:
+        await side.limiter.enforce_project_io_token_quota_for_frame(auth, "gpt-4o", 30, 60)
+    after_refusal: Final = _io_tokens(side)
+    assert refund is not None
+    await refund()
+
+    assert refusing in str(refused.value.detail)
+    assert after_refusal[built : built + 2] == [30, 60]
+    assert _io_tokens(side)[built : built + 2] == [0, 0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("limited", "built"), [("metadata", 0), ("team_metadata", 2)], ids=["key", "team"])
+async def test_a_realtime_turn_charges_its_usage_to_key_and_team_io_counters(
+    backend: int | None, limited: str, built: int
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    auth: Final = _auth(
+        team_id="t1", **{limited: {"model_itpm_limit": {"gpt-4o": 400}, "model_otpm_limit": {"gpt-4o": 100}}}
+    )
+
+    await run_scoped(
+        side.limiter,
+        auth,
+        {"model": "gpt-4o"},
+        {"kind": "project_io"},
+        {"kind": "settle_io", "input_tokens": 18, "output_tokens": 9},
+        batched=False,
+    )
+
+    assert _io_tokens(side)[built : built + 2] == [18, 9]
+
+
+def _io_tokens_by_counter(side: Side) -> Mapping[str, int | None]:
+    return dict(zip((key for key, _ in _KEY_AND_TEAM_IO_SCOPES), _io_tokens(side), strict=True))
+
+
+_KEY_AND_LOWER_TEAM_IO_LIMITS: Final = MappingProxyType(
+    {
+        "team_id": "t1",
+        "metadata": {"model_itpm_limit": {"gpt-4o": 400}, "model_otpm_limit": {"gpt-4o": 100}},
+        "team_metadata": {"model_itpm_limit": {"gpt-4o": 20}, "model_otpm_limit": {"gpt-4o": 50}},
+    }
+)
+
+
+@pytest.mark.asyncio
+async def test_a_responses_websocket_frame_is_held_only_to_the_key_io_limits_when_key_and_team_both_limit_the_model(
+    backend: int | None,
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    auth: Final = _auth(**_KEY_AND_LOWER_TEAM_IO_LIMITS)
+
+    refund: Final = await side.limiter.enforce_project_io_token_quota_for_frame(auth, "gpt-4o", 30, 60)
+    with pytest.raises(HTTPException) as refused:
+        await side.limiter.enforce_project_io_token_quota_for_frame(auth, "gpt-4o", 30, 60)
+    after_refusal: Final = _io_tokens_by_counter(side)
+    assert refund is not None
+    await refund()
+
+    assert "model_per_key_otpm" in str(refused.value.detail)
+    assert after_refusal == {
+        "model_per_key_itpm": 30,
+        "model_per_key_otpm": 60,
+        "model_per_team_itpm": None,
+        "model_per_team_otpm": None,
+    }
+    assert _io_tokens_by_counter(side) == {
+        "model_per_key_itpm": 0,
+        "model_per_key_otpm": 0,
+        "model_per_team_itpm": None,
+        "model_per_team_otpm": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_realtime_turn_charges_only_the_key_io_counters_when_key_and_team_both_limit_the_model(
+    backend: int | None,
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+
+    await run_scoped(
+        side.limiter,
+        _auth(**_KEY_AND_LOWER_TEAM_IO_LIMITS),
+        {"model": "gpt-4o"},
+        {"kind": "project_io"},
+        {"kind": "settle_io", "input_tokens": 18, "output_tokens": 9},
+        batched=False,
+    )
+
+    assert _io_tokens_by_counter(side) == {
+        "model_per_key_itpm": 18,
+        "model_per_key_otpm": 9,
+        "model_per_team_itpm": None,
+        "model_per_team_otpm": None,
+    }
+
+
 async def _guarded(call: Coroutine[object, object, object]) -> object:
     try:
         return await call
@@ -1204,6 +1478,44 @@ async def test_a_batch_is_charged_and_refused_like_python(
     )
     assert observed[0] is None
     assert observed[2] is not None or end == "proxy_failure"
+
+
+@pytest.mark.asyncio
+async def test_key_output_limit_still_refuses_a_batch_the_project_enqueued_token_limit_covers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _batch_usage(monkeypatch, total_tokens=600, request_count=6)
+    auth: Final = _auth(
+        metadata={"model_otpm_limit": {"gpt-4o": 150}},
+        project_id="proj",
+        project_metadata={"model_batch_enqueued_token_limit": {"gpt-4o": 1000000}},
+    )
+
+    outcomes: Final = await _admitted(
+        _side(Clock()), [Request(auth, _BATCH, call_type="acreate_batch") for _ in range(2)]
+    )
+
+    assert outcomes[0] is None
+    assert outcomes[1] is not None and "model_per_key_otpm" in str(outcomes[1])
+
+
+@pytest.mark.asyncio
+async def test_malformed_project_input_limit_leaves_the_key_daily_token_limit_enforced_under_a_covering_project_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _batch_usage(monkeypatch, total_tokens=600, request_count=6)
+    auth: Final = _auth(
+        tpd_limit=1000,
+        project_id="proj",
+        project_metadata={"model_batch_enqueued_token_limit": {"gpt-4o": 1000000}, "model_itpm_limit": [1]},
+    )
+
+    outcomes: Final = await _admitted(
+        _side(Clock()), [Request(auth, _BATCH, call_type="acreate_batch") for _ in range(2)]
+    )
+
+    assert outcomes[0] is None
+    assert outcomes[1] is not None and "api_key_tpd" in str(outcomes[1])
 
 
 def _batch_object(batch_id: str, status: str) -> SimpleNamespace:

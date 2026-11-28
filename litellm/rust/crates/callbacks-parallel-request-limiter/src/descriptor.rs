@@ -5,6 +5,12 @@ use serde_json::Value;
 
 pub const PROJECT_ITPM: &str = "model_per_project_itpm";
 pub const PROJECT_OTPM: &str = "model_per_project_otpm";
+pub const KEY_ITPM: &str = "model_per_key_itpm";
+pub const KEY_OTPM: &str = "model_per_key_otpm";
+pub const TEAM_ITPM: &str = "model_per_team_itpm";
+pub const TEAM_OTPM: &str = "model_per_team_otpm";
+pub const ITPM_KEYS: [&str; 3] = [PROJECT_ITPM, KEY_ITPM, TEAM_ITPM];
+pub const OTPM_KEYS: [&str; 3] = [PROJECT_OTPM, KEY_OTPM, TEAM_OTPM];
 pub const PTU_TEAM: &str = "model_per_team_ptu";
 
 fn int_text(text: &str) -> Option<i64> {
@@ -269,8 +275,16 @@ impl Descriptor {
         self.limits().window_size.unwrap_or(default)
     }
 
-    pub fn is_project_io(&self) -> bool {
-        self.key == PROJECT_ITPM || self.key == PROJECT_OTPM
+    pub fn is_itpm(&self) -> bool {
+        ITPM_KEYS.contains(&self.key.as_str())
+    }
+
+    pub fn is_otpm(&self) -> bool {
+        OTPM_KEYS.contains(&self.key.as_str())
+    }
+
+    pub fn is_io(&self) -> bool {
+        self.is_itpm() || self.is_otpm()
     }
 }
 
@@ -280,6 +294,25 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[rstest]
+    #[case::project_input("model_per_project_itpm", (true, false))]
+    #[case::project_output("model_per_project_otpm", (false, true))]
+    #[case::key_input("model_per_key_itpm", (true, false))]
+    #[case::key_output("model_per_key_otpm", (false, true))]
+    #[case::team_input("model_per_team_itpm", (true, false))]
+    #[case::team_output("model_per_team_otpm", (false, true))]
+    #[case::key_total("model_per_key", (false, false))]
+    #[case::team_ptu("model_per_team_ptu", (false, false))]
+    fn a_descriptor_knows_whether_it_counts_input_or_output_tokens(
+        #[case] key: &str,
+        #[case] expected: (bool, bool),
+    ) {
+        let descriptor: Descriptor =
+            serde_json::from_value(json!({"key": key, "value": "v"})).unwrap();
+        assert_eq!((descriptor.is_itpm(), descriptor.is_otpm()), expected);
+        assert_eq!(descriptor.is_io(), expected.0 || expected.1);
+    }
 
     #[rstest]
     fn a_descriptor_reads_the_python_typed_dict_with_float_and_missing_limits() {

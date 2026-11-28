@@ -41,7 +41,9 @@ BURST: Final = 8
 TOKEN_LIMIT: Final = 100
 INPUT_TOKEN_LIMIT: Final = 120
 MAX_TOKENS: Final = 60
+HEALTHY_OUTPUT_TOKENS: Final = 3
 METERED_USAGE: Final = MappingProxyType({"prompt_tokens": 900, "completion_tokens": 100, "total_tokens": 1000})
+OUTPUT_LIMIT_UNDER_METERED_USAGE: Final = METERED_USAGE["completion_tokens"] - 10
 MALFORMED_VALUES: Final[tuple[tuple[str, JsonValue], ...]] = (
     ("word", "sometimes"),
     ("empty", ""),
@@ -60,10 +62,20 @@ class Groups:
     metered: str
     gated_hard: str
     gated_soft: str
+    gated_output: str
     capped: str
 
     def names(self) -> tuple[str, ...]:
-        return (self.primary, self.fallback, self.last, self.metered, self.gated_hard, self.gated_soft, self.capped)
+        return (
+            self.primary,
+            self.fallback,
+            self.last,
+            self.metered,
+            self.gated_hard,
+            self.gated_soft,
+            self.gated_output,
+            self.capped,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +109,7 @@ def new_groups() -> Groups:
         metered=f"per-model-metered-{suffix}",
         gated_hard=f"per-model-gated-hard-{suffix}",
         gated_soft=f"per-model-gated-soft-{suffix}",
+        gated_output=f"per-model-gated-output-{suffix}",
         capped=f"per-model-capped-{suffix}",
     )
 
@@ -139,6 +152,12 @@ def metered_reply(request: Request) -> Reply:
         "usage": dict(METERED_USAGE),
     }
     return Reply(body=json.dumps(body).encode())
+
+
+def provider_outage_reply(request: Request) -> Reply:
+    if is_model_info_probe(request):
+        return model_list_reply()
+    return Reply(status=500, body=b'{"error": {"message": "scripted provider outage", "type": "server_error"}}')
 
 
 def model_entry(group: str, wire: Wire, **extra: JsonValue) -> dict[str, JsonValue]:
@@ -189,6 +208,7 @@ def enforcing_config(directory: Path, groups: Groups, wires: Mapping[str, Wire])
             model_entry(groups.metered, wires[groups.metered]),
             model_entry(groups.gated_hard, wires[groups.gated_hard], rpm=1),
             model_entry(groups.gated_soft, wires[groups.gated_soft], rpm=1),
+            model_entry(groups.gated_output, wires[groups.gated_output], rpm=1),
             model_entry(groups.capped, wires[groups.capped]),
         ),
         fallbacks=(
@@ -196,6 +216,7 @@ def enforcing_config(directory: Path, groups: Groups, wires: Mapping[str, Wire])
             {groups.metered: [groups.fallback]},
             {groups.gated_hard: [groups.capped, groups.last]},
             {groups.gated_soft: [groups.fallback]},
+            {groups.gated_output: [groups.capped, groups.last]},
         ),
         general_settings={SETTING: True},
         callbacks=("dynamic_rate_limiter_v3",),
@@ -219,6 +240,32 @@ def enforcing(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 rig_gateway, directory, {}, config=enforcing_config(directory, groups, wires), workers=2
             )
         )
+        yield Rig(owned.gateway, owned, groups, wires)
+
+
+@pytest.fixture(scope="module")
+def unset(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
+    directory: Final = tmp_path_factory.mktemp("per-model-limits-unset")
+    groups: Final = new_groups()
+    with ExitStack() as stack:
+        rig_gateway: Final = stack.enter_context(gateway_from_environment())
+        outage: Final = stack.enter_context(wire_server(provider_outage_reply))
+        wires: Final = MappingProxyType(
+            {
+                groups.metered: stack.enter_context(wire_server(metered_reply)),
+                groups.last: stack.enter_context(wire_server(healthy_reply)),
+            }
+        )
+        config: Final = proxy_config(
+            directory,
+            model_list=(
+                model_entry(groups.primary, outage),
+                *(model_entry(group, wire) for group, wire in wires.items()),
+            ),
+            fallbacks=({groups.primary: [groups.metered, groups.last]},),
+            general_settings={},
+        )
+        owned: Final = stack.enter_context(owned_proxy_process(rig_gateway, directory, {}, config=config, workers=2))
         yield Rig(owned.gateway, owned, groups, wires)
 
 
@@ -494,6 +541,64 @@ def test_chat_over_key_model_tpm_gets_429_instead_of_the_fallback(enforcing: Rig
             limit=TOKEN_LIMIT,
         )
     assert enforcing.traffic() == enforcing.expected({metered: (first,)})
+
+
+def test_chat_over_key_model_otpm_gets_429_instead_of_the_fallback(enforcing: Rig) -> None:
+    enforcing.traffic()
+    metered: Final = enforcing.groups.metered
+    first, second = new_marker(), new_marker()
+    with enforcing.gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"model_otpm_limit": {metered: TOKEN_LIMIT}})
+        assert_served(chat(enforcing.gateway, key, metered, first, max_tokens=MAX_TOKENS), metered, f"chatcmpl-{first}")
+        assert_refused(
+            chat(enforcing.gateway, key, metered, second, max_tokens=MAX_TOKENS),
+            "model_per_key_otpm",
+            metered,
+            kind="tokens",
+            limit=TOKEN_LIMIT,
+        )
+    assert enforcing.traffic() == enforcing.expected({metered: (first,)})
+
+
+def test_a_fallback_over_the_key_model_otpm_answers_429_and_leaves_no_reservation_on_it(enforcing: Rig) -> None:
+    enforcing.traffic()
+    groups: Final = enforcing.groups
+    warm, spend, refused, after = new_marker(), new_marker(), new_marker(), new_marker()
+    over_the_room_left: Final = TOKEN_LIMIT - HEALTHY_OUTPUT_TOKENS + 1
+    with enforcing.gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"model_otpm_limit": {groups.capped: TOKEN_LIMIT}})
+        assert_served(chat(enforcing.gateway, key, groups.gated_output, warm), groups.gated_output, f"chatcmpl-{warm}")
+        assert_served(
+            chat(enforcing.gateway, key, groups.capped, spend, max_tokens=MAX_TOKENS),
+            groups.capped,
+            f"chatcmpl-{spend}",
+        )
+        assert_refused(
+            chat(enforcing.gateway, key, groups.gated_output, refused, max_tokens=over_the_room_left),
+            "model_per_key_otpm",
+            groups.capped,
+            kind="tokens",
+            limit=TOKEN_LIMIT,
+        )
+        assert_served(
+            chat(enforcing.gateway, key, groups.capped, after, max_tokens=TOKEN_LIMIT - MAX_TOKENS),
+            groups.capped,
+            f"chatcmpl-{after}",
+        )
+    assert enforcing.traffic() == enforcing.expected({groups.gated_output: (warm,), groups.capped: (spend, after)})
+
+
+def test_a_provider_error_skips_a_fallback_over_the_key_model_otpm_and_is_served_by_the_next_one(unset: Rig) -> None:
+    unset.traffic()
+    groups: Final = unset.groups
+    spend, moved = new_marker(), new_marker()
+    with unset.gateway.scenario() as scenario:
+        key: Final = scenario.key(metadata={"model_otpm_limit": {groups.metered: OUTPUT_LIMIT_UNDER_METERED_USAGE}})
+        assert_served(
+            chat(unset.gateway, key, groups.metered, spend, max_tokens=MAX_TOKENS), groups.metered, f"chatcmpl-{spend}"
+        )
+        assert_served(chat(unset.gateway, key, groups.primary, moved), groups.last, f"chatcmpl-{moved}")
+    assert unset.traffic() == unset.expected({groups.metered: (spend,), groups.last: (moved,)})
 
 
 def test_key_router_settings_fallbacks_are_skipped_on_a_per_model_429(enforcing: Rig) -> None:

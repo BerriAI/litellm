@@ -21,6 +21,7 @@ import traceback
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from itertools import chain, groupby
 from types import MappingProxyType, TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -128,6 +129,7 @@ from litellm.proxy.db.master_key_migration import reencrypt_stored_values
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
+from litellm.proxy.hooks.rate_limiter_utils import io_limit_entries
 from litellm.proxy.management.teams.authz import TEAM_ADMIN_ONLY, TEAM_OR_ORG_ADMIN, is_team_admin
 from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
@@ -2195,6 +2197,68 @@ def check_team_key_model_specific_limits(
         entity_model_tpm_limit_dict=entity_model_tpm_limit_dict,
         entity_type="team",
     )
+    _check_key_model_io_limits(
+        keys=keys,
+        data=data,
+        entity_metadata=team_table.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_TeamTable.metadata is a bare dict
+        entity_tpm_limit=team_table.tpm_limit,
+        entity_type="team",
+    )
+
+
+def _io_overallocation(
+    label: str, allocated: int, limit: int, entity_limits: Sequence[tuple[str, int | None]], entity_type: str
+) -> str | None:
+    return next(
+        (
+            f"Allocated {label} limit={allocated} + Key {label} limit={limit} is greater than {entity_type} {entity_label} limit={entity_limit}"
+            for entity_label, entity_limit in entity_limits
+            if entity_limit is not None and allocated + limit > entity_limit
+        ),
+        None,
+    )
+
+
+def _check_key_model_io_limits(
+    keys: Sequence[LiteLLM_VerificationToken],
+    data: GenerateKeyRequest | UpdateKeyRequest,
+    entity_metadata: object,
+    entity_tpm_limit: int | None,
+    entity_type: str,
+) -> None:
+    for name, label in (("model_itpm_limit", "ITPM"), ("model_otpm_limit", "OTPM")):
+        _check_key_model_io_limit(
+            label,
+            io_limit_entries(data.metadata, name),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            _summed_io_limits((key.metadata for key in keys), name),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+            io_limit_entries(entity_metadata, name),
+            entity_tpm_limit,
+            entity_type,
+        )
+
+
+def _check_key_model_io_limit(
+    label: str,
+    requested: Mapping[str, int],
+    allocated: Mapping[str, int],
+    entity_limits: Mapping[str, int],
+    entity_tpm_limit: int | None,
+    entity_type: str,
+) -> None:
+    for model, limit in requested.items():
+        if detail := _io_overallocation(
+            label,
+            allocated.get(model, 0),
+            limit,
+            ((label, entity_limits.get(model) or None), ("TPM", entity_tpm_limit)),
+            entity_type,
+        ):
+            raise HTTPException(status_code=400, detail=detail)
+
+
+def _summed_io_limits(metadatas: Iterable[object], name: str) -> Mapping[str, int]:
+    entries: Final = sorted(chain.from_iterable(io_limit_entries(metadata, name).items() for metadata in metadatas))
+    return {model: sum(limit for _, limit in group) for model, group in groupby(entries, key=lambda entry: entry[0])}
 
 
 def check_team_key_rpm_tpm_limits(

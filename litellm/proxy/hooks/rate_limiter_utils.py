@@ -18,6 +18,33 @@ from litellm.types.utils import CallTypes, PriorityReservationDict, Usage
 _SOCKET_SESSION_EVENTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
+def valid_io_limit(value: object) -> int | None:
+    match value:
+        case bool():
+            return None
+        case int() | float() | str():
+            try:
+                return int(value)
+            except (ValueError, OverflowError):
+                return None
+        case _:
+            return None
+
+
+def mapping_entries(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None  # pyright: ignore[reportUnknownVariableType]  # auth and request metadata are untyped
+
+
+def metadata_member(metadata: object, name: str) -> object:
+    entries: Final = mapping_entries(metadata)
+    return entries.get(name) if entries else None
+
+
+def io_limit_entries(metadata: object, name: str) -> Mapping[str, int]:
+    entries: Final = mapping_entries(metadata_member(metadata, name)) or {}
+    return {str(model): limit for model, value in entries.items() if (limit := valid_io_limit(value)) is not None}
+
+
 def socket_session_usage(kwargs: Mapping[str, object], response_obj: object) -> Usage | None:
     if not isinstance(response_obj, list):
         return None

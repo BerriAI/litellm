@@ -30,6 +30,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROXY_MaxParallelRequestsHandler_v3,
     get_batch_rate_limiter,
+    no_max_tokens_output_floor,
     run_scoped,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
@@ -972,6 +973,319 @@ async def test_alias_routed_rows_naming_the_deployment_model_are_held_to_both_pr
 
     assert refused.value.status_code == 429
     assert f"project-1:{limited_model}" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limited", "descriptor_key", "entity"),
+    [
+        ("metadata", "model_per_key_otpm", hash_token("sk-batch")),
+        ("team_metadata", "model_per_team_otpm", "team-1"),
+    ],
+    ids=["key", "team"],
+)
+async def test_key_and_team_output_limits_size_and_charge_the_output_a_batch_row_may_produce(
+    alias_routed_batch: respx.MockRouter, limited: str, descriptor_key: str, entity: str
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+    otpm_limit: Final = 200
+
+    await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=hash_token("sk-batch"),
+            models=[_BATCH_ALIAS],
+            team_id="team-1",
+            **{limited: {"model_otpm_limit": {_BATCH_ALIAS: otpm_limit}}},
+        ),
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+
+    charged: Final = await _counter(
+        internal_usage_cache, rate_limiter, descriptor_key, f"{entity}:{_BATCH_ALIAS}", "tokens"
+    )
+    assert charged == no_max_tokens_output_floor(otpm_limit)
+    assert charged < no_max_tokens_output_floor(None)
+
+
+@pytest.mark.asyncio
+async def test_a_team_output_limit_the_key_overrides_does_not_shrink_the_output_a_batch_row_may_produce(
+    alias_routed_batch: respx.MockRouter,
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+    key_limit: Final = 400
+
+    await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=hash_token("sk-batch"),
+            models=[_BATCH_ALIAS],
+            team_id="team-1",
+            metadata={"model_otpm_limit": {_BATCH_ALIAS: key_limit}},
+            team_metadata={"model_otpm_limit": {_BATCH_ALIAS: 200}},
+        ),
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+
+    charged: Final = await _counter(
+        internal_usage_cache, rate_limiter, "model_per_key_otpm", f"{hash_token('sk-batch')}:{_BATCH_ALIAS}", "tokens"
+    )
+    assert charged == no_max_tokens_output_floor(key_limit)
+    assert charged > no_max_tokens_output_floor(200)
+    assert (
+        await _counter(internal_usage_cache, rate_limiter, "model_per_team_otpm", f"team-1:{_BATCH_ALIAS}", "tokens")
+        == 0
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured", [151, "151", 151.9], ids=["integer", "numeric text", "fractional number"])
+async def test_a_key_output_limit_is_read_like_python_int_when_sizing_a_batch_row_output(
+    alias_routed_batch: respx.MockRouter, configured: object
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    internal_usage_cache, rate_limiter, batch_limiter = _make_limiters()
+
+    await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=hash_token("sk-batch"),
+            models=[_BATCH_ALIAS],
+            metadata={"model_otpm_limit": {_BATCH_ALIAS: configured}},
+        ),
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+
+    assert await _counter(
+        internal_usage_cache, rate_limiter, "model_per_key_otpm", f"{hash_token('sk-batch')}:{_BATCH_ALIAS}", "tokens"
+    ) == no_max_tokens_output_floor(151)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limited", "refusing"),
+    [("metadata", "model_per_key_itpm"), ("team_metadata", "model_per_team_itpm")],
+    ids=["key", "team"],
+)
+async def test_a_key_or_team_input_limit_on_a_row_model_alone_gets_the_batch_file_read_and_refused(
+    alias_routed_batch: respx.MockRouter, limited: str, refusing: str
+):
+    file_route: Final = alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_DEPLOYMENT_MODEL),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key=hash_token("sk-batch"),
+                team_id="team-1",
+                **{limited: {"model_itpm_limit": {_DEPLOYMENT_MODEL: 1}}},
+            ),
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert file_route.call_count == 1
+    assert refused.value.status_code == 429
+    assert refusing in str(refused.value.detail)
+    assert _DEPLOYMENT_MODEL in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_key_output_limit_still_refuses_a_batch_the_project_enqueued_token_limit_covers(
+    alias_routed_batch: respx.MockRouter,
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    _, _, batch_limiter = _make_limiters()
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-batch"),
+        models=[_BATCH_ALIAS],
+        metadata={"model_otpm_limit": {_BATCH_ALIAS: 1}},
+        project_id="project-1",
+        project_metadata={"model_batch_enqueued_token_limit": {_BATCH_ALIAS: 1000000}},
+    )
+
+    await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert refused.value.status_code == 429
+    assert "model_per_key_otpm" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limited", ["metadata", "team_metadata", "project_metadata"], ids=["key", "team", "project"])
+async def test_a_batch_refused_by_an_output_limit_names_it_an_otpm_limit(
+    alias_routed_batch: respx.MockRouter, limited: str
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    _, _, batch_limiter = _make_limiters()
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-batch"),
+        models=[_BATCH_ALIAS],
+        team_id="team-1",
+        project_id="project-1",
+        **{limited: {"model_otpm_limit": {_BATCH_ALIAS: 1}}},
+    )
+
+    await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert refused.value.status_code == 429
+    assert "out of 1 OTPM limit" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limited", ["metadata", "team_metadata", "project_metadata"], ids=["key", "team", "project"])
+async def test_a_batch_refused_by_an_input_limit_names_it_an_itpm_limit(
+    alias_routed_batch: respx.MockRouter, limited: str
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key=hash_token("sk-batch"),
+                models=[_BATCH_ALIAS],
+                team_id="team-1",
+                project_id="project-1",
+                **{limited: {"model_itpm_limit": {_BATCH_ALIAS: 1}}},
+            ),
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert refused.value.status_code == 429
+    assert "out of 1 ITPM limit" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("malformed", ["abc", {_BATCH_ALIAS: None}], ids=["text", "unset limit"])
+async def test_malformed_team_output_limit_metadata_leaves_the_key_token_limit_enforced(
+    alias_routed_batch: respx.MockRouter, malformed: object
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key=hash_token("sk-batch"),
+                models=[_BATCH_ALIAS],
+                tpm_limit=1,
+                team_id="team-1",
+                team_metadata={"model_otpm_limit": malformed},
+            ),
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert refused.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_project_input_limit_without_a_value_still_counts_the_batch(alias_routed_batch: respx.MockRouter):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    counted: Final = await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=hash_token("sk-batch"),
+            project_id="project-1",
+            project_metadata={"model_itpm_limit": {_BATCH_ALIAS: None}},
+        ),
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+
+    assert counted["_batch_token_count"] > 0
+
+
+@pytest.mark.asyncio
+async def test_malformed_project_input_limit_leaves_the_key_daily_token_limit_enforced_under_a_covering_project_limit(
+    alias_routed_batch: respx.MockRouter,
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    def key_limited_to(tpd_limit: int) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key=hash_token("sk-batch"),
+            models=[_BATCH_ALIAS],
+            tpd_limit=tpd_limit,
+            project_id="project-1",
+            project_metadata={
+                "model_batch_enqueued_token_limit": {_BATCH_ALIAS: 1000000},
+                "model_itpm_limit": [1],
+            },
+        )
+
+    admitted: Final = await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=key_limited_to(1000000),
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=key_limited_to(admitted["_batch_token_count"]),
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert refused.value.status_code == 429
+    assert "api_key_tpd" in str(refused.value.detail)
 
 
 @pytest.mark.asyncio
