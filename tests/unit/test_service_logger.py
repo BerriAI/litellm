@@ -5,6 +5,9 @@ Regression test for KeyError: 'call_type' when async_log_success_event
 is called without call_type in kwargs (e.g. from batch polling callbacks).
 """
 
+import asyncio
+import asyncio.events
+
 import pytest
 from datetime import datetime
 from typing import Final
@@ -367,3 +370,57 @@ async def test_generic_otel_logger_receives_service_event_once_beside_langfuse_o
     assert len(service_spans) == 1
     assert service_spans[0].attributes.get("call_type") == "success"
     assert langfuse_exporter.get_finished_spans() == ()
+
+
+_SYNC_HOOK_CALLS = [
+    pytest.param("service_success_hook", {}, id="success"),
+    pytest.param("service_failure_hook", {"error": RuntimeError("boom")}, id="failure"),
+]
+
+
+@pytest.fixture
+def started_loops(monkeypatch) -> list[asyncio.AbstractEventLoop]:
+    """Event loops started during the test."""
+    started: list[asyncio.AbstractEventLoop] = []
+    original = asyncio.events._set_running_loop
+
+    def recording_set_running_loop(loop):
+        if loop is not None:
+            started.append(loop)
+        original(loop)
+
+    monkeypatch.setattr(asyncio.events, "_set_running_loop", recording_set_running_loop)
+    return started
+
+
+@pytest.mark.parametrize("hook_name, extra_kwargs", _SYNC_HOOK_CALLS)
+def test_sync_service_hook_starts_no_event_loop_without_callbacks(monkeypatch, started_loops, hook_name, extra_kwargs):
+    """With no service callback, nothing receives the event, so no loop should start."""
+    monkeypatch.setattr(litellm, "service_callback", [])
+
+    getattr(ServiceLogging(), hook_name)(service=ServiceTypes.REDIS, duration=0.1, call_type="test", **extra_kwargs)
+
+    assert started_loops == []
+
+
+@pytest.mark.parametrize("hook_name, extra_kwargs", _SYNC_HOOK_CALLS)
+def test_sync_service_hook_still_delivers_to_configured_callbacks(
+    monkeypatch, hook_name, extra_kwargs
+):
+    """With a service callback, the event still reaches it: a real OTel logger exports the span."""
+    from litellm.integrations.otel.model.spans import SpanRole
+
+    v2_logger, exporter = _make_otel_v2_logger()
+    parent = v2_logger._emitter.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
+    monkeypatch.setattr(litellm, "service_callback", [v2_logger])
+
+    getattr(ServiceLogging(), hook_name)(
+        service=ServiceTypes.REDIS,
+        duration=0.1,
+        call_type="test",
+        parent_otel_span=parent,
+        **extra_kwargs,
+    )
+    parent.end()
+
+    assert "redis test" in [span.name for span in exporter.get_finished_spans()]
