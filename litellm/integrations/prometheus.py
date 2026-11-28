@@ -1120,6 +1120,7 @@ class PrometheusLogger(CustomLogger):
                 name="litellm_deployment_latency_per_output_token",
                 documentation="LLM Deployment Analytics - Latency per output token",
                 labelnames=self.get_labels_for_metric("litellm_deployment_latency_per_output_token"),
+                buckets=self.latency_buckets,
             )
 
             self.litellm_deployment_successful_fallbacks: _MetricLike[PrometheusCounter] = self._counter_factory(
