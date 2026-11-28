@@ -21,8 +21,8 @@ use std::{convert::Infallible, sync::Arc, time::Duration};
 use litellm_config::{Config, LitellmRole};
 use litellm_gateway_auth::{Auth, BearerOrXApiKey, KeyAuthenticator, SystemClock};
 use litellm_gateway_auth_core::{
-    AgentIdentityFailure, AuthHost, Error, HostFacts, KeyHash, MasterKey, OperatorHooks, Refreshed,
-    RouteGroups, Rows, Settings, Token,
+    AffiliationRead, AgentIdentityFailure, AuthHost, Error, HostFacts, KeyHash, MasterKey,
+    OperatorHooks, Refreshed, RouteGroups, Rows, Settings, Token,
     authn::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
         key::Keyed,
@@ -33,21 +33,21 @@ use litellm_gateway_auth_core::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
             RegisteredAgent, TeamRead, UserLookup, UserRead,
         },
-        key::Owner,
+        key::{KeyTeam, Owner},
     },
     record::{EndUserRecord, MembershipRecord, OrgRecord, ProjectRecord, TeamRecord, UserRecord},
 };
 use litellm_redis_store::auth_cache::KeyEntry;
 use serde_json::Value;
 
-pub(crate) use affiliation::{unserved, unserved_project, unserved_user};
+pub(crate) use affiliation::{unserved, unserved_org, unserved_project, unserved_user};
 pub(crate) use end_user::{end_user, unserved as unserved_end_user};
 pub use key::Key;
 pub(crate) use models::{allowed_models, layers};
 pub use store::AuthStore;
 
 /// The rows the native host hands the core: a key's, and a core record for each thing a caller
-/// belongs to. A key's team, owner and project are read, and a caller that holds one still goes
+/// belongs to. A key's team, owner, organization and project are read, and a caller that holds one still goes
 /// to Python at admit. The steps that read the other records decline. `Infallible` is a row this
 /// host has no record for, so no identity that needs one exists. The end user's record is empty
 /// for a request that names none, and names the end user alone for one whose row holds nothing
@@ -329,11 +329,16 @@ impl AuthHost for NativeAuthHost {
 
     /// A team with no row declines, since the key is then judged by its own copy of the team's
     /// values, which this host does not read.
-    async fn key_team(&self, team_id: &str) -> Result<Option<TeamRecord>, Error> {
+    async fn key_team(&self, team_id: &str) -> Result<Option<KeyTeam<TeamRecord>>, Error> {
         let read = self.store("key_team")?.team(team_id).await;
         match unless_failed(read, "key_team")? {
             Some(team) => affiliation::team(&team)
-                .map(|team| Some(team.row))
+                .map(|team| {
+                    Some(KeyTeam {
+                        organization_id: team.row.organization_id.clone(),
+                        row: team.row,
+                    })
+                })
                 .or_else(declined),
             None => declined("team_id"),
         }
@@ -359,8 +364,14 @@ impl AuthHost for NativeAuthHost {
         declined("load_team_membership")
     }
 
-    async fn org(&self, _: &str) -> Result<Option<Org<OrgRecord>>, Error> {
-        declined("org")
+    async fn org(&self, id: &str, read: AffiliationRead) -> Result<Option<Org<OrgRecord>>, Error> {
+        if read == AffiliationRead::Jwt {
+            return declined("org");
+        }
+        let read = Box::pin(self.store("org")?.org(id)).await;
+        unless_failed(read, "org")?
+            .map(|row| affiliation::org(&row).or_else(declined))
+            .transpose()
     }
 
     async fn org_by_alias(&self, _: &str) -> Result<Option<Org<OrgRecord>>, Error> {
@@ -542,7 +553,8 @@ mod tests {
     const PARENTS: &str = r#"
         INSERT INTO "LiteLLM_BudgetTable" (budget_id, created_by, updated_by) VALUES ('budget', 'test', 'test');
         INSERT INTO "LiteLLM_OrganizationTable" (organization_id, organization_alias, budget_id, created_by, updated_by)
-            VALUES ('org', 'Org', 'budget', 'test', 'test');
+            VALUES ('org', 'Org', 'budget', 'test', 'test'),
+                   ('other', 'Other Org', 'budget', 'test', 'test');
         INSERT INTO "LiteLLM_TeamTable" (team_id) VALUES ('team');
         INSERT INTO "LiteLLM_ProjectTable" (project_id, project_alias, team_id, models, created_by, updated_by)
             VALUES ('project', 'Project', 'team', ARRAY[]::text[], 'test', 'test');
@@ -808,7 +820,6 @@ mod tests {
     #[case::a_team_with_no_row(json!({"team_id": "gone"}))]
     #[case::the_ui_team(json!({"team_id": "litellm-dashboard"}))]
     #[case::agent_id(json!({"agent_id": "agent"}))]
-    #[case::org_id(json!({"organization_id": "org"}))]
     #[case::permissions(json!({"permissions": {"a": true}}))]
     #[case::metadata(json!({"metadata": {"guardrails": ["pii"]}}))]
     #[case::metadata_beside_a_model_limit(json!({"metadata": {"model_rpm_limit": {"claude": 2}, "tags": ["a"]}}))]
@@ -909,6 +920,30 @@ mod tests {
     }
 
     #[rstest]
+    #[case::org_id(json!({"organization_id": "org"}), json!({}))]
+    #[case::organization_id(json!({}), json!({"organization_id": "org"}))]
+    #[case::key_org_wins(json!({"organization_id": "org"}), json!({"organization_id": "other"}))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_keys_organization_reaches_its_caller(#[case] key: Columns, #[case] team: Columns) {
+        let held = in_team(key, team).await;
+
+        let caller = presenting(held.database(), VIRTUAL_KEY).await.unwrap();
+
+        assert_eq!(
+            caller
+                .affiliation
+                .org
+                .as_ref()
+                .and_then(Named::stored)
+                .map(|record| (
+                    record.organization_id.as_str(),
+                    record.organization_alias.as_deref()
+                )),
+            Some(("org", Some("Org"))),
+        );
+    }
+
+    #[rstest]
     #[case::rpm(json!({"rpm_limit": 2}), KeyLimits { rpm: Some(2), ..KeyLimits::default() })]
     #[case::tpm(json!({"tpm_limit": 100}), KeyLimits { tpm: Some(100), ..KeyLimits::default() })]
     #[case::parallel(
@@ -982,7 +1017,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::organization_id(json!({"organization_id": "org"}))]
     #[case::object_permission_id(json!({"object_permission_id": "permission"}))]
     #[case::model_aliases(json!({"model_id": 7}))]
     #[case::metadata(json!({"metadata": {"guardrails": ["pii"]}}))]

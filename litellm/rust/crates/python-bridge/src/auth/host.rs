@@ -394,6 +394,7 @@ impl OperatorHooks for PythonAuthHost {
 }
 
 impl AuthHost for PythonAuthHost {
+    const READ_KEY_AFFILIATIONS: bool = false;
     type Rows = PyRows;
 
     async fn validated_end_user_id(&self, end_user_id: &str) -> Result<Option<String>, Error> {
@@ -506,9 +507,18 @@ impl AuthHost for PythonAuthHost {
         .await?
         .map_err(Error::from)
     }
-    async fn key_team(&self, team_id: &str) -> Result<Option<PyRow>, Error> {
+    async fn key_team(
+        &self,
+        team_id: &str,
+    ) -> Result<Option<litellm_gateway_auth_core::identity::key::KeyTeam<PyRow>>, Error> {
         let team_id = team_id.to_owned();
-        self.ask(|reply| Ask::KeyTeam { team_id, reply }).await
+        let row = self.ask(|reply| Ask::KeyTeam { team_id, reply }).await?;
+        Ok(
+            row.map(|row| litellm_gateway_auth_core::identity::key::KeyTeam {
+                row,
+                organization_id: None,
+            }),
+        )
     }
     async fn object_permission(&self, id: &str) -> Result<Option<PyRow>, Error> {
         let id = id.to_owned();
@@ -671,7 +681,11 @@ impl AuthHost for PythonAuthHost {
         })
         .await
     }
-    async fn org(&self, org_id: &str) -> Result<Option<Org<PyRow>>, Error> {
+    async fn org(
+        &self,
+        org_id: &str,
+        _: litellm_gateway_auth_core::AffiliationRead,
+    ) -> Result<Option<Org<PyRow>>, Error> {
         let org_id = org_id.to_owned();
         self.ask(|reply| Ask::Org { org_id, reply }).await
     }

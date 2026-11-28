@@ -112,6 +112,8 @@ pub(crate) struct KeyFacts {
     #[pyo3(attribute)]
     team_object_permission_id: Option<String>,
     #[pyo3(attribute)]
+    org_id: Option<String>,
+    #[pyo3(attribute)]
     project_id: Option<String>,
     #[pyo3(attribute, from_py_with = py_optional_timestamp)]
     last_refreshed_at: Option<Timestamp>,
@@ -127,6 +129,7 @@ impl From<KeyFacts> for KeyRecord {
             user_id: facts.user_id,
             team_id: facts.team_id,
             team_object_permission_id: facts.team_object_permission_id,
+            org_id: facts.org_id,
             project_id: facts.project_id,
             last_refreshed_at: facts.last_refreshed_at,
         }

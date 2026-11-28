@@ -1,0 +1,62 @@
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+
+allow_missing_organization: true
+
+rows:
+  - LiteLLM_BudgetTable: {budget_id: default, created_by: test, updated_by: test}
+  - LiteLLM_BudgetTable: {budget_id: limited, max_budget: 10, created_by: test, updated_by: test}
+  - LiteLLM_OrganizationTable: {organization_id: plain, organization_alias: Plain, budget_id: default, created_by: test, updated_by: test}
+  - LiteLLM_OrganizationTable: {organization_id: limited, organization_alias: Limited, budget_id: limited, created_by: test, updated_by: test}
+  - LiteLLM_OrganizationTable: {organization_id: tagged, organization_alias: Tagged, budget_id: default, metadata: {tags: [a]}, created_by: test, updated_by: test}
+  - LiteLLM_OrganizationTable: {organization_id: unread, organization_alias: Unread, budget_id: default, created_by: test, updated_by: test}
+
+keys:
+  sk-plain: {organization_id: plain}
+  sk-missing: {organization_id: missing}
+  sk-limited: {organization_id: limited}
+  sk-tagged: {organization_id: tagged}
+  sk-unread: {organization_id: unread}
+
+requests:
+  - name: a key names an organization
+    headers: {authorization: Bearer sk-plain}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: organization
+
+  - name: an organization has no row
+    headers: {authorization: Bearer sk-missing}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: organization
+
+  - name: an organization has an unserved budget
+    headers: {authorization: Bearer sk-limited}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: max_budget
+
+  - name: an organization holds structured metadata
+    headers: {authorization: Bearer sk-tagged}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: the database fails the organization query
+    unavailable: organization
+    headers: {authorization: Bearer sk-unread}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native

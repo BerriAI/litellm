@@ -13,7 +13,6 @@ use crate::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct Affiliation<R: Rows> {
     pub holder: Holder<R>,
-    /// Only a JWT's for now: the key path reads no organization.
     pub org: Option<Named<R::Org>>,
     pub project: Option<Named<R::Project>>,
 }

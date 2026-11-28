@@ -271,9 +271,15 @@ impl AuthHost for ScriptedHost {
         )?;
         verdict(self.key_over_budget.as_ref())
     }
-    async fn key_team(&self, team_id: &str) -> Result<Option<String>, Error> {
+    async fn key_team(
+        &self,
+        team_id: &str,
+    ) -> Result<Option<crate::identity::key::KeyTeam<String>>, Error> {
         self.step("key_team", format!("key_team {team_id}"))?;
-        Ok(self.key_team_found.then(|| format!("team {team_id}")))
+        Ok(self.key_team_found.then(|| crate::identity::key::KeyTeam {
+            row: format!("team {team_id}"),
+            organization_id: None,
+        }))
     }
     async fn object_permission(&self, id: &str) -> Result<Option<String>, Error> {
         self.step("object_permission", format!("object_permission {id}"))?;
@@ -429,7 +435,11 @@ impl AuthHost for ScriptedHost {
         self.record(format!("add_member {user_id} {team_id}"));
         Ok(())
     }
-    async fn org(&self, org_id: &str) -> Result<Option<Org<String>>, Error> {
+    async fn org(
+        &self,
+        org_id: &str,
+        _: crate::host::AffiliationRead,
+    ) -> Result<Option<Org<String>>, Error> {
         self.record(format!("org {org_id}"));
         Ok(self.orgs.get(org_id).cloned())
     }

@@ -1,12 +1,20 @@
 use crate::{
-    AuthHost, Error, Team, TeamCopy,
+    AuthHost, Error, TeamCopy,
     authn::key::{KeyRecord, UI_TEAM_ID},
+    host::Rows,
 };
+
+use super::KeyTeam;
+
+pub(super) enum Read<R: Rows> {
+    Stored(KeyTeam<R::Team>),
+    KeyCopy(TeamCopy<R>),
+}
 
 pub(super) async fn read<H: AuthHost>(
     host: &H,
     record: &KeyRecord,
-) -> Result<Option<Team<H::Rows>>, Error> {
+) -> Result<Option<Read<H::Rows>>, Error> {
     let Some(team_id) = record.team_id.as_deref() else {
         return Ok(None);
     };
@@ -15,13 +23,13 @@ pub(super) async fn read<H: AuthHost>(
         team_id => host.key_team(team_id).await?,
     };
     if let Some(team) = loaded {
-        return Ok(Some(Team::Row(team)));
+        return Ok(Some(Read::Stored(team)));
     }
     let object_permission = match record.team_object_permission_id.as_deref() {
         None => None,
         Some(id) => host.object_permission(id).await?,
     };
-    Ok(Some(Team::KeyCopy(TeamCopy {
+    Ok(Some(Read::KeyCopy(TeamCopy {
         team_id: team_id.to_owned(),
         object_permission,
     })))

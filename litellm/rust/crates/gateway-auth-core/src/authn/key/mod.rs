@@ -53,7 +53,7 @@ pub enum KeySource<'a, K> {
     /// A key the caller already read, which a JWT mapped to that key authenticates as. The end user
     /// that JWT names wins over the request's.
     Resolved {
-        key: Keyed<K>,
+        key: Box<Keyed<K>>,
         end_user_id: Option<&'a str>,
     },
 }
@@ -68,6 +68,7 @@ pub struct KeyRecord {
     pub user_id: Option<String>,
     pub team_id: Option<String>,
     pub team_object_permission_id: Option<String>,
+    pub org_id: Option<String>,
     pub project_id: Option<String>,
     pub last_refreshed_at: Option<Timestamp>,
 }

@@ -5,7 +5,7 @@ use crate::{
     callbacks::budgets,
     host::{
         NativeRows,
-        auth::{unserved, unserved_project, unserved_user},
+        auth::{unserved, unserved_org, unserved_project, unserved_user},
     },
 };
 
@@ -14,8 +14,7 @@ use crate::{
 /// core did not authenticate is over the error's name. A key in a team or with an owner stays
 /// with Python: over the first column its team, then its owner, holds that nothing native reads
 /// yet, and otherwise over `team` or `user`, since the native spend log charges neither yet. A key
-/// in a project stays with Python the same way, over `project` once neither of those keeps it
-/// there.
+/// in an organization or project stays with Python the same way, after team and owner.
 pub(super) fn caller(_: &Admit, authentication: &Authentication) -> Option<Reason> {
     match authentication {
         Ok(caller) => match &caller.credential {
@@ -23,6 +22,13 @@ pub(super) fn caller(_: &Admit, authentication: &Authentication) -> Option<Reaso
             Credential::Key { .. } => {
                 let project = caller.affiliation.project.as_ref();
                 charged(&caller.affiliation.holder)
+                    .or_else(|| {
+                        caller.affiliation.org.as_ref().map(|org| {
+                            org.stored()
+                                .and_then(unserved_org)
+                                .unwrap_or("organization")
+                        })
+                    })
                     .or_else(|| {
                         project.map(|project| unserved_project_column(project).unwrap_or("project"))
                     })

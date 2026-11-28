@@ -56,7 +56,7 @@ pub(crate) fn precheck<'a, R: Rows>(
             Some(hash) if hash.as_str().is_empty() => return Err(KeyDenial::MalformedKey),
             Some(hash) => Named::Resolved {
                 hash,
-                key: Box::new(key),
+                key,
                 end_user_id,
                 master_key,
             },
