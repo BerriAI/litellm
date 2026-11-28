@@ -1322,7 +1322,9 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     set_auth_context(user_api_key_auth)
 
     # Mock servers
-    working_server = MagicMock()
+    working_server = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     working_server.name = "working_server"
     working_server.alias = "working"
     working_server.allowed_tools = None
@@ -1335,7 +1337,9 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
     working_server.tool_name_to_display_name = None
     working_server.tool_name_to_description = None
 
-    failing_server = MagicMock()
+    failing_server = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     failing_server.name = "failing_server"
     failing_server.alias = "failing"
     failing_server.allowed_tools = None
@@ -1435,7 +1439,9 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
     set_auth_context(user_api_key_auth)
 
     # Mock servers
-    failing_server1 = MagicMock()
+    failing_server1 = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     failing_server1.name = "failing_server1"
     failing_server1.alias = "failing1"
     failing_server1.allowed_tools = None
@@ -1445,7 +1451,9 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
     failing_server1.auth_type = None
     failing_server1.extra_headers = None
 
-    failing_server2 = MagicMock()
+    failing_server2 = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     failing_server2.name = "failing_server2"
     failing_server2.alias = "failing2"
     failing_server2.allowed_tools = None
@@ -4567,7 +4575,9 @@ async def test_list_tools_single_server_unprefixed_names():
     set_auth_context(user_api_key_auth)
 
     # One allowed server
-    server = MagicMock()
+    server = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     server.server_id = "server1"
     server.name = "Zapier MCP"
     server.alias = "zapier"
@@ -4635,7 +4645,9 @@ async def test_list_tools_multiple_servers_prefixed_names():
     set_auth_context(user_api_key_auth)
 
     # Two allowed servers
-    server1 = MagicMock()
+    server1 = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     server1.server_id = "server1"
     server1.name = "Zapier MCP"
     server1.alias = "zapier"
@@ -4645,7 +4657,9 @@ async def test_list_tools_multiple_servers_prefixed_names():
     server1.auth_type = None
     server1.extra_headers = None
 
-    server2 = MagicMock()
+    server2 = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     server2.server_id = "server2"
     server2.name = "Jira MCP"
     server2.alias = "jira"
@@ -4830,7 +4844,9 @@ async def test_call_mcp_tool_user_unauthorized_access():
 
     # Mock global_mcp_server_manager.get_mcp_server_by_id to return servers
     # only for allowed servers, not "restricted_server" (the server the user is trying to access)
-    allowed_server_obj = MagicMock()
+    allowed_server_obj = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     allowed_server_obj.name = "allowed_server"
     allowed_server_obj.server_name = "allowed_server"
     allowed_server_obj.server_id = "allowed_server"
@@ -4840,7 +4856,9 @@ async def test_call_mcp_tool_user_unauthorized_access():
     allowed_server_obj.auth_type = None
     allowed_server_obj.extra_headers = None
 
-    another_server_obj = MagicMock()
+    another_server_obj = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     another_server_obj.name = "another_server"
     another_server_obj.server_name = "another_server"
     another_server_obj.server_id = "another_server"
@@ -5057,7 +5075,9 @@ async def test_list_tools_filters_by_key_team_permissions():
     set_auth_context(user_api_key_auth)
 
     # Mock server
-    server = MagicMock()
+    server = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     server.server_id = "server1"
     server.name = "Test Server"
     server.alias = "test"
@@ -5168,7 +5188,9 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
     set_auth_context(user_api_key_auth)
 
     # Mock server
-    server = MagicMock()
+    server = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     server.server_id = "server1"
     server.name = "Test Server"
     server.alias = "test"
@@ -5265,7 +5287,9 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
     set_auth_context(user_api_key_auth)
 
     # Mock server
-    server = MagicMock()
+    server = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     server.server_id = "server1"
     server.name = "Test Server"
     server.alias = "test"
@@ -5368,7 +5392,9 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
     set_auth_context(user_api_key_auth)
 
     # Mock server
-    server = MagicMock()
+    server = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     server.server_id = "gitmcp_server"
     server.name = "GITMCP"
     server.alias = "GITMCP"
@@ -8487,7 +8513,9 @@ async def test_execute_mcp_tool_sets_model_in_model_call_details():
         user_role=LitellmUserRoles.INTERNAL_USER.value,
     )
 
-    fake_server = MagicMock()
+    fake_server = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     fake_server.name = "openapi-petstore"
     fake_server.is_byok = False
     fake_server.auth_type = None
@@ -10423,7 +10451,9 @@ async def test_aggregate_listing_reports_per_server_outcomes():
     user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
     set_auth_context(user_api_key_auth)
 
-    working_server = MagicMock()
+    working_server = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     working_server.name = "working_server"
     working_server.alias = "working"
     working_server.short_prefix = None
@@ -10436,7 +10466,9 @@ async def test_aggregate_listing_reports_per_server_outcomes():
     working_server.tool_name_to_display_name = None
     working_server.tool_name_to_description = None
 
-    broken_server = MagicMock()
+    broken_server = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     broken_server.name = "broken_server"
     broken_server.alias = "broken"
     broken_server.short_prefix = None
@@ -10497,7 +10529,9 @@ async def test_outcome_keys_use_display_prefix_never_canonical_names():
     except ImportError:
         pytest.skip("MCP server not available")
 
-    server = MagicMock()
+    server = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     server.alias = "public-alias"
     server.server_name = "internal-canonical-name"
     server.name = "internal-canonical-name"
@@ -11470,7 +11504,9 @@ async def test_list_tools_injects_byok_credential_for_non_oauth2_auth_types(auth
     user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="byok_user")
     set_auth_context(user_api_key_auth)
 
-    server = MagicMock()
+    server = MagicMock(
+        additional_auth=None, auth_profiles_unreadable=False, uses_auth_profile=False, auth_profile_id=None
+    )
     server.server_id = "byok_server"
     server.name = "byok"
     server.alias = "byok"

@@ -74,6 +74,12 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy.mcp_server.auth_profile_selection import (
+    UnusableProfile,
+    raise_unusable_profile,
+    resolve_effective_servers,
+    resolve_usable_server,
+)
 from litellm.proxy.mcp_server.byok_credential_cache import (
     byok_credential_cache,
     byok_credential_cache_key,
@@ -1005,6 +1011,31 @@ async def _get_allowed_mcp_servers(
     return allowed_mcp_servers
 
 
+async def split_usable_mcp_servers(
+    servers: Sequence[MCPServer], caller: UserAPIKeyAuth | None
+) -> tuple[Sequence[MCPServer], tuple[tuple[MCPServer, UnusableProfile], ...]]:
+    resolutions: Final = await resolve_effective_servers(servers, caller)
+    return resolutions.usable, resolutions.left_out
+
+
+async def get_usable_mcp_servers(
+    user_api_key_auth: UserAPIKeyAuth | None,
+    mcp_servers: Sequence[str] | None,
+    client_ip: str | None = None,
+) -> Sequence[MCPServer]:
+    allowed: Final = await _get_allowed_mcp_servers(
+        user_api_key_auth=user_api_key_auth, mcp_servers=mcp_servers, client_ip=client_ip
+    )
+    usable, left_out = await split_usable_mcp_servers(allowed, user_api_key_auth)
+    if left_out and not usable:
+        raise_unusable_profile(left_out[0][1])
+    return usable
+
+
+_split_usable_mcp_servers: Final = split_usable_mcp_servers
+_get_usable_mcp_servers: Final = get_usable_mcp_servers
+
+
 def _client_has_per_server_auth_header(
     server: MCPServer,
     mcp_server_auth_headers: dict[str, dict[str, str]] | None,
@@ -1295,7 +1326,7 @@ async def find_mcp_proxy_tool(
     from litellm.proxy.mcp_server.catalog import get_filtered_server_tools
     from litellm.proxy.mcp_server.tool_search import mcp_proxy_tool_id
 
-    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
+    allowed_mcp_servers: Final = await _get_usable_mcp_servers(
         user_api_key_auth=user_api_key_auth,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
@@ -1459,7 +1490,7 @@ async def _get_tools_from_mcp_servers(
             litellm_logging_obj = None
 
     try:
-        allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
+        allowed_mcp_servers: Final = await _get_usable_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
             client_ip=client_ip,
@@ -2125,6 +2156,10 @@ async def _check_byok_credential(
         )
 
 
+def _admits(allowed_mcp_servers: Sequence[MCPServer], server: MCPServer) -> bool:
+    return any(allowed.server_id == server.server_id for allowed in allowed_mcp_servers)
+
+
 def _challenge_missing_token_exchange_subject(
     server: MCPServer | None,
     requested_server: MCPServer | None,
@@ -2144,7 +2179,7 @@ def _challenge_missing_token_exchange_subject(
         return
     if requested_server is not None and requested_server.server_id != server.server_id:
         return
-    if all(allowed.server_id != server.server_id for allowed in allowed_mcp_servers):
+    if not _admits(allowed_mcp_servers, server):
         return
     if global_mcp_server_manager.extract_subject_token(oauth2_headers, raw_headers, user_api_key_auth) is not None:
         return
@@ -2156,6 +2191,14 @@ def _challenge_missing_token_exchange_subject(
     )
 
     raise_token_exchange_challenge(server, root_path=get_request_root_path())
+
+
+async def _caller_view_if_admitted(
+    server: MCPServer | None, allowed_mcp_servers: Sequence[MCPServer], user_api_key_auth: UserAPIKeyAuth | None
+) -> MCPServer | None:
+    if server is None or not _admits(allowed_mcp_servers, server):
+        return server  # admission refuses first; a profile refusal must not precede it
+    return await resolve_usable_server(server, user_api_key_auth)
 
 
 async def _list_tools_before_first_call(
@@ -2179,7 +2222,7 @@ async def _list_tools_before_first_call(
     """
     if server is None or global_mcp_server_manager.server_exposes_tool(server, tool_name):
         return
-    if all(allowed.server_id != server.server_id for allowed in allowed_mcp_servers):
+    if not _admits(allowed_mcp_servers, server):
         return
     try:
         await _get_tools_from_mcp_servers(
@@ -2312,10 +2355,12 @@ async def _execute_mcp_tool(
                 all_registry_prefixes.add(normalize_server_name(known_prefix))
         name_is_prefixed = is_tool_name_prefixed(name, known_server_prefixes=all_registry_prefixes)
 
-    first_call_target: Final = (
+    first_call_target: Final = await _caller_view_if_admitted(
         requested_server
         if requested_server is not None and not name_is_prefixed
-        else global_mcp_server_manager.server_owning_tool_name_prefix(name)
+        else global_mcp_server_manager.server_owning_tool_name_prefix(name),
+        allowed_mcp_servers,
+        user_api_key_auth,
     )
     first_call_tool_name: Final = (
         name
@@ -2413,6 +2458,11 @@ async def _execute_mcp_tool(
     if mcp_server is None:
         mcp_server = global_mcp_server_manager.get_mcp_server_from_tool_name(  # rebind-ok: pre-existing rebinding on a rename-only line
             name
+        )
+
+    if mcp_server is not None:
+        mcp_server = await resolve_usable_server(  # rebind-ok: dispatch continues with the caller's profile view
+            mcp_server, user_api_key_auth
         )
 
     effective_guardrail_auth: Final = await MCPRequestHandler.guardrail_auth_for_call(

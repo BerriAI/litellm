@@ -1,5 +1,6 @@
 import queue
 from collections.abc import Iterator, Mapping
+from collections.abc import Set as AbstractSet
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -8,12 +9,27 @@ import pytest
 from mcp.server.context import ServerRequestContext
 from mcp.types import CallToolResult
 
+import litellm
+from litellm.caching.dual_cache import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.mcp_server.mcp_context import active_mcp_request_ctx_var
 from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.proxy.mcp_server.outbound_credentials.resolver import UpstreamCredentialProvider
 from litellm.proxy.mcp_server.upstream import prepare_upstream_client
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPAuth, MCPTransport, MCPUpstreamProtocol
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from tests._support.mcp_auth_profiles import (
+    MINTED_PROFILE_TOKEN,
+    ProfileUpstream,
+    call_tickets_add,
+    caller_granted,
+    install_profile_manager,
+    profile_manager,
+    tickets_server,
+)
 from tests._support.mcp_count_tool_upstream import count_tool_upstream, methods_received
 
 _HTTP_URL: Final = "https://upstream.example/mcp"
@@ -190,3 +206,78 @@ async def test_upstream_client_ignores_the_setting_where_the_call_already_lists_
     )
 
     assert client.skip_tool_output_validation is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("granted", "expected"),
+    [
+        pytest.param(None, "Bearer caller-header", id="without-a-grant-the-callers-header-still-wins"),
+        pytest.param("bots", "Bearer bots-token", id="a-selected-profile-is-not-overridden-by-the-callers-header"),
+        pytest.param(
+            "ops", f"Bearer {MINTED_PROFILE_TOKEN}", id="a-minted-token-is-not-overridden-by-the-callers-header"
+        ),
+    ],
+)
+@pytest.mark.parametrize("per_server", [False, True], ids=["global-header", "per-server-header"])
+async def test_a_callers_auth_header_does_not_replace_a_selected_profiles_credential(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, expected: str, per_server: bool
+) -> None:
+    upstream: Final = ProfileUpstream()
+    server: Final = tickets_server()
+    install_profile_manager(monkeypatch, profile_manager(server, upstream))
+
+    await call_tickets_add(
+        server,
+        caller_granted(granted),
+        mcp_auth_header=None if per_server else "Bearer caller-header",
+        mcp_server_auth_headers={"tickets": {"Authorization": "Bearer caller-header"}} if per_server else None,
+    )
+
+    assert upstream.credentials_seen() == {expected}
+
+
+class _ApiKeyUpstream(ProfileUpstream):
+    def __init__(self) -> None:
+        super().__init__()
+        self.api_keys: Final[list[str | None]] = []  # mutable-ok: the fake records what it was sent
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        if request.method == "POST":
+            self.api_keys.append(request.headers.get("x-api-key"))
+        return super().__call__(request)
+
+
+class _HookAddingAnApiKey(CustomLogger):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict[str, object], call_type: str
+    ) -> dict[str, object]:
+        return {**data, "extra_headers": {"X-API-Key": "hook-key"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("granted", "expected"),
+    [
+        pytest.param(None, {"hook-key"}, id="without-a-grant-the-hook-header-reaches-the-upstream"),
+        pytest.param("keys", {"profile-key"}, id="a-selected-api-key-profile-is-not-replaced-by-the-hook-header"),
+    ],
+)
+async def test_a_hook_header_does_not_replace_a_selected_api_key_profiles_credential(
+    monkeypatch: pytest.MonkeyPatch, granted: str | None, expected: AbstractSet[str]
+) -> None:
+    upstream: Final = _ApiKeyUpstream()
+    server: Final = tickets_server(profiles=({"id": "keys", "auth_type": "api_key", "auth_value": "profile-key"},))
+    manager: Final = profile_manager(server, upstream)
+    install_profile_manager(monkeypatch, manager)
+    monkeypatch.setattr(litellm, "callbacks", [_HookAddingAnApiKey()])
+
+    await manager.call_tool(
+        server_name="tickets",
+        name="add",
+        arguments={},
+        user_api_key_auth=caller_granted(granted),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+    )
+
+    assert set(upstream.api_keys) == expected

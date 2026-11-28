@@ -126,14 +126,14 @@ async def resolve_upstream_auth(
             if not has_header(extra_headers, header_name):
                 record_auth_resolution(server.server_id, credential.source)
                 return auth, extra_headers
-            if isinstance(
+            if server.uses_auth_profile or isinstance(
                 spec.config,
                 (TokenExchangeConfig, AuthorizationCodeConfig, IdJagConfig, ClientCredentialsConfig),
             ):
                 # The resolver owns the credential here (token_exchange's exchanged token,
                 # authorization_code's stored token, id_jag's minted assertion,
-                # client_credentials' gateway-minted M2M token). It is authoritative: a
-                # guardrail such as MCPJWTSigner, static_headers, or any other injected
+                # client_credentials' gateway-minted M2M token, a selected auth profile's credential).
+                # It is authoritative: a guardrail such as MCPJWTSigner, static_headers, or any other injected
                 # Authorization must NOT shadow it (otherwise the upstream gets e.g. the
                 # signer's JWT instead of the minted token and rejects it, and for M2M the
                 # one-shot 401 refetch is lost with it). Drop only the header the resolved
@@ -216,6 +216,7 @@ async def prepare_upstream_client(
         None
         if server_spec is not None
         and mcp_auth_header
+        and not server.uses_auth_profile
         and not isinstance(
             server_spec.config, (AuthorizationCodeConfig, IdJagConfig, PassthroughConfig, TokenExchangeConfig)
         )

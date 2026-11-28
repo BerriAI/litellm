@@ -27,6 +27,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.mcp_server import catalog
 from litellm.proxy.mcp_server import operations as mcp_operations
+from litellm.proxy.mcp_server.auth_profile_selection import resolve_effective_server
 from litellm.proxy.mcp_server.auth_profiles import parse_auth_profiles
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.exceptions import MCPUpstreamAuthError
@@ -38,9 +39,11 @@ from litellm.proxy.mcp_server.faults.list_outcomes import (
 )
 from litellm.proxy.mcp_server.mcp_context import active_mcp_request_ctx_var, mcp_gateway_server_name
 from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+from litellm.proxy.mcp_server.operations import prepare_context
 from litellm.proxy.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from tests._support.mcp_auth_profiles import tickets_server
 from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
 CatalogKind = Literal["tools", "prompts", "resources", "templates"]
@@ -1154,4 +1157,70 @@ def test_configuration_identity_of_a_server_without_profiles_is_that_of_a_bare_s
         json.loads(identity)
         .keys()
         .isdisjoint({"additional_auth", "additional_auth_secrets_digest", "auth_profiles_unreadable"})
+    )
+
+
+class _CountingGrantSource:
+    def __init__(self) -> None:
+        self.reads = 0
+
+    async def __call__(self, caller: UserAPIKeyAuth | None) -> tuple[Mapping[str, str], ...]:
+        self.reads += 1
+        return ({"tickets": "bots"},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", [False, True], ids=["one-operation", "operations-inside-an-operation"])
+async def test_a_catalog_operation_reads_the_callers_grants_once_however_often_it_resolves_a_server(
+    nested: bool,
+) -> None:
+    manager: Final = MCPServerManager()
+    source: Final = _CountingGrantSource()
+    server: Final = _profiled_server(token="token-1")
+    caller: Final = UserAPIKeyAuth(api_key="hashed-key")
+
+    @catalog.catalog_operation(lambda: manager)
+    async def resolve_twice() -> None:
+        await resolve_effective_server(server, caller, source)
+        await resolve_effective_server(server, caller, source)
+
+    @catalog.catalog_operation(lambda: manager)
+    async def resolve_in_nested_operations() -> None:
+        await resolve_twice()
+        await resolve_twice()
+
+    await (resolve_in_nested_operations() if nested else resolve_twice())
+
+    assert source.reads == 1
+
+
+def test_a_pagination_cursor_is_bound_to_the_profile_it_was_issued_under() -> None:
+    server: Final = tickets_server()
+    context: Final = OperationContext(_caller=None)
+
+    scopes: Final = {
+        catalog._caller_scope(context, [server.model_copy(update={"auth_profile_id": profile_id})])
+        for profile_id in (None, "bots", "ops")
+    }
+
+    assert len(scopes) == 3
+
+
+def test_a_pagination_cursor_issued_without_a_profile_stays_valid() -> None:
+    server: Final = MCPServer(
+        server_id="tickets",
+        name="tickets",
+        alias="tickets",
+        transport=MCPTransport.http,
+        url="https://tickets.example.com/mcp",
+        auth_type=MCPAuth.bearer_token,
+        authentication_token="default-credential",
+        allow_all_keys=True,
+    )
+    caller: Final = UserAPIKeyAuth(api_key="hashed-key", user_id="alice", team_id="team-1")
+
+    scope: Final = catalog._caller_scope(prepare_context(caller, mcp_auth_header="Bearer caller"), [server])
+
+    assert scope == "0ff17ac18235dbc16689ecba199e5eca4f83221adf5d0d5c38ea491df175a1c5", (
+        "a caller without a profile must keep the cursor scope issued before profiles existed"
     )

@@ -7,9 +7,11 @@ MCP server tools.
 """
 
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from mcp.types import CallToolResult
 
 from litellm.proxy._types import (
@@ -17,8 +19,22 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.mcp_server.auth_profile_selection import (
+    UnsupportedProfileHost,
+    unusable_profile_detail,
+    with_auth_profile,
+)
+from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from tests._support.mcp_auth_profiles import (
+    ProfileUpstream,
+    call_tickets_tool,
+    caller_granted,
+    install_profile_manager,
+    profile_manager,
+    tickets_server,
+)
 
 
 @pytest.mark.asyncio
@@ -40,6 +56,10 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
     fake_server.auth_type = None
     fake_server.mcp_info = None
     fake_server.server_id = "srv-1"
+    fake_server.uses_auth_profile = False
+    fake_server.auth_profile_id = None
+    fake_server.additional_auth = None
+    fake_server.auth_profiles_unreadable = False
     fake_server.server_name = "openapi-petstore"
     fake_server.alias = None
     fake_server.short_prefix = None
@@ -127,6 +147,10 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
     fake_server.auth_type = None
     fake_server.mcp_info = None
     fake_server.server_id = "srv-1"
+    fake_server.uses_auth_profile = False
+    fake_server.auth_profile_id = None
+    fake_server.additional_auth = None
+    fake_server.auth_profiles_unreadable = False
     fake_server.server_name = "openapi-petstore"
     fake_server.alias = None
     fake_server.short_prefix = None
@@ -896,3 +920,64 @@ async def test_openapi_passthrough_preparation_preserves_credential_precedence(
     assert resolved == {"Authorization": per_server or "Bearer forwarded"}
     assert remaining == {"X-Trace": "trace"}
     assert headers == {"authorization": "Bearer forwarded", "X-Trace": "trace"}
+
+
+@pytest.mark.parametrize(
+    ("granted", "expected"),
+    [
+        pytest.param(None, "Bearer caller-header", id="without-a-grant-the-callers-header-is-sent"),
+        pytest.param("bots", None, id="a-selected-profile-takes-no-caller-credential"),
+    ],
+)
+def test_an_openapi_tool_call_takes_no_caller_credential_for_a_selected_profile(
+    granted: str | None, expected: str | None
+) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import resolve_openapi_tool_auth
+
+    server = tickets_server()
+    profile = next((p for p in server.additional_auth or () if p.id == granted), None)
+
+    authorization, _, _ = resolve_openapi_tool_auth(
+        with_auth_profile(server, profile), None, {"tickets": {"Authorization": "Bearer caller-header"}}, None, None
+    )
+
+    assert authorization == expected
+
+
+def _openapi_tickets(monkeypatch: pytest.MonkeyPatch, executed: list[str]) -> MCPServer:
+    async def handler() -> str:
+        executed.append("ran")
+        return "done"
+
+    server: Final = tickets_server(overrides={"spec_path": "/tickets.yaml"})
+    install_profile_manager(monkeypatch, profile_manager(server, ProfileUpstream()))
+    monkeypatch.setattr(global_mcp_tool_registry, "published_tools", {})
+    global_mcp_tool_registry.register_tool("tickets-export", "export", {}, handler, server_id="tickets")
+    return server
+
+
+@pytest.mark.asyncio
+async def test_an_openapi_server_without_a_grant_runs_its_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    executed: Final[list[str]] = []  # mutable-ok: the handler records that it ran
+    server: Final = _openapi_tickets(monkeypatch, executed)
+
+    await call_tickets_tool("tickets-export", server, caller_granted(None))
+
+    assert executed == ["ran"]
+
+
+@pytest.mark.asyncio
+async def test_an_openapi_server_refuses_a_selected_profile_before_its_handler_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executed: Final[list[str]] = []  # mutable-ok: the handler records that it ran
+    server: Final = _openapi_tickets(monkeypatch, executed)
+
+    with pytest.raises(HTTPException) as unavailable:
+        await call_tickets_tool("tickets-export", server, caller_granted("bots"))
+
+    assert (unavailable.value.status_code, unavailable.value.detail) == (
+        500,
+        unusable_profile_detail(UnsupportedProfileHost("tickets", "bots")),
+    )
+    assert executed == []

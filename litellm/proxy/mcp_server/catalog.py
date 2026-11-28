@@ -610,8 +610,13 @@ def catalog_operation(
         @wraps(function)
         async def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:  # kwargs-ok: preserves ParamSpec
 
-            async with manager().catalog.operation():
-                return await function(*args, **kwargs)
+            from litellm.proxy.mcp_server.auth_profile_selection import (  # noqa: PLC0415  # lazy: catalog cycle
+                shared_grant_memo,
+            )
+
+            with shared_grant_memo():
+                async with manager().catalog.operation():
+                    return await function(*args, **kwargs)
 
         return wrapped
 
@@ -1015,6 +1020,9 @@ def _caller_scope(context: OperationContext, servers: Sequence[MCPServer]) -> st
         | frozenset({"authorization"})
         | frozenset(map(str.lower, chain.from_iterable(server.extra_headers or () for server in servers)))
     )
+    profile_ids: Final = tuple(
+        sorted((server.server_id, server.auth_profile_id) for server in servers if server.auth_profile_id is not None)
+    )
     material: Final = (
         caller.model_dump(include={"api_key", "user_id", "team_id", "org_id", "end_user_id", "user_role"}, mode="json")
         if caller is not None
@@ -1027,6 +1035,7 @@ def _caller_scope(context: OperationContext, servers: Sequence[MCPServer]) -> st
         context.client_ip,
         context.protocol_version,
         context.mcp_proxy_mode,
+        *((profile_ids,) if any(profile_ids) else ()),
     )
     return hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
