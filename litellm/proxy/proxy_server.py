@@ -8059,6 +8059,7 @@ class ProxyConfig:
                         build_router_config(
                             router_arguments(
                                 model_list=_model_list,
+                                cache_responses=litellm.cache is not None,
                                 router_general_settings=RouterGeneralSettings(
                                     async_only_mode=True  # only init async clients
                                 ),
