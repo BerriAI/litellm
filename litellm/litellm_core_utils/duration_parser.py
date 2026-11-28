@@ -23,7 +23,8 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
 
 
 def normalize_duration(duration: str) -> str:
-    return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
+    cleaned = duration.strip()
+    return _BUDGET_DURATION_WORD_ALIASES.get(cleaned.lower(), cleaned)
 
 
 def _extract_from_regex(duration: str) -> tuple[int, str]:
