@@ -19,6 +19,7 @@ import click
 import requests
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.private_json import ensure_private_dir
 from litellm.proxy.common_utils.codex_model_catalog import (
     CODEX_BASE_INSTRUCTIONS_PATH,
     CodexCatalogRow,
@@ -44,7 +45,7 @@ from .claude_settings import (
     load_json_or_empty,
 )
 from .cmd_quoting import quote_for_cmd
-from .config import pkce_default, subscription_default
+from .config import get_config_file_path, pkce_default, subscription_default
 from .pi import (
     LITELLM_PROXY_API_KEY_ENV,
     PI_PROVIDER_NAME,
@@ -1106,6 +1107,56 @@ def codex_model_sync_args(
     return ModelSyncArgs(("-c", override))
 
 
+_OPENCODE_SERVER_ENV: Final = (OPENAI_API_KEY_ENV, OPENAI_BASE_URL_ENV, OPENCODE_CONFIG_CONTENT_ENV)
+
+
+def opencode_service_fingerprint_path() -> Path:
+    return Path(get_config_file_path()).with_name("opencode_service_fingerprint")
+
+
+def _read_fingerprint(path_of: Callable[[], Path]) -> str | None:
+    try:
+        return path_of().read_text(encoding="utf-8")
+    except (OSError, RuntimeError, UnicodeDecodeError):
+        return None
+
+
+def _write_fingerprint(path_of: Callable[[], Path], fingerprint: str) -> None:
+    try:
+        path: Final = path_of()
+        ensure_private_dir(path.parent)
+        _replace_file(path, fingerprint)
+    except (OSError, RuntimeError):
+        return
+
+
+def restart_opencode_service(
+    binary: str,
+    env: Mapping[str, str],
+    *,
+    run: Callable[..., subprocess.CompletedProcess[str]],
+    fingerprint_path: Callable[[], Path],
+) -> None:
+    fingerprint: Final = hashlib.sha256(
+        json.dumps([env.get(name) for name in _OPENCODE_SERVER_ENV]).encode()
+    ).hexdigest()
+    if _read_fingerprint(fingerprint_path) == fingerprint:
+        return
+    try:
+        completed: Final = run(
+            _windows_command(binary, (binary, "service", "restart")),
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    if completed.returncode == 0:
+        _write_fingerprint(fingerprint_path, fingerprint)
+
+
 def agent_model_sync_env(
     binary: str,
     base_env: Mapping[str, str],
@@ -1280,6 +1331,8 @@ def run_agent(
     write_overlay: Callable[[str, str, Mapping[str, str]], Path] = write_settings_overlay,
     project_dir: Path | None = None,
     key_from_stored_login: bool = False,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    opencode_fingerprint_path: Callable[[], Path] = opencode_service_fingerprint_path,
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
@@ -1360,6 +1413,8 @@ def run_agent(
         if subscription and os.path.basename(command[0]) == "claude"
         else _launch_key_overlay_args(command, base_url, api_key, settings_hide_key, env_before_sync, write_overlay)
     )
+    if os.path.basename(command[0]) == "opencode":
+        restart_opencode_service(binary, env, run=run, fingerprint_path=opencode_fingerprint_path)
     if reattach_terminal is not None:
         reattach_terminal()
     launcher(binary, [command[0], *extra_args, *settings_args, *forwarded], env)
