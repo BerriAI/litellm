@@ -2062,6 +2062,41 @@ async def _compare_and_invalidate_user_oauth_credential(
     return True if written > 0 else None
 
 
+# A refresh can rewrite the row between the read and the guarded delete; reread and try again.
+_REVOKE_COMPARE_AND_DELETE_ATTEMPTS: Final = 3
+
+
+async def delete_user_oauth_credential_if_grant_matches(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    grant_generation: str | None,
+) -> Literal["deleted", "missing", "changed"]:
+    for _attempt in range(_REVOKE_COMPARE_AND_DELETE_ATTEMPTS):
+        outcome = await _compare_and_delete_user_oauth_credential(prisma_client, user_id, server_id, grant_generation)
+        if outcome != "rewritten":
+            return outcome
+    return "changed"
+
+
+async def _compare_and_delete_user_oauth_credential(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    grant_generation: str | None,
+) -> Literal["deleted", "missing", "changed", "rewritten"]:
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
+    grant: Final = None if row is None else decode_oauth_payload(row.credential_b64)
+    if row is None or grant is None:
+        return "missing"
+    if _oauth_grant_generation(grant) != grant_generation:
+        return "changed"
+    deleted: Final = await _user_credential_actions(prisma_client).delete_many(
+        where={"user_id": user_id, "server_id": server_id, "credential_b64": row.credential_b64}
+    )
+    return "deleted" if deleted > 0 else "rewritten"
+
+
 async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, server_id: str, scope: str) -> None:
     """Note on the saved grant that the provider refused a call for ``scope``, so the connect page sends the user
     back to the provider. The next sign-in drops the note; a grant saved since the read is left alone."""

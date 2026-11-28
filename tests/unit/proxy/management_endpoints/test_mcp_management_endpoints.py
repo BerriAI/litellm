@@ -5899,7 +5899,7 @@ async def test_delete_mcp_oauth_user_credential_only_deletes_oauth():
             new=AsyncMock(return_value=None),
         ),
         patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
             new=delete_mock,
         ),
     ):
@@ -5968,6 +5968,54 @@ async def test_store_mcp_oauth_user_credential_invalidates_cached_token():
 
 
 @pytest.mark.asyncio
+async def test_delete_mcp_oauth_user_credential_reads_invalidated_grants_for_revocation():
+    """Revocation must still delete a dead-grant tombstone instead of treating it as already absent."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        delete_mcp_oauth_user_credential,
+    )
+    from litellm.proxy.mcp_server import mcp_server_manager as manager_module
+
+    server_id: Final = "srv-inv-dead"
+    user_id: Final = "user-inv-dead"
+    prisma: Final = _make_prisma_client()
+    reader: Final = AsyncMock(return_value={"type": "oauth2", "access_token": "", "refresh_token": "dead-refresh"})
+    delete_mock: Final = AsyncMock(return_value=None)
+    invalidate_mock: Final = AsyncMock(return_value=None)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_user_oauth_credential",
+            new=reader,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
+            new=delete_mock,
+        ),
+        patch.object(
+            manager_module.global_mcp_server_manager,
+            "invalidate_user_oauth_token_cache",
+            new=invalidate_mock,
+        ),
+    ):
+        result = await delete_mcp_oauth_user_credential(
+            server_id=server_id,
+            user_api_key_dict=_make_user_auth(user_id),
+        )
+
+    reader.assert_awaited_once_with(prisma, user_id, server_id, use_writer=True, include_invalidated=True)
+    delete_mock.assert_awaited_once_with(prisma, user_id, server_id, grant_generation=None)
+    invalidate_mock.assert_awaited_once_with(user_id, server_id)
+    assert result.has_credential is False
+
+
+@pytest.mark.asyncio
 async def test_delete_mcp_oauth_user_credential_invalidates_cached_token():
     """Revoking a stored OAuth credential drops the v2 per-user token cache entry, so the
     revoked token stops flowing upstream immediately instead of until its TTL."""
@@ -5993,7 +6041,7 @@ async def test_delete_mcp_oauth_user_credential_invalidates_cached_token():
             new=AsyncMock(return_value={"type": "oauth2", "access_token": "revoked-tok"}),
         ),
         patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
             new=AsyncMock(return_value=None),
         ),
         patch.object(
@@ -6012,9 +6060,73 @@ async def test_delete_mcp_oauth_user_credential_invalidates_cached_token():
 
 
 @pytest.mark.asyncio
+async def test_delete_mcp_oauth_user_credential_reports_a_replacement_grant_as_a_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A newer sign-in survives revoke, and the caller is told the revoke did not happen."""
+    if not mgmt_endpoints.MCP_AVAILABLE:
+        pytest.skip("MCP module not installed")
+
+    from types import SimpleNamespace
+
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        delete_mcp_oauth_user_credential,
+    )
+    from litellm.proxy.mcp_server import mcp_server_manager as manager_module
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key")
+    server_id: Final = "srv-inv-race"
+    user_id: Final = "user-inv-race"
+    invalidate_mock: Final = AsyncMock(return_value=None)
+    old_b64: Final = encrypt_value_helper(
+        json.dumps({"type": "oauth2", "access_token": "old-tok", "grant_id": "grant-old"})
+    )
+    new_b64: Final = encrypt_value_helper(
+        json.dumps({"type": "oauth2", "access_token": "new-tok", "grant_id": "grant-new"})
+    )
+    delete_many: Final = AsyncMock(return_value=0)
+
+    db_handle: Final = SimpleNamespace(
+        litellm_mcpusercredentials=SimpleNamespace(
+            find_unique=AsyncMock(
+                side_effect=[
+                    SimpleNamespace(user_id=user_id, server_id=server_id, credential_b64=old_b64),
+                    SimpleNamespace(user_id=user_id, server_id=server_id, credential_b64=new_b64),
+                ]
+            ),
+            delete_many=delete_many,
+        ),
+    )
+    prisma_client: Final = SimpleNamespace(db=db_handle, writer_db=db_handle)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=prisma_client,
+        ),
+        patch.object(
+            manager_module.global_mcp_server_manager,
+            "invalidate_user_oauth_token_cache",
+            new=invalidate_mock,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_mcp_oauth_user_credential(
+                server_id=server_id,
+                user_api_key_dict=_make_user_auth(user_id),
+            )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {"error": "oauth_credential_changed"}
+    delete_many.assert_not_awaited()
+    invalidate_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_delete_mcp_oauth_user_credential_invalidates_when_record_already_gone():
     """A concurrent delete can remove the row between the read and the delete; the cache may
-    still hold the revoked token, so the invalidate must fire even on RecordNotFoundError."""
+    still hold the revoked token, so the invalidate must fire even when the conditional delete is a no-op."""
     if not mgmt_endpoints.MCP_AVAILABLE:
         pytest.skip("MCP module not installed")
 
@@ -6023,9 +6135,9 @@ async def test_delete_mcp_oauth_user_credential_invalidates_when_record_already_
     )
     from litellm.proxy.mcp_server import mcp_server_manager as manager_module
 
-    server_id = "srv-inv-3"
-    user_id = "user-inv-3"
-    invalidate_mock = AsyncMock(return_value=None)
+    server_id: Final = "srv-inv-3"
+    user_id: Final = "user-inv-3"
+    invalidate_mock: Final = AsyncMock(return_value=None)
 
     with (
         patch(
@@ -6037,8 +6149,8 @@ async def test_delete_mcp_oauth_user_credential_invalidates_when_record_already_
             new=AsyncMock(return_value={"type": "oauth2", "access_token": "revoked-tok"}),
         ),
         patch(
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
-            new=AsyncMock(side_effect=mgmt_endpoints.RecordNotFoundError({}, message="already gone")),
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
+            new=AsyncMock(return_value="missing"),
         ),
         patch.object(
             manager_module.global_mcp_server_manager,
@@ -6046,7 +6158,7 @@ async def test_delete_mcp_oauth_user_credential_invalidates_when_record_already_
             new=invalidate_mock,
         ),
     ):
-        result = await delete_mcp_oauth_user_credential(
+        result: Final = await delete_mcp_oauth_user_credential(
             server_id=server_id,
             user_api_key_dict=_make_user_auth(user_id),
         )
@@ -6191,7 +6303,7 @@ async def test_admin_revokes_another_users_oauth_credential():
             new=get_mock,
         ),
         patch(  # test-quality-ok: endpoint test stubs the credential row delete
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
             new=delete_mock,
         ),
         patch.object(  # test-quality-ok: the OAuth cache lives on the global manager; the suite's only seam
@@ -6234,7 +6346,7 @@ async def test_non_full_admin_cannot_revoke_another_users_oauth_credential(role)
             new=get_mock,
         ),
         patch(  # test-quality-ok: endpoint test stubs the credential row delete
-            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_credential",
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_user_oauth_credential_if_grant_matches",
             new=delete_mock,
         ),
     ):
@@ -10569,7 +10681,7 @@ class TestMCPServerResolutionCharacterization:
             ),
         )
         credential_read: Final = AsyncMock(return_value={"type": "oauth2", "access_token": "lit3974-token"})
-        delete_credential: Final = AsyncMock()
+        conditional_delete: Final = AsyncMock(return_value="deleted")
         invalidate: Final = AsyncMock()
 
         with (
@@ -10582,7 +10694,7 @@ class TestMCPServerResolutionCharacterization:
             ),
             patch.object(manager, "invalidate_user_oauth_token_cache", invalidate),
             patch.object(mgmt_endpoints, "get_user_oauth_credential", credential_read),
-            patch.object(mgmt_endpoints, "delete_user_credential", delete_credential),
+            patch.object(mgmt_endpoints, "delete_user_oauth_credential_if_grant_matches", conditional_delete),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
             patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
@@ -10598,8 +10710,8 @@ class TestMCPServerResolutionCharacterization:
             "is_expired": False,
             "connected_at": None,
         }
-        credential_read.assert_awaited_once_with(prisma, user_id, server_id, include_invalidated=True)
-        delete_credential.assert_awaited_once_with(prisma, user_id, server_id)
+        credential_read.assert_awaited_once_with(prisma, user_id, server_id, use_writer=True, include_invalidated=True)
+        conditional_delete.assert_awaited_once_with(prisma, user_id, server_id, grant_generation=None)
         invalidate.assert_awaited_once_with(user_id, server_id)
         assert httpx_mock.calls.call_count == 0
 

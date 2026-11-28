@@ -35,6 +35,7 @@ from litellm.proxy.mcp_server.db import (
     _prepare_mcp_server_data,
     create_mcp_server,
     decrypt_credentials,
+    delete_user_oauth_credential_if_grant_matches,
     encrypt_credentials,
     get_all_mcp_servers,
     get_mcp_servers,
@@ -1034,6 +1035,110 @@ async def test_invalidated_grants_are_absent_from_user_and_admin_credential_surf
     assert await list_server_user_credentials(prisma, "srv-1") == ()
     invalidated_metadata: Final = await get_user_oauth_credential(prisma, "alice", "srv-1", include_invalidated=True)
     assert invalidated_metadata is not None and invalidated_metadata["refresh_token"] == "rt-old"
+
+
+@pytest.mark.asyncio
+async def test_conditional_revocation_deletes_only_the_same_grant_generation(
+    credentials_prisma: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    fixed_now: Final = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    clock_ticks: Final = itertools.count()
+
+    class StepDateTime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            current_time: Final = fixed_now + timedelta(seconds=next(clock_ticks))
+            return current_time.replace(tzinfo=None) if tz is None else current_time.astimezone(tz)
+
+    monkeypatch.setattr("litellm.proxy.mcp_server.db.datetime", StepDateTime)
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
+    tombstone_generation: Final = (await _saved_grant(credentials_prisma))["grant_id"]
+    assert await invalidate_user_oauth_credential_if_grant_matches(
+        credentials_prisma, "alice", "srv-1", "at-old", "rt-old"
+    )
+    assert (
+        await delete_user_oauth_credential_if_grant_matches(credentials_prisma, "alice", "srv-1", tombstone_generation)
+        == "deleted"
+    )
+    assert ("alice", "srv-1") not in rows.rows
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
+    rotated_generation: Final = (await _saved_grant(credentials_prisma))["grant_id"]
+    assert await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-rotated", refresh_token="rt-new", refreshed_from="rt-old"
+    )
+    assert (
+        await delete_user_oauth_credential_if_grant_matches(credentials_prisma, "alice", "srv-1", rotated_generation)
+        == "deleted"
+    )
+    assert ("alice", "srv-1") not in rows.rows
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-legacy", refresh_token="rt-legacy")
+    legacy_row: Final = rows.rows[("alice", "srv-1")]
+    legacy_decoded: Final = _decode_user_credential(legacy_row.credential_b64)
+    assert legacy_decoded is not None
+    legacy_payload: Final = {
+        key: value for key, value in json.loads(legacy_decoded).items() if key not in {"connected_at", "grant_id"}
+    }
+    rows.rows = {
+        **rows.rows,
+        ("alice", "srv-1"): SimpleNamespace(
+            **{**vars(legacy_row), "credential_b64": encrypt_value_helper(json.dumps(legacy_payload))}
+        ),
+    }
+    assert await store_user_oauth_credential(
+        credentials_prisma,
+        "alice",
+        "srv-1",
+        "at-legacy-rotated",
+        refresh_token="rt-legacy-new",
+        refreshed_from="rt-legacy",
+    )
+    legacy_rotated: Final = await _saved_grant(credentials_prisma)
+    assert "connected_at" not in legacy_rotated and "grant_id" not in legacy_rotated
+    assert await delete_user_oauth_credential_if_grant_matches(credentials_prisma, "alice", "srv-1", None) == "deleted"
+    assert ("alice", "srv-1") not in rows.rows
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
+    replaced_generation: Final = (await _saved_grant(credentials_prisma))["grant_id"]
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-new", refresh_token="rt-new")
+    replacement: Final = await _saved_grant(credentials_prisma)
+    assert replacement["grant_id"] != replaced_generation
+
+    assert (
+        await delete_user_oauth_credential_if_grant_matches(credentials_prisma, "alice", "srv-1", replaced_generation)
+        == "changed"
+    )
+    grant: Final = await _saved_grant(credentials_prisma)
+    assert (grant["access_token"], grant["refresh_token"]) == ("at-new", "rt-new")
+
+
+@pytest.mark.asyncio
+async def test_conditional_revocation_deletes_a_grant_that_a_refresh_rewrites_mid_revoke(
+    credentials_prisma: SimpleNamespace,
+) -> None:
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-old", refresh_token="rt-old")
+    generation: Final = (await _saved_grant(credentials_prisma))["grant_id"]
+    guarded_delete: Final = rows.delete_many
+    rotations: Final = iter(("at-rotated",))
+
+    async def delete_after_a_concurrent_rotation(where: Mapping[str, str]) -> int:
+        for access_token in rotations:
+            assert await store_user_oauth_credential(
+                credentials_prisma, "alice", "srv-1", access_token, refresh_token="rt-new", refreshed_from="rt-old"
+            )
+        return await guarded_delete(where)
+
+    rows.delete_many = delete_after_a_concurrent_rotation
+
+    assert (
+        await delete_user_oauth_credential_if_grant_matches(credentials_prisma, "alice", "srv-1", generation)
+        == "deleted"
+    )
+    assert ("alice", "srv-1") not in rows.rows
 
 
 @pytest.mark.asyncio
