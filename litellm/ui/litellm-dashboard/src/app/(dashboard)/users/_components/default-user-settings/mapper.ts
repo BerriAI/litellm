@@ -42,6 +42,22 @@ const serverValuesShape = {
 
 const serverValuesSchema = z.object(serverValuesShape);
 
+type ModelMaxBudget = NonNullable<DefaultInternalUserParams["model_max_budget"]>;
+
+const budgetConfigShape = {
+  max_budget: z.number().nullish(),
+  budget_duration: z.string().nullish(),
+  tpm_limit: z.number().nullish(),
+  rpm_limit: z.number().nullish(),
+};
+
+const modelMaxBudgetSchema = z.object({
+  model_max_budget: z.record(z.string(), z.object(budgetConfigShape)).nullish().catch(null),
+});
+
+export const modelMaxBudgetFromSettings = (values: InternalUserSettings["values"]): ModelMaxBudget | null =>
+  modelMaxBudgetSchema.parse(values).model_max_budget ?? null;
+
 export const settingsToForm = (values: InternalUserSettings["values"]): DefaultUserSettingsFormValues => {
   const parsed = serverValuesSchema.parse(values);
 
@@ -71,10 +87,14 @@ const toTeamBody = (team: DefaultUserSettingsSubmitValues["teams"][number]): Def
   user_role: team.user_role,
 });
 
-export const buildBody = (values: DefaultUserSettingsSubmitValues): DefaultInternalUserParams => ({
+export const buildBody = (
+  values: DefaultUserSettingsSubmitValues,
+  modelMaxBudget: ModelMaxBudget | null = null,
+): DefaultInternalUserParams => ({
   user_role: asDefaultUserRole(values.user_role),
   max_budget: numberOrNull(values.max_budget),
   budget_duration: textOrNull(values.budget_duration),
   models: listOrNull(values.models),
+  model_max_budget: modelMaxBudget,
   teams: listOrNull(values.teams.map(toTeamBody)),
 });

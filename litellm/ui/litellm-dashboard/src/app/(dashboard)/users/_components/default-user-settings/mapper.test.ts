@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBody, settingsToForm } from "./mapper";
+import { buildBody, modelMaxBudgetFromSettings, settingsToForm } from "./mapper";
 import type { DefaultUserSettingsSubmitValues } from "./schema";
 
 const CONFIGURED_SETTINGS = {
@@ -79,6 +79,7 @@ const SAVED_BODY = {
   max_budget: 100,
   budget_duration: "30d",
   models: ["gpt-5.2"],
+  model_max_budget: null,
   teams: [{ team_id: "team-1", max_budget_in_team: 25, user_role: "admin" }],
 };
 
@@ -89,6 +90,7 @@ const CLEARED_BODY = {
   max_budget: null,
   budget_duration: null,
   models: null,
+  model_max_budget: null,
   teams: null,
 };
 
@@ -112,5 +114,20 @@ describe("buildBody", () => {
 
   it("refuses to send a role the backend does not accept", () => {
     expect(buildBody(formValues({ user_role: "made_up_role" })).user_role).toBeNull();
+  });
+});
+
+const PER_MODEL_BUDGETS = { "gpt-5.2": { max_budget: 10, budget_duration: "30d" } };
+
+describe("model_max_budget", () => {
+  it("sends back the per-model budgets the form loaded, so saving the form keeps them", () => {
+    const loaded = modelMaxBudgetFromSettings({ ...CONFIGURED_SETTINGS, model_max_budget: PER_MODEL_BUDGETS });
+
+    expect(buildBody(formValues(), loaded).model_max_budget).toStrictEqual(PER_MODEL_BUDGETS);
+  });
+
+  it("reads absent or unrecognisable per-model budgets as none", () => {
+    expect(modelMaxBudgetFromSettings(CONFIGURED_SETTINGS)).toBeNull();
+    expect(modelMaxBudgetFromSettings({ model_max_budget: "ten dollars" })).toBeNull();
   });
 });

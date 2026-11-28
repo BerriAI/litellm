@@ -22,7 +22,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { fetchClient } from "@/lib/http/api";
 
-import { buildBody, settingsToForm, type DefaultInternalUserParams, type InternalUserSettings } from "./mapper";
+import {
+  buildBody,
+  modelMaxBudgetFromSettings,
+  settingsToForm,
+  type DefaultInternalUserParams,
+  type InternalUserSettings,
+} from "./mapper";
 import {
   defaultUserSettingsSchema,
   EMPTY_TEAM_ROW,
@@ -260,13 +266,21 @@ const SettingsView = ({ values, roleOptions }: SettingsViewProps) => {
 
 interface SettingsFormProps {
   initialValues: DefaultUserSettingsFormValues;
+  modelMaxBudget: ReturnType<typeof modelMaxBudgetFromSettings>;
   roleOptions: readonly RoleOption[];
   updateSettings: (body: DefaultInternalUserParams) => Promise<void>;
   onCancel: () => void;
   onSaved: () => void;
 }
 
-const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, onSaved }: SettingsFormProps) => {
+const SettingsForm = ({
+  initialValues,
+  modelMaxBudget,
+  roleOptions,
+  updateSettings,
+  onCancel,
+  onSaved,
+}: SettingsFormProps) => {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const budgetDurationItems = BUDGET_DURATION_OPTIONS.map((option) => ({
@@ -277,7 +291,7 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
   const { isDirty } = form.formState;
 
   const mutation = useMutation({
-    mutationFn: (values: DefaultUserSettingsSubmitValues) => updateSettings(buildBody(values)),
+    mutationFn: (values: DefaultUserSettingsSubmitValues) => updateSettings(buildBody(values, modelMaxBudget)),
     onSuccess: (_result, values) => {
       toast.success(t("users.defaultSettings.toasts.updated"));
       queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY });
@@ -438,6 +452,10 @@ export const DefaultUserSettingsForm = ({
   );
 
   const initialValues = React.useMemo(() => (data === undefined ? undefined : settingsToForm(data.values)), [data]);
+  const modelMaxBudget = React.useMemo(
+    () => (data === undefined ? null : modelMaxBudgetFromSettings(data.values)),
+    [data],
+  );
 
   if (isPending) {
     return (
@@ -468,6 +486,7 @@ export const DefaultUserSettingsForm = ({
       {isEditing ? (
         <SettingsForm
           initialValues={initialValues}
+          modelMaxBudget={modelMaxBudget}
           roleOptions={roleOptions}
           updateSettings={updateSettings}
           onCancel={() => setIsEditing(false)}

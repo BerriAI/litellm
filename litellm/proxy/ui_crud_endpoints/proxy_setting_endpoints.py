@@ -24,6 +24,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -36,6 +37,7 @@ from litellm.proxy.config_resolvers.sso import (
     SSO_SECRET_FIELDS,
     resolve_sso_config,
 )
+from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
@@ -64,6 +66,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
 )
+from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
     from prisma.errors import PrismaError
@@ -1163,6 +1166,24 @@ async def _update_litellm_setting(
     }
 
 
+def _has_budget_window(budget: BudgetConfig) -> bool:
+    if budget.budget_duration is None:
+        return False
+    try:
+        duration_in_seconds(budget.budget_duration)
+    except ValueError:
+        return False
+    return True
+
+
+def _capped_models_without_a_budget_window(model_max_budget: Mapping[str, BudgetConfig]) -> tuple[str, ...]:
+    return tuple(
+        model
+        for model, budget in model_max_budget.items()
+        if budget.max_budget is not None and not _has_budget_window(budget)
+    )
+
+
 @router.patch(
     "/update/internal_user_settings",
     tags=["SSO Settings"],
@@ -1178,6 +1199,21 @@ async def update_internal_user_settings(
     """
     if settings.teams is not None:
         await _validate_default_teams_exist(settings.teams)
+
+    try:
+        validate_model_max_budget(settings.model_max_budget)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)})
+
+    windowless_models: Final = _capped_models_without_a_budget_window(settings.model_max_budget or {})
+    if windowless_models:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"model_max_budget for {', '.join(windowless_models)} needs a budget_duration such as '30d', "
+                "since a per-model budget without one is never enforced."
+            },
+        )
 
     if settings.teams is not None and all(isinstance(team, NewUserRequestTeam) for team in settings.teams):
         await update_default_team_member_budget(
