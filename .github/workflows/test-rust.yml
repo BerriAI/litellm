@@ -89,7 +89,7 @@ jobs:
   rust-test:
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'rust-tests')
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     # Trim debuginfo to keep the job's target dir within the runner's disk
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
