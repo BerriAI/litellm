@@ -18,6 +18,10 @@ class ActiveTeamStore:
     def __init__(self, handle: ActiveTeamsHandle) -> None:
         self._handle: Final = handle
 
+    def flush_local(self) -> None:
+        """Drops everything this process holds in memory and leaves Redis alone, for test harnesses that reuse a process."""
+        self._handle.flush_local()
+
     @with_service_target(RATE_LIMITS_TARGET)
     async def touch(self, model: str, member: str, priority_class: str, window: int) -> Mapping[str, str]:
         """Record ``member`` as active on ``model`` and return every member active on it, oldest first, each with

@@ -1,0 +1,26 @@
+# The proxy signs in to its database with a token the gateway cannot mint yet, so the proxy reads
+# a database the gateway opens no pool on. The end user a body names may hold a budget or a model
+# list there, so a request that names one goes to Python.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+  environment_variables:
+    IAM_TOKEN_DB_AUTH: "true"
+
+requests:
+  - name: the master key naming an end user
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {user_id: eu-broke}}
+    expect: python
+    reason: body
+    over: end_user
+
+  - name: the master key naming nobody
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

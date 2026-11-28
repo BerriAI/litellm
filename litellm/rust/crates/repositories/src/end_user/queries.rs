@@ -25,6 +25,13 @@ pub struct EndUserRecord {
     pub blocked: bool,
 }
 
+impl EndUserRecord {
+    /// The `spend` column, what a budget counter for this row is seeded and floored from.
+    pub fn spend(&self) -> f64 {
+        self.spend
+    }
+}
+
 /// The end user `end_user_id` with its linked budget and object permission, or `None` when no row exists
 pub(super) async fn find_end_user_record(
     executor: impl PgExecutor<'_>,

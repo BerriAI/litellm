@@ -24,11 +24,11 @@ fn hash_token(token: &str) -> String {
 }
 
 const KEY: &str = "sk-limited";
-/// What the database holds for [`KEY`]: a plain row with these limits, and the owner the native
-/// app does not serve a key for.
+/// What the database holds for [`KEY`]: a plain row with these limits, and whether it sets the
+/// soft budget cooldown the native app does not serve a key for.
 struct Holding {
     limits: KeyLimits,
-    owner: Option<&'static str>,
+    cooling: bool,
 }
 
 impl Holding {
@@ -45,7 +45,7 @@ impl Holding {
             "tpm_limit": tpm,
             "max_parallel_requests": max_parallel_requests,
             "metadata": {"model_rpm_limit": **model_rpm, "model_tpm_limit": **model_tpm},
-            "user_id": self.owner,
+            "soft_budget_cooldown": self.cooling,
         });
         keys::Held::holding(KEY, columns).await
     }
@@ -101,7 +101,7 @@ async fn served(limits: KeyLimits) -> Served {
 async fn configured(limits: KeyLimits, general_settings: &str) -> Served {
     let holding = Holding {
         limits,
-        owner: None,
+        cooling: false,
     };
     support::served(holding.stored().await, general_settings, "").await
 }
@@ -141,7 +141,7 @@ async fn a_key_the_native_app_does_not_serve_counts_nothing_against_its_limits()
             tpm: Some(100),
             ..KeyLimits::default()
         },
-        owner: Some("owner"),
+        cooling: true,
     };
     let Served {
         app,

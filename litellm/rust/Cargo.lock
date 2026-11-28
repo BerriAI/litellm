@@ -3571,9 +3571,11 @@ name = "litellm-auth-azure"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "aws-lc-rs",
  "azure_core",
  "azure_identity",
  "futures-util",
+ "hex",
  "litellm-auth-types",
  "litellm-env",
  "litellm-error",
@@ -3587,7 +3589,6 @@ dependencies = [
  "rstest",
  "rustls",
  "serde_json",
- "sha2 0.10.9",
  "strum",
  "tempfile",
  "thiserror 2.0.21",
@@ -3601,6 +3602,7 @@ dependencies = [
 name = "litellm-auth-gcp"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "axum",
  "base64 0.22.1",
  "gcp_auth",
@@ -3624,7 +3626,6 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "shlex 2.0.1",
  "strum",
  "tempfile",
@@ -4226,6 +4227,8 @@ dependencies = [
  "hyper-util",
  "jiff",
  "litellm-at-rest",
+ "litellm-auth",
+ "litellm-auth-aws",
  "litellm-auth-store",
  "litellm-call-scope",
  "litellm-callbacks",
@@ -4870,7 +4873,6 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-azure",
- "litellm-auth-gcp",
  "litellm-auth-store",
  "litellm-cache",
  "litellm-cache-response",

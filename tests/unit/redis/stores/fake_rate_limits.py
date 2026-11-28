@@ -134,6 +134,9 @@ class FakeRateLimits:
     def slot_groups(self, scopes: Sequence[RateLimitScope], force: bool) -> list[list[int]]:
         return self.memory.slot_groups(scopes, force)
 
+    def flush_local(self) -> None:
+        self.memory.flush_local()
+
     def get_local(self, entry: RateLimitEntry) -> LocalValue | None:
         return self.memory.get_local(entry)
 

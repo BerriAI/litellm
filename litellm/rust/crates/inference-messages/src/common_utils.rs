@@ -51,15 +51,17 @@ impl MessagesProvider {
     }
 }
 
-/// Python's `get_provider_anthropic_messages_config`: Vertex AI serves only its Claude
-/// partner models on this route.
+/// Python's `get_provider_anthropic_messages_config`: Azure AI, Bedrock Mantle and Vertex AI
+/// serve only their Claude models on this route.
 pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<MessagesProvider> {
     use litellm_llms::openrouter::messages::transformation::OPENROUTER_MESSAGES_CONFIG;
 
     let config: &'static dyn BaseMessagesConfig = match provider {
         LlmProviders::Tencent => &TENCENT_MESSAGES_CONFIG,
         LlmProviders::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
-        LlmProviders::AzureAi => &AZURE_AI_MESSAGES_CONFIG,
+        LlmProviders::AzureAi if model.to_ascii_lowercase().contains("claude") => {
+            &AZURE_AI_MESSAGES_CONFIG
+        }
         LlmProviders::Bedrock if has_route_prefix(model, "claude_platform/") => {
             &BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
         }
@@ -157,6 +159,7 @@ mod tests {
     #[case::openai(LlmProviders::Openai, "gpt-5")]
     #[case::vertex_gemini(LlmProviders::VertexAi, "gemini-2.5-pro")]
     #[case::bedrock_mantle_non_claude(LlmProviders::BedrockMantle, "openai.gpt-oss-120b")]
+    #[case::azure_ai_non_claude(LlmProviders::AzureAi, "gpt-5.5")]
     fn provider_without_a_messages_config_is_rejected(
         #[case] provider: LlmProviders,
         #[case] model: &str,

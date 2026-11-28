@@ -1231,12 +1231,13 @@ async fn a_custom_anthropic_base_gets_the_callers_tool_use_ids_whatever_the_mode
 }
 
 #[rstest]
-#[case::azure("azure_ai")]
-#[case::deepseek("deepseek")]
+#[case::azure("azure_ai", "claude-deployment")]
+#[case::deepseek("deepseek", "my-deployment")]
 #[tokio::test]
 async fn providers_sharing_the_anthropic_shaping_still_rewrite_tool_use_ids(
     call: MessagesCall,
     #[case] provider: &str,
+    #[case] model: &str,
 ) {
     let upstream = upstream([message_response()]).await;
 
@@ -1247,7 +1248,7 @@ async fn providers_sharing_the_anthropic_shaping_still_rewrite_tool_use_ids(
             api_base: Some(upstream.uri()),
             ..call
         },
-        json!({"model": "my-deployment", "messages": replayed_tool_round()}),
+        json!({"model": model, "messages": replayed_tool_round()}),
     ))
     .await;
 

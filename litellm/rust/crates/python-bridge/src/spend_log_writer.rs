@@ -157,11 +157,14 @@ impl RustSpendLogWriter {
     ) -> PyResult<Bound<'py, PyAny>> {
         let retention = retention.map(|(include, exclude)| Retention { include, exclude });
         let writer = Arc::clone(&self.writer);
-        let pass = Box::pin(crate::logger::capture(py).instrument(async move {
-            Box::pin(writer.flush(limit, retention.as_ref()))
-                .await
-                .map(|rows| guardrail_usage_rows(&rows))
-        }));
+        let pass = Box::pin(crate::db::for_caller(
+            py,
+            crate::logger::capture(py).instrument(async move {
+                Box::pin(writer.flush(limit, retention.as_ref()))
+                    .await
+                    .map(|rows| guardrail_usage_rows(&rows))
+            }),
+        )?);
         crate::execution::run_async(
             py,
             async move {

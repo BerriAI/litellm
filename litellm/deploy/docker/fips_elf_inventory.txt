@@ -10,6 +10,7 @@
 /app/.venv/lib/python3.13/site-packages/aiohttp/_http_writer.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/aiohttp/_websocket/mask.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/aiohttp/_websocket/reader_c.cpython-313-ARCH-linux-gnu.so
+/app/.venv/lib/python3.13/site-packages/audioop/_audioop.abi3.so
 /app/.venv/lib/python3.13/site-packages/backports/zstd/_zstd.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/charset_normalizer/cd.cpython-313-ARCH-linux-gnu.so
 /app/.venv/lib/python3.13/site-packages/charset_normalizer/md.cpython-313-ARCH-linux-gnu.so

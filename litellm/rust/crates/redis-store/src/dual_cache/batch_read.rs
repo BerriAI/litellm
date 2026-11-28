@@ -189,6 +189,13 @@ impl<V: Clone + FromValue + std::marker::Send + Sync + 'static> DualCache<V, Bat
         Reservation { keys, previous }
     }
 
+    /// Drops memory and the read history behind the refresh throttle, as a fresh process starts.
+    pub(crate) fn flush_local(&self) -> Result<(), Error> {
+        self.memory.flush()?;
+        self.reads.recent.lock().clear();
+        Ok(())
+    }
+
     pub(crate) fn release(&self, reservation: Reservation) {
         let mut recent = self.reads.recent.lock();
         for (key, previous) in reservation.keys.into_iter().zip(reservation.previous) {
@@ -261,6 +268,11 @@ impl RecentReads {
         if self.times.insert(key.clone(), time).is_none() {
             self.order.push_back(key);
         }
+    }
+
+    fn clear(&mut self) {
+        self.order.clear();
+        self.times.clear();
     }
 
     fn remove(&mut self, key: &str) {
