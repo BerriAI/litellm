@@ -158,6 +158,13 @@ else:
     PrismaClient = Any
 
 
+# The first 24 bytes of "litellm_proxy:passthrough;" encode to a fixed 32-char
+# base64 prefix shared by every passthrough managed ID stored in the table.
+_PASSTHROUGH_B64_PREFIX: Final = base64.urlsafe_b64encode(
+    SpecialEnums.LITELLM_PASSTHROUGH_MANAGED_ID_COMPLETE_STR.value[:24].encode()
+).decode()
+
+
 def _sanitized_parse_error(e: Exception) -> str:
     return (
         str(e.errors(include_input=False, include_url=False, include_context=False))
@@ -1738,7 +1745,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if owner_filter is None:
             return build_list_page([])
 
-        where_clause: Dict[str, object] = {"file_purpose": "batch", **owner_filter}
+        where_clause: Dict[str, object] = {
+            "file_purpose": "batch",
+            **owner_filter,
+            "NOT": {"unified_object_id": {"startsWith": _PASSTHROUGH_B64_PREFIX}},
+        }
 
         if after:
             cursor_row = await _managed_object_table(self.prisma_client).find_first(

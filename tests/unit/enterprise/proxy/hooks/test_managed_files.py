@@ -7080,3 +7080,38 @@ async def test_same_team_can_edit_an_image_from_its_managed_file(body: Mapping[s
     )
 
     assert result == data
+
+
+@pytest.mark.asyncio
+async def test_list_user_batches_excludes_passthrough_rows() -> None:
+    """GET /v1/batches must not return passthrough-managed batches.
+
+    Passthrough rows share the same table and file_purpose="batch" as managed
+    batches. list_user_batches must pass a NOT startsWith filter so only
+    managed IDs (not base64-encoded passthrough IDs) are returned.
+    """
+    import base64
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm_enterprise.proxy.hooks.managed_files import _PASSTHROUGH_B64_PREFIX
+
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[])
+
+    proxy_managed_files: Final = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=prisma_client)
+
+    await proxy_managed_files.list_user_batches(
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    call_kwargs: Final = prisma_client.db.litellm_managedobjecttable.find_many.call_args
+    where: Final = call_kwargs.kwargs["where"]
+    not_clause: Final = where.get("NOT")
+    assert not_clause is not None, "where clause is missing NOT filter"
+    assert not_clause == {"unified_object_id": {"startsWith": _PASSTHROUGH_B64_PREFIX}}
+
+    passthrough_plaintext: Final = "litellm_proxy:passthrough;provider:openai;unified_id,abc;raw_id,batch_xyz"
+    passthrough_b64: Final = base64.urlsafe_b64encode(passthrough_plaintext.encode()).decode().rstrip("=")
+    assert passthrough_b64.startswith(_PASSTHROUGH_B64_PREFIX), (
+        "passthrough ID must match the prefix used in the NOT filter"
+    )
