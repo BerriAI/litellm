@@ -210,6 +210,7 @@ async def _load_stored_refresh_token(
             prisma_client=prisma_client,
             user_id=litellm_user_id,
             server_id=server_id,
+            include_invalidated=True,
         )
         if not cred or not await credential_binding_matches(binding, litellm_user_id, server_id, cred):
             return None

@@ -154,6 +154,19 @@ async def _post_token_endpoint(
     return AuthorizationCodeTokenSuccess(body=body)
 
 
+async def _revoke_credential(user_id: str, server_id: str, access_token: str, refresh_token: str | None) -> None:
+    from litellm.proxy.mcp_server.db import (  # noqa: PLC0415  # runtime global avoids a package import cycle
+        invalidate_user_oauth_credential_if_grant_matches,
+    )
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global is wired after module import
+
+    if prisma_client is None:
+        return
+    await invalidate_user_oauth_credential_if_grant_matches(
+        prisma_client, user_id, server_id, access_token, refresh_token
+    )
+
+
 def _redis_cache_is_available() -> bool:
     from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # runtime global
 
@@ -244,7 +257,9 @@ def _build_per_user_oauth_token_store(
     server_lookup: ServerLookup,
 ) -> tuple[CachedOAuthTokenStore, bool]:
     backend, coordinator, uses_redis = _runtime_backend_and_coordinator()
-    refresher: Final = AuthorizationCodeRefresher(server_lookup, _post_token_endpoint, _persist_credential)
+    refresher: Final = AuthorizationCodeRefresher(
+        server_lookup, _post_token_endpoint, _persist_credential, revoke=_revoke_credential
+    )
     refreshing: Final = RefreshingTokenStore(
         V2PerUserTokenStore(partial(_read_bound_credential, server_lookup)), refresher, coordinator=coordinator
     )

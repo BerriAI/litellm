@@ -69,3 +69,9 @@ async def test_empty_user_short_circuits_without_reading():
 
     assert await V2PerUserTokenStore(read).fetch("", "srv") is None
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_empty_access_token_is_not_authorized():
+    store = V2PerUserTokenStore(_reader({"access_token": "", "refresh_token": "rt"}))
+    assert await store.fetch("alice", "srv") is None
