@@ -367,7 +367,10 @@ def get_routes() -> tuple[str, ...]:
         json.loads(next(line for line in lines if line.startswith("ROUTES=")).removeprefix("ROUTES="))
     )
     assert missing == [], f"Lazy features registered no route, so S2 cannot sweep them: {missing}"
-    assert "/spend/logs/ui/{request_id}" in routes, "Route enumeration missed hidden routes"
+    assert any(
+        route in routes
+        for route in ("/spend/logs/ui/{request_id:path}", "/spend/logs/ui/{request_id}")
+    ), "Route enumeration missed hidden routes"
     assert "/guardrails/list" in routes, "Route enumeration missed lazily registered feature routes"
     return routes
 

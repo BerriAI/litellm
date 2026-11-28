@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import urllib.parse
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import timezone
 from functools import partial
@@ -8651,6 +8652,36 @@ def test_ui_view_request_response_opens_request_id_without_call_id_index(client,
         response = client.get("/spend/logs/ui/req-1", headers={"Authorization": "Bearer sk-test"})
         assert response.status_code == 200, response.text
         assert response.json()["messages"] == [{"role": "user", "content": "drawer prompt"}]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.parametrize("user_role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.INTERNAL_USER])
+def test_ui_view_request_response_request_id_with_slashes(client, monkeypatch, user_role):
+    """
+    A stored request_id containing slashes must be retrievable through
+    /spend/logs/ui/{request_id:path}, both when URL-encoded (%2F) and as raw path.
+    """
+    slash_request_id = "github_copilot/gpt-6.2-sol/run/123/sub/456"
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        _SpendLogsWithoutCallIdIndex([_payload_row(slash_request_id, "call-slash", "user_a", "slash prompt")]),
+    )
+    monkeypatch.setattr(
+        litellm.logging_callback_manager, "get_active_additional_logging_utils_from_custom_logger", lambda: []
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=user_role, user_id="user_a")
+    try:
+        # 1. Percent-encoded slash (%2F)
+        encoded_id = urllib.parse.quote(slash_request_id, safe="")
+        response_encoded = client.get(f"/spend/logs/ui/{encoded_id}", headers={"Authorization": "Bearer sk-test"})
+        assert response_encoded.status_code == 200, response_encoded.text
+        assert response_encoded.json()["messages"] == [{"role": "user", "content": "slash prompt"}]
+
+        # 2. Raw slashes
+        response_raw = client.get(f"/spend/logs/ui/{slash_request_id}", headers={"Authorization": "Bearer sk-test"})
+        assert response_raw.status_code == 200, response_raw.text
+        assert response_raw.json()["messages"] == [{"role": "user", "content": "slash prompt"}]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

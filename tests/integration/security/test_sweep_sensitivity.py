@@ -148,7 +148,7 @@ def test_only_provider_passthrough_routes_match_the_passthrough_deny_rule() -> N
     denied: Final = {route for route in get_routes() if route_denied(route) == PROVIDER_PASSTHROUGH_REASON}
     assert "/openai/{endpoint:path}" in denied and "/langfuse/{endpoint:path}" in denied
     assert all(route.endswith("/{endpoint:path}") and route.count("{") == 1 for route in denied), denied
-    for swept in ("/v1/files/{file_id:path}", "/spend/logs/ui/{request_id}", "/v1/memory/{key:path}"):
+    for swept in ("/v1/files/{file_id:path}", "/spend/logs/ui/{request_id:path}", "/v1/memory/{key:path}"):
         assert route_denied(swept) is None, swept
 
 

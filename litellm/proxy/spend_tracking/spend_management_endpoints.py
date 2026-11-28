@@ -3451,7 +3451,7 @@ def _parse_spend_log_ui_date(value: str | None) -> datetime | None:
 
 
 @router.get(
-    "/spend/logs/ui/{request_id}",
+    "/spend/logs/ui/{request_id:path}",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
