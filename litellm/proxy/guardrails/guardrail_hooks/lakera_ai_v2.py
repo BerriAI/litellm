@@ -1,10 +1,12 @@
 import copy
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from functools import partial
+from itertools import chain
 from string import Formatter
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
@@ -20,6 +22,8 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_tool_message_for_guardrail,
     filter_messages_by_skip_flags,
     merge_guardrailed_scoped_messages,
+    stream_item_field,
+    stream_item_items,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -31,9 +35,13 @@ from litellm.proxy.guardrails._content_utils import (
     build_inspection_messages,
     has_non_string_content,
 )
+from litellm.responses.litellm_completion_transformation.reasoning_items import (
+    thinking_block_texts,
+    with_thinking_text,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse
 from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIBreakdownItem,
     LakeraAIRequest,
@@ -46,7 +54,6 @@ if TYPE_CHECKING:
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
-_RESPONSE_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 _DETECTOR_CATEGORY_PHRASES: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -241,6 +248,60 @@ def _build_lakera_inspection_messages(data: Mapping[str, object]) -> Sequence[Ma
     ]
 
 
+_NativeText: TypeAlias = tuple[Callable[[object], None], str]
+
+
+def _write_field(block: object, field: str, text: object) -> None:
+    if isinstance(block, dict):
+        block[field] = text  # rebind-ok: masking rewrites the served response's text block in place
+        return
+    setattr(block, field, text)
+
+
+def _write_thinking_text(item: object, block_index: int, text: object) -> None:
+    encrypted_content: Final = stream_item_field(item, "encrypted_content")
+    if isinstance(encrypted_content, str) and isinstance(text, str):
+        _write_field(item, "encrypted_content", with_thinking_text(encrypted_content, block_index, text))
+
+
+def _present_texts(blocks: Sequence[object], field: str) -> tuple[_NativeText, ...]:
+    texts: Final = tuple((block, stream_item_field(block, field)) for block in blocks)
+    return tuple((partial(_write_field, block, field), text) for block, text in texts if isinstance(text, str) and text)
+
+
+def _text_blocks(container: object, text_type: str) -> tuple[_NativeText, ...]:
+    blocks: Final = stream_item_items(container, "content")
+    return _present_texts(tuple(block for block in blocks if stream_item_field(block, "type") == text_type), "text")
+
+
+def _thinking_texts(item: object) -> tuple[_NativeText, ...]:
+    texts: Final = thinking_block_texts(stream_item_field(item, "encrypted_content"))
+    return tuple((partial(_write_thinking_text, item, index), text) for index, text in texts.items())
+
+
+def _output_item_text_blocks(item: object) -> tuple[_NativeText, ...]:
+    if stream_item_field(item, "type") == "reasoning":
+        parts: Final = (*stream_item_items(item, "summary"), *stream_item_items(item, "content"))
+        return (*_present_texts(parts, "text"), *_thinking_texts(item))
+    return _text_blocks(item, "output_text")
+
+
+def _native_output_text_blocks(response: object) -> tuple[_NativeText, ...] | None:
+    if isinstance(response, ResponsesAPIResponse) or stream_item_field(response, "object") == "response":
+        output: Final = stream_item_items(response, "output")
+        item_texts: Final = tuple(chain.from_iterable(_output_item_text_blocks(item) for item in output))
+        provider_fields: Final = stream_item_field(response, "provider_specific_fields")
+        return (*item_texts, *_present_texts(stream_item_items(provider_fields, "thinking_blocks"), "thinking"))
+    if stream_item_field(response, "type") == "message":
+        return _text_blocks(response, "text")
+    return None
+
+
+def _write_choice_text(response: ModelResponse, choice_index: int, text: object) -> None:
+    if isinstance(text, str):
+        response.choices[choice_index].message.content = text  # rebind-ok: masking edits the served reply in place
+
+
 class LakeraAIGuardrail(CustomGuardrail):
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -267,9 +328,6 @@ class LakeraAIGuardrail(CustomGuardrail):
     ):
         """
         Initialize the LakeraAIGuardrail class.
-
-        This guardrail only supports the chat completions endpoint (/v1/chat/completions).
-        It is not supported for the Responses API, /v1/messages, MCP, A2A, or other endpoints.
 
         This calls: https://api.lakera.ai/v2/guard
 
@@ -765,8 +823,9 @@ class LakeraAIGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return response
 
-        messages_or_none: Final[list[AllMessageValues] | None] = data.get("messages")
-        original_messages, _ = self._filter_skipped_messages(messages_or_none or [])
+        original_messages, _ = self._filter_skipped_messages(
+            _build_lakera_inspection_messages(data)  # pyright: ignore[reportArgumentType]  # build_inspection_messages returns plain dicts, not typed message unions
+        )
 
         # Extract assistant messages from the response, keeping only role/content.
         # Track choice indices so we write masked content back to the correct choice
@@ -783,9 +842,14 @@ class LakeraAIGuardrail(CustomGuardrail):
             if role and content:
                 response_messages.append({"role": role, "content": content})
                 choice_indices.append(i)
+        native_text_blocks: Final = _native_output_text_blocks(response)
+        response_messages.extend({"role": "assistant", "content": text} for _, text in native_text_blocks or ())
 
         # Use a copy of original_messages so _mask_pii_in_messages does not mutate data["messages"]
         post_call_messages: Final = list(copy.deepcopy(original_messages)) + response_messages
+        if not post_call_messages and (native_text_blocks is not None or isinstance(response, ModelResponse)):
+            verbose_proxy_logger.warning("Lakera AI: not running guardrail. No inspectable text in request or response")
+            return response
 
         # Call Lakera guardrail
         lakera_guardrail_response, _ = await self.call_v2_guard(
@@ -804,12 +868,14 @@ class LakeraAIGuardrail(CustomGuardrail):
                     masked_entity_count=masked_entity_count,
                 )
                 assistant_messages: Final = masked_messages[len(original_messages) :]
-                for idx, msg in enumerate(assistant_messages):
-                    if idx < len(choice_indices):
-                        choice_idx = choice_indices[idx]
-                        response_dict["choices"][choice_idx]["message"]["content"] = msg.get("content", "")
+                native_masked: Final = assistant_messages[len(choice_indices) :]
+                for (write_text, _), masked in zip(native_text_blocks or (), native_masked, strict=True):
+                    write_text(stream_item_field(masked, "content"))
+                if isinstance(response, ModelResponse):
+                    for choice_idx, masked_message in zip(choice_indices, assistant_messages, strict=True):
+                        _write_choice_text(response, choice_idx, stream_item_field(masked_message, "content"))
                 add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
-                return ModelResponse(**_RESPONSE_FIELDS.validate_python(response_dict))
+                return response
 
             # inject_system_message has nothing left to inject into once a response
             # already exists, so it is treated the same as monitor: log and allow.

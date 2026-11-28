@@ -6,8 +6,8 @@ Additional tests live in tests/guardrails_tests/test_lakera_v2.py.
 """
 
 import importlib, logging, os
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Callable, Mapping
+from typing import Final, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -25,8 +25,13 @@ from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     _build_lakera_inspection_messages,
     humanize_lakera_block_reasons,
 )
+from litellm.responses.litellm_completion_transformation.reasoning_items import (
+    encode_thinking_blocks,
+    thinking_block_texts,
+)
 from litellm.types.guardrails import LitellmParams, Mode
-from litellm.types.utils import ModelResponse
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import EmbeddingResponse, ModelResponse, TextCompletionResponse
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -44,17 +49,9 @@ async def test_lakera_post_call_success_hook_returns_model_response_when_pii_mas
             {"detector_type": "pii/email", "detected": True, "message_id": 1},
         ],
     }
-    llm_response = MagicMock()
-    llm_response.model_dump.return_value = {
-        "choices": [
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": "Your email is test@example.com",
-                }
-            },
-        ]
-    }
+    llm_response = ModelResponse(
+        choices=[{"message": {"role": "assistant", "content": "Your email is test@example.com"}}]
+    )
 
     with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
@@ -276,8 +273,7 @@ class TestAsyncPostCallSuccessHookSkipFlags:
             "model": "gpt-3.5-turbo",
             "metadata": {},
         }
-        llm_response = MagicMock()
-        llm_response.model_dump.return_value = {"choices": [{"message": {"role": "assistant", "content": "hi there"}}]}
+        llm_response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "hi there"}}])
         with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = ({"flagged": False}, {})
             await guardrail.async_post_call_success_hook(
@@ -299,10 +295,7 @@ class TestAsyncPostCallSuccessHookSkipFlags:
             "model": "gpt-3.5-turbo",
             "metadata": {},
         }
-        llm_response = MagicMock()
-        llm_response.model_dump.return_value = {
-            "choices": [{"message": {"role": "assistant", "content": "my email is a@b.com"}}]
-        }
+        llm_response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "my email is a@b.com"}}])
         pii_response = {
             "flagged": True,
             "breakdown": [{"detector_type": "pii/email", "detected": True, "message_id": 1}],
@@ -356,8 +349,7 @@ async def _run_during_call(guardrail: LakeraAIGuardrail, lakera_response: Mappin
 
 
 async def _run_post_call(guardrail: LakeraAIGuardrail, lakera_response: Mapping[str, object]) -> ModelResponse:
-    llm_response: Final = MagicMock()
-    llm_response.model_dump.return_value = {"choices": [{"message": {"role": "assistant", "content": "hello world"}}]}
+    llm_response: Final = ModelResponse(choices=[{"message": {"role": "assistant", "content": "hello world"}}])
     with patch.object(guardrail, "call_v2_guard", new_callable=AsyncMock, return_value=(lakera_response, {})):
         response: Final = await guardrail.async_post_call_success_hook(
             data={"messages": [], "model": "gpt-3.5-turbo", "metadata": {}},
@@ -1694,10 +1686,7 @@ class TestAdvisoryModePostCall:
             "flagged": True,
             "breakdown": [{"detector_type": "moderated_content/violence", "detected": True}],
         }
-        llm_response = MagicMock()
-        llm_response.model_dump.return_value = {
-            "choices": [{"message": {"role": "assistant", "content": "Some response content"}}]
-        }
+        llm_response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Some response content"}}])
 
         with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
             mock_call.return_value = (mock_response, {})
@@ -2354,8 +2343,7 @@ async def test_lakera_post_call_blocks_flagged_content():
     }
 
     # Mock LLM response object
-    llm_response = MagicMock()
-    llm_response.model_dump.return_value = {"choices": [{"message": {"role": "assistant", "content": "some response"}}]}
+    llm_response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "some response"}}])
 
     with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
@@ -2390,10 +2378,7 @@ async def test_lakera_post_call_allows_clean_content():
         "breakdown": [],
     }
 
-    llm_response = MagicMock()
-    llm_response.model_dump.return_value = {
-        "choices": [{"message": {"role": "assistant", "content": "clean response"}}]
-    }
+    llm_response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "clean response"}}])
 
     with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
@@ -2429,17 +2414,9 @@ async def test_lakera_post_call_masks_pii_and_allows():
         ],
     }
 
-    llm_response = MagicMock()
-    llm_response.model_dump.return_value = {
-        "choices": [
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": "Your email is test@example.com",
-                }
-            },
-        ]
-    }
+    llm_response = ModelResponse(
+        choices=[{"message": {"role": "assistant", "content": "Your email is test@example.com"}}]
+    )
 
     with patch.object(lakera_guardrail, "call_v2_guard", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = (mock_response, {})
@@ -2497,3 +2474,282 @@ async def test_call_v2_guard_returns_the_lakera_verdict_and_logs_it_without_the_
     logged: Final = request_data["metadata"]["standard_logging_guardrail_information"][0]
     assert logged["guardrail_status"] == "success"
     assert logged["guardrail_response"] == {"flagged": True, "breakdown": verdict["breakdown"]}
+
+
+_CARD: Final = "4111 1111 1111 1111"
+_CARD_REPLY: Final = f"Card {_CARD} is on file."
+_CLEAN_VERDICT: Final = {"flagged": False, "breakdown": [], "payload": []}
+_NativeReply: TypeAlias = Callable[..., ResponsesAPIResponse | dict[str, object]]
+_ReasoningReply: TypeAlias = Callable[[str, str], ResponsesAPIResponse | dict[str, object]]
+
+
+def _card_verdict(message_id: int) -> dict[str, object]:
+    return {
+        "flagged": True,
+        "breakdown": [{"detector_type": "pii/credit_card", "detected": True, "message_id": message_id}],
+        "payload": [{"detector_type": "pii/credit_card", "start": 5, "end": 5 + len(_CARD), "message_id": message_id}],
+    }
+
+
+def _responses_reply(*texts: str) -> ResponsesAPIResponse:
+    content: Final = [{"type": "output_text", "text": text, "annotations": []} for text in texts]
+    message: Final = {"type": "message", "id": "msg_1", "role": "assistant", "status": "completed", "content": content}
+    return ResponsesAPIResponse(id="resp_1", created_at=1, output=[message])
+
+
+def _anthropic_reply(*texts: str) -> dict[str, object]:
+    return {"type": "message", "role": "assistant", "content": [{"type": "text", "text": text} for text in texts]}
+
+
+def _responses_body_reply(*texts: str) -> dict[str, object]:
+    content: Final = [{"type": "output_text", "text": text, "annotations": []} for text in texts]
+    message: Final = {"type": "message", "id": "msg_1", "role": "assistant", "status": "completed", "content": content}
+    return {"id": "resp_1", "object": "response", "created_at": 1, "status": "completed", "output": [message]}
+
+
+def _served_texts(response: object) -> tuple[object, ...]:
+    if isinstance(response, ResponsesAPIResponse):
+        return tuple(block.text for block in response.output[0].content)
+    if isinstance(response, dict) and response.get("object") == "response":
+        return tuple(block["text"] for block in response["output"][0]["content"])
+    return tuple(block["text"] for block in response["content"])
+
+
+async def _post_call(
+    on_flagged: str, verdict: dict[str, object], data: dict[str, object], response: object
+) -> tuple[object, _RecordingLakeraClient]:
+    guardrail: Final = LakeraAIGuardrail(api_key="test_key", on_flagged=on_flagged)
+    client: Final = _RecordingLakeraClient(verdict)
+    guardrail.async_handler = client
+    result: Final = await guardrail.async_post_call_success_hook(
+        data={**data, "metadata": {}}, user_api_key_dict=UserAPIKeyAuth(api_key="test_key"), response=response
+    )
+    return result, client
+
+
+_NATIVE_SHAPES: Final = [
+    pytest.param({"model": "m", "input": "Which card?"}, _responses_reply, id="responses"),
+    pytest.param({"model": "m", "input": "Which card?"}, _responses_body_reply, id="responses-passthrough-body"),
+    pytest.param(
+        {"model": "m", "messages": [{"role": "user", "content": "Which card?"}]}, _anthropic_reply, id="messages"
+    ),
+]
+
+
+@pytest.mark.asyncio
+class TestPostCallNativeResponseShapes:
+    @pytest.mark.parametrize(("data", "reply"), _NATIVE_SHAPES)
+    async def test_lakera_sees_the_prompt_and_every_assistant_text_block(
+        self, data: dict[str, object], reply: _NativeReply
+    ) -> None:
+        response = reply("Paris.", "It is in France.")
+
+        result, client = await _post_call("block", _CLEAN_VERDICT, data, response)
+
+        assert result is response
+        assert client.posts[0]["json"]["messages"] == [
+            {"role": "user", "content": "Which card?"},
+            {"role": "assistant", "content": "Paris."},
+            {"role": "assistant", "content": "It is in France."},
+        ]
+
+    @pytest.mark.parametrize(("data", "reply"), _NATIVE_SHAPES)
+    async def test_block_rejects_a_flagged_reply(self, data: dict[str, object], reply: _NativeReply) -> None:
+        with pytest.raises(HTTPException) as blocked:
+            await _post_call("block", _card_verdict(1), data, reply(_CARD_REPLY))
+
+        assert (blocked.value.status_code, blocked.value.detail["error"]) == (400, "Violated guardrail policy")
+
+    @pytest.mark.parametrize(("data", "reply"), _NATIVE_SHAPES)
+    async def test_mask_rewrites_only_the_flagged_block_and_keeps_the_response_type(
+        self, data: dict[str, object], reply: _NativeReply
+    ) -> None:
+        response = reply("Here you go.", _CARD_REPLY)
+
+        result, _ = await _post_call("mask", _card_verdict(2), data, response)
+
+        assert result is response
+        assert _served_texts(result) == ("Here you go.", "Card [MASKED CREDIT_CARD] is on file.")
+
+    async def test_mask_keeps_a_tool_call_only_responses_reply_when_pii_is_in_the_prompt(self) -> None:
+        call: Final = {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "lookup", "arguments": "{}"}
+        response = ResponsesAPIResponse(id="resp_1", created_at=1, output=[call])
+        prompt: Final = f"Card {_CARD} please."
+
+        result, client = await _post_call("mask", _card_verdict(0), {"model": "m", "input": prompt}, response)
+
+        assert result is response
+        assert client.posts[0]["json"]["messages"] == [{"role": "user", "content": prompt}]
+
+    async def test_nothing_to_inspect_skips_lakera_and_returns_the_response(self) -> None:
+        response = _responses_reply()
+
+        result, client = await _post_call("block", _card_verdict(0), {"model": "m", "input": []}, response)
+
+        assert result is response
+        assert client.posts == []
+
+
+def _reasoning_output(summary: str, content: str) -> list[dict[str, object]]:
+    reasoning: Final = {
+        "type": "reasoning",
+        "id": "rs_1",
+        "summary": [{"type": "summary_text", "text": summary}],
+        "content": [{"type": "reasoning_text", "text": content}],
+    }
+    answer: Final = {
+        "type": "message",
+        "id": "msg_1",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
+    }
+    return [reasoning, answer]
+
+
+def _reasoning_responses_reply(summary: str, content: str) -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(id="resp_1", created_at=1, output=_reasoning_output(summary, content))
+
+
+def _reasoning_body_reply(summary: str, content: str) -> dict[str, object]:
+    return {"id": "resp_1", "object": "response", "created_at": 1, "output": _reasoning_output(summary, content)}
+
+
+def _reasoning_texts(response: object) -> tuple[object, ...]:
+    if isinstance(response, ResponsesAPIResponse):
+        return (response.output[0].summary[0].text, response.output[0].content[0].text)
+    return (response["output"][0]["summary"][0]["text"], response["output"][0]["content"][0]["text"])
+
+
+_REASONING_SHAPES: Final = [
+    pytest.param(_reasoning_responses_reply, id="responses"),
+    pytest.param(_reasoning_body_reply, id="responses-passthrough-body"),
+]
+
+
+@pytest.mark.asyncio
+class TestPostCallResponsesReasoning:
+    @pytest.mark.parametrize("reply", _REASONING_SHAPES)
+    async def test_lakera_sees_reasoning_summary_and_content_as_assistant_text(self, reply: _ReasoningReply) -> None:
+        _, client = await _post_call("block", _CLEAN_VERDICT, {"model": "m", "input": "Which card?"}, reply("S.", "C."))
+
+        assert client.posts[0]["json"]["messages"] == [
+            {"role": "user", "content": "Which card?"},
+            {"role": "assistant", "content": "S."},
+            {"role": "assistant", "content": "C."},
+            {"role": "assistant", "content": "Done."},
+        ]
+
+    @pytest.mark.parametrize("reply", _REASONING_SHAPES)
+    async def test_mask_rewrites_the_reasoning_summary_in_place(self, reply: _ReasoningReply) -> None:
+        response = reply(_CARD_REPLY, "C.")
+
+        result, _ = await _post_call("mask", _card_verdict(1), {"model": "m", "input": "Which card?"}, response)
+
+        assert result is response
+        assert _reasoning_texts(result) == ("Card [MASKED CREDIT_CARD] is on file.", "C.")
+
+    async def test_mask_rewrites_every_copy_of_bridged_thinking_text(self) -> None:
+        encrypted: Final = encode_thinking_blocks([{"type": "thinking", "thinking": _CARD_REPLY, "signature": "sig"}])
+        reasoning: Final = {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "content": [{"type": "output_text", "text": _CARD_REPLY, "annotations": []}],
+            "encrypted_content": encrypted,
+        }
+        response: Final = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            output=[reasoning],
+            provider_specific_fields={"thinking_blocks": [{"type": "thinking", "thinking": _CARD_REPLY}]},
+        )
+        verdict: Final = {
+            "flagged": True,
+            "breakdown": [
+                {"detector_type": "pii/credit_card", "detected": True, "message_id": message_id}
+                for message_id in (1, 2, 3)
+            ],
+            "payload": [
+                {"detector_type": "pii/credit_card", "start": 5, "end": 5 + len(_CARD), "message_id": message_id}
+                for message_id in (1, 2, 3)
+            ],
+        }
+
+        result, client = await _post_call("mask", verdict, {"model": "m", "input": "Which card?"}, response)
+
+        assert [message["content"] for message in client.posts[0]["json"]["messages"]] == [
+            "Which card?",
+            _CARD_REPLY,
+            _CARD_REPLY,
+            _CARD_REPLY,
+        ]
+        assert result is response
+        assert _CARD not in response.model_dump_json()
+        assert thinking_block_texts(response.output[0]["encrypted_content"]) == {
+            0: "Card [MASKED CREDIT_CARD] is on file."
+        }
+
+
+@pytest.mark.asyncio
+async def test_post_call_sends_chat_prompt_text_parts_as_plain_text() -> None:
+    data: Final = {"model": "m", "messages": [{"role": "user", "content": [{"type": "text", "text": "Which card?"}]}]}
+    chat_response: Final = ModelResponse(choices=[{"message": {"role": "assistant", "content": "None."}}])
+
+    _, client = await _post_call("block", _CLEAN_VERDICT, data, chat_response)
+
+    assert client.posts[0]["json"]["messages"] == [
+        {"role": "user", "content": "Which card?"},
+        {"role": "assistant", "content": "None."},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mask_returns_a_non_chat_response_unchanged_when_pii_is_in_the_prompt() -> None:
+    embedding: Final = EmbeddingResponse(model="m", data=[{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}])
+
+    result, client = await _post_call("mask", _card_verdict(0), {"model": "m", "input": f"Card {_CARD}."}, embedding)
+
+    assert result is embedding
+    assert result.data[0]["embedding"] == [0.1, 0.2]
+    assert len(client.posts) == 1
+
+
+@pytest.mark.asyncio
+async def test_text_completion_with_nothing_read_still_calls_lakera() -> None:
+    completion: Final = TextCompletionResponse(choices=[{"index": 0, "text": "Paris.", "finish_reason": "stop"}])
+
+    _, client = await _post_call("block", _CLEAN_VERDICT, {"model": "m", "prompt": "Capital of France?"}, completion)
+
+    assert client.posts[0]["json"]["messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_chat_reply_with_nothing_to_inspect_skips_lakera() -> None:
+    chat_response: Final = ModelResponse(choices=[{"message": {"role": "assistant", "content": None}}])
+
+    result, client = await _post_call("block", _card_verdict(0), {"model": "m", "messages": []}, chat_response)
+
+    assert result is chat_response
+    assert client.posts == []
+
+
+@pytest.mark.asyncio
+async def test_mask_rewrites_the_chat_reply_in_place() -> None:
+    chat_response: Final = ModelResponse(
+        choices=[
+            {"index": 0, "message": {"role": "assistant", "content": None}},
+            {"index": 1, "message": {"role": "assistant", "content": "Here you go."}},
+            {"index": 2, "message": {"role": "assistant", "content": _CARD_REPLY}},
+        ]
+    )
+    data: Final = {"model": "m", "messages": [{"role": "user", "content": "Which card?"}]}
+
+    result, _ = await _post_call("mask", _card_verdict(2), data, chat_response)
+
+    assert result is chat_response
+    assert [choice.message.content for choice in chat_response.choices] == [
+        None,
+        "Here you go.",
+        "Card [MASKED CREDIT_CARD] is on file.",
+    ]
