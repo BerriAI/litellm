@@ -28,13 +28,14 @@ from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stub
 client = TestClient(app)
 
 
-def test_dashboard_discovers_webiq_with_its_display_name() -> None:
+@pytest.mark.parametrize(("slug", "display_name"), [("webiq", "Microsoft Web IQ"), ("keirolabs", "Keirolabs")])
+def test_dashboard_discovers_search_provider_with_its_display_name(slug: str, display_name: str) -> None:
     with _override_auth(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)):
         response: Final = client.get("/search_tools/ui/available_providers")
 
     assert response.status_code == 200, response.text
-    assert [provider for provider in response.json()["providers"] if provider["provider_name"] == "webiq"] == [
-        {"provider_name": "webiq", "ui_friendly_name": "Microsoft Web IQ"}
+    assert [provider for provider in response.json()["providers"] if provider["provider_name"] == slug] == [
+        {"provider_name": slug, "ui_friendly_name": display_name}
     ]
 
 

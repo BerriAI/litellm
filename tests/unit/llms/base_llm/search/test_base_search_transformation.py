@@ -27,6 +27,7 @@ from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
 from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
 from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
 from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
+from litellm.llms.keirolabs.search.transformation import KeirolabsSearchConfig
 from litellm.llms.linkup.search.transformation import LinkupSearchConfig
 from litellm.llms.nimble.search.transformation import NimbleSearchConfig
 from litellm.llms.parallel_ai.search.transformation import ParallelAISearchConfig
@@ -60,6 +61,7 @@ _BASE_ENV_VARS = (
     "TINYFISH_API_BASE",
     "CRW_API_BASE",
     "NIMBLE_API_BASE",
+    "KEIROLABS_API_BASE",
     "BING_GROUNDING_PROJECT_ENDPOINT",
 )
 
@@ -101,6 +103,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
     (TinyfishSearchConfig, {"TINYFISH_API_KEY": "srv"}, "caller-key", {}),
     (FastCRWSearchConfig, {"CRW_API_KEY": "srv"}, "caller-key", {}),
     (NimbleSearchConfig, {"NIMBLE_API_KEY": "srv"}, "caller-key", {}),
+    (KeirolabsSearchConfig, {"KEIROLABS_API_KEY": "srv"}, "caller-key", {}),
     (BingGroundingSearchConfig, {"BING_GROUNDING_TOKEN": "srv"}, "caller-key", {}),
 )
 
