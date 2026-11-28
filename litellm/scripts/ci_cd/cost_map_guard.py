@@ -43,7 +43,10 @@ AUTHOR_TYPE_ENV: Final = "COST_MAP_GUARD_AUTHOR_TYPE"
 BOT_AUTHOR_TYPE: Final = "Bot"
 MERGE_CONFLICT_EXIT_CODE: Final = 1
 SPECIAL_ROOT_KEYS: Final = frozenset({"sample_spec", "fallback_generalizations"})
-EVALUATION_OUTPUT_PRICE_SOURCES: Final[Mapping[str, str]] = MappingProxyType({})
+_LEVANTO_PRICING: Final = "https://levanto.ai/pricing (All plans: Output $1 / 1M tokens, read 2026-11-24)"
+EVALUATION_OUTPUT_PRICE_SOURCES: Final[Mapping[str, str]] = MappingProxyType(
+    {"levanto/levanto-sage-2": _LEVANTO_PRICING, "levanto/sage-latest": _LEVANTO_PRICING}
+)
 
 CostMap = dict[str, object]
 _MISSING: Final = object()

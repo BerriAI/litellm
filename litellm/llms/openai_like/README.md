@@ -185,6 +185,22 @@ A key ending in `/*` covers every model whose name starts with that prefix, incl
 3. `ProviderConfigManager.get_provider_responses_api_config()` returns the generated config
 4. Request/response transformation is inherited from OpenAI — no custom code needed
 
+## Decisions API Support
+
+A decision model that serves the System One API at `{base_url}/v1/systemone` declares it the same way:
+
+```json
+{
+  "your_provider": {
+    "base_url": "https://api.yourprovider.com",
+    "api_key_env": "YOUR_PROVIDER_API_KEY",
+    "supported_endpoints": ["/v1/systemone"]
+  }
+}
+```
+
+This enables `litellm.decisions(model="your_provider/model-name", ...)`, `litellm.systemone(...)`, the proxy's `/v1/decisions` and `/v1/systemone` routes and the Auto Router classifier with zero Python code. Add the provider to `LlmProviders` and add each model to the cost map with `"mode": "evaluation"` so calls are priced.
+
 ## Benefits
 
 - **Simple**: 2-5 lines of JSON vs 100+ lines of Python

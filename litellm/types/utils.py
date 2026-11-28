@@ -4826,6 +4826,7 @@ class LlmProviders(str, Enum):
     BESPOKE = "bespoke"
     EMPIRIOLABS = "empiriolabs"
     EU_JEV = "eu_jev"
+    LEVANTO = "levanto"
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"
