@@ -183,7 +183,7 @@ from litellm.repositories.user_repository import NewUserDefaults, UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
-from litellm.router_api import RegistryReader
+from litellm.router_api import RegistryReader, RouterRegistry
 from litellm.rust_bridge._native import NativeDatabaseFailure, NativeRateCard
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -526,6 +526,91 @@ def _log_budget_lookup_failure(entity: str, error: Exception) -> None:
     )
 
 
+def _router_settings_source(llm_router: object) -> object:
+    """Return the router settings view or router object holding routing configuration."""
+    settings_fn: Final = getattr(llm_router, "settings", None)
+    return settings_fn() if callable(settings_fn) else llm_router
+
+
+def _is_pass_through_all_models_enabled(llm_router: object) -> bool:
+    """Return True if the router has pass_through_all_models enabled."""
+    try:
+        general: Final = getattr(_router_settings_source(llm_router), "router_general_settings", None)
+        return getattr(general, "pass_through_all_models", False) is True
+    except (AttributeError, TypeError, RuntimeError):
+        return False
+
+
+def _has_default_deployment_configured(llm_router: object) -> bool:
+    """Return True if the router has a default_deployment configured."""
+    try:
+        source: Final = _router_settings_source(llm_router)
+        if getattr(source, "default_deployment_raises", None) is True:
+            return True
+        default_deployment: Final[object] = getattr(source, "default_deployment", None)
+        if default_deployment is None:
+            return False
+        return isinstance(default_deployment, (Mapping, str)) or (
+            type(default_deployment).__module__ != "unittest.mock"
+        )
+    except (AttributeError, TypeError, RuntimeError):
+        return False
+
+
+def _deployment_model_info(deployment: DeploymentTypedDict) -> Mapping[str, object]:
+    """Return a typed mapping for a deployment's optional ``model_info`` block."""
+    mapping: Final = as_str_mapping(deployment)
+    if mapping is None:
+        return _NO_MODEL_INFO
+    return as_str_mapping(mapping.get("model_info")) or _NO_MODEL_INFO
+
+
+def _is_registered_deployment_id(registry: RouterRegistry, model_name: str) -> bool:
+    """Return True when ``model_name`` matches a registered deployment ``model_info.id``."""
+    try:
+        has_deployment: Final = registry.has_deployment(model_name)
+        if type(has_deployment) is bool:
+            return has_deployment
+    except (AttributeError, TypeError, RuntimeError, KeyError):
+        verbose_proxy_logger.debug("Error checking deployment id %s via has_deployment", model_name)
+    try:
+        all_deployments: Final = registry.deployments() or ()
+        for d in all_deployments:
+            if _deployment_model_info(d).get("id") == model_name:
+                return True
+    except (AttributeError, TypeError, RuntimeError, KeyError):
+        return False
+    return False
+
+
+def _can_resolve_backend_model_waiver(model_name: str, llm_router: RegistryReader) -> bool:
+    """Return True when ``model_name`` may fall back to backend-name zero-cost resolution."""
+    if _is_pass_through_all_models_enabled(llm_router) or _has_default_deployment_configured(llm_router):
+        return False
+    registry: Final = llm_router.registry()
+    if _is_registered_deployment_id(registry, model_name):
+        return False
+    try:
+        team_public_names: Final = registry.names(kind="team_public")
+    except (AttributeError, TypeError, RuntimeError, KeyError):
+        return True
+    return model_name not in team_public_names
+
+
+def _is_group_explicit_zero_cost(grp_info: object) -> bool:
+    """Return True when a model group info has explicit zero input and output token costs."""
+    if grp_info is None:
+        return False
+    input_cost: Final = getattr(grp_info, "input_cost_per_token", None)
+    output_cost: Final = getattr(grp_info, "output_cost_per_token", None)
+    return (
+        isinstance(input_cost, (int, float))
+        and isinstance(output_cost, (int, float))
+        and input_cost <= 0
+        and output_cost <= 0
+    )
+
+
 def _get_router_zero_cost_cache(llm_router: RegistryReader) -> dict[str, bool] | None:
     """
     Return the router's per-instance zero-cost cache, or ``None`` for objects
@@ -572,6 +657,48 @@ def is_model_cost_zero(model: str | Sequence[str] | None, llm_router: RegistryRe
                 continue
         try:
             model_group_info = llm_router.registry().group(model_name, include_hidden=True)
+
+            if model_group_info is None:
+                if not _can_resolve_backend_model_waiver(model_name, llm_router):
+                    verbose_proxy_logger.debug(
+                        "Backend model %s is ineligible for zero-cost fallback waiver, retaining budget enforcement",
+                        model_name,
+                    )
+                    if zero_cost_cache is not None:
+                        zero_cost_cache[model_name] = False
+                    return False
+
+                served_candidates = _deployments_served_for(model_name, llm_router)
+                if not served_candidates:
+                    verbose_proxy_logger.debug("No model group info found for %s, assuming it has cost", model_name)
+                    if zero_cost_cache is not None:
+                        zero_cost_cache[model_name] = False
+                    return False
+
+                candidate_groups: tuple[str, ...] = tuple(
+                    dict.fromkeys(d["model_name"] for d in served_candidates if d["model_name"])
+                )
+                first_group = candidate_groups[0] if len(candidate_groups) == 1 else None
+                if first_group is None:
+                    verbose_proxy_logger.debug(
+                        "Backend model %s has %s matching groups, rejecting ambiguous zero-cost waiver",
+                        model_name,
+                        len(candidate_groups),
+                    )
+                    if zero_cost_cache is not None:
+                        zero_cost_cache[model_name] = False
+                    return False
+
+                for d in served_candidates:
+                    grp_name = d["model_name"]
+                    if grp_name:
+                        grp_info = llm_router.registry().group(grp_name, include_hidden=True)
+                        if not _is_group_explicit_zero_cost(grp_info):
+                            if zero_cost_cache is not None:
+                                zero_cost_cache[model_name] = False
+                            return False
+
+                model_group_info = llm_router.registry().group(first_group, include_hidden=True)
 
             if model_group_info is None:
                 # Model not found or no pricing info available
@@ -680,14 +807,30 @@ def _deployments_served_for(model: str, llm_router: RegistryReader) -> Sequence[
     registry: Final = llm_router.registry()
     routed_group: Final = registry.resolve(model)
     if registry.resolve(routed_group) == routed_group:
-        return registry.deployments(routed_group) or ()
+        deployments: Final = registry.deployments(routed_group)
+        if deployments:
+            return deployments
     named: Final = registry.deployments(model, source="alias")
     if named:
         return named
-    return tuple(
+    pattern_deployments: Final = tuple(
         DeploymentTypedDict(**deployment)
         for deployment in registry.patterns().get_deployments_by_pattern(model=routed_group)
     )
+    if pattern_deployments:
+        return pattern_deployments
+    if not _can_resolve_backend_model_waiver(model, llm_router):
+        return ()
+    backend_matches: Final = tuple(
+        d
+        for d in (registry.deployments() or ())
+        if (as_str_mapping(d["litellm_params"]) or _EMPTY_COST_ENTRY).get("model") == model
+        and not _deployment_model_info(d).get("team_id")
+        and not (as_str_mapping(d) or _EMPTY_COST_ENTRY).get("team_id")
+    )
+    if backend_matches:
+        return backend_matches
+    return ()
 
 
 def _has_ptu_flat_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:
@@ -706,7 +849,7 @@ def _has_ptu_flat_cost(deployments: Sequence[DeploymentTypedDict]) -> bool:
 def _is_cost_explicitly_configured(deployments: Sequence[DeploymentTypedDict]) -> bool:
     """
     Check if any of the deployments has cost fields explicitly set in its
-    litellm.model_cost entry.
+    litellm.model_cost entry or deployment configuration.
 
     When Router._create_deployment() registers a model not in the global
     cost map, it creates a sparse entry like {"id": "<hash>"} with no cost
@@ -716,9 +859,17 @@ def _is_cost_explicitly_configured(deployments: Sequence[DeploymentTypedDict]) -
     It also reaches a deployment that prices itself through its ``model_info`` block, whose entry
     lands in the cost map under the deployment id.
     """
-    return any(
-        (card := _deployment_rate_card(deployment)) is not None and card.token_rate_key for deployment in deployments
-    )
+    for deployment in deployments:
+        model_info = _deployment_model_info(deployment)
+        if "input_cost_per_token" in model_info or "output_cost_per_token" in model_info:
+            return True
+        litellm_params = as_str_mapping(deployment["litellm_params"]) or _EMPTY_COST_ENTRY
+        if "input_cost_per_token" in litellm_params or "output_cost_per_token" in litellm_params:
+            return True
+        card = _deployment_rate_card(deployment)
+        if card is not None and card.token_rate_key:
+            return True
+    return False
 
 
 def _deployment_rate_card(deployment: DeploymentTypedDict) -> NativeRateCard | None:
