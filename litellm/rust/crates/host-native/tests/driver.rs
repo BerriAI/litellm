@@ -167,6 +167,7 @@ fn dispatching_call() -> TestMachine {
                         secret_fields: Vec::new(),
                         api_key: None,
                         host_transport: false,
+                        dropped_params: Vec::new(),
                     },
                 )
                 .await?;

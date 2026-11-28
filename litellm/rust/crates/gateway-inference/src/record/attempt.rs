@@ -38,6 +38,8 @@ pub struct AttemptRecord {
     pub source: Option<ResultSource>,
     /// What the route settled the attempt's cost as.
     pub cost: Option<Cost>,
+    /// The fields the route took out of the caller's request before it sent it.
+    pub dropped_params: Vec<String>,
 }
 
 impl AttemptRecord {
@@ -110,9 +112,20 @@ impl<E> Interceptors<E> for Recorder {
     async fn before_provider_request(
         &self,
         wire: WireRequest,
-        _: RequestContext,
+        context: RequestContext,
     ) -> Result<WireRequest, E> {
-        super::note(|record| record.record_sent(Some(wire.url.clone())));
+        if !context.dropped_params.is_empty() {
+            tracing::warn!(
+                model = %context.model,
+                provider = %context.custom_llm_provider,
+                dropped = %context.dropped_params.join(","),
+                "sent the request without the params its provider would refuse"
+            );
+        }
+        super::note(|record| {
+            record.record_sent(Some(wire.url.clone()));
+            record.dropped_params = context.dropped_params;
+        });
         Ok(wire)
     }
 
@@ -162,6 +175,7 @@ mod tests {
             secret_fields: Vec::new(),
             api_key: None,
             host_transport: false,
+            dropped_params: Vec::new(),
         }
     }
 
@@ -239,6 +253,24 @@ mod tests {
         #[case] expected: Seen,
     ) {
         assert_eq!(seen(sends, responds, source).await, expected);
+    }
+
+    #[tokio::test]
+    async fn the_recorder_keeps_the_params_the_route_dropped_from_the_request_it_sent() {
+        let (_, record) = super::super::attempt(async {
+            Interceptors::<()>::before_provider_request(
+                &Recorder,
+                wire(),
+                RequestContext {
+                    dropped_params: vec!["temperature".to_owned(), "top_k".to_owned()],
+                    ..context()
+                },
+            )
+            .await
+            .map_err(|()| Error::Internal)
+        })
+        .await;
+        assert_eq!(record.dropped_params, ["temperature", "top_k"]);
     }
 
     /// What a failed attempt that sent its request left in its record, inside a call.

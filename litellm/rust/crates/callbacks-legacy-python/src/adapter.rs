@@ -1799,6 +1799,7 @@ assert logger._route_prices is False, 'result_ready clears an earlier hop'
                 secret_fields: Vec::new(),
                 api_key: None,
                 host_transport: false,
+                dropped_params: Vec::new(),
             };
             let wire = WireRequest {
                 url: "https://provider.invalid/v1/messages".into(),
@@ -1881,6 +1882,7 @@ assert reasons == [{'kind': 'thinking_signature'}, {'kind': 'strict_tools', 'dro
                 secret_fields: secret_fields.iter().map(|name| name.to_string()).collect(),
                 api_key: Some(SecretValue::new("route-key")),
                 host_transport: false,
+                dropped_params: Vec::new(),
             };
             let wire = WireRequest {
                 url: "https://provider.invalid/ocr".into(),
@@ -1933,6 +1935,7 @@ assert reasons == [{'kind': 'thinking_signature'}, {'kind': 'strict_tools', 'dro
             secret_fields: vec![],
             api_key: Some(SecretValue::new("route-key")),
             host_transport: false,
+            dropped_params: Vec::new(),
         }
     }
 

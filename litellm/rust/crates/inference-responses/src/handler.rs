@@ -38,6 +38,7 @@ pub(super) async fn execute(
             _ => None,
         },
         host_transport: false,
+        dropped_params: Vec::new(),
     };
     let body = config.transform_responses_api_request(
         &identity.model,

@@ -22,6 +22,7 @@ struct RecordingHost {
     rewrite: Rewrite,
     events: super::support::Observations,
     optional_params: Mutex<Vec<Value>>,
+    dropped_params: Mutex<Vec<String>>,
     facts: Mutex<Vec<ExecutionFacts>>,
     reject_result: bool,
     reject_response: bool,
@@ -34,6 +35,7 @@ impl RecordingHost {
             rewrite,
             events: super::support::Observations::default(),
             optional_params: Mutex::new(Vec::new()),
+            dropped_params: Mutex::new(Vec::new()),
             facts: Mutex::new(Vec::new()),
             reject_result: false,
             reject_response: false,
@@ -92,6 +94,10 @@ impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protoco
             .lock()
             .unwrap()
             .push(context.optional_params.clone());
+        self.dropped_params
+            .lock()
+            .unwrap()
+            .extend(context.dropped_params);
         (self.rewrite)(wire)
     }
     async fn after_provider_response(
@@ -495,6 +501,7 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
         .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
     assert_eq!(optional_params, json!({"max_tokens": 16}));
+    assert_eq!(host.dropped_params.into_inner().unwrap(), ["temperature"]);
 }
 
 #[rstest]

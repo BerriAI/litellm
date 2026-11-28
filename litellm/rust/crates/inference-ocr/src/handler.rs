@@ -75,6 +75,7 @@ impl<'a, H> OcrCallHooks<'a, H> {
                     .collect(),
                 api_key: request.connection.api_key.clone(),
                 host_transport: false,
+                dropped_params: Vec::new(),
             },
         }
     }
