@@ -1437,10 +1437,10 @@ async def test_the_cooled_down_counter_names_the_deployment_as_its_state_does_wh
         ctx=RoutingContext(router), deployment_id="dep-1", exception_status=404, cooldown_time=5.0
     )
 
+    samples: Final = itertools.chain.from_iterable(family.samples for family in REGISTRY.collect())
     cooled_down: Final = {
         (sample.labels["litellm_model_name"], sample.value)
-        for family in REGISTRY.collect()
-        for sample in family.samples
+        for sample in samples
         if sample.name == "litellm_deployment_cooled_down_total" and sample.labels["model_id"] == "dep-1"
     }
     assert cooled_down == {("gpt-5.4-mini", 1.0)}
