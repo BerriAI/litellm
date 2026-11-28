@@ -20,7 +20,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     parse_prompt_tokens_details,
 )
 from litellm.rust_bridge._native import NativePrices
-from litellm.types.utils import CacheCreationTokenDetails, Usage
+from litellm.types.utils import CacheCreationTokenDetails, ModelInfo, Usage
 from litellm.utils import get_model_info
 
 
@@ -62,6 +62,7 @@ def cost_per_token(
     usage: Usage,
     custom_llm_provider: str = "dashscope",
     current_time: datetime | None = None,
+    deployment_model_info: ModelInfo | None = None,
 ) -> tuple[float, float]:
     """
     Calculate cost per token for Dashscope models.
@@ -74,11 +75,16 @@ def cost_per_token(
         usage: LiteLLM Usage block
         custom_llm_provider: The provider id the request resolved to; dashscope or one of its brand aliases
         current_time: The moment the request is billed at; defaults to now, UTC
+        deployment_model_info: Optional resolved deployment prices
 
     Returns:
         Tuple[float, float] - (prompt_cost_in_usd, completion_cost_in_usd)
     """
-    model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    model_info: Final = (
+        deployment_model_info
+        if deployment_model_info is not None
+        else get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    )
     breakdown: Final = _extract_token_breakdown(usage)
     quote: Final = NativePrices(model_info, custom_llm_provider).quote(
         breakdown.total_input_tokens, call_context(None, None, None, current_time)

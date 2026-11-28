@@ -73,6 +73,7 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     resolve_model_and_provider_for_metadata,
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
+from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
@@ -322,8 +323,9 @@ def _inherited_clip_rates(
 ) -> Mapping[str, object]:
     """The per-second audio and video input rates a token-priced entry inherits, from the region's own cost map entry
     when it has one. A clip is billed by its length and has no tokens, so a token price alone would bill it at
-    nothing."""
-    if not model_info.get("input_cost_per_token"):
+    nothing. A zero token rate keeps unconfigured clip rates at zero."""
+    token_rate: Final = model_info.get("input_cost_per_token")
+    if token_rate is None:
         return {}
     missing_fields: Final = tuple(field for field in _CLIP_RATE_FIELDS if model_info.get(field) is None)
     if not missing_fields:
@@ -343,7 +345,11 @@ def _inherited_clip_rates(
         )
     except Exception:  # noqa: BLE001  # an unmapped backend model contributes nothing
         return {}
-    return {field: backend_info[field] for field in missing_fields if backend_info.get(field) is not None}
+    return {
+        field: 0.0 if token_rate == 0 else backend_info[field]
+        for field in missing_fields
+        if backend_info.get(field) is not None
+    }
 
 
 def _inherited_service_tier_pricing(
@@ -460,7 +466,7 @@ def cost_map_backend_model(deployment: Deployment) -> str:
     return model
 
 
-def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) -> Mapping[str, object]:
+def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) -> AliasedCostEntry:
     """The ``model_info`` a deployment contributes to ``litellm.model_cost``
     (``_deployment_model_cost_payload``): its model_info, its custom pricing, then the inherited rates."""
     declared: Final = dict(_MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True)))
@@ -493,10 +499,14 @@ def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) ->
     )
     tiers: Final = {**cached, **_inherited_service_tier_pricing(host, cached, rates_model, provider)}
     tiered_output: Final = {**tiers, **_inherited_tiered_output_rate(host, tiers, rates_model, provider)}
-    return {
-        **tiered_output,
-        **_inherited_clip_rates(host, tiered_output, rates_model, provider, params.get("aws_region_name")),
-    }
+    return AliasedCostEntry(
+        {
+            **tiered_output,
+            **_inherited_clip_rates(host, tiered_output, rates_model, provider, params.get("aws_region_name")),
+        },
+        (),
+        frozenset(name for name, value in priced.items() if value is not None),
+    )
 
 
 def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -> Mapping[str, object]:
@@ -565,21 +575,38 @@ def _catalog_backend_keys(
     )
 
 
+def _shared_backend_registration(
+    key: str, model_info: Mapping[str, object], catalog: Mapping[str, Mapping[str, object]]
+) -> Mapping[str, object]:
+    shared: Final = keep_registered_mode(key, model_info)
+    if "litellm_provider" not in shared:
+        return shared
+    catalog_entry: Final = catalog.get(key) or catalog.get(model_cost_registration_key(key)) or {}
+    provider: Final = catalog_entry.get("litellm_provider")
+    return {**shared, "litellm_provider": provider} if isinstance(provider, str) else shared
+
+
 def register_deployment_in_model_cost(
     host: "PythonHost",
     *,
     model_id: str | None,
-    model_info: Mapping[str, object],
+    model_info: AliasedCostEntry,
     model: str,
     custom_llm_provider: str | None,
     pricing_provider: str | None = None,
 ) -> None:
     """Write a deployment's metadata into ``litellm.model_cost`` (``_register_deployment_in_model_cost``):
-    the whole entry under its id, the schema fields under its backend model key(s)."""
+    the whole entry under its id, the schema fields under its backend model key(s).
+    Keep declared prices distinguishable from rates inherited for display or legacy lookups.
+    """
     registered: Final = (
-        without(model_info, *CustomPricingLiteLLMParams.model_fields)
+        AliasedCostEntry(
+            without(model_info, *CustomPricingLiteLLMParams.model_fields),
+            (),
+            model_info.registered_fields.difference(CustomPricingLiteLLMParams.model_fields),
+        )
         if classify_strategy_router_model(model) is not None
-        else dict(model_info)
+        else model_info
     )
     register_model: Final = host.invoke("register_model")
     if model_id is not None:
@@ -591,13 +618,14 @@ def register_deployment_in_model_cost(
             add_to_provider_model_sets=False,
         )
     backend_keys: Final = _backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
+    catalog: Final = catalog_with_runtime_registrations()
     shared_model_info: Final = _shared_backend_model_info_for_keys(
-        catalog=catalog_with_runtime_registrations(),
+        catalog=catalog,
         backend_keys=_catalog_backend_keys(model, custom_llm_provider, backend_keys),
         shared_model_info=shared_backend_model_info(registered),
     )
     register_model(
-        model_cost={key: keep_registered_mode(key, shared_model_info) for key in backend_keys},
+        model_cost={key: _shared_backend_registration(key, shared_model_info, catalog) for key in backend_keys},
         persist_across_reloads=False,
     )
 

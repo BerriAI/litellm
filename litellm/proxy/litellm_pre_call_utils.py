@@ -708,6 +708,7 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY: Final = "allow_client_mess
 # prices the row, so a caller naming a cheaper model lowers their own spend.
 _CLIENT_PRICING_CONTROL_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields.keys()) | {
     "base_model",
+    "model_info",
     PRICING_CURRENCY_FIELD,
 }
 # ``model_info`` carries the same pricing fields when read by
