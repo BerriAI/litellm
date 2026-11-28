@@ -249,6 +249,7 @@ MODE_CASES: Final = (
     pytest.param("tavily", "tavily/search", {"search_depth": "advanced"}, id="tavily"),
     pytest.param("tavily", "tavily/tavily/search", {"search_depth": "advanced"}, id="tavily-sdk-spelling"),
     pytest.param("linkup", "linkup/search", {"depth": "deep"}, id="linkup"),
+    pytest.param("seltz", "seltz/search", {"tier": "base"}, id="seltz"),
 )
 
 
@@ -323,6 +324,61 @@ def test_a_runtime_price_on_the_mode_entry_wins_over_a_runtime_price_on_the_gene
         model=model, custom_llm_provider=provider, optional_params=optional_params
     )
     assert cost == pytest.approx((0.011, 0.0))
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+@pytest.mark.parametrize("tier", ["base", "BASE", " Base "])
+def test_seltz_tier_spelling_uses_the_base_catalog_price(tier: str) -> None:
+    cost: Final = search_provider_cost_per_query(
+        model="seltz/search", custom_llm_provider="seltz", optional_params={"tier": tier}
+    )
+    base_price: Final = GetModelCostMap.loaded_model_cost_map()["seltz/search-base"]["input_cost_per_query"]
+    assert cost == pytest.approx((base_price, 0.0))
+
+
+@pytest.mark.usefixtures("_loaded_catalog_prices")
+@pytest.mark.parametrize(
+    ("optional_params", "entry"),
+    [
+        (None, "seltz/search"),
+        ({}, "seltz/search"),
+        ({"tier": "pro"}, "seltz/search-pro"),
+        ({"tier": "turbo"}, "seltz/search"),
+    ],
+)
+def test_seltz_omitted_or_unknown_tier_keeps_the_default_catalog_price(
+    optional_params: Mapping[str, object] | None, entry: str
+) -> None:
+    cost: Final = search_provider_cost_per_query(
+        model="seltz/search", custom_llm_provider="seltz", optional_params=optional_params
+    )
+    price: Final = GetModelCostMap.loaded_model_cost_map()[entry]["input_cost_per_query"]
+    assert cost == pytest.approx((price, 0.0))
+
+
+def test_seltz_catalog_records_the_published_tier_prices() -> None:
+    catalog: Final = GetModelCostMap.load_local_model_cost_map()
+    # https://docs.seltz.ai/pricing read 2026-11-19. Pro is $5 per 1,000 searches and the default tier.
+    # Base is $3 per 1,000 searches.
+    assert catalog["seltz/search"]["input_cost_per_query"] == pytest.approx(0.005)
+    assert catalog["seltz/search-pro"]["input_cost_per_query"] == pytest.approx(0.005)
+    assert catalog["seltz/search-base"]["input_cost_per_query"] == pytest.approx(0.003)
+    assert catalog["seltz/search"]["litellm_provider"] == "seltz"
+    assert catalog["seltz/search"]["source"] == "https://docs.seltz.ai/pricing"
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
+def test_sync_seltz_base_search_reports_the_base_price_and_sends_the_tier_as_written(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post("https://api.seltz.ai/v1/search").respond(json={"documents": []})
+    response: Final = litellm.search(
+        query="litellm release notes", search_provider="seltz", api_key="test-seltz-key", tier=" Base "
+    )
+    assert json.loads(respx_mock.calls.last.request.content) == {"query": "litellm release notes", "tier": " Base "}
+    assert response.hidden_params["response_cost"] == pytest.approx(
+        litellm.model_cost["seltz/search-base"]["input_cost_per_query"]
+    )
 
 
 @pytest.mark.usefixtures("_search_mode_prices")
