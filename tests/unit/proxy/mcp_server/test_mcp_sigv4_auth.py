@@ -16,13 +16,21 @@ import pytest
 from prisma import models
 
 from litellm.mcp_client.client import MCPClient, MCPSigV4Auth
+from litellm.models.mcp_server import LiteLLM_MCPServerTable
 from litellm.types.mcp import MCPAuth, MCPTransport
 
 _FUTURE_EXPIRATION: Final = datetime.now(timezone.utc) + timedelta(hours=1)
 
 
-def _updated_row() -> models.LiteLLM_MCPServerTable:
-    return models.LiteLLM_MCPServerTable.model_construct(server_id="test-server", transport="http", env={}, env_vars=[])
+def _prisma_for_update() -> MagicMock:
+    client: Final = MagicMock()
+    row: Final = models.LiteLLM_MCPServerTable.model_construct(
+        server_id="test-server", transport="http", env={}, env_vars=[]
+    )
+    client.db.litellm_mcpservertable.update = AsyncMock(return_value=row)
+    client.db.execute_raw = AsyncMock()
+    client.db.tx.return_value.__aenter__.return_value = client.db
+    return client
 
 
 class TestMCPSigV4Auth:
@@ -636,9 +644,8 @@ class TestCredentialMergeOnUpdate:
             }
         )
 
-        mock_prisma = MagicMock()
+        mock_prisma = _prisma_for_update()
         mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -676,8 +683,7 @@ class TestCredentialMergeOnUpdate:
         from litellm.proxy._types import UpdateMCPServerRequest
         from litellm.proxy.mcp_server.db import update_mcp_server
 
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
+        mock_prisma = _prisma_for_update()
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -703,9 +709,8 @@ class TestCredentialMergeOnUpdate:
         existing_record.auth_type = "aws_sigv4"
         existing_record.credentials = None
 
-        mock_prisma = MagicMock()
+        mock_prisma = _prisma_for_update()
         mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -745,9 +750,8 @@ class TestCredentialMergeOnUpdate:
             }
         )
 
-        mock_prisma = MagicMock()
+        mock_prisma = _prisma_for_update()
         mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -788,9 +792,8 @@ class TestCredentialMergeOnUpdate:
             }
         )
 
-        mock_prisma = MagicMock()
+        mock_prisma = _prisma_for_update()
         mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -827,53 +830,20 @@ class TestSigV4BuildFromTable:
             MCPServerManager,
         )
 
-        table_record = MagicMock()
-        table_record.server_id = "test-sigv4-server"
-        table_record.server_name = "sigv4_server"
-        table_record.alias = None
-        table_record.description = None
-        table_record.url = "https://bedrock-agentcore.us-east-1.amazonaws.com/invocations"
-        table_record.spec_path = None
-        table_record.pinned_tools = None
-        table_record.transport = "http"
-        table_record.auth_type = "aws_sigv4"
-        table_record.mcp_info = {"server_name": "sigv4_server"}
-        table_record.credentials = json.dumps(
-            {
+        table_record: Final = LiteLLM_MCPServerTable(
+            server_id="test-sigv4-server",
+            server_name="sigv4_server",
+            url="https://bedrock-agentcore.us-east-1.amazonaws.com/invocations",
+            transport="http",
+            auth_type="aws_sigv4",
+            credentials={
                 "aws_access_key_id": "enc:AKIAEXAMPLE",
                 "aws_secret_access_key": "enc:SECRET",
                 "aws_session_token": "enc:TOKEN",
                 "aws_region_name": "us-east-1",
                 "aws_service_name": "bedrock-agentcore",
-            }
+            },
         )
-        table_record.extra_headers = None
-        table_record.static_headers = None
-        table_record.command = None
-        table_record.args = []
-        table_record.env = None
-        table_record.mcp_access_groups = []
-        table_record.allowed_tools = []
-        table_record.disallowed_tools = None
-        table_record.allow_all_keys = False
-        table_record.available_on_public_internet = True
-        table_record.authorization_url = None
-        table_record.token_url = None
-        table_record.registration_url = None
-        table_record.created_at = None
-        table_record.updated_at = None
-        table_record.client_id = None
-        table_record.client_secret = None
-        table_record.tool_name_to_display_name = None
-        table_record.tool_name_to_description = None
-        table_record.byok_api_key_help_url = None
-        table_record.oauth2_flow = None
-        table_record.token_exchange_endpoint = None
-        table_record.audience = None
-        table_record.subject_token_type = None
-        table_record.token_exchange_profile = None
-        table_record.instructions = None
-        table_record.source_url = None
 
         manager = MCPServerManager()
 
@@ -897,45 +867,14 @@ class TestSigV4BuildFromTable:
             MCPServerManager,
         )
 
-        table_record = MagicMock()
-        table_record.server_id = "test-bearer-server"
-        table_record.server_name = "bearer_server"
-        table_record.alias = None
-        table_record.description = None
-        table_record.url = "https://example.com/mcp"
-        table_record.spec_path = None
-        table_record.pinned_tools = None
-        table_record.transport = "http"
-        table_record.auth_type = "bearer_token"
-        table_record.mcp_info = {"server_name": "bearer_server"}
-        table_record.credentials = json.dumps({"auth_value": "enc:tok"})
-        table_record.extra_headers = None
-        table_record.static_headers = None
-        table_record.command = None
-        table_record.args = []
-        table_record.env = None
-        table_record.mcp_access_groups = []
-        table_record.allowed_tools = []
-        table_record.disallowed_tools = None
-        table_record.allow_all_keys = False
-        table_record.available_on_public_internet = True
-        table_record.authorization_url = None
-        table_record.token_url = None
-        table_record.registration_url = None
-        table_record.created_at = None
-        table_record.updated_at = None
-        table_record.client_id = None
-        table_record.client_secret = None
-        table_record.tool_name_to_display_name = None
-        table_record.tool_name_to_description = None
-        table_record.byok_api_key_help_url = None
-        table_record.oauth2_flow = None
-        table_record.token_exchange_endpoint = None
-        table_record.audience = None
-        table_record.subject_token_type = None
-        table_record.token_exchange_profile = None
-        table_record.instructions = None
-        table_record.source_url = None
+        table_record: Final = LiteLLM_MCPServerTable(
+            server_id="test-bearer-server",
+            server_name="bearer_server",
+            url="https://example.com/mcp",
+            transport="http",
+            auth_type="bearer_token",
+            credentials={"auth_value": "enc:tok"},
+        )
 
         manager = MCPServerManager()
 
@@ -1123,9 +1062,8 @@ class TestAuthTypeSwitchClearsCredentials:
         existing_record.auth_type = "oauth2"
         existing_record.credentials = json.dumps({"client_id": "enc:cid", "client_secret": "enc:csec"})
 
-        mock_prisma = MagicMock()
+        mock_prisma = _prisma_for_update()
         mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",

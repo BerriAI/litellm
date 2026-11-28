@@ -13,7 +13,7 @@ from mcp.types import CallToolResult, ListToolsResult, TextContent
 from mcp.types import Tool as MCPTool
 from starlette.types import Receive, Scope, Send
 
-from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+from litellm.proxy._types import LiteLLM_MCPServerTable, LiteLLM_ObjectPermissionTable
 from litellm.proxy.mcp_server.mcp_server_manager import (
     MCPServer,
     MCPServerManager,
@@ -1562,195 +1562,24 @@ async def test_mcp_server_manager_server_id_tool_prefixing():
 
 
 @pytest.mark.asyncio
-async def test_add_update_server_with_alias():
-    """
-    Test that add_update_server correctly handles servers with alias.
-    """
-    test_manager = MCPServerManager()
-
-    # Create a mock LiteLLM_MCPServerTable with alias
-    mock_mcp_server = MagicMock()
-    mock_mcp_server.server_id = "test-server-123"
-    mock_mcp_server.alias = "my_alias"
-    mock_mcp_server.server_name = "Test Server"
-    mock_mcp_server.url = "https://test-server.com/mcp"
-    mock_mcp_server.transport = MCPTransport.http
-    mock_mcp_server.auth_type = None
-    mock_mcp_server.credentials = {}
-    mock_mcp_server.description = "Test server description"
-    mock_mcp_server.mcp_info = {}
-    mock_mcp_server.static_headers = {}
-    mock_mcp_server.command = None
-    mock_mcp_server.args = []
-    mock_mcp_server.env = None
-    mock_mcp_server.spec_path = None
-    mock_mcp_server.pinned_tools = None
-    # OAuth fields - set explicitly to None to avoid MagicMock objects
-    mock_mcp_server.client_id = None
-    mock_mcp_server.client_secret = None
-    mock_mcp_server.authorization_url = None
-    mock_mcp_server.registration_url = None
-    mock_mcp_server.token_url = None
-    mock_mcp_server.oauth2_flow = None
-    mock_mcp_server.token_exchange_endpoint = None
-    mock_mcp_server.audience = None
-    mock_mcp_server.subject_token_type = None
-    mock_mcp_server.token_exchange_profile = None
-    # Additional fields used by build_mcp_server_from_table
-    mock_mcp_server.extra_headers = None
-    mock_mcp_server.allow_all_keys = False
-    mock_mcp_server.available_on_public_internet = True
-    mock_mcp_server.mcp_access_groups = None
-    mock_mcp_server.allowed_tools = None
-    mock_mcp_server.disallowed_tools = None
-    mock_mcp_server.tool_name_to_display_name = None
-    mock_mcp_server.tool_name_to_description = None
-    mock_mcp_server.is_byok = False
-    mock_mcp_server.byok_description = None
-    mock_mcp_server.byok_api_key_help_url = None
-    mock_mcp_server.created_at = None
-    mock_mcp_server.updated_at = None
-    mock_mcp_server.instructions = None
-    mock_mcp_server.source_url = None
-    mock_mcp_server.approval_status = "active"
-
-    # Add server to manager
-    await test_manager.add_server(mock_mcp_server)
-
-    # Verify server was added with correct name (should use alias)
-    assert "test-server-123" in test_manager.registry
-    added_server = test_manager.registry["test-server-123"]
-    assert added_server.name == "my_alias"
-    assert added_server.alias == "my_alias"
-    assert added_server.server_name == "Test Server"
-
-
-@pytest.mark.asyncio
-async def test_add_update_server_without_alias():
-    """
-    Test that add_update_server correctly handles servers without alias.
-    """
-    test_manager = MCPServerManager()
-
-    # Create a mock LiteLLM_MCPServerTable without alias
-    mock_mcp_server = MagicMock()
-    mock_mcp_server.server_id = "test-server-123"
-    mock_mcp_server.alias = None
-    mock_mcp_server.server_name = "Test Server"
-    mock_mcp_server.url = "https://test-server.com/mcp"
-    mock_mcp_server.transport = MCPTransport.http
-    mock_mcp_server.auth_type = None
-    mock_mcp_server.credentials = {}
-    mock_mcp_server.description = "Test server description"
-    mock_mcp_server.mcp_info = {}
-    mock_mcp_server.static_headers = {}
-    mock_mcp_server.command = None
-    mock_mcp_server.args = []
-    mock_mcp_server.env = None
-    mock_mcp_server.spec_path = None
-    mock_mcp_server.pinned_tools = None
-    # OAuth fields - set explicitly to None to avoid MagicMock objects
-    mock_mcp_server.client_id = None
-    mock_mcp_server.client_secret = None
-    mock_mcp_server.authorization_url = None
-    mock_mcp_server.registration_url = None
-    mock_mcp_server.token_url = None
-    mock_mcp_server.oauth2_flow = None
-    mock_mcp_server.token_exchange_endpoint = None
-    mock_mcp_server.audience = None
-    mock_mcp_server.subject_token_type = None
-    mock_mcp_server.token_exchange_profile = None
-    # Additional fields used by build_mcp_server_from_table
-    mock_mcp_server.extra_headers = None
-    mock_mcp_server.allow_all_keys = False
-    mock_mcp_server.available_on_public_internet = True
-    mock_mcp_server.mcp_access_groups = None
-    mock_mcp_server.allowed_tools = None
-    mock_mcp_server.disallowed_tools = None
-    mock_mcp_server.tool_name_to_display_name = None
-    mock_mcp_server.tool_name_to_description = None
-    mock_mcp_server.is_byok = False
-    mock_mcp_server.byok_description = None
-    mock_mcp_server.byok_api_key_help_url = None
-    mock_mcp_server.created_at = None
-    mock_mcp_server.updated_at = None
-    mock_mcp_server.instructions = None
-    mock_mcp_server.source_url = None
-    mock_mcp_server.approval_status = "active"
-
-    # Add server to manager
-    await test_manager.add_server(mock_mcp_server)
-
-    # Verify server was added with correct name (should use server_name)
-    assert "test-server-123" in test_manager.registry
-    added_server = test_manager.registry["test-server-123"]
-    assert added_server.name == "Test Server"
-    assert added_server.alias is None
-    assert added_server.server_name == "Test Server"
-
-
-@pytest.mark.asyncio
-async def test_add_update_server_fallback_to_server_id():
-    """
-    Test that add_update_server falls back to server_id when neither alias nor server_name are available.
-    """
-    test_manager = MCPServerManager()
-
-    # Create a mock LiteLLM_MCPServerTable without alias or server_name
-    mock_mcp_server = MagicMock()
-    mock_mcp_server.server_id = "test-server-123"
-    mock_mcp_server.alias = None
-    mock_mcp_server.server_name = None
-    mock_mcp_server.url = "https://test-server.com/mcp"
-    mock_mcp_server.transport = MCPTransport.http
-    mock_mcp_server.auth_type = None
-    mock_mcp_server.credentials = {}
-    mock_mcp_server.description = "Test server description"
-    mock_mcp_server.mcp_info = {}
-    mock_mcp_server.static_headers = {}
-    mock_mcp_server.command = None
-    mock_mcp_server.args = []
-    mock_mcp_server.env = None
-    mock_mcp_server.spec_path = None
-    mock_mcp_server.pinned_tools = None
-    # OAuth fields - set explicitly to None to avoid MagicMock objects
-    mock_mcp_server.client_id = None
-    mock_mcp_server.client_secret = None
-    mock_mcp_server.authorization_url = None
-    mock_mcp_server.registration_url = None
-    mock_mcp_server.token_url = None
-    mock_mcp_server.oauth2_flow = None
-    mock_mcp_server.token_exchange_endpoint = None
-    mock_mcp_server.audience = None
-    mock_mcp_server.subject_token_type = None
-    mock_mcp_server.token_exchange_profile = None
-    # Additional fields used by build_mcp_server_from_table - set explicitly
-    # to avoid MagicMock objects being passed to Pydantic MCPServer constructor
-    mock_mcp_server.extra_headers = None
-    mock_mcp_server.allow_all_keys = False
-    mock_mcp_server.available_on_public_internet = True
-    mock_mcp_server.mcp_access_groups = None
-    mock_mcp_server.allowed_tools = None
-    mock_mcp_server.disallowed_tools = None
-    mock_mcp_server.tool_name_to_display_name = None
-    mock_mcp_server.tool_name_to_description = None
-    mock_mcp_server.is_byok = False
-    mock_mcp_server.byok_description = None
-    mock_mcp_server.byok_api_key_help_url = None
-    mock_mcp_server.created_at = None
-    mock_mcp_server.updated_at = None
-    mock_mcp_server.instructions = None
-    mock_mcp_server.source_url = None
-    mock_mcp_server.approval_status = "active"
-    # Add server to manager
-    await test_manager.add_server(mock_mcp_server)
-
-    # Verify server was added with correct name (should use server_id)
-    assert "test-server-123" in test_manager.registry
-    added_server = test_manager.registry["test-server-123"]
-    assert added_server.name == "test-server-123"
-    assert added_server.alias is None
-    assert added_server.server_name is None
+@pytest.mark.parametrize(
+    ("alias", "server_name", "expected_name"),
+    (("my_alias", "Test Server", "my_alias"), (None, "Test Server", "Test Server"), (None, None, "test-server-123")),
+)
+async def test_add_update_server_uses_alias_then_name_then_id(
+    alias: str | None, server_name: str | None, expected_name: str
+) -> None:
+    manager: Final = MCPServerManager()
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="test-server-123",
+        alias=alias,
+        server_name=server_name,
+        transport="http",
+        url="https://example.com/mcp",
+    )
+    await manager.add_server(row)
+    added: Final = manager.registry[row.server_id]
+    assert (added.name, added.alias, added.server_name) == (expected_name, alias, server_name)
 
 
 def test_normalize_server_name():

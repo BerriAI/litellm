@@ -1984,6 +1984,7 @@ async def _persist_dcr_client_registration(
     from litellm.proxy._types import UpdateMCPServerRequest  # noqa: PLC0415
     from litellm.proxy.mcp_server.db import (  # noqa: PLC0415  # avoids circular import
         McpIdentifierConflict,
+        McpInvalidIdentityBinding,
         create_mcp_server_oauth_client_credentials_if_absent,
         update_mcp_server,
         upsert_mcp_server_oauth_client_credentials,
@@ -2045,6 +2046,8 @@ async def _persist_dcr_client_registration(
             touched_by="mcp_oauth_dcr",
             expected_updated_at=stored.updated_at if stored else None,
         )
+        if isinstance(updated_row, McpInvalidIdentityBinding):
+            return "failed"
         if updated_row is not None and not isinstance(updated_row, McpIdentifierConflict):
             await _refresh_persisted_dcr_server(updated_row)
             _apply_persisted_dcr_credentials(mcp_server, _PersistedDcrCredentials.model_validate(credentials))

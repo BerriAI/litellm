@@ -78,7 +78,12 @@ from litellm.types.mcp import (
     MCPUpstreamProtocol,
     validate_mcp_protocol_transport,
 )
-from litellm.types.mcp_server.mcp_server_manager import MCPEventCallbackBase, MCPInfo, MCPServerEventsConfig
+from litellm.types.mcp_server.mcp_server_manager import (
+    MCPEventCallbackBase,
+    MCPInfo,
+    MCPOAuthIdentityBinding,
+    MCPServerEventsConfig,
+)
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
@@ -1575,6 +1580,10 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
         return values
 
 
+class AdminNewMCPServerRequest(NewMCPServerRequest):  # frozen-ok: the create handler normalizes the payload in place
+    oauth_identity_binding: MCPOAuthIdentityBinding | None = None
+
+
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
     preserve_explicit_oauth_settings: bool = Field(
@@ -1625,6 +1634,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
     per_server_oauth_discovery: bool = False
+    oauth_identity_binding: MCPOAuthIdentityBinding | None = None
     is_byok: bool = False
     byok_description: list[str] = Field(default_factory=list)
     byok_api_key_help_url: str | None = None

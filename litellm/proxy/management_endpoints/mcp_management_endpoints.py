@@ -160,6 +160,7 @@ if MCP_AVAILABLE:
             return _ToolNameValidationResult()
 
     from litellm.proxy._types import (
+        AdminNewMCPServerRequest,
         LiteLLM_MCPServerTable,
         LiteLLM_ObjectPermissionTable,
         LitellmUserRoles,
@@ -212,6 +213,8 @@ if MCP_AVAILABLE:
     from litellm.proxy.mcp_server.contracts import TargetCatalog
     from litellm.proxy.mcp_server.db import (
         McpIdentifierConflict,
+        McpInvalidIdentityBinding,
+        McpServerWriteFailure,
         approve_mcp_server,
         create_draft_mcp_server,
         create_mcp_server_if_identifier_free,
@@ -338,11 +341,13 @@ if MCP_AVAILABLE:
             "MCP server names and aliases must be unique, case-insensitive."
         )
 
-    def raise_mcp_identifier_conflict(conflict: McpIdentifierConflict) -> NoReturn:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": mcp_identifier_conflict_message(conflict)},
+    def raise_mcp_write_failure(failure: McpServerWriteFailure) -> NoReturn:
+        detail: Final = (
+            {"error": mcp_identifier_conflict_message(failure)}
+            if isinstance(failure, McpIdentifierConflict)
+            else failure.detail
         )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
     def warn_if_id_jag_server_outruns_sso(server_id: str | None, auth_type: MCPAuth | str | None) -> None:
         """Registering an ``oauth2_id_jag`` server under an SSO provider that captures no IdP
@@ -371,7 +376,7 @@ if MCP_AVAILABLE:
         The create payload carries the plaintext credentials, so the M2M-vs-interactive
         decision is reliable here in a way it is not at read time (credentials are
         encrypted at rest and redacted in responses). The client_credentials shape
-        mirrors the legacy inference in MCPServerManager._resolve_oauth2_flow; every
+        mirrors the legacy inference in resolve_configured_oauth2_flow; every
         other oauth2 configuration is the authorization_code grant, including
         delegate_auth_to_upstream, where the client runs that grant upstream.
         """
@@ -821,6 +826,7 @@ if MCP_AVAILABLE:
         sanitized.env = {}
         sanitized.command = None
         sanitized.args = []
+        sanitized.oauth_identity_binding = None
         sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
@@ -869,6 +875,7 @@ if MCP_AVAILABLE:
         sanitized.teams = []
         sanitized.env_vars = None
 
+        sanitized.oauth_identity_binding = None
         sanitized.issuer = None
         sanitized.authorization_url = None
         sanitized.token_url = None
@@ -1659,8 +1666,8 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": f"Error registering mcp server: {e}"},
             )
-        if isinstance(new_mcp_server, McpIdentifierConflict):
-            raise_mcp_identifier_conflict(new_mcp_server)
+        if isinstance(new_mcp_server, McpServerWriteFailure):
+            raise_mcp_write_failure(new_mcp_server)
         # Do NOT add to runtime registry — pending servers are not active
         return _redact_mcp_credentials(new_mcp_server)
 
@@ -2027,7 +2034,7 @@ if MCP_AVAILABLE:
     )
     @management_endpoint_wrapper
     async def add_mcp_server(
-        payload: NewMCPServerRequest,
+        payload: AdminNewMCPServerRequest,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         litellm_changed_by: str | None = Header(
             None,
@@ -2097,8 +2104,8 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": f"Error creating mcp server: {e}"},
             )
-        if isinstance(new_mcp_server, McpIdentifierConflict):
-            raise_mcp_identifier_conflict(new_mcp_server)
+        if isinstance(new_mcp_server, McpServerWriteFailure):
+            raise_mcp_write_failure(new_mcp_server)
 
         warn_if_id_jag_server_outruns_sso(new_mcp_server.server_id, new_mcp_server.auth_type)
 
@@ -2190,6 +2197,8 @@ if MCP_AVAILABLE:
             except Exception as e:  # noqa: BLE001  # any create failure must become a per-entry error, not a 500
                 verbose_proxy_logger.exception("Error importing mcp server %s: %s", conversion.name, e)
                 return MCPConnectorImportFailure(name=conversion.name, error=str(e))
+            if isinstance(created, McpInvalidIdentityBinding):
+                return MCPConnectorImportFailure(name=conversion.name, error=created.detail)
             if isinstance(created, McpIdentifierConflict):
                 return MCPConnectorImportSkipped(name=conversion.name, reason=mcp_identifier_conflict_message(created))
             try:
@@ -2738,15 +2747,10 @@ if MCP_AVAILABLE:
     ):
         """Persist the OAuth2 access token obtained by the calling user."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        await _authorize_and_fetch_mcp_server(prisma_client, user_api_key_dict, server_id)
-        from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # keep manager import lazy
-            global_mcp_server_manager as _manager,
+        server: Final = await _authorize_and_fetch_mcp_server(
+            prisma_client, user_api_key_dict, server_id, use_writer=True
         )
-
-        # This endpoint accepts an opaque token with no upstream identity validation, so it must be
-        # closed for identity-bound servers or it becomes a bypass of the token-relay binding check.
-        registry_server: Final = _manager.get_mcp_server_by_id(server_id)
-        binding: Final = registry_server.oauth_identity_binding if registry_server else None
+        binding: Final = server.oauth_identity_binding
         if binding is not None and binding.mode == "enforce":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -2969,6 +2973,8 @@ if MCP_AVAILABLE:
         prisma_client: "PrismaClient",
         user_api_key_dict: UserAPIKeyAuth,
         server_id: str,
+        *,
+        use_writer: bool = False,
     ) -> LiteLLM_MCPServerTable:
         """Resolve the MCP server a caller may manage their own per-user state for.
 
@@ -2981,7 +2987,7 @@ if MCP_AVAILABLE:
         """
         catalog: Final[TargetCatalog] = MCPServerTargetCatalog(
             manager=global_mcp_server_manager,
-            db_lookup=lambda sid: get_mcp_server(prisma_client, sid),
+            db_lookup=lambda sid: get_mcp_server(prisma_client, sid, use_writer=use_writer),
         )
         authorized: Final = await catalog.resolve(
             server_id,
@@ -3318,8 +3324,8 @@ if MCP_AVAILABLE:
             fields_set=payload_fields_set,
         )
 
-        if isinstance(mcp_server_record_updated, McpIdentifierConflict):
-            raise_mcp_identifier_conflict(mcp_server_record_updated)
+        if isinstance(mcp_server_record_updated, McpServerWriteFailure):
+            raise_mcp_write_failure(mcp_server_record_updated)
 
         if mcp_server_record_updated is None:
             raise HTTPException(

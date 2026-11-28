@@ -85,6 +85,25 @@ class MCPOAuthMetadata(LiteLLMBaseModel):
     usable in memory but must never be persisted as configuration."""
 
 
+def resolve_configured_oauth2_flow(
+    *,
+    auth_type: MCPAuthType | None,
+    oauth2_flow: str | None,
+    token_url: str | None,
+    authorization_url: str | None,
+    client_id: str | None,
+    client_secret: str | None,
+) -> Literal["client_credentials", "authorization_code"] | None:
+    """Resolve a configured or legacy OAuth grant for write validation and request handling."""
+    if oauth2_flow in ("client_credentials", "authorization_code"):
+        return oauth2_flow
+    if oauth2_flow or auth_type != MCPAuth.oauth2 or authorization_url:
+        return None
+    if token_url and client_id and client_secret:
+        return "client_credentials"
+    return None
+
+
 class MCPOAuthIdentityBinding(LiteLLMBaseModel):
     """Per-server policy binding stored per-user OAuth credentials to the authenticated LiteLLM caller.
 
@@ -103,6 +122,11 @@ class MCPOAuthIdentityBinding(LiteLLMBaseModel):
     principal_claim: str = "email"
     caller_field: Literal["user_email", "user_id"] = "user_email"
     require_email_verified: bool = True
+
+    def flow_error(self, *, per_user: bool, delegated: bool) -> str | None:
+        if self.mode != "disabled" and (not per_user or delegated):
+            return "oauth_identity_binding requires gateway-managed per-user OAuth2 credentials"
+        return None
 
 
 class MCPServerEventsConfig(LiteLLMBaseModel):
@@ -369,9 +393,10 @@ class MCPServer(LiteLLMBaseModel):
     @model_validator(mode="after")
     def validate_identity_binding_mode(self) -> Self:
         binding: Final = self.oauth_identity_binding
-        if binding is not None and binding.mode != "disabled":
-            if not self.needs_user_oauth_token or self.delegate_auth_to_upstream:
-                raise ValueError("oauth_identity_binding requires gateway-managed per-user OAuth2 credentials")
+        if binding is not None and (
+            error := binding.flow_error(per_user=self.needs_user_oauth_token, delegated=self.delegate_auth_to_upstream)
+        ):
+            raise ValueError(error)
         return self
 
     @property
