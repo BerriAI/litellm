@@ -7,6 +7,8 @@ from typing import Final
 
 import httpx
 import pytest
+import requests
+import responses
 from google.oauth2.credentials import Credentials
 from pydantic import TypeAdapter, ValidationError
 
@@ -15,6 +17,8 @@ from litellm.exceptions import UnprocessableEntityError
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.image_edit import get_vertex_ai_image_edit_config
 from litellm.llms.vertex_ai.image_generation import (
     get_vertex_ai_image_generation_config,
 )
@@ -1325,3 +1329,72 @@ def test_vertex_gemini_generation_accepts_the_snake_case_image_config() -> None:
     }
     with pytest.raises(litellm.UnsupportedParamsError, match="`image_config`"):
         _sent_gemini_generation_request(image_config="banana")
+
+
+def test_vertex_image_generation_and_edit_reuse_cached_credentials_across_requests() -> None:
+    credentials_json: Final = json.dumps(
+        {
+            "type": "authorized_user",
+            "client_id": "image-client",
+            "client_secret": "synthetic-secret",
+            "refresh_token": "image-refresh",
+            "quota_project_id": "test-project",
+        }
+    )
+    litellm_params: Final = {
+        "vertex_project": "test-project",
+        "vertex_location": "us-central1",
+        "vertex_credentials": credentials_json,
+    }
+    now: Final = datetime.datetime(2025, 1, 1)
+
+    with patch("google.auth._helpers.utcnow", return_value=now), responses.RequestsMock() as oauth:
+        def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+            return 200, {}, json.dumps({"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600})
+
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+
+        gen_headers_first: Final = get_vertex_ai_image_generation_config("gemini-2.5-flash-image").validate_environment(
+            headers={},
+            model="gemini-2.5-flash-image",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        gen_headers_second: Final = get_vertex_ai_image_generation_config("gemini-2.5-flash-image").validate_environment(
+            headers={},
+            model="gemini-2.5-flash-image",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        edit_headers: Final = get_vertex_ai_image_edit_config("gemini-2.5-flash-image").validate_environment(
+            headers={},
+            model="gemini-2.5-flash-image",
+            litellm_params=litellm_params,
+        )
+        imagen_gen_headers: Final = get_vertex_ai_image_generation_config("imagen-3.0-generate-001").validate_environment(
+            headers={},
+            model="imagen-3.0-generate-001",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+        imagen_edit_headers: Final = get_vertex_ai_image_edit_config("imagen-3.0-generate-001").validate_environment(
+            headers={},
+            model="imagen-3.0-generate-001",
+            litellm_params=litellm_params,
+        )
+        chat_token, chat_project = VertexLLM().ensure_access_token(
+            credentials=credentials_json,
+            project_id="test-project",
+            custom_llm_provider="vertex_ai",
+        )
+
+        assert len(oauth.calls) == 1
+        assert gen_headers_first["Authorization"] == "Bearer token-1"
+        assert gen_headers_second["Authorization"] == "Bearer token-1"
+        assert edit_headers["Authorization"] == "Bearer token-1"
+        assert imagen_gen_headers["Authorization"] == "Bearer token-1"
+        assert imagen_edit_headers["Authorization"] == "Bearer token-1"
+        assert (chat_token, chat_project) == ("token-1", "test-project")

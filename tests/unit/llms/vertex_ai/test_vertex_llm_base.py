@@ -2987,3 +2987,87 @@ async def test_evicted_credentials_finish_refresh_without_being_readmitted(
         assert (target, "target") not in vertex._credentials_project_mapping
         assert vertex.get_access_token(target, "target") == (f"token-{limit + 2}", "target")
         assert len(vertex._credentials_project_mapping) == limit
+
+
+def test_sync_token_flight_shared_across_fresh_vertex_instances() -> None:
+    from litellm.llms.vertex_ai.image_generation import VertexAIGeminiImageGenerationConfig
+
+    credentials: Final = _authorized_user_cache_credentials("sync-shared-flight")
+    leader_fetching: Final = Event()
+    follower_ready: Final = Semaphore(0)
+
+    def follow() -> tuple[str, str]:
+        follower_ready.release()
+        return VertexAIGeminiImageGenerationConfig().get_access_token(credentials, "unit-project")
+
+    def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        if not leader_fetching.is_set():
+            leader_fetching.set()
+            assert follower_ready.acquire(timeout=5)
+            time.sleep(0.2)
+        return 200, {}, json.dumps({"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600})
+
+    with (
+        patch("google.auth._helpers.utcnow", return_value=datetime(2025, 1, 1)),
+        responses.RequestsMock() as oauth,
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        leader: Final = pool.submit(
+            VertexAIGeminiImageGenerationConfig().get_access_token, credentials, "unit-project"
+        )
+        assert leader_fetching.wait(timeout=5)
+        follower: Final = pool.submit(follow)
+        assert leader.result(timeout=10) == ("token-1", "unit-project")
+        assert follower.result(timeout=10) == ("token-1", "unit-project")
+        assert len(oauth.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_refresh_single_flight_shared_across_fresh_vertex_instances() -> None:
+    from litellm.llms.vertex_ai.image_generation import VertexAIGeminiImageGenerationConfig
+
+    credentials: Final = _authorized_user_cache_credentials("async-shared-flight")
+
+    def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        if len(oauth.calls) == 0:
+            time.sleep(0.2)
+        return 200, {}, json.dumps({"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600})
+
+    with patch("google.auth._helpers.utcnow", return_value=datetime(2025, 1, 1)), responses.RequestsMock() as oauth:
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+        results: Final = await asyncio.gather(
+            VertexAIGeminiImageGenerationConfig().get_access_token_async(credentials, "unit-project"),
+            VertexAIGeminiImageGenerationConfig().get_access_token_async(credentials, "unit-project"),
+        )
+        assert results == [("token-1", "unit-project"), ("token-1", "unit-project")]
+        assert len(oauth.calls) == 1
+
+
+def test_shared_credential_cache_survives_sequential_event_loops() -> None:
+    from litellm.llms.vertex_ai.image_generation import VertexAIGeminiImageGenerationConfig
+
+    credentials: Final = _authorized_user_cache_credentials("cross-loop")
+    now: Final = datetime(2025, 1, 1)
+
+    with patch("google.auth._helpers.utcnow", return_value=now) as clock, responses.RequestsMock() as oauth:
+        def token_response(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+            return 200, {}, json.dumps({"access_token": f"token-{len(oauth.calls) + 1}", "expires_in": 3600})
+
+        oauth.add_callback(responses.POST, "https://oauth2.googleapis.com/token", callback=token_response)
+
+        first: Final = asyncio.run(
+            VertexAIGeminiImageGenerationConfig().get_access_token_async(credentials, "unit-project")
+        )
+        second: Final = asyncio.run(
+            VertexAIGeminiImageGenerationConfig().get_access_token_async(credentials, "unit-project")
+        )
+        clock.return_value = now + timedelta(seconds=7200)
+        refreshed: Final = asyncio.run(
+            VertexAIGeminiImageGenerationConfig().get_access_token_async(credentials, "unit-project")
+        )
+
+        assert first == ("token-1", "unit-project")
+        assert second == ("token-1", "unit-project")
+        assert refreshed == ("token-2", "unit-project")
+        assert len(oauth.calls) == 2
