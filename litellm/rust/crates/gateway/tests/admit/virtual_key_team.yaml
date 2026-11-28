@@ -60,6 +60,7 @@ keys:
   sk-member-default-owner: {team_id: member_default, user_id: member}
   sk-member-default-gone: {team_id: member_default_gone}
   sk-member-default-per-model: {team_id: member_default_per_model}
+  sk-member-default-per-model-owner: {team_id: member_default_per_model, user_id: member}
   sk-reset-scheduled: {team_id: reset_scheduled}
   sk-windowed: {team_id: windowed}
   sk-per-model: {team_id: per_model}
@@ -82,9 +83,7 @@ requests:
   - name: a key in a team with a per-model budget
     headers: {authorization: Bearer sk-per-model}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: model_max_budget
+    expect: rust
 
   - name: a key in a team with router overrides
     headers: {authorization: Bearer sk-router-override}
@@ -206,7 +205,12 @@ requests:
     body: {model: claude, max_tokens: 16, messages: []}
     expect: python
     reason: credential
-    over: model_max_budget
+    over: team
+
+  - name: a member key whose team default holds per-model budgets
+    headers: {authorization: Bearer sk-member-default-per-model-owner}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
 
   - name: a key in a team with a budget reset time
     headers: {authorization: Bearer sk-reset-scheduled}

@@ -207,6 +207,11 @@ def proxies(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureReq
       model: anthropic/{MODEL}
       api_key: parity-mock
       api_base: {upstream.base_url}
+    model_info:
+      access_groups: [metered-family]
+router_settings:
+  model_group_alias:
+    metered-alias: metered
 general_settings:
   master_key: {MASTER_KEY}
   disable_budget_reservation: false
@@ -355,27 +360,77 @@ def _provider_response(proxies: Proxies, identity: Identity) -> None:
     )
 
 
-def _send(client: httpx.Client, identity: Identity) -> httpx.Response:
+def _send(
+    client: httpx.Client, identity: Identity, end_user: str | None = None, model: str = "metered"
+) -> httpx.Response:
     return client.post(
         "/v1/messages",
         headers={"Authorization": f"Bearer {identity.token}", "anthropic-version": "2023-06-01"},
-        json={"model": "metered", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 8},
+        json={
+            "model": model,
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 8,
+            **({"metadata": {"user_id": end_user}} if end_user is not None else {}),
+        },
     )
 
 
-def _model_budget_outcome(
-    client: httpx.Client, proxies: Proxies, maximum: float, expected_spend: float
-) -> tuple[int, int, float, float]:
-    identity: Final = _identity(proxies.database, Case(owner=True, maximum=2.0))
+def _model_budget_identity(
+    proxies: Proxies, maximum: float, scope: str, entry: str
+) -> tuple[Identity, str | None, str]:
+    identity: Final = _identity(
+        proxies.database, Case(owner=scope in ("key", "owner", "end-user"), default=scope == "default", maximum=2.0)
+    )
     hashed: Final = hashlib.sha256(identity.token.encode()).hexdigest()
+    end_user: Final = f"customer-{identity.user}" if scope == "end-user" else None
+    budget_id: Final = f"budget-{identity.user}"
+    policy: Final = Jsonb({entry: {"budget_limit": maximum, "time_period": "1h"}})
     with psycopg.connect(proxies.database) as connection:
-        connection.execute(
-            'UPDATE "LiteLLM_VerificationToken" SET model_max_budget = %s WHERE token = %s',
-            (Jsonb({"met*": {"budget_limit": maximum, "time_period": "1h"}}), hashed),
-        )
+        if scope == "key":
+            connection.execute(
+                'UPDATE "LiteLLM_VerificationToken" SET model_max_budget = %s WHERE token = %s', (policy, hashed)
+            )
+        elif scope == "owner":
+            connection.execute(
+                'UPDATE "LiteLLM_UserTable" SET model_max_budget = %s WHERE user_id = %s', (policy, identity.user)
+            )
+        elif scope == "team":
+            connection.execute(
+                'UPDATE "LiteLLM_TeamTable" SET model_max_budget = %s WHERE team_id = %s', (policy, identity.team)
+            )
+        elif end_user is not None:
+            connection.execute(
+                """INSERT INTO "LiteLLM_BudgetTable" (budget_id, model_max_budget, created_by, updated_by, updated_at)
+                   VALUES (%s, %s, 'parity', 'parity', NOW())""",
+                (budget_id, policy),
+            )
+            connection.execute(
+                'INSERT INTO "LiteLLM_EndUserTable" (user_id, budget_id) VALUES (%s, %s)', (end_user, budget_id)
+            )
+        else:
+            connection.execute(
+                'UPDATE "LiteLLM_BudgetTable" SET model_max_budget = %s WHERE budget_id = %s', (policy, budget_id)
+            )
+    prefix: Final = {
+        "key": f"virtual_key_spend:{hashed}",
+        "owner": f"user_model_spend:{identity.user}",
+        "team": f"team_model_spend:{identity.team}",
+        "end-user": f"end_user_model_spend:{end_user}",
+    }.get(scope, f"team_member_model_spend:{len(identity.user)}:{identity.user}:{identity.team}")
+    counter: Final = f"{prefix}:{entry}:1h"
+    return identity, end_user, counter
+
+
+def _model_budget_outcome(
+    client: httpx.Client,
+    proxies: Proxies,
+    seeded: tuple[Identity, str | None, str],
+    expected_spend: float,
+    model: str = "metered",
+) -> tuple[int, int, float, float]:
+    identity, end_user, counter = seeded
     _provider_response(proxies, identity)
-    counter: Final = f"virtual_key_spend:{hashed}:met*:1h"
-    first: Final = _send(client, identity)
+    first: Final = _send(client, identity, end_user, model)
     assert first.status_code == 200, first.text
 
     def spend() -> float:
@@ -393,7 +448,7 @@ def _model_budget_outcome(
         return float(stored)
 
     settled: Final = eventually(spend, lambda value: value == pytest.approx(expected_spend))
-    second: Final = _send(client, identity)
+    second: Final = _send(client, identity, end_user, model)
     assert second.status_code == 422, second.text
     assert spend() == pytest.approx(settled)
     persisted: Final = eventually(
@@ -404,8 +459,38 @@ def _model_budget_outcome(
 
 @pytest.mark.parametrize("proxies", [True, False], ids=["redis", "postgres"], indirect=True)
 def test_per_model_glob_charges_a_success_and_refuses_the_next_request(proxies: Proxies, actual_cost: float) -> None:
-    python: Final = _model_budget_outcome(proxies.python, proxies, actual_cost / 2, actual_cost)
-    rust: Final = _model_budget_outcome(proxies.rust, proxies, actual_cost / 2, actual_cost)
+    python: Final = _model_budget_outcome(
+        proxies.python, proxies, _model_budget_identity(proxies, actual_cost / 2, "key", "met*"), actual_cost
+    )
+    rust: Final = _model_budget_outcome(
+        proxies.rust, proxies, _model_budget_identity(proxies, actual_cost / 2, "key", "met*"), actual_cost
+    )
+    assert rust == pytest.approx(python)
+
+
+@pytest.mark.parametrize("scope", ["owner", "team", "member", "default", "end-user"])
+def test_affiliation_per_model_caps(proxies: Proxies, actual_cost: float, scope: str) -> None:
+    python_identity: Final = _model_budget_identity(proxies, actual_cost / 2, scope, "met*")
+    rust_identity: Final = _model_budget_identity(proxies, actual_cost / 2, scope, "met*")
+    python: Final = _model_budget_outcome(proxies.python, proxies, python_identity, actual_cost)
+    rust: Final = _model_budget_outcome(proxies.rust, proxies, rust_identity, actual_cost)
+    assert rust == pytest.approx(python)
+
+
+@pytest.mark.parametrize(
+    ("model", "entry"),
+    [
+        pytest.param("metered-alias", "metered", id="alias"),
+        pytest.param("metered", "metered-family", id="access-group"),
+    ],
+)
+def test_affiliation_per_model_cap_resolves_budget_name(
+    proxies: Proxies, actual_cost: float, model: str, entry: str
+) -> None:
+    python_identity: Final = _model_budget_identity(proxies, actual_cost / 2, "owner", entry)
+    rust_identity: Final = _model_budget_identity(proxies, actual_cost / 2, "owner", entry)
+    python: Final = _model_budget_outcome(proxies.python, proxies, python_identity, actual_cost, model)
+    rust: Final = _model_budget_outcome(proxies.rust, proxies, rust_identity, actual_cost, model)
     assert rust == pytest.approx(python)
 
 

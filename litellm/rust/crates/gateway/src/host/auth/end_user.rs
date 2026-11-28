@@ -125,7 +125,7 @@ pub(crate) fn unserved(end_user: &EndUserRecord) -> Option<&'static str> {
     } = end_user;
     let object_permission = &object_permission.is_some();
     carried![object_permission]
-        .or_else(|| unserved_budget_extras(budget_extras))
+        .or_else(|| unserved_budget_extras(budget_extras, true))
         .or_else(|| {
             carried![
                 blocked,
@@ -213,14 +213,14 @@ mod tests {
     }
 
     #[rstest]
-    fn an_end_users_per_model_budget_is_read_but_not_enforced() {
+    fn an_end_users_per_model_budget_is_read_and_served() {
         let entry = stored(json!({"litellm_budget_table": {"model_max_budget": {"claude": 1.0}}}));
         let row = record(&entry).unwrap();
         assert_eq!(
             row.budget_extras.model_max_budget["claude"],
             litellm_gateway_auth_core::record::ModelBudget::Amount(1.0),
         );
-        assert_eq!(unserved(&row), Some("model_max_budget"));
+        assert_eq!(unserved(&row), None);
     }
 
     #[rstest]

@@ -22,7 +22,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     AppState, Gateway, StoredConfig,
-    callbacks::parallel_request_limiter,
+    callbacks::{model_budget, parallel_request_limiter},
     host::{self, NativeHost, NativeRows, auth::AuthStore},
     middleware::request_allowlist,
 };
@@ -188,6 +188,25 @@ impl Admit {
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
     }
 
+    fn member_budget_fallback(
+        &self,
+        caller: &Authenticated<NativeRows>,
+        fields: &Fields,
+    ) -> Option<Reason> {
+        model_budget::member_entries(&caller.affiliation.holder)?;
+        let model = fields.get("model")?.as_str()?;
+        let registry = self.router.registry();
+        let settings = self.router.settings();
+        let dynamic = &settings.dynamic;
+        let groups = [model, registry.alias_of(model).unwrap_or(model)];
+        (dynamic
+            .fallbacks
+            .lookup_groups(&groups, &dynamic.fallback_keys)
+            .is_some_and(|targets| !targets.is_empty())
+            || !dynamic.default_fallbacks.is_empty())
+        .then(|| Reason::new(Refused::Credential, "team_member_model_budget_fallback"))
+    }
+
     /// A key whose model list names a model access group goes to Python, which checks the
     /// budget the proxy's database may hold for that group (`_model_access_group_max_budget_check`).
     /// The gateway reads no group budget, so every group the router knows is taken as budgeted,
@@ -275,6 +294,7 @@ impl Admit {
         let over_its_caller = authenticated.as_ref().ok().and_then(|caller| {
             self.model_access(caller, &fields)
                 .or_else(|| self.access_group_budget(caller))
+                .or_else(|| self.member_budget_fallback(caller, &fields))
                 .or_else(|| token_estimate(caller, parts.uri.path(), &mut fields))
         });
         if let Some(reason) = over_its_caller {

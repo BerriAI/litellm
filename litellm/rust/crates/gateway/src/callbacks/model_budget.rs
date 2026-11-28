@@ -11,7 +11,7 @@ use litellm_callbacks::{
     Selection, Subscription, Verdict, typed,
 };
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core::{Credential, Named, Team};
+use litellm_gateway_auth_core::{Credential, Holder, Named, Team};
 use litellm_gateway_inference::record;
 use litellm_model_catalog::CostMap;
 use litellm_redis_store::model_budgets::{Counter, ModelBudgets, Period, Scope};
@@ -53,6 +53,19 @@ impl<'a> Entity<'a> {
     }
 }
 
+pub(crate) fn member_entries(holder: &Holder<NativeRows>) -> Option<&Entries> {
+    holder.user().and_then(Named::stored)?;
+    let Team::Row(team) = holder.team()? else {
+        return None;
+    };
+    let entries = holder
+        .membership()
+        .map(|member| &member.budget_extras.model_max_budget)
+        .filter(|entries| !entries.is_empty())
+        .unwrap_or(&team.member_budget_extras.model_max_budget);
+    (!entries.is_empty()).then_some(entries)
+}
+
 fn entities(identity: &Authenticated<NativeRows>) -> Vec<Entity<'_>> {
     let holder = &identity.affiliation.holder;
     let team = holder.team().and_then(|team| match team {
@@ -67,11 +80,7 @@ fn entities(identity: &Authenticated<NativeRows>) -> Vec<Entity<'_>> {
     };
     let user = holder.user().and_then(Named::stored);
     let member = user.zip(team).and_then(|(user, team)| {
-        let entries = holder
-            .membership()
-            .map(|member| &member.budget_extras.model_max_budget)
-            .filter(|entries| !entries.is_empty())
-            .unwrap_or(&team.member_budget_extras.model_max_budget);
+        let entries = member_entries(holder)?;
         Entity::new(
             Scope::TeamMember,
             format!(

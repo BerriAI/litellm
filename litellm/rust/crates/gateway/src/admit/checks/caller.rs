@@ -50,17 +50,27 @@ fn charged(holder: &Holder<NativeRows>) -> Option<&'static str> {
         .or_else(|| user.and_then(Named::stored).and_then(unserved_user))
         .or_else(|| holder.membership().and_then(unserved_membership))
         .or_else(|| match (team, user.and_then(Named::stored)) {
-            (Some(Team::Row(team)), _) if !team.budget_limits.is_empty() => None,
+            (Some(Team::Row(team)), _)
+                if !team.budget_limits.is_empty() || !team.model_max_budget.is_empty() =>
+            {
+                None
+            }
             (Some(Team::Row(team)), Some(_))
                 if team.member_max_budget.is_some()
-                    || holder
-                        .membership()
-                        .is_some_and(|member| member.budget.max.is_some()) =>
+                    || !team.member_budget_extras.model_max_budget.is_empty()
+                    || holder.membership().is_some_and(|member| {
+                        member.budget.max.is_some()
+                            || !member.budget_extras.model_max_budget.is_empty()
+                    }) =>
             {
                 None
             }
             (Some(_), _) => Some("team"),
-            (None, Some(user)) if user.budget.max.is_some() || !user.budget_limits.is_empty() => {
+            (None, Some(user))
+                if user.budget.max.is_some()
+                    || !user.budget_limits.is_empty()
+                    || !user.model_max_budget.is_empty() =>
+            {
                 None
             }
             (None, _) => user.map(|_| "user"),

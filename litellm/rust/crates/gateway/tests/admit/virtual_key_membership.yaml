@@ -4,6 +4,13 @@ config:
       litellm_params:
         model: anthropic/claude-haiku-5-5
         api_key: provider-key
+    - model_name: claude-with-fallback
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    fallbacks:
+      - claude-with-fallback: [claude]
   general_settings:
     master_key: gateway-key
 
@@ -55,9 +62,14 @@ requests:
   - name: the key owner's membership budget has a per-model map
     headers: {authorization: Bearer sk-structured}
     body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a member model budget may rewrite a request through a router fallback
+    headers: {authorization: Bearer sk-structured}
+    body: {model: claude-with-fallback, max_tokens: 16, messages: []}
     expect: python
     reason: credential
-    over: model_max_budget
+    over: team_member_model_budget_fallback
 
   - name: the database fails the membership query
     unavailable: membership

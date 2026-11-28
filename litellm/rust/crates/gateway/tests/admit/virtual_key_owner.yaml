@@ -46,9 +46,7 @@ requests:
   - name: a key whose owner holds a per-model budget
     headers: {authorization: Bearer sk-per-model}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: model_max_budget
+    expect: rust
 
   - name: a key whose owner holds nothing else
     headers: {authorization: Bearer sk-plain}

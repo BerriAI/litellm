@@ -228,7 +228,7 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         soft_budget,
         budget_duration,
         budget_limits: _,
-        model_max_budget,
+        model_max_budget: _,
         model_spend: _,
         model_id,
         litellm_model_table,
@@ -259,7 +259,6 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         max_budget,
         soft_budget,
         budget_duration,
-        model_max_budget,
         model_id,
         litellm_model_table,
         router_settings,
@@ -272,7 +271,7 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         model_tpm_limit,
         priority,
     ]
-    .or_else(|| unserved_budget_extras(member_budget_extras))
+    .or_else(|| unserved_budget_extras(member_budget_extras, true))
 }
 
 /// The user's record, or the first field it holds that the native gateway cannot handle yet.
@@ -394,7 +393,7 @@ pub(crate) fn unserved_user(user: &UserRecord) -> Option<&'static str> {
         rollover_credit: _,
         budget_duration: _,
         budget_limits: _,
-        model_max_budget,
+        model_max_budget: _,
         model_spend: _,
         allowed_cache_controls,
         policies,
@@ -408,7 +407,6 @@ pub(crate) fn unserved_user(user: &UserRecord) -> Option<&'static str> {
         tpm_limit,
         rpm_limit,
         max_parallel_requests,
-        model_max_budget,
         allowed_cache_controls,
         policies,
     ]
@@ -485,7 +483,7 @@ pub(crate) fn unserved_membership(membership: &MembershipRecord) -> Option<&'sta
         budget_duration: _,
         budget_extras:
             BudgetExtras {
-                model_max_budget,
+                model_max_budget: _,
                 model_rpm_limit,
                 model_tpm_limit,
                 allowed_models,
@@ -495,7 +493,6 @@ pub(crate) fn unserved_membership(membership: &MembershipRecord) -> Option<&'sta
             },
     } = membership;
     carried![
-        model_max_budget,
         model_rpm_limit,
         model_tpm_limit,
         allowed_models,
@@ -653,7 +650,10 @@ fn budget_row(entry: &BudgetEntry, spend: f64) -> Result<BudgetRow, &'static str
     })
 }
 
-pub(super) fn unserved_budget_extras(extras: &BudgetExtras) -> Option<&'static str> {
+pub(super) fn unserved_budget_extras(
+    extras: &BudgetExtras,
+    serves_model_budget: bool,
+) -> Option<&'static str> {
     let BudgetExtras {
         model_max_budget,
         model_rpm_limit,
@@ -664,6 +664,7 @@ pub(super) fn unserved_budget_extras(extras: &BudgetExtras) -> Option<&'static s
         temp_budget_expiry,
     } = extras;
     let temp_budget_expiry = &temp_budget_expiry.is_some();
+    let model_max_budget = &(!serves_model_budget && !model_max_budget.is_empty());
     carried![
         rollover_max_budget,
         model_max_budget,
@@ -702,7 +703,7 @@ pub(crate) fn unserved_org(org: &OrgRecord) -> Option<&'static str> {
     let object_permission = &object_permission.is_some();
     let metadata = &metadata.is_some();
     carried![object_permission, metadata]
-        .or_else(|| unserved_budget_extras(budget_extras))
+        .or_else(|| unserved_budget_extras(budget_extras, false))
         .or_else(|| {
             carried![
                 models,
@@ -811,7 +812,7 @@ pub(crate) fn unserved_project(project: &ProjectRecord) -> Option<&'static str> 
     let object_permission = &object_permission.is_some();
     let metadata = &metadata.is_some();
     carried![object_permission, metadata]
-        .or_else(|| unserved_budget_extras(budget_extras))
+        .or_else(|| unserved_budget_extras(budget_extras, false))
         .or_else(|| {
             carried![
                 team_id,
@@ -867,7 +868,7 @@ mod tests {
     fn budget_extras_are_read_and_named_unserved(#[case] input: &str, #[case] field: Option<&str>) {
         let entry = BudgetEntry::from_value(&json::loads(input).unwrap()).unwrap();
         let row = budget_row(&entry, 3.0).unwrap();
-        assert_eq!(unserved_budget_extras(&row.budget_extras), field);
+        assert_eq!(unserved_budget_extras(&row.budget_extras, false), field);
         assert_eq!(row.budget.spend, 3.0);
     }
 
@@ -915,8 +916,8 @@ mod tests {
         r#"{"budget_limits": [{"budget_duration": "30d", "max_budget": 5.0}]}"#,
         None
     )]
-    #[case::model_max_budget(r#"{"model_max_budget": {"claude": 1.0}}"#, Some("model_max_budget"))]
-    fn a_users_budget_policies_are_copied_and_only_per_model_is_named_unserved(
+    #[case::model_max_budget(r#"{"model_max_budget": {"claude": 1.0}}"#, None)]
+    fn a_users_budget_policies_are_copied_and_served(
         #[case] held: &str,
         #[case] field: Option<&str>,
     ) {
