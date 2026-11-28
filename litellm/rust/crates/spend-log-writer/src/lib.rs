@@ -32,8 +32,12 @@ mod store;
 #[cfg(test)]
 mod test_support;
 
-use std::time::Duration;
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
+use litellm_callbacks_spend_log::SpendLogStatus;
 use tokio::sync::Mutex;
 
 pub use entry::{Charge, EntryError, QueuedSpendLog, RejectedRow};
@@ -49,6 +53,15 @@ pub enum ClaimError {
     Row(#[from] RowError),
     #[error(transparent)]
     Database(#[from] litellm_db::Error),
+}
+
+/// A failed flush and the ID of its rows requeued for retry or Redis parking.
+#[derive(Debug, thiserror::Error)]
+#[error("{error}")]
+pub struct FlushError {
+    #[source]
+    pub error: litellm_db::Error,
+    pub pass: u64,
 }
 
 /// The writer's limits. The defaults are the Python proxy's constants; the proxy passes the ones
@@ -93,6 +106,7 @@ pub struct SpendLogWriter<S> {
     queue: SpendLogQueue,
     flusher: SpendLogFlusher<S>,
     write_lock: Mutex<()>,
+    next_failed_pass: AtomicU64,
     wake: Box<dyn Fn() + Send + Sync>,
 }
 
@@ -103,6 +117,7 @@ impl<S: LedgerStore> SpendLogWriter<S> {
             queue: SpendLogQueue::default(),
             flusher,
             write_lock: Mutex::new(()),
+            next_failed_pass: AtomicU64::new(0),
             wake: Box::new(wake),
         }
     }
@@ -158,16 +173,50 @@ impl<S: LedgerStore> SpendLogWriter<S> {
         limit: usize,
         retention: Option<&Retention>,
     ) -> Result<Vec<QueuedSpendLog>, litellm_db::Error> {
+        self.flush_with_policy(limit, retention, false, false)
+            .await
+            .map_err(|failure| failure.error)
+    }
+
+    /// Apply the proxy's current log policy before any queued details reach Postgres.
+    pub async fn flush_with_policy(
+        &self,
+        limit: usize,
+        retention: Option<&Retention>,
+        disable_spend_logs: bool,
+        disable_error_logs: bool,
+    ) -> Result<Vec<QueuedSpendLog>, FlushError> {
         let _pass = self.write_lock.lock().await;
-        let rows = self.queue.dequeue(limit);
+        let mut rows = self.queue.dequeue(limit);
+        if disable_spend_logs || disable_error_logs {
+            rows.retain_mut(|entry| {
+                let Some(row) = entry.row() else {
+                    return true;
+                };
+                if !(disable_spend_logs
+                    || disable_error_logs && row.status == SpendLogStatus::Failure)
+                {
+                    return true;
+                }
+                if let Some(charge_only) = entry.accounting_only() {
+                    *entry = charge_only;
+                    return true;
+                }
+                entry.strip_to_legacy_cost_receipt()
+            });
+        }
         if rows.is_empty() {
             return Ok(rows);
         }
         match self.flusher.write(&rows, retention).await {
             Ok(()) => Ok(rows),
             Err(error) => {
+                let pass = self.next_failed_pass.fetch_add(1, Ordering::Relaxed);
+                for row in &mut rows {
+                    row.failed_pass = Some(pass);
+                }
                 self.enqueue(rows, true);
-                Err(error)
+                Err(FlushError { error, pass })
             }
         }
     }
@@ -182,6 +231,11 @@ impl<S: LedgerStore> SpendLogWriter<S> {
     /// elsewhere.
     pub fn take(&self, limit: usize) -> Vec<QueuedSpendLog> {
         self.queue.dequeue(limit)
+    }
+
+    /// Takes only rows still queued from the failed pass, even if other rows were prepended.
+    pub fn take_failed_pass(&self, pass: u64) -> Vec<QueuedSpendLog> {
+        self.queue.dequeue_failed_pass(pass)
     }
 
     pub fn len(&self) -> usize {
@@ -206,14 +260,98 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::{SpendLogFlusher, SpendLogWriter, WriterSettings};
-    use crate::test_support::{FakeStore, connect_error, full_pool, rows};
+    use super::{QueuedSpendLog, SpendLogFlusher, SpendLogWriter, WriterSettings};
+    use crate::test_support::{FakeStore, charged, connect_error, full_pool, python_row, rows};
 
     fn writer(store: FakeStore) -> SpendLogWriter<FakeStore> {
         SpendLogWriter::new(
             SpendLogFlusher::new(store, WriterSettings::default()),
             || {},
         )
+    }
+
+    #[rstest]
+    #[case::all_disabled(true, false, "success", false)]
+    #[case::errors_disabled(false, true, "failure", false)]
+    #[case::errors_only_keep_success(false, true, "success", true)]
+    #[case::enabled(false, false, "failure", true)]
+    #[tokio::test]
+    async fn a_flush_applies_current_policy_to_queued_detail_without_dropping_its_charge(
+        #[case] disable_spend_logs: bool,
+        #[case] disable_error_logs: bool,
+        #[case] status: &str,
+        #[case] logged: bool,
+    ) {
+        let writer = writer(FakeStore::writing());
+        let row = python_row(
+            "queued",
+            &format!(
+                r#", "status": "{status}", "accounting_delivery_id": "delivery", "accounting_payload": {{"spend": 1.0}}"#
+            ),
+        );
+        writer.enqueue(
+            vec![QueuedSpendLog::from_python(&row).expect("valid row")],
+            false,
+        );
+
+        writer
+            .flush_with_policy(10, None, disable_spend_logs, disable_error_logs)
+            .await
+            .expect("writes");
+
+        let writes = writer.flusher().store().calls();
+        assert_eq!(writes.written, if logged { vec!["queued"] } else { vec![] });
+        assert_eq!(
+            writes.charges_kept,
+            if logged { vec![] } else { vec!["queued"] }
+        );
+    }
+
+    #[rstest]
+    #[case::batch_receipt("job_batch_cost", "aretrieve_batch", true, "")]
+    #[case::video_receipt("job_video_cost", "avideo_status", true, "")]
+    #[case::enabled("job_batch_cost", "aretrieve_batch", false, "gpt")]
+    #[tokio::test]
+    async fn a_flush_keeps_legacy_job_cost_but_strips_request_details_when_disabled(
+        #[case] request_id: &str,
+        #[case] call_type: &str,
+        #[case] disabled: bool,
+        #[case] model: &str,
+    ) {
+        let expected_id = request_id.to_owned();
+        let expected_type = call_type.to_owned();
+        let expected_model = model.to_owned();
+        let writer = writer(FakeStore::new(Box::new(move |writes, _| {
+            let [write] = writes else {
+                panic!("expected one receipt");
+            };
+            let log = write.log.as_ref().expect("legacy job needs a receipt");
+            assert_eq!(log.request_id, expected_id);
+            assert_eq!(log.call_type, expected_type);
+            assert_eq!(log.spend, 0.25);
+            assert_eq!(log.status.as_deref(), Some("success"));
+            assert_eq!(log.model, expected_model);
+            if disabled {
+                assert!(log.api_key.is_empty());
+                assert_eq!(log.total_tokens, 0);
+                assert_eq!(log.metadata.as_ref().map(|value| value.get()), Some("{}"));
+                assert_eq!(log.messages.as_ref().map(|value| value.get()), Some("{}"));
+            }
+            assert!(write.delivery.is_none());
+            None
+        })));
+        let row = python_row(request_id, &format!(r#", "call_type": "{call_type}""#));
+        writer.enqueue(
+            vec![QueuedSpendLog::from_python(&row).expect("valid row")],
+            false,
+        );
+
+        writer
+            .flush_with_policy(10, None, disabled, false)
+            .await
+            .expect("writes");
+
+        assert_eq!(writer.flusher().store().calls().written, vec![request_id]);
     }
 
     #[rstest]
@@ -252,6 +390,36 @@ mod tests {
             .map(|row| row.request_id().to_owned())
             .collect();
         assert_eq!(order, ["0", "1", "2"]);
+    }
+
+    #[rstest]
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_filtered_pass_can_be_taken_without_draining_other_work() {
+        let writer = writer(FakeStore::new(Box::new(|_, _| Some(connect_error()))));
+        let mut queued = rows(3);
+        queued[1] = charged("charged");
+        writer.enqueue(queued, false);
+
+        let failure = writer
+            .flush_with_policy(2, None, true, false)
+            .await
+            .expect_err("pass fails");
+        writer.enqueue(vec![charged("recovered")], true);
+
+        let failed = writer.take_failed_pass(failure.pass);
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].request_id(), "charged");
+        assert!(failed[0].row().is_none());
+        assert!(failed[0].charge().is_some());
+        assert!(writer.take_failed_pass(failure.pass).is_empty());
+        assert_eq!(
+            writer
+                .take(10)
+                .iter()
+                .map(QueuedSpendLog::request_id)
+                .collect::<Vec<_>>(),
+            ["recovered", "2"],
+        );
     }
 
     #[rstest]

@@ -843,6 +843,123 @@ async def test_drain_spend_logs_queue_keeps_rows_in_memory_when_redis_is_down(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("disable_spend", "disable_errors", "status", "expected_details"),
+    [(True, False, "success", 0), (False, True, "failure", 0), (False, True, "success", 1)],
+)
+async def test_redis_replay_applies_current_policy_and_keeps_the_delivery(
+    mock_prisma_client: MagicMock,
+    make_spend_log_row: Callable[..., dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging_with_redis: MagicMock,
+    disable_spend: bool,
+    disable_errors: bool,
+    status: str,
+    expected_details: int,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    row = {
+        **make_spend_log_row(request_id="parked"),
+        "status": status,
+        "accounting_delivery_id": "parked-delivery",
+        "accounting_payload": {"spend": 0.25},
+    }
+    buffer = proxy_logging_with_redis.db_spend_update_writer.redis_update_buffer
+    assert await buffer.store_spend_logs_in_redis([row])
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", disable_spend)
+    monkeypatch.setattr(proxy_server, "general_settings", {"disable_error_logs": disable_errors})
+    mock_prisma_client.writer_db = mock_prisma_client.db
+    query = AsyncMock(side_effect=[[{"delivery_id": "parked-delivery"}], []])
+    mock_prisma_client.db.query_raw = query
+
+    await update_spend(mock_prisma_client, None, proxy_logging_with_redis)
+
+    delivery_sql, delivery_json = query.await_args_list[0].args
+    assert '"LiteLLM_SpendLogDelivery"' in delivery_sql
+    assert json.loads(delivery_json) == [
+        {
+            "delivery_id": "parked-delivery",
+            "request_id": "parked",
+            "accounting_payload": {"spend": 0.25},
+            "is_batch": False,
+        }
+    ]
+    assert sum('INSERT INTO "LiteLLM_SpendLogs"' in call.args[0] for call in query.await_args_list) == expected_details
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_spend", [True, False], ids=["receipt-only", "full-row"])
+async def test_redis_replay_keeps_only_the_legacy_settlement_receipt_when_logging_is_disabled(
+    mock_prisma_client: MagicMock,
+    make_spend_log_row: Callable[..., dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging_with_redis: MagicMock,
+    disable_spend: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    receipt = {
+        "request_id": "job_batch_cost",
+        "call_type": "aretrieve_batch",
+        "status": "success",
+        "spend": 0.25,
+        "startTime": "2026-06-02T00:00:00Z",
+        "endTime": "2026-06-02T00:00:01Z",
+    }
+    row = make_spend_log_row(**receipt, messages=[{"content": "request detail"}])
+    buffer = proxy_logging_with_redis.db_spend_update_writer.redis_update_buffer
+    assert await buffer.store_spend_logs_in_redis([row])
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", disable_spend)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    create_many = AsyncMock()
+    mock_prisma_client.db.litellm_spendlogs.create_many = create_many
+
+    await update_spend(mock_prisma_client, None, proxy_logging_with_redis)
+
+    assert create_many.await_args.kwargs["data"] == ((receipt if disable_spend else row),)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_spend", [True, False], ids=["receipt-only", "full-row"])
+async def test_failed_python_flush_replays_legacy_settlement_row(
+    mock_prisma_client: MagicMock,
+    make_spend_log_row: Callable[..., dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+    proxy_logging_with_redis: MagicMock,
+    disable_spend: bool,
+) -> None:
+    from prisma.errors import TableNotFoundError
+
+    from litellm.proxy import proxy_server
+
+    receipt = {
+        "request_id": "job_batch_cost",
+        "call_type": "aretrieve_batch",
+        "status": "success",
+        "spend": 0.25,
+        "startTime": "2026-06-02T00:00:00Z",
+        "endTime": "2026-06-02T00:00:01Z",
+    }
+    row = make_spend_log_row(**receipt, messages=[{"content": "request detail"}])
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", disable_spend)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    mock_prisma_client.spend_log_transactions = [row]
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_table_gone_error())
+
+    with pytest.raises(TableNotFoundError):
+        await update_spend_logs_job(mock_prisma_client, None, proxy_logging_with_redis)
+
+    assert mock_prisma_client.spend_log_transactions == []
+    create_many = AsyncMock()
+    mock_prisma_client.db.litellm_spendlogs.create_many = create_many
+
+    await update_spend(mock_prisma_client, None, proxy_logging_with_redis)
+
+    create_many.assert_awaited_once_with(data=((receipt if disable_spend else row),), skip_duplicates=True)
+
+
+@pytest.mark.asyncio
 async def test_update_spend_writes_rows_parked_in_redis_by_a_previous_pod(
     mock_prisma_client: Any,
     make_spend_log_row: Any,

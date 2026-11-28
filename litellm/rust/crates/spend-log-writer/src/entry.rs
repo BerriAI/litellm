@@ -53,6 +53,7 @@ pub struct RejectedRow {
 /// and `charge` is `None` off the ledger.
 #[derive(Clone, Debug, PartialEq)]
 pub struct QueuedSpendLog {
+    pub(crate) failed_pass: Option<u64>,
     request_id: String,
     call_type: String,
     row: Option<SpendLogRow>,
@@ -133,6 +134,7 @@ impl QueuedSpendLog {
             Some(_) => return Err(EntryError::InvalidCharge),
         };
         Ok(Self {
+            failed_pass: None,
             request_id: row.request_id.clone(),
             call_type: row.call_type.clone(),
             row: logged.then_some(row),
@@ -171,6 +173,7 @@ impl QueuedSpendLog {
         let log_disabled = fields.remove(ACCOUNTING_LOG_DISABLED) == Some(Value::Bool(true));
         let charge = charge(&mut fields).map_err(|error| refused(request_id.clone(), error))?;
         let entry = Self {
+            failed_pass: None,
             request_id: id,
             call_type,
             row: None,
@@ -242,6 +245,7 @@ impl QueuedSpendLog {
         let charge = self.charge.clone()?;
         Some(
             Self {
+                failed_pass: self.failed_pass,
                 request_id: self.request_id.clone(),
                 call_type: self.call_type.clone(),
                 row: None,
@@ -250,6 +254,51 @@ impl QueuedSpendLog {
             }
             .measured(),
         )
+    }
+
+    /// Retains only the settlement receipt of a legacy job, with neutral request fields.
+    pub(crate) fn strip_to_legacy_cost_receipt(&mut self) -> bool {
+        let Some(row) = self.row.as_mut().filter(|row| row.settles_once()) else {
+            return false;
+        };
+        *row = SpendLogRow {
+            request_id: row.request_id.clone(),
+            call_type: row.call_type.clone(),
+            spend: row.spend,
+            start_time: row.start_time.clone(),
+            end_time: row.end_time.clone(),
+            status: row.status,
+            api_key: String::new(),
+            cache_hit: String::new(),
+            completion_start_time: None,
+            model: String::new(),
+            user: String::new(),
+            team_id: String::new(),
+            organization_id: String::new(),
+            metadata: "{}".into(),
+            cache_key: String::new(),
+            total_tokens: 0,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            request_tags: "[]".into(),
+            end_user: String::new(),
+            api_base: String::new(),
+            model_group: String::new(),
+            model_id: String::new(),
+            mcp_namespaced_tool_name: None,
+            agent_id: None,
+            billing_agent_id: None,
+            requester_ip_address: None,
+            custom_llm_provider: String::new(),
+            messages: "{}".into(),
+            response: "{}".into(),
+            proxy_server_request: "{}".into(),
+            session_id: None,
+            request_duration_ms: None,
+            litellm_call_id: None,
+        };
+        self.bytes = json::dumps_len(&self.wire()).unwrap_or(0);
+        true
     }
 }
 

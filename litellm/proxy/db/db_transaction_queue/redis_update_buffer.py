@@ -141,7 +141,7 @@ def _spend_log_json_default(value: object) -> str:
 
 
 def _encode_spend_log_row(row: SpendLogRow) -> str:
-    return json.dumps(row, default=_spend_log_json_default)
+    return json.dumps(row if isinstance(row, dict) else dict(row), default=_spend_log_json_default)
 
 
 def _decode_spend_log_row(encoded: object) -> dict[str, object] | None:

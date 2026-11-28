@@ -72,6 +72,26 @@ impl SpendLogQueue {
         popped
     }
 
+    pub(crate) fn dequeue_failed_pass(&self, pass: u64) -> Vec<QueuedSpendLog> {
+        let mut state = self.state();
+        let Some(start) = state
+            .rows
+            .iter()
+            .position(|row| row.failed_pass == Some(pass))
+        else {
+            return Vec::new();
+        };
+        let count = state
+            .rows
+            .iter()
+            .skip(start)
+            .take_while(|row| row.failed_pass == Some(pass))
+            .count();
+        let popped: Vec<_> = state.rows.drain(start..start + count).collect();
+        state.bytes -= popped.iter().map(QueuedSpendLog::bytes).sum::<usize>();
+        popped
+    }
+
     pub fn len(&self) -> usize {
         self.state().rows.len()
     }

@@ -5273,6 +5273,31 @@ async def test_ProxyConfig__update_general_settings_updates_max_parallel(monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("yaml_enabled", [False, True])
+async def test_db_request_log_policy_reloads_without_overriding_yaml(
+    monkeypatch: pytest.MonkeyPatch, yaml_enabled: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"disable_spend_logs": False, "disable_error_logs": False} if yaml_enabled else {},
+    )
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    config: Final = ProxyConfig()
+
+    await config._update_general_settings({"disable_spend_logs": True, "disable_error_logs": True})
+    assert (proxy_server.disable_spend_logs, proxy_server.general_settings.get("disable_error_logs")) == (
+        not yaml_enabled,
+        not yaml_enabled,
+    )
+
+    await config._update_general_settings({"disable_spend_logs": False, "disable_error_logs": False})
+    assert (proxy_server.disable_spend_logs, proxy_server.general_settings.get("disable_error_logs")) == (False, False)
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig__update_general_settings_applies_db_max_batch_file_size_mb(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     pc = ProxyConfig()
