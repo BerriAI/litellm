@@ -1,5 +1,7 @@
 from collections.abc import Mapping, Sequence
-from typing import Final
+from fnmatch import fnmatchcase
+from types import MappingProxyType
+from typing import Final, TypeGuard
 from urllib.parse import unquote_plus
 
 from fastapi import status
@@ -10,9 +12,40 @@ from pydantic import TypeAdapter
 
 from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.types.proxy.request_tag_mappings import RequestTagMapping
+from litellm.types.proxy.request_tag_mappings import RequestPatternTagMapping, RequestTagMapping
 
 REQUEST_TAG_MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[RequestTagMapping, ...])
+REQUEST_PATTERN_TAG_MAPPINGS_ADAPTER: Final = TypeAdapter(tuple[RequestPatternTagMapping, ...])
+
+
+def _is_object_mapping(value: object) -> TypeGuard[Mapping[str, object]]:
+    return isinstance(value, Mapping)
+
+
+def _dotted_string(current: object, parts: tuple[str, ...]) -> str | None:
+    if not parts:
+        return current if isinstance(current, str) else None
+    if not _is_object_mapping(current):
+        return None
+    return _dotted_string(current.get(parts[0]), parts[1:])
+
+
+def _body_string(body: Mapping[str, object], field: str) -> str | None:
+    return _dotted_string(body, tuple(field.split(".")))
+
+
+def resolve_pattern_tag_mappings(
+    headers: Mapping[str, str], body: Mapping[str, object], rules: Sequence[RequestPatternTagMapping]
+) -> tuple[tuple[str, bool], ...]:
+    normalized_headers: Final = MappingProxyType({key.lower(): value for key, value in headers.items()})
+
+    def matches(rule: RequestPatternTagMapping) -> bool:
+        value: Final = (
+            normalized_headers.get(rule.field.lower()) if rule.source == "header" else _body_string(body, rule.field)
+        )
+        return isinstance(value, str) and fnmatchcase(value, rule.pattern)
+
+    return tuple((tag, True) for tag in dict.fromkeys(rule.tag for rule in rules if matches(rule)))
 
 
 def is_baggage_mapped_route(route: str) -> bool:

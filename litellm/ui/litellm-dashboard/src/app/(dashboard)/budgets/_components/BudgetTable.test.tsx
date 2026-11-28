@@ -61,6 +61,7 @@ const defaultProps = {
   canModify: true,
   onEditClick: vi.fn(),
   onDeleteClick: vi.fn(),
+  onAssignClick: vi.fn(),
 };
 
 describe("BudgetTable", () => {
@@ -160,6 +161,15 @@ describe("BudgetTable", () => {
     renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
     expect(screen.getAllByText("n/a")).toHaveLength(3);
     expect(screen.getByText("Unlimited")).toBeInTheDocument();
+  });
+
+  it("assigns the selected budget from the actions menu", async () => {
+    const user = userEvent.setup();
+    const list = makeList();
+    renderWithProviders(<BudgetTable {...defaultProps} list={list} />);
+    await user.click(screen.getByRole("button", { name: "Open budget actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Assign budget" }));
+    expect(defaultProps.onAssignClick).toHaveBeenCalledExactlyOnceWith(list.rows[0]);
   });
 
   it("should call onEditClick from the actions menu", async () => {
