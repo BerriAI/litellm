@@ -68,6 +68,7 @@ const config: ViteUserConfig = {
         test: {
           ...jsdomTier,
           name: "integration",
+          setupFiles: [...jsdomTier.setupFiles, "tests/setup.integration.ts"],
           include: ["src/**/*.integration.test.tsx", "tests/**/*.integration.test.tsx"],
           exclude: ["node_modules/**"],
         },
