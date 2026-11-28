@@ -1,4 +1,6 @@
+use litellm_auth::VertexParams;
 use litellm_auth_gcp::google::{GoogleLoginFailure, PythonException};
+use litellm_auth_gcp::vertex::vertex_location;
 use litellm_llms_types::providers::vertex_ai::{GLOBAL_API_BASE, GLOBAL_LOCATION};
 use litellm_model_catalog::Catalog;
 use litellm_python_compat::urllib::urlsplit;
@@ -124,6 +126,21 @@ pub fn supported_regions(catalog: &Catalog, model: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The location Python's `resolve_vertex_location_for_cost` prices a Claude on Vertex AI call
+/// in, the one the call is sent to: the configured location, or `VERTEXAI_LOCATION` or
+/// `VERTEX_LOCATION`, routed by the model's `supported_regions`.
+pub fn cost_location(
+    params: &VertexParams,
+    model: &str,
+    catalog: &Catalog,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> String {
+    vertex_region(
+        vertex_location(params, env_lookup),
+        &supported_regions(catalog, model),
+    )
 }
 
 #[cfg(test)]

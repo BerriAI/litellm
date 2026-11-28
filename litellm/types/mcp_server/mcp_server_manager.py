@@ -25,12 +25,17 @@ _TOOLS_LIST_CACHE_TTL_SECONDS: Final = TypeAdapter[int](
 )
 
 
+MCPResourceURIMatch: TypeAlias = Literal["strict", "path_only"]
+
+
 # MCPInfo now allows arbitrary additional fields for custom metadata
 def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, object]:
     if "protocol_version" in value:
         TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(value["protocol_version"])
     if "skip_tool_output_validation" in value:
         TypeAdapter[bool](bool).validate_python(value["skip_tool_output_validation"], strict=True)
+    if "resource_uri_match" in value:
+        TypeAdapter[MCPResourceURIMatch](MCPResourceURIMatch).validate_python(value["resource_uri_match"])
     if "tools_list_cache_ttl_seconds" in value:
         _TOOLS_LIST_CACHE_TTL_SECONDS.validate_python(value["tools_list_cache_ttl_seconds"], strict=True)
     return value
@@ -341,6 +346,11 @@ class MCPServer(LiteLLMBaseModel):
     @property
     def skip_tool_output_validation(self) -> bool:
         return (self.mcp_info or {}).get("skip_tool_output_validation") is True
+
+    @property
+    def resource_uri_match(self) -> MCPResourceURIMatch:
+        configured: Final[object] = (self.mcp_info or {}).get("resource_uri_match")
+        return "path_only" if configured == "path_only" else "strict"
 
     @property
     def tools_list_cache_ttl_seconds(self) -> int | None:

@@ -10,6 +10,7 @@ import {
   waitFor,
   within,
 } from "@/../tests/test-utils";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { components } from "@/lib/http/schema";
@@ -347,5 +348,39 @@ describe("PromptCachingRequestsTable", () => {
     expect(screen.getByText("Select a date range to view requests")).toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     await waitFor(() => expect(fetchMock).not.toHaveBeenCalled());
+  });
+
+  describe("URL state", () => {
+    it("opens the caching filter named in ?requests_filter= and requests it", async () => {
+      fetchMock.mockResolvedValue(response([request({ request_id: "hit-1" })]));
+      renderWithProviders(<PromptCachingRequestsTable accessToken="token-a" dateValue={dates} />, {
+        searchParams: "?requests_filter=hits",
+      });
+
+      await screen.findByRole("link", { name: "hit-1" });
+      expect(screen.getByRole("tab", { name: "Cache hits", selected: true })).toBeInTheDocument();
+      expect(lastQuery().get("filter")).toBe("hits");
+    });
+
+    it("ignores an unknown ?requests_filter=, then replaces it on a filter click and drops it for every caching request", async () => {
+      fetchMock.mockResolvedValue(response([request({ request_id: "any-1" })]));
+      const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+      renderWithProviders(<PromptCachingRequestsTable accessToken="token-a" dateValue={dates} />, {
+        searchParams: "?requests_filter=misses",
+        onUrlUpdate,
+      });
+      await screen.findByRole("link", { name: "any-1" });
+      expect(screen.getByRole("tab", { name: "All caching", selected: true })).toBeInTheDocument();
+      expect(lastQuery().get("filter")).toBe("all");
+      const lastUpdate = () => onUrlUpdate.mock.calls.at(-1)?.[0];
+
+      fireEvent.click(screen.getByRole("tab", { name: "LiteLLM injected" }));
+      await waitFor(() => expect(lastUpdate()?.searchParams.get("requests_filter")).toBe("injected"));
+      expect(lastUpdate()?.options.history).toBe("replace");
+      await waitFor(() => expect(lastQuery().get("filter")).toBe("injected"));
+
+      fireEvent.click(screen.getByRole("tab", { name: "All caching" }));
+      await waitFor(() => expect(lastUpdate()?.searchParams.has("requests_filter")).toBe(false));
+    });
   });
 });

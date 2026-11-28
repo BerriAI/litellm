@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Final, Protocol
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from fastapi import HTTPException
 
@@ -34,7 +35,32 @@ if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 ServerLookup = Callable[[str], "MCPServer | None"]
-TokenEndpointPost = Callable[[str, dict[str, str], dict[str, str]], Awaitable["dict[str, object] | None"]]
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizationCodeTokenSuccess:
+    body: dict[str, object] | None = None
+    tag: Literal["success"] = "success"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizationCodeTokenDenied:
+    status_code: int
+    body: dict[str, object]
+    detail: str
+    tag: Literal["denied"] = "denied"
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizationCodeTokenUnreachable:
+    detail: str
+    tag: Literal["unreachable"] = "unreachable"
+
+
+AuthorizationCodeTokenOutcome: TypeAlias = (
+    AuthorizationCodeTokenSuccess | AuthorizationCodeTokenDenied | AuthorizationCodeTokenUnreachable
+)
+TokenEndpointPost: TypeAlias = Callable[[str, dict[str, str], dict[str, str]], Awaitable[AuthorizationCodeTokenOutcome]]
 
 
 class CredentialPersist(Protocol):
@@ -140,9 +166,14 @@ class AuthorizationCodeRefresher:
             "refresh_token": token.refresh_token,
             **token_request.body,
         }
-        body: Final = await self._token_endpoint(token_url, form, token_request.headers)
-        if body is None:
-            return None
+        outcome: Final = await self._token_endpoint(token_url, form, token_request.headers)
+        match outcome:
+            case AuthorizationCodeTokenUnreachable():
+                return None
+            case AuthorizationCodeTokenDenied():
+                return None
+            case AuthorizationCodeTokenSuccess():
+                body: Final = outcome.body or {}
         access_token: Final = body.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             return None
