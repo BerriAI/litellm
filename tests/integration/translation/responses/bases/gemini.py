@@ -333,30 +333,27 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
 )
 
 GEMINI_4_ARGON_THOUGHT: Final = (
-    "Okay, here's my thought process on this task:\n\n**My Approach to Quantity Validation**\n\n"
-    "Alright, the instructions are clear: I need to understand how this system deals with potentially"
-    " problematic quantities like zero, negative numbers, and non-integers. The prompt explicitly dir"
-    "ects me to start with `shop/validation.py`. This makes perfect sense; it's the logical starting "
-    "point for understanding the system's core logic regarding quantity checks. I also need to rememb"
-    "er the system instructions regarding the use of the `read_file` tool and not making file changes"
-    ".\n\nSo, I will state clearly that my next step is to examine `shop/validation.py` to understand i"
-    "ts handling of these edge cases. I'll then use the `read_file` tool on that specific file. This "
-    "will provide the necessary context before I can even *consider* any potential fixes or further f"
-    "ile inspections. This approach aligns with the instructions and ensures I'm building a solid fou"
-    "ndation of understanding before I start looking for specific issues.\n\n\n"
+    "**My Approach to Understanding Quantity Validation**\n\nOkay, so the user wants a focused review, "
+    "and I need to start by understanding how this system handles potentially tricky quantity inputs."
+    " The instructions are clear: first, I need to look at the validation, especially focusing on zer"
+    "os, negatives, and non-integers. The prompt explicitly directs me to the `shop/validation.py` fi"
+    "le to get this information.\n\nTherefore, I will begin by explaining that I need to examine `shop/"
+    "validation.py` to understand the quantity validation logic. Then, I will use the `read_file` too"
+    "l to examine the file content.\n\n\n"
 )
 
 GEMINI_4_ARGON_THOUGHT_SIGNATURE: Final = (
-    "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"
+    "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"
 )
 
 GEMINI_4_ARGON_RESPONSE_FIELDS: Final[Mapping[str, JsonValue]] = {
@@ -364,25 +361,18 @@ GEMINI_4_ARGON_RESPONSE_FIELDS: Final[Mapping[str, JsonValue]] = {
         {
             "content": {
                 "parts": [
-                    {
-                        "text": GEMINI_4_ARGON_THOUGHT,
-                        "thought": True,
-                    },
+                    {"text": GEMINI_4_ARGON_THOUGHT, "thought": True},
                     {
                         "text": (
-                            "I will read `shop/validation.py` next to see how zero, negative, and non-integer quantities are "
-                            "validated."
-                        ),
+                            "I will read `shop/validation.py` to examine how zero, negative, and non-integer quantities are c"
+                            "urrently handled in `validate_quantity`."
+                        )
                     },
                     {
                         "functionCall": {
                             "name": "read_file",
-                            "args": {
-                                "path": "shop/validation.py",
-                                "start_line": 1,
-                                "end_line": 50,
-                            },
-                            "id": "call_31641",
+                            "args": {"start_line": 1, "path": "shop/validation.py", "end_line": 50},
+                            "id": "call_18163055417662353838",
                         },
                         "thoughtSignature": GEMINI_4_ARGON_THOUGHT_SIGNATURE,
                     },
@@ -392,28 +382,19 @@ GEMINI_4_ARGON_RESPONSE_FIELDS: Final[Mapping[str, JsonValue]] = {
             "finishReason": "STOP",
             "index": 0,
             "finishMessage": "Model generated function call(s).",
-        },
+        }
     ],
     "usageMetadata": {
         "promptTokenCount": 412,
-        "candidatesTokenCount": 65,
-        "totalTokenCount": 614,
-        "promptTokensDetails": [
-            {
-                "modality": "TEXT",
-                "tokenCount": 412,
-            },
-        ],
-        "candidatesTokensDetails": [
-            {
-                "modality": "TEXT",
-                "tokenCount": 65,
-            },
-        ],
-        "thoughtsTokenCount": 137,
+        "candidatesTokenCount": 70,
+        "totalTokenCount": 613,
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 412}],
+        "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 70}],
+        "thoughtsTokenCount": 131,
+        "serviceTier": "standard",
     },
     "modelVersion": "gemini-4-argon",
-    "responseId": "AyfQauWvIqOO6dkPs7f0GQ",
+    "responseId": "1AEDa_bbIt6yjdoPnJGJoAo",
 }
 
 GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
@@ -436,13 +417,7 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
                 "id": ANY,
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": GEMINI_4_ARGON_THOUGHT,
-                        "annotations": [],
-                    },
-                ],
+                "content": [{"type": "output_text", "text": GEMINI_4_ARGON_THOUGHT, "annotations": []}],
                 "phase": None,
             },
             {
@@ -454,25 +429,23 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
                     {
                         "type": "output_text",
                         "text": (
-                            "I will read `shop/validation.py` next to see how zero, negative, and non-integer quantities are "
-                            "validated."
+                            "I will read `shop/validation.py` to examine how zero, negative, and non-integer quantities are c"
+                            "urrently handled in `validate_quantity`."
                         ),
                         "annotations": [],
-                    },
+                    }
                 ],
                 "phase": None,
             },
             {
-                "arguments": '{"path": "shop/validation.py", "start_line": 1, "end_line": 50}',
-                "call_id": "call_31641__thought__" + GEMINI_4_ARGON_THOUGHT_SIGNATURE,
+                "arguments": '{"start_line": 1, "path": "shop/validation.py", "end_line": 50}',
+                "call_id": "call_18163055417662353838__thought__" + GEMINI_4_ARGON_THOUGHT_SIGNATURE,
                 "name": "read_file",
                 "type": "function_call",
-                "id": "fc_call_31641__thought__" + GEMINI_4_ARGON_THOUGHT_SIGNATURE,
+                "id": "fc_call_18163055417662353838__thought__" + GEMINI_4_ARGON_THOUGHT_SIGNATURE,
                 "namespace": None,
                 "status": "completed",
-                "provider_specific_fields": {
-                    "thought_signature": GEMINI_4_ARGON_THOUGHT_SIGNATURE,
-                },
+                "provider_specific_fields": {"thought_signature": GEMINI_4_ARGON_THOUGHT_SIGNATURE},
             },
         ],
         "usage": {
@@ -485,13 +458,9 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
                 "text_tokens": 412,
                 "video_tokens": None,
             },
-            "output_tokens": 202,
-            "output_tokens_details": {
-                "audio_tokens": None,
-                "reasoning_tokens": 137,
-                "text_tokens": 65,
-            },
-            "total_tokens": 614,
+            "output_tokens": 201,
+            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 131, "text_tokens": 70},
+            "total_tokens": 613,
             "cost": None,
         },
     },
