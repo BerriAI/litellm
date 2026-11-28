@@ -1412,6 +1412,19 @@ class TestAutoRouterSession:
         assert ADMIN.api_key != "sk-test"
 
     @pytest.mark.asyncio
+    async def test_a_keyless_caller_gets_a_404_without_querying(self, monkeypatch: pytest.MonkeyPatch):
+        # A `lite login` session authenticates with no api_key; prisma rejects where.api_key=None with a 500.
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
+
+        lookups = self._rig(monkeypatch, [{**self.ROW, "api_key": "", "session_id": "sess-1"}])
+        with pytest.raises(HTTPException) as err:
+            await get_auto_router_session(
+                user_api_key_dict=UserAPIKeyAuth(user_id="u1", is_session_token=True), session_id="sess-1"
+            )
+        assert err.value.status_code == 404
+        assert lookups == []
+
+    @pytest.mark.asyncio
     async def test_the_sessions_most_recently_active_router_is_the_one_reported(self, monkeypatch: pytest.MonkeyPatch):
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
 
