@@ -1,11 +1,14 @@
 import json
 import math
 from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, Union
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 
 
 # Defined above the `litellm.proxy.*` imports so the name is bound even when
@@ -40,6 +43,35 @@ def validate_budget_duration(budget_duration: str | None, status_code: int = 400
     error: Final = budget_duration_error(budget_duration)
     if error is not None:
         raise HTTPException(status_code=status_code, detail={"error": error})
+
+
+def _key_expires_at(duration: str) -> datetime | None:
+    try:
+        return datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
+    except (ValueError, OverflowError):
+        return None
+
+
+def validate_key_duration(duration: str | None) -> None:
+    """Reject a key `duration` that cannot be parsed or whose expiry falls outside the datetime range."""
+    if duration is None or _key_expires_at(duration) is not None:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": (
+                f"Invalid duration '{duration}'. Use a format like '30m', '1h', '7d', or '1mo', "
+                "or null for a key that never expires."
+            )
+        },
+    )
+
+
+def validate_key_duration_update(duration: str | None) -> None:
+    """Updates also take "" to keep the current expiry and the deprecated "-1" to never expire."""
+    if duration in ("", "-1"):
+        return
+    validate_key_duration(duration)
 
 
 import litellm

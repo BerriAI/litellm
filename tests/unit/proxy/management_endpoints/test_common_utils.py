@@ -37,6 +37,8 @@ from litellm.proxy.management_endpoints.common_utils import (
     user_api_key_has_admin_view,
     user_has_admin_privileges,
     upsert_budget_and_membership,
+    validate_key_duration,
+    validate_key_duration_update,
 )
 from litellm.types.utils import BudgetConfig
 
@@ -753,6 +755,36 @@ class TestValidateBudgetDuration:
         assert exc_info.value.detail == {
             "error": "Invalid budget_duration '0s'. Use a format like '1h', '24h', '7d', or '30d'."
         }
+
+
+@pytest.mark.parametrize("duration", [None, "30s", "5m", "1h", "7d", "1mo", "daily"])
+def test_key_duration_accepts_every_duration_that_has_an_expiry(duration: str | None) -> None:
+    assert validate_key_duration(duration) is None
+    assert validate_key_duration_update(duration) is None
+
+
+@pytest.mark.parametrize("duration", ["", "-1"])
+def test_only_key_updates_accept_the_keep_and_never_expire_values(duration: str) -> None:
+    assert validate_key_duration_update(duration) is None
+    with pytest.raises(HTTPException) as exc_info:
+        validate_key_duration(duration)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize("duration", ["banana", "1x", "-5m", "3650000d", "99999999999d"])
+def test_key_duration_rejects_a_value_with_no_expiry(duration: str) -> None:
+    expected: Final = {
+        "error": (
+            f"Invalid duration '{duration}'. Use a format like '30m', '1h', '7d', or '1mo', "
+            "or null for a key that never expires."
+        )
+    }
+    with pytest.raises(HTTPException) as generate_error:
+        validate_key_duration(duration)
+    with pytest.raises(HTTPException) as update_error:
+        validate_key_duration_update(duration)
+    assert (generate_error.value.status_code, generate_error.value.detail) == (400, expected)
+    assert (update_error.value.status_code, update_error.value.detail) == (400, expected)
 
 
 class TestRequireCallerUserIdErrorDetail:

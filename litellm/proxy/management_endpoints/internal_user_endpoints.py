@@ -77,6 +77,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+    validate_key_duration,
     validate_rollover_budget_patch,
     validate_semantic_cache_metadata,
 )
@@ -653,6 +654,7 @@ async def new_user(
             raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
 
         validate_budget_duration(data.budget_duration)
+        validate_key_duration(data.duration)
 
         # Check for duplicate user_id or email
         await _check_duplicate_user_id(data.user_id, prisma_client)
