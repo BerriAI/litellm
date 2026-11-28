@@ -333,6 +333,7 @@ export default function UserInfoView({
           ([field]) => field !== "mcp_servers_and_groups" && field !== "mcp_tool_permissions" && field !== "skills",
         ),
       );
+      userFields.user_id = userData.user_id;
 
       await userUpdateUserCall(
         accessToken,

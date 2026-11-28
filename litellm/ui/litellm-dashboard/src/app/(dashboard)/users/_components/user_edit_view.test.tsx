@@ -115,6 +115,49 @@ describe("UserEditView", () => {
     expect(userIdInput).toHaveValue("user-123");
   });
 
+  it("should ignore autofill mutations on the disabled User ID field and keep userData.user_id on submit", async () => {
+    const onSubmit = vi.fn();
+    renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmit} />);
+
+    const userIdInput = await screen.findByLabelText("User ID");
+    expect(userIdInput).toBeDisabled();
+    expect(userIdInput).toHaveAttribute("readonly");
+    expect(userIdInput).toHaveAttribute("autocomplete", "off");
+    expect(userIdInput).toHaveAttribute("data-lpignore", "true");
+    expect(userIdInput).toHaveAttribute("data-1p-ignore", "true");
+    expect(userIdInput).not.toHaveAttribute("name");
+
+    fireEvent.change(userIdInput, { target: { value: "admin" } });
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
+    expect(onSubmit.mock.calls[0][0].user_id).toBe("user-123");
+  });
+
+  it("should submit the rerendered user_id even if the User ID input was autofilled", async () => {
+    const onSubmit = vi.fn();
+    const { rerender } = renderWithProviders(
+      <UserEditView {...defaultProps} userData={{ ...MOCK_USER_DATA, user_id: "user-a" }} onSubmit={onSubmit} />,
+    );
+
+    await screen.findByLabelText("User ID");
+
+    rerender(
+      <UserEditView {...defaultProps} userData={{ ...MOCK_USER_DATA, user_id: "user-b" }} onSubmit={onSubmit} />,
+    );
+
+    const userIdInput = await screen.findByLabelText("User ID");
+    fireEvent.change(userIdInput, { target: { value: "admin" } });
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+    });
+    expect(onSubmit.mock.calls[0][0].user_id).toBe("user-b");
+  });
+
   it("should not display user ID field when in bulk edit mode", async () => {
     renderWithProviders(<UserEditView {...defaultProps} isBulkEdit={true} />);
 
