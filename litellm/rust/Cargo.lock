@@ -4258,6 +4258,7 @@ dependencies = [
  "litellm-inference",
  "litellm-inference-messages",
  "litellm-license",
+ "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
  "litellm-model-catalog-refresh",
@@ -5158,6 +5159,7 @@ version = "0.1.0"
 dependencies = [
  "jiff",
  "litellm-auth-types",
+ "litellm-llms-types",
  "litellm-python-compat",
  "litellm-secret-value",
  "rstest",

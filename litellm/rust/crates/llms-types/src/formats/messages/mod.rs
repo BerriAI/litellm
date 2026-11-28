@@ -1,3 +1,4 @@
+mod cache_points;
 mod content;
 mod error;
 mod metadata;
@@ -7,6 +8,7 @@ pub mod streaming;
 mod tools;
 mod usage;
 
+pub use cache_points::*;
 pub use content::*;
 pub use error::*;
 pub use metadata::*;

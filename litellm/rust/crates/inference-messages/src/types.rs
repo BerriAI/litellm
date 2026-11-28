@@ -4,7 +4,10 @@ use bytes::Bytes;
 use litellm_host::call::CallOutput;
 use litellm_llms::{
     ErrorDetail,
-    base_llm::messages::context::{MessagesModelCapabilities, MessagesShapeOptions},
+    base_llm::messages::{
+        cache_points::CachePoints,
+        context::{MessagesModelCapabilities, MessagesShapeOptions},
+    },
 };
 use litellm_llms_types::{
     formats::messages::{MessagesRequest, MessagesResponse},
@@ -63,6 +66,10 @@ pub struct MessagesShaping {
     pub capabilities: MessagesModelCapabilities,
     #[serde(default)]
     pub vertex: VertexShaping,
+    /// The deployment's prompt cache breakpoints the route adds itself. A Python host adds its
+    /// own before the call, so it projects none.
+    #[serde(skip)]
+    pub cache_points: CachePoints,
     #[serde(flatten)]
     pub settings: MessagesSettings,
 }
@@ -221,6 +228,7 @@ mod tests {
         }),
         MessagesShaping {
             vertex: VertexShaping::default(),
+            cache_points: Default::default(),
             settings: MessagesSettings {
                 drop_params: true,
                 reasoning_auto_summary: true,

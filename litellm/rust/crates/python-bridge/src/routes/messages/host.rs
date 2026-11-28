@@ -836,6 +836,7 @@ impl MessagesPythonHost {
         let shaping = MessagesShaping {
             capabilities,
             vertex,
+            cache_points: Default::default(),
             settings: MessagesSettings {
                 whole_sse_frames: settings.stream_cost_model.is_some(),
                 inject_stream_cost: settings.stream_cost_model.is_some()

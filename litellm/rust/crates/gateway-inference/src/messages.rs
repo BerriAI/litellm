@@ -14,6 +14,7 @@ use litellm_inference_messages::{
     messages_body, route::Messages,
 };
 use litellm_llms::anthropic::model_capabilities::messages_route_capabilities;
+use litellm_llms::base_llm::messages::cache_points::CachePoints;
 use litellm_llms::vertex_ai::common_utils::supported_regions;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_llms_types::formats::messages::{
@@ -226,8 +227,8 @@ fn is_set(flag: Option<&Spelled<bool>>) -> bool {
 
 /// How the messages route shapes a call to `deployment`: the `configured` settings under its own
 /// `drop_params` and `additional_drop_params`, the capabilities `catalog` and its `model_info`
-/// declare, and for Claude on Vertex AI the model's `supported_regions`, which route the call as
-/// they route it in Python.
+/// declare, the `cache_control_injection_points` the route places, and for Claude on Vertex AI the
+/// model's `supported_regions`, which route the call as they route it in Python.
 fn shaping(
     deployment: &Deployment,
     catalog: &Catalog,
@@ -261,6 +262,11 @@ fn shaping(
                     .and_then(Value::as_bool)
             },
         ),
+        cache_points: params
+            .cache_control_injection_points
+            .as_ref()
+            .and_then(CachePoints::served)
+            .unwrap_or_default(),
         vertex: match deployment.provider() {
             VERTEX_AI => VertexShaping {
                 supported_regions: supported_regions(catalog, &params.model),

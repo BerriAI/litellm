@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, fmt, ops::Deref};
 
 use jiff::civil::Time;
 use litellm_auth_types::{AwsParams, ClaudePlatformParams, ParamSpec, VertexParams};
+use litellm_llms_types::{formats::messages::CacheControlInjectionPoint, recognized::Recognized};
 use litellm_secret_value::SecretValue;
 
 use serde::Deserialize;
@@ -56,6 +57,10 @@ pub struct LitellmParams {
     pub use_chat_completions_api: Option<bool>,
     pub litellm_credential_name: Option<String>,
     pub provider_affinity_header: Option<String>,
+    /// Where LiteLLM adds prompt cache breakpoints to a call. An entry, or a whole value, Python's
+    /// hook reads otherwise than as a point is kept as written.
+    pub cache_control_injection_points:
+        Option<Recognized<Vec<Recognized<CacheControlInjectionPoint>>>>,
     /// The Bedrock Mantle workspace a call is billed to, sent as `anthropic-workspace-id`.
     pub aws_bedrock_project_id: Option<String>,
     #[serde(flatten)]

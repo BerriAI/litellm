@@ -129,6 +129,56 @@ async fn deployment_sampling_params_sit_under_the_client_body(
     assert_eq!(response.status(), 200);
 }
 
+#[tokio::test]
+async fn deployment_cache_points_reach_the_provider_as_breakpoints() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(body_json(json!({
+            "model": "test-model",
+            "max_tokens": 16,
+            "system": [{"type": "text", "text": "be terse", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "hello"}]},
+                {"role": "user", "content": [{"type": "text", "text": "more", "cache_control": {"type": "ephemeral", "ttl": "5m"}}]},
+            ],
+        })))
+        .respond_with(message_response())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let app = support::app_with_litellm_params(
+        "anthropic/test-model",
+        &upstream.uri(),
+        json!({
+            "model": "anthropic/test-model",
+            "cache_control_injection_points": [
+                {"location": "message", "role": "system", "control": {"type": "ephemeral", "ttl": "1h"}},
+                {"location": "message", "index": -1, "control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+        }),
+    );
+
+    let response = support::post(
+        app,
+        "/v1/messages",
+        json!({
+            "model": "public/model",
+            "max_tokens": 16,
+            "system": "be terse",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": "more"},
+            ],
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), 200);
+}
+
 #[rstest]
 #[case::max_tokens("max_tokens", json!(7))]
 #[case::metadata("metadata", json!({"user_id": "deployment-user"}))]
