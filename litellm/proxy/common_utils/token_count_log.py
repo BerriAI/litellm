@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from asyncio import CancelledError
 from collections.abc import Awaitable, Callable, Mapping
@@ -63,7 +64,8 @@ def deployment_model_id(deployment: Mapping[str, object] | None) -> str | None:
 
 
 def _log_token_count(request: _CountRequest, fields: _CountFields, status_code: int) -> None:
-    verbose_proxy_logger.info(
+    verbose_proxy_logger.log(
+        logging.WARNING if 500 <= status_code < 600 else logging.INFO,
         "token count - litellm_call_id=%s request_model=%s model_id=%s model_used=%s input_tokens=%s "
         "count_source=%s status_code=%s",
         _logfmt_value(request.litellm_call_id),

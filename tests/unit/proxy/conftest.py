@@ -472,13 +472,13 @@ TOKEN_COUNT_LOG_FIELDS: Final = (
 def token_count_log_lines(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[Callable[[], tuple[dict[str, object], ...]]]:
-    """The structured fields of every INFO token count line the proxy logger writes while the test runs."""
+    """The structured fields of each token count line the proxy logger writes while the test runs."""
     monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
     with caplog.at_level(logging.INFO, logger=verbose_proxy_logger.name):
         yield lambda: tuple(
             {field: record.__dict__[field] for field in TOKEN_COUNT_LOG_FIELDS}
             for record in caplog.records
-            if record.levelno == logging.INFO and "count_source" in record.__dict__
+            if record.name == verbose_proxy_logger.name and "count_source" in record.__dict__
         )
 
 
