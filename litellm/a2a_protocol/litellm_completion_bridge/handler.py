@@ -32,6 +32,9 @@ from litellm.types.utils import ModelResponse
 # A2A provider configs can scope provider-side state (e.g. LangFlow session memory)
 # per key instead of trusting the client-supplied A2A contextId.
 A2A_USER_API_KEY_HASH_PARAM: Final = "litellm_a2a_user_api_key_hash"
+# Internal litellm_params key carrying the inbound AgentCore runtime session header
+# from request.headers so transformation.py can scope it to the calling principal.
+A2A_RUNTIME_SESSION_ID_PARAM: Final = "litellm_a2a_runtime_session_id"
 
 # Agent metadata fields stored in litellm_params that are not valid litellm.acompletion() kwargs
 _AGENT_ONLY_PARAMS: Final = frozenset(
@@ -43,6 +46,7 @@ _AGENT_ONLY_PARAMS: Final = frozenset(
         AGENT_CARD_PATH_PARAM,
         A2A_PROTOCOL_VERSION_PARAM,
         A2A_USER_API_KEY_HASH_PARAM,
+        A2A_RUNTIME_SESSION_ID_PARAM,
     }
 )
 

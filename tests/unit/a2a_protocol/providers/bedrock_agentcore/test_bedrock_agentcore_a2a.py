@@ -700,3 +700,201 @@ class TestStreamingContentType:
             ]
 
         assert events == expected_events
+
+
+class TestGenericJsonRpcAndSessionResolution:
+    """Verify generic JSON-RPC task/resubscribe methods and session header scoping."""
+
+    def test_supports_jsonrpc_only_for_native_jsonrpc_provider(self) -> None:
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+        from litellm.a2a_protocol.providers.langflow.config import LangFlowA2AConfig
+        from litellm.a2a_protocol.providers.pydantic_ai_agents.config import (
+            PydanticAIProviderConfig,
+        )
+        from litellm.a2a_protocol.providers.watsonx_orchestrate.config import (
+            WatsonxOrchestrateA2AConfig,
+        )
+
+        assert BedrockAgentCoreA2AConfig().supports_jsonrpc() is True
+        assert PydanticAIProviderConfig().supports_jsonrpc() is False
+        assert LangFlowA2AConfig().supports_jsonrpc() is False
+        assert WatsonxOrchestrateA2AConfig().supports_jsonrpc() is False
+
+    def test_session_resolution_precedence_and_principal_scoping(self) -> None:
+        from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+            A2A_RUNTIME_SESSION_ID_PARAM,
+            A2A_USER_API_KEY_HASH_PARAM,
+        )
+
+        inbound_session = "inbound-runtime-session-00000000000000001"
+        top_context_id = "top-level-context-id-0000000000000000002"
+        configured_session = "configured-runtime-session-000000000000003"
+
+        header_params = {
+            **SAMPLE_LITELLM_PARAMS,
+            A2A_USER_API_KEY_HASH_PARAM: KEY_HASH,
+            A2A_RUNTIME_SESSION_ID_PARAM: inbound_session,
+            "runtimeSessionId": configured_session,
+        }
+        assert _session_header(_params_with_context(CONTEXT_ID), header_params) == _scoped(CONTEXT_ID, KEY_HASH)
+        assert _session_header({"id": "task-1"}, header_params) == _scoped(inbound_session, KEY_HASH)
+
+        no_header_params = {
+            **SAMPLE_LITELLM_PARAMS,
+            A2A_USER_API_KEY_HASH_PARAM: KEY_HASH,
+            "runtimeSessionId": configured_session,
+        }
+        assert _session_header({"contextId": top_context_id}, no_header_params) == _scoped(top_context_id, KEY_HASH)
+        assert _session_header({"id": "task-1"}, no_header_params) == configured_session
+
+    def test_invalid_inbound_runtime_session_rejected(self) -> None:
+        import litellm
+        from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+            A2A_RUNTIME_SESSION_ID_PARAM,
+        )
+
+        litellm_params = {**SAMPLE_LITELLM_PARAMS, A2A_RUNTIME_SESSION_ID_PARAM: "too-short"}
+        with pytest.raises(litellm.BadRequestError, match="Invalid AgentCore runtime session id"):
+            _session_header({"id": "task-1"}, litellm_params)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method", "params"),
+        [
+            ("tasks/get", {"id": "task-1"}),
+            ("tasks/list", {"contextId": "ctx-000000000000000000000000000000001"}),
+            ("tasks/cancel", {"id": "task-1"}),
+            ("agent/getAuthenticatedExtendedCard", {}),
+        ],
+    )
+    async def test_handle_jsonrpc_signs_and_forwards_method(
+        self, httpx_transport: None, method: str, params: dict
+    ) -> None:
+        from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+            A2A_RUNTIME_SESSION_ID_PARAM,
+            A2A_USER_API_KEY_HASH_PARAM,
+        )
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+
+        inbound_session = "session-for-task-method-0000000000000001"
+        litellm_params = {
+            "model": SAMPLE_MODEL,
+            "custom_llm_provider": "bedrock",
+            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "aws_region_name": "us-west-2",
+            A2A_USER_API_KEY_HASH_PARAM: KEY_HASH,
+            A2A_RUNTIME_SESSION_ID_PARAM: inbound_session,
+        }
+
+        with respx.mock(assert_all_called=True) as router:
+            route = router.post(url__regex=r".*/invocations.*").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": "req-99",
+                        "result": {"id": "task-1", "status": {"state": "canceled"}},
+                    },
+                )
+            )
+            result = await BedrockAgentCoreA2AConfig().handle_jsonrpc(
+                method=method,
+                request_id="req-99",
+                params=params,
+                litellm_params=litellm_params,
+                agent_extra_headers={"x-custom-trace": "trace-123"},
+            )
+
+        sent = route.calls.last.request
+        sent_body = json.loads(sent.content)
+        assert sent_body == {"jsonrpc": "2.0", "method": method, "id": "req-99", "params": params}
+        assert sent.headers["Authorization"].startswith("AWS4-HMAC-SHA256 ")
+        assert sent.headers[SESSION_HEADER] == _scoped(inbound_session, KEY_HASH)
+        assert sent.headers["x-custom-trace"] == "trace-123"
+        assert result["result"] == {"id": "task-1", "status": {"state": "canceled"}}
+
+    @pytest.mark.asyncio
+    async def test_handle_jsonrpc_relays_4xx_jsonrpc_error(self, httpx_transport: None) -> None:
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+
+        with respx.mock(assert_all_called=True) as router:
+            router.post(url__regex=r".*/invocations.*").mock(
+                return_value=httpx.Response(
+                    404,
+                    json={"jsonrpc": "2.0", "id": "req-404", "error": {"code": -32001, "message": "Task not found"}},
+                )
+            )
+            result = await BedrockAgentCoreA2AConfig().handle_jsonrpc(
+                method="tasks/get",
+                request_id="req-404",
+                params={"id": "missing"},
+                litellm_params=SAMPLE_LITELLM_PARAMS,
+            )
+
+        assert result["error"] == {"code": -32001, "message": "Task not found"}
+
+    @pytest.mark.asyncio
+    async def test_handle_jsonrpc_streaming_sends_tasks_resubscribe(self, httpx_transport: None) -> None:
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+
+        sse_body = (
+            'data: {"jsonrpc": "2.0", "id": "req-sub", "result": {"kind": "status-update", "final": false}}\n\n'
+            'data: {"jsonrpc": "2.0", "id": "req-sub", "result": {"kind": "status-update", "final": true}}\n\n'
+        )
+        with respx.mock(assert_all_called=True) as router:
+            route = router.post(url__regex=r".*/invocations.*").mock(
+                return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
+            )
+            events = [
+                event
+                async for event in BedrockAgentCoreA2AConfig().handle_jsonrpc_streaming(
+                    method="tasks/resubscribe",
+                    request_id="req-sub",
+                    params={"id": "task-1"},
+                    litellm_params=SAMPLE_LITELLM_PARAMS,
+                )
+            ]
+
+        sent_body = json.loads(route.calls.last.request.content)
+        assert sent_body == {
+            "jsonrpc": "2.0",
+            "method": "tasks/resubscribe",
+            "id": "req-sub",
+            "params": {"id": "task-1"},
+        }
+        assert len(events) == 2
+        assert events[1]["result"] == {"kind": "status-update", "final": True}
+
+    @pytest.mark.asyncio
+    async def test_handle_jsonrpc_streaming_relays_4xx_jsonrpc_error(self, httpx_transport: None) -> None:
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+
+        with respx.mock(assert_all_called=True) as router:
+            router.post(url__regex=r".*/invocations.*").mock(
+                return_value=httpx.Response(
+                    404,
+                    json={"jsonrpc": "2.0", "error": {"code": -32001, "message": "Task not found"}},
+                )
+            )
+            events = [
+                event
+                async for event in BedrockAgentCoreA2AConfig().handle_jsonrpc_streaming(
+                    method="tasks/resubscribe",
+                    request_id="req-sub",
+                    params={"id": "missing"},
+                    litellm_params=SAMPLE_LITELLM_PARAMS,
+                )
+            ]
+
+        assert events == [{"jsonrpc": "2.0", "error": {"code": -32001, "message": "Task not found"}}]
