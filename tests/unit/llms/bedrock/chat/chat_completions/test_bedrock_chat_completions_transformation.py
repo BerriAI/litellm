@@ -147,6 +147,21 @@ def test_complete_url_is_runtime_openai_chat_completions(monkeypatch):
     assert url == "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions"
 
 
+def test_complete_url_empty_api_base_uses_configured_region(monkeypatch):
+    # An empty api_base is unset, not an explicit endpoint with an empty region.
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
+    url = cfg.get_complete_url(
+        api_base="",
+        api_key=None,
+        model="us.xai.grok-4.6",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
+
+
 def test_complete_url_appends_to_openai_v1_base():
     cfg = AmazonBedrockRuntimeChatCompletionsConfig()
     url = cfg.get_complete_url(
