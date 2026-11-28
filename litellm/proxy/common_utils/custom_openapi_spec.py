@@ -417,6 +417,76 @@ class CustomOpenAPISpec:
             return openapi_schema
 
     @staticmethod
+    def _nullable(property_schema: JsonValue) -> JsonValue:
+        options: Final = CustomOpenAPISpec._as_array(CustomOpenAPISpec._as_object(property_schema).get("anyOf"))
+        return property_schema if {"type": "null"} in options else {"anyOf": [property_schema, {"type": "null"}]}
+
+    @staticmethod
+    def _optional_at_load(def_schema: JsonValue, filled: frozenset[str]) -> JsonValue:
+        obj: Final = CustomOpenAPISpec._as_object(def_schema)
+        properties: Final = CustomOpenAPISpec._as_object(obj.get("properties"))
+        required: Final = [name for name in CustomOpenAPISpec._as_array(obj.get("required")) if name not in filled]
+        rest: Final = {key: value for key, value in obj.items() if key != "required"}
+        relaxed: Final[JsonObject] = {
+            **rest,
+            "properties": {
+                name: CustomOpenAPISpec._nullable(prop) if name in filled else prop for name, prop in properties.items()
+            },
+        }
+        return {**relaxed, "required": required} if required else relaxed
+
+    @staticmethod
+    def _config_yaml_input_schema(schema: JsonObject, filled_by_def: Mapping[str, frozenset[str]]) -> JsonObject:
+        defs: Final = CustomOpenAPISpec._as_object(schema.get("$defs"))
+        return {
+            **schema,
+            "$defs": {
+                name: CustomOpenAPISpec._optional_at_load(d, filled_by_def[name]) if name in filled_by_def else d
+                for name, d in defs.items()
+            },
+        }
+
+    @staticmethod
+    def add_config_yaml_schema(openapi_schema: JsonObject, description: str) -> None:
+        from litellm.proxy._types import ConfigYAML, ModelInfo, ModelParams
+
+        # Fields the models' before-validators fill in at load, so a config may omit them or set them to null.
+        filled_at_load: Final = MappingProxyType(
+            {
+                ModelParams.__name__: frozenset({"model_info"}),
+                ModelInfo.__name__: frozenset({"id", "mode", "base_model"}),
+            }
+        )
+        schema: Final = CustomOpenAPISpec.get_pydantic_schema(ConfigYAML) or {}
+        CustomOpenAPISpec.add_schema_to_components(
+            openapi_schema, "ConfigYAML", CustomOpenAPISpec._config_yaml_input_schema(schema, filled_at_load)
+        )
+        paths: Final = CustomOpenAPISpec._as_object(openapi_schema.setdefault("paths", {}))
+        path_item: Final = CustomOpenAPISpec._as_object(paths.setdefault("/config/yaml", {}))
+        _ = path_item.setdefault(
+            "get",
+            {
+                "tags": ["config.yaml"],
+                "summary": "Config Yaml Endpoint",
+                "description": description,
+                "operationId": "config_yaml_endpoint_config_yaml_get",
+                "requestBody": {
+                    "required": True,
+                    "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ConfigYAML"}}},
+                },
+                "responses": {
+                    "200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}},
+                    "422": {
+                        "description": "Validation Error",
+                        "content": {
+                            "application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}
+                        },
+                    },
+                },
+            },
+        )
+
+    @staticmethod
     def add_llm_api_request_schema_body(
         openapi_schema: JsonObject,
     ) -> JsonObject:
