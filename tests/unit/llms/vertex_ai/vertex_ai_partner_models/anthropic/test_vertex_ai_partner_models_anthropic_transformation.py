@@ -640,6 +640,67 @@ async def test_vertex_ai_anthropic_prompt_caching_does_not_add_beta_header(
     assert "anthropic_beta" not in json.loads(request.content)
 
 
+@pytest.mark.parametrize(
+    "web_search_params",
+    [
+        pytest.param({"web_search_options": {}}, id="web_search_options"),
+        pytest.param(
+            {"tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}]},
+            id="web_search_tool",
+        ),
+    ],
+)
+def test_vertex_ai_anthropic_web_search_keeps_caller_beta(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    local_beta_headers_config: None,
+    web_search_params: dict[str, object],
+) -> None:
+    from litellm.main import vertex_partner_models_chat_completion
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(
+        vertex_partner_models_chat_completion._credentials_project_mapping,
+        ("test-vertex-credentials", "test-project"),
+        (Credentials(token="test-vertex-token"), "test-project"),
+    )
+    route: Final = respx_mock.post(
+        "https://us-east5-aiplatform.googleapis.com/v1/projects/test-project/locations/us-east5/"
+        "publishers/anthropic/models/claude-opus-4-5@20251101:rawPredict"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg-betas",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-4-5-20251101",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 4, "output_tokens": 1},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="vertex_ai/claude-opus-4-5@20251101",
+        messages=[{"role": "user", "content": "Hello"}],
+        vertex_project="test-project",
+        vertex_location="us-east5",
+        vertex_credentials="test-vertex-credentials",
+        max_retries=0,
+        extra_headers={"anthropic-beta": "interleaved-thinking-2025-05-14"},
+        **web_search_params,
+    )
+
+    assert route.call_count == 1
+    request: Final = route.calls[0].request
+    assert set(request.headers["anthropic-beta"].split(",")) == {
+        "interleaved-thinking-2025-05-14",
+        "web-search-2025-03-05",
+    }
+
+
 def test_vertex_ai_partner_models_anthropic_forwards_prompt_caching_scope_beta_header(
     local_beta_headers_config: None,
 ) -> None:
