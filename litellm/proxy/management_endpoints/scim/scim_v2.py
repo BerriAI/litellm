@@ -48,6 +48,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
     _delete_cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    delete_cache_key_object,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     delete_cache_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
