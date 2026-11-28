@@ -61,6 +61,8 @@ def reasoning_content_from_thinking_blocks(
 
 
 ENCRYPTED_REASONING_SIGNATURE_PREFIX: Final = "litellm_encrypted_reasoning:"
+TURN_SETTINGS_MARKER: Final = "litellm_turn_settings:"
+TURN_SETTINGS_END: Final = ";"
 
 
 def encrypted_reasoning_signature(encrypted_content: str) -> str:
@@ -77,10 +79,18 @@ def _carries_encrypted_reasoning(signature: object) -> bool:
     return isinstance(signature, str) and signature.startswith(ENCRYPTED_REASONING_SIGNATURE_PREFIX)
 
 
+def _without_turn_settings(payload: str) -> str:
+    """A signature may carry `litellm_turn_settings:<settings>;` ahead of the blob. The settings never contain `;`."""
+    if not payload.startswith(TURN_SETTINGS_MARKER):
+        return payload
+    _, separator, blob = payload.partition(TURN_SETTINGS_END)
+    return blob if separator else ""
+
+
 def encrypted_content_from_signature(signature: object) -> str | None:
     if not isinstance(signature, str) or not _carries_encrypted_reasoning(signature):
         return None
-    return signature.removeprefix(ENCRYPTED_REASONING_SIGNATURE_PREFIX) or None
+    return _without_turn_settings(signature.removeprefix(ENCRYPTED_REASONING_SIGNATURE_PREFIX)) or None
 
 
 def _encrypted_reasoning_field(block: Mapping[str, object]) -> object:
