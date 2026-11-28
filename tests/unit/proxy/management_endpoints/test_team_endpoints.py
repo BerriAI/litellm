@@ -9425,6 +9425,18 @@ def test_transform_teams_to_deleted_records():
         assert isinstance(record2["model_max_budget"], str)
 
 
+def test_transform_teams_to_deleted_records_leaves_a_null_router_settings_to_the_column_default() -> None:
+    team: Final = LiteLLM_TeamTable(team_id="team-null-router", metadata={"owner": "a"}, router_settings=None)
+
+    records: Final = _transform_teams_to_deleted_records(
+        teams=[team],
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", api_key="sk-admin"),
+    )
+
+    assert "router_settings" not in records[0]
+    assert json.loads(records[0]["metadata"]) == {"owner": "a"}
+
+
 def test_transform_teams_to_deleted_records_empty_list():
     user_api_key_dict = UserAPIKeyAuth(
         user_id="user-123",

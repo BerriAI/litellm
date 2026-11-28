@@ -5821,6 +5821,18 @@ def test_transform_verification_tokens_to_deleted_records_keeps_organization_id(
     assert records[0]["organization_id"] == "org-finops"
 
 
+def test_transform_verification_tokens_to_deleted_records_leaves_a_null_router_settings_to_the_column_default() -> None:
+    key: Final = LiteLLM_VerificationToken(token="hashed-token-null-router", metadata={"owner": "a"}, router_settings=None)
+
+    records: Final = _transform_verification_tokens_to_deleted_records(
+        keys=[key],
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-1", api_key="sk-admin"),
+    )
+
+    assert "router_settings" not in records[0]
+    assert json.loads(records[0]["metadata"]) == {"owner": "a"}
+
+
 def test_transform_verification_tokens_to_deleted_records_empty_list():
     user_api_key_dict = UserAPIKeyAuth(
         user_id="user-123",
