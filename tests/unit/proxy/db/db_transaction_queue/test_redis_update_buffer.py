@@ -11,7 +11,11 @@ from redis.exceptions import RedisError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
-from litellm.constants import REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY
+from litellm.constants import (
+    REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY,
+    REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT,
+    REDIS_SPEND_LOGS_PARK_BATCH_MAX_BYTES,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
@@ -942,6 +946,75 @@ async def test_a_non_finite_daily_spend_buffered_in_redis_drains_as_zero(spend: 
     assert drained is not None
     assert drained[PARKED_DAILY_KEY]["spend"] == 0.0
     assert drained[PARKED_DAILY_KEY]["api_requests"] == 2
+
+
+class _RecordingListRedis(_ListRedis):
+    def __init__(self, fail_on_push: int | None = None) -> None:
+        super().__init__()
+        self.pushed_bytes: list[int] = []
+        self.fail_on_push = fail_on_push
+
+    async def async_rpush_and_trim(self, key: str, values: list[str], max_len: int) -> int:
+        if len(self.pushed_bytes) == self.fail_on_push:
+            raise ConnectionError("redis went away mid-park")
+        self.pushed_bytes.append(sum(len(value) for value in values))
+        return await super().async_rpush_and_trim(key, values, max_len)
+
+
+def _prompt_carrying_rows(count: int) -> list[dict[str, object]]:
+    return [{"request_id": f"req-{index}", "messages": "x" * 400_000} for index in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_parking_a_large_queue_never_sends_one_oversized_push():
+    redis: Final = _RecordingListRedis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis)
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+    rows: Final = _prompt_carrying_rows(10)
+
+    assert await buffer.store_spend_logs_in_redis(rows) is True
+
+    assert len(redis.pushed_bytes) > 1
+    assert max(redis.pushed_bytes) <= REDIS_SPEND_LOGS_PARK_BATCH_MAX_BYTES
+    parked: Final = await buffer.get_spend_logs_from_redis_buffer(limit=100)
+    assert [row["request_id"] for row in parked] == [row["request_id"] for row in rows]
+
+
+@pytest.mark.asyncio
+async def test_parking_many_small_rows_is_sliced_by_the_dequeue_count():
+    redis: Final = _RecordingListRedis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis)
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+    rows: Final = [{"request_id": f"req-{index}"} for index in range(REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT * 2 + 1)]
+
+    assert await buffer.store_spend_logs_in_redis(rows) is True
+
+    assert len(redis.pushed_bytes) == 3
+    assert len(redis.rows) == len(rows)
+
+
+@pytest.mark.asyncio
+async def test_a_park_that_fails_midway_reports_failure_so_the_caller_keeps_the_rows():
+    redis: Final = _RecordingListRedis(fail_on_push=1)
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis)
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+
+    assert await buffer.store_spend_logs_in_redis(_prompt_carrying_rows(10)) is False
+
+    assert len(redis.pushed_bytes) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_row_cap_still_drops_the_oldest_rows_across_slices():
+    redis: Final = _RecordingListRedis()
+    buffer: Final = RedisUpdateBuffer(redis_cache=redis)
+    buffer.should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+    rows: Final = _prompt_carrying_rows(10)
+
+    assert await buffer.store_spend_logs_in_redis(rows, max_rows=3) is True
+
+    parked: Final = await buffer.get_spend_logs_from_redis_buffer(limit=100)
+    assert [row["request_id"] for row in parked] == ["req-7", "req-8", "req-9"]
 
 
 @pytest.mark.asyncio

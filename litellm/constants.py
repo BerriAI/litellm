@@ -519,6 +519,7 @@ MAX_REDIS_BUFFER_DEQUEUE_COUNT: Final = get_env_int("MAX_REDIS_BUFFER_DEQUEUE_CO
 REDIS_SPEND_LOGS_BUFFER_KEY: Final = "litellm_spend_logs_buffer"
 REDIS_SPEND_LOGS_BUFFER_MAX_ROWS: Final = 100000
 REDIS_SPEND_LOGS_BUFFER_DEQUEUE_COUNT: Final = 1000
+REDIS_SPEND_LOGS_PARK_BATCH_MAX_BYTES: Final = max(1, get_env_int("REDIS_SPEND_LOGS_PARK_BATCH_MAX_BYTES", 1_000_000))
 # Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
 LITELLM_ASYNCIO_QUEUE_MAXSIZE: Final = get_env_int("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000)
 TOOL_POLICY_CACHE_TTL_SECONDS: Final = get_env_int("TOOL_POLICY_CACHE_TTL_SECONDS", 60)
