@@ -42,6 +42,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     BedrockMantleAuthMixin,
     drop_schema_keywords_gemma_4_rejects,
     mantle_supports_all_json_schema_keywords,
+    split_mantle_region_prefix,
     with_values_gemma_4_accepts,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -328,6 +329,11 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     @staticmethod
     def _model_map_lookup_name(model: str) -> str:
         return model.split("/")[-1].removeprefix("openai.")
+
+    def _model_map_row_keys(self, model: str) -> tuple[str, ...]:
+        region, bare = split_mantle_region_prefix(model)
+        regional: Final = (f"bedrock_mantle/{region}/{bare}",) if region else ()
+        return (*regional, f"bedrock_mantle/{bare}")
 
     def map_openai_params(
         self,

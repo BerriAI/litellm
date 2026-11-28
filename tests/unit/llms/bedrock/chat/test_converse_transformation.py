@@ -10118,8 +10118,8 @@ def test_supports_sampling_params_prefixed_and_anthropic_fallback(monkeypatch: p
         "global.custom-test-reasoning-model",
         {"supports_sampling_params": False},
     )
-    assert AmazonConverseConfig._supports_sampling_params("custom-test-reasoning-model") is False
-    assert AmazonConverseConfig._supports_sampling_params("anthropic.claude-custom-unregistered") is True
+    assert AmazonConverseConfig.supports_sampling_params("custom-test-reasoning-model") is False
+    assert AmazonConverseConfig.supports_sampling_params("anthropic.claude-custom-unregistered") is True
 
 
 @pytest.mark.usefixtures("fake_provider_credentials")

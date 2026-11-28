@@ -6,19 +6,22 @@ falls back to the Chat Completions bridge and rides Converse.
 
 import json
 import logging
+from collections.abc import Mapping
 from importlib.resources import files
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import patch
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils import model_cost_table
 from litellm.llms.bedrock.common_utils import bedrock_supports_openai_responses
 from litellm.llms.bedrock.responses.transformation import (
     BedrockOpenAIResponsesConfig,
     _without_disabled_reasoning_effort,
 )
 from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -623,3 +626,151 @@ class TestRemoteImageInlining:
         )
         assert [i.get("type") or i.get("role") for i in body["input"]] == ["message", "user"]
         assert body["input"][1]["content"] == [{"type": "input_image", "image_url": self._INLINED}]
+
+
+_NO_SAMPLING_MODEL: Final = "us.example.no-sampling-model"
+_NO_SAMPLING_SHAPES: Final = (
+    pytest.param(_NO_SAMPLING_MODEL, _NO_SAMPLING_MODEL, id="row-for-the-same-profile"),
+    pytest.param("global.example.no-sampling-model", _NO_SAMPLING_MODEL, id="row-for-another-region-profile"),
+    pytest.param(_NO_SAMPLING_MODEL, f"chat_completions/{_NO_SAMPLING_MODEL}", id="chat-completions-route"),
+)
+
+
+def _converse_row(flags: Mapping[str, bool]) -> dict[str, object]:
+    return {
+        "litellm_provider": "bedrock_converse",
+        "mode": "chat",
+        "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+        **flags,
+    }
+
+
+@pytest.mark.parametrize(("row_key", "model"), _NO_SAMPLING_SHAPES)
+def test_sampling_flagged_row_drops_temperature_and_top_p_and_keeps_the_rest(
+    row_key: str, model: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(model_cost_table.published(), row_key, _converse_row({"supports_sampling_params": False}))
+    params: Final = _cfg().map_openai_params(
+        response_api_optional_params={"temperature": 0.2, "top_p": 0.5, "max_output_tokens": 64},
+        model=model,
+        drop_params=True,
+    )
+    assert params == {"max_output_tokens": 64}
+
+
+@pytest.mark.parametrize("param", ["temperature", "top_p"])
+def test_sampling_flagged_row_refuses_each_sampling_param_without_drop_params(
+    param: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        model_cost_table.published(), _NO_SAMPLING_MODEL, _converse_row({"supports_sampling_params": False})
+    )
+    with pytest.raises(
+        litellm.UnsupportedParamsError,
+        match=f"doesn't support {param}: its model map entry sets `supports_sampling_params",
+    ):
+        _cfg().map_openai_params(
+            response_api_optional_params={"temperature": 0.5} if param == "temperature" else {"top_p": 0.5},
+            model=_NO_SAMPLING_MODEL,
+            drop_params=False,
+        )
+
+
+_ROUTED_NO_SAMPLING_MODEL: Final = f"bedrock/{_NO_SAMPLING_MODEL}"
+
+
+def _flagged_row_allowing_effort_none(monkeypatch: pytest.MonkeyPatch, allows_none: bool) -> None:
+    monkeypatch.setitem(
+        model_cost_table.published(),
+        _NO_SAMPLING_MODEL,
+        _converse_row({"supports_sampling_params": False, "supports_none_reasoning_effort": allows_none}),
+    )
+
+
+def test_sampling_flagged_row_keeps_sampling_at_an_effort_none_it_allows(monkeypatch: pytest.MonkeyPatch) -> None:
+    _flagged_row_allowing_effort_none(monkeypatch, allows_none=True)
+    request: Final[ResponsesAPIOptionalRequestParams] = {
+        "temperature": 0.2,
+        "top_p": 0.5,
+        "reasoning": {"effort": "none"},
+    }
+
+    params: Final = _cfg().map_openai_params(
+        response_api_optional_params=request, model=_ROUTED_NO_SAMPLING_MODEL, drop_params=False
+    )
+
+    assert params == request
+
+
+def test_sampling_flagged_row_keeps_sampling_at_effort_none_behind_the_chat_completions_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _flagged_row_allowing_effort_none(monkeypatch, allows_none=True)
+    monkeypatch.setattr(litellm, "bedrock_converse_models", {*litellm.bedrock_converse_models, _NO_SAMPLING_MODEL})
+    request: Final[ResponsesAPIOptionalRequestParams] = {"temperature": 0.2, "reasoning": {"effort": "none"}}
+
+    params: Final = _cfg().map_openai_params(
+        response_api_optional_params=request, model=f"chat_completions/{_NO_SAMPLING_MODEL}", drop_params=False
+    )
+
+    assert params == request
+
+
+@pytest.mark.parametrize(
+    ("default_effort", "kept"),
+    [("none", {"temperature": 0.2}), (None, {})],
+    ids=["row-defaults-to-effort-none", "row-declares-no-default"],
+)
+def test_sampling_flagged_row_without_a_requested_effort_follows_the_row_default(
+    default_effort: str | None, kept: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    default: Final = {} if default_effort is None else {"default_reasoning_effort": default_effort}
+    monkeypatch.setitem(
+        model_cost_table.published(),
+        _NO_SAMPLING_MODEL,
+        {
+            **_converse_row({"supports_sampling_params": False, "supports_none_reasoning_effort": True}),
+            **default,
+        },
+    )
+
+    params: Final = _cfg().map_openai_params(
+        response_api_optional_params={"temperature": 0.2}, model=_ROUTED_NO_SAMPLING_MODEL, drop_params=True
+    )
+
+    assert params == kept
+
+
+@pytest.mark.parametrize(
+    ("effort", "allows_none", "dropped_to"),
+    [("low", True, {"reasoning": {"effort": "low"}}), ("none", False, {})],
+    ids=["other-effort", "effort-none-the-row-does-not-allow"],
+)
+def test_sampling_flagged_row_drops_or_refuses_temperature_unless_effort_none_is_allowed(
+    effort: Literal["low", "none"], allows_none: bool, dropped_to: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _flagged_row_allowing_effort_none(monkeypatch, allows_none=allows_none)
+    request: Final[ResponsesAPIOptionalRequestParams] = {"temperature": 0.2, "reasoning": {"effort": effort}}
+    with pytest.raises(litellm.UnsupportedParamsError, match="doesn't support temperature"):
+        _cfg().map_openai_params(
+            response_api_optional_params=request, model=_ROUTED_NO_SAMPLING_MODEL, drop_params=False
+        )
+
+    params: Final = _cfg().map_openai_params(
+        response_api_optional_params=request, model=_ROUTED_NO_SAMPLING_MODEL, drop_params=True
+    )
+
+    assert params == dropped_to
+
+
+@pytest.mark.parametrize("flags", [{}, {"supports_sampling_params": True}], ids=["no-flag", "flag-true"])
+def test_row_that_does_not_refuse_sampling_forwards_both_params(
+    flags: Mapping[str, bool], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(model_cost_table.published(), _NO_SAMPLING_MODEL, _converse_row(flags))
+    params: Final = _cfg().map_openai_params(
+        response_api_optional_params={"temperature": 0.2, "top_p": 0.5},
+        model=_NO_SAMPLING_MODEL,
+        drop_params=False,
+    )
+    assert params == {"temperature": 0.2, "top_p": 0.5}
