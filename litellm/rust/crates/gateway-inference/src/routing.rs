@@ -132,7 +132,7 @@ pub async fn attempt<H: Host, A: RouteAttempt>(
     route: &A,
     attempt: &Attempt,
 ) -> Result<Served<Attempted<A::Output>>, AttemptFailure<Error>> {
-    let (output, recorded) = record::attempt(route.run(attempt)).await;
+    let (output, recorded) = record::attempt(&attempt.deployment, route.run(attempt)).await;
     let mut output = output.map_err(|error| attempt_failure(attempt, error))?;
     let Some((chunks, read)) = A::held(&mut output) else {
         let total_tokens = A::counts(&output).map_or(0, Counts::total);
@@ -383,7 +383,7 @@ where
         }
         // Python closes the attempt a take-over supersedes before the take-over runs.
         let own = ended_on(failed.closed());
-        let closed = std::mem::take(&mut routed.output.response.1);
+        let closed = routed.output.response.1.clone();
         record::write(|entries| entries.failed_attempts.push(closed));
         let routing = Some(Routing::served(&routed));
         let answered = match take_over {
@@ -504,25 +504,24 @@ pub(crate) fn timeout(
         .or(configured.or(router))
 }
 
-/// The deployment `deployment_id` names in the router's registry, with the timeout its attempt
-/// ran under, `configured` being the process `request_timeout` its route reads.
+/// `deployment` with the timeout its attempt ran under, `configured` being the process
+/// `request_timeout` its route reads.
 pub(crate) fn served_deployment<H: Host>(
     gateway: &Gateway<H>,
-    deployment_id: &str,
+    deployment: &Deployment,
     streamed: bool,
     configured: Option<Duration>,
-) -> Option<ServedDeployment> {
-    let deployment = gateway.router.registry().deployment(deployment_id)?;
-    Some(ServedDeployment {
+) -> ServedDeployment {
+    ServedDeployment {
         model: deployment.params.model.clone(),
         api_base: deployment.params.api_base.clone(),
         timeout: timeout(
-            &deployment,
+            deployment,
             gateway.router.settings().timeout,
             streamed,
             configured,
         ),
-    })
+    }
 }
 
 pub(crate) fn api_key(deployment: &Deployment) -> Option<String> {
@@ -718,7 +717,8 @@ mod tests {
             &self,
             attempt: &Attempt,
         ) -> Result<Served<Attempted<A::Output>>, AttemptFailure<Error>> {
-            let (sent, recorded) = record::attempt(self.route.run(attempt)).await;
+            let (sent, recorded) =
+                record::attempt(&attempt.deployment, self.route.run(attempt)).await;
             let sent = (
                 sent.map_err(|error| attempt_failure(attempt, error))?,
                 recorded,

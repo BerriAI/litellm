@@ -142,7 +142,7 @@ fn outcome(ended: Ended) -> Outcome {
 }
 
 fn deployment(entries: &CallState) -> Option<&litellm_router_core::Deployment> {
-    entries.served()?.deployment.as_deref()
+    Some(&entries.served()?.deployment)
 }
 
 /// The provider the served deployment was called through, as Python's `custom_llm_provider`
@@ -495,7 +495,9 @@ mod tests {
         let read = on_a_call(|entries| {
             entries.attempt = Some(litellm_gateway_inference::record::AttemptRecord {
                 cost: settled,
-                ..Default::default()
+                ..litellm_gateway_inference::record::AttemptRecord::on(
+                    litellm_gateway_inference::record::test_deployment("d1"),
+                )
             });
             read(entries, Field::Cost)
         });
@@ -513,7 +515,9 @@ mod tests {
                 .failed_attempts
                 .push(litellm_gateway_inference::record::AttemptRecord {
                     cost: Some(Settled::Priced(Box::new(priced(0.25)))),
-                    ..Default::default()
+                    ..litellm_gateway_inference::record::AttemptRecord::on(
+                        litellm_gateway_inference::record::test_deployment("d1"),
+                    )
                 });
             read(entries, Field::Cost)
         });
@@ -604,7 +608,7 @@ mod tests {
     fn served(response_id: Option<&str>) -> ServedCall {
         ServedCall {
             model_group: "claude".to_owned(),
-            deployment: None,
+            deployment: litellm_gateway_inference::record::test_deployment("d1"),
             response_id: response_id.map(str::to_owned),
             usage: None,
             first_event: None,

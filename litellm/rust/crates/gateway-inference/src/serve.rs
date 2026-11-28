@@ -115,21 +115,21 @@ where
         let endpoint = build(body)?;
         let routed = routing::call(gateway, identity, E::OP, E::PATH, &model, &endpoint).await?;
         let routing = Routing::served(&routed);
+        let reported = ReportedModel::of(&model, &routed);
+        let (mut output, recorded) = routed.output.response;
         let deployment = routing::served_deployment(
             gateway,
-            &routed.deployment_id,
+            &recorded.deployment,
             streamed,
-            E::configured_timeout(gateway, &routed.deployment_id),
+            E::configured_timeout(gateway, &recorded.deployment.id),
         );
-        let reported = ReportedModel::of(&model, &routed);
         let served = ServedBy {
-            deployment: gateway.router.registry().deployment(&routed.deployment_id),
+            deployment: recorded.deployment.clone(),
             model_group: routed.model_group,
         };
-        let (mut output, recorded) = routed.output.response;
         let stream = E::held(&mut output).is_some();
         record::write(|entries| {
-            entries.routed(routing, deployment, recorded);
+            entries.routed(routing, Some(deployment), recorded);
             if stream {
                 entries.stream_response = true;
             }
@@ -165,15 +165,16 @@ fn error_response<H: Host, E: Endpoint>(
     let streamed = record::read(|entries| entries.stream_timeout).unwrap_or(false);
     let timeout = raised_on
         .filter(|_| error.raised_by_provider())
-        .and_then(|deployment_id| {
+        .and_then(|deployment_id| gateway.router.registry().deployment(deployment_id))
+        .and_then(|deployment| {
             routing::served_deployment(
                 gateway,
-                deployment_id,
+                &deployment,
                 streamed,
-                E::configured_timeout(gateway, deployment_id),
+                E::configured_timeout(gateway, &deployment.id),
             )
-        })
-        .and_then(|deployment| deployment.timeout);
+            .timeout
+        });
     ErrorResponse {
         in_handler: error.in_handler(),
         timeout,

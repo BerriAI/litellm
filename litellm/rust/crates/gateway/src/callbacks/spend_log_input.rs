@@ -110,13 +110,13 @@ struct Metadata<'a> {
     user_api_key_request_route: &'static str,
     model_group: &'a str,
     model_info: ModelInfo<'a>,
-    deployment: Option<&'a str>,
+    deployment: &'a str,
     status: &'static str,
 }
 
 #[derive(Serialize)]
 struct ModelInfo<'a> {
-    id: Option<&'a str>,
+    id: &'a str,
 }
 
 #[derive(Serialize)]
@@ -127,7 +127,7 @@ struct LitellmParams<'a> {
 
 #[derive(Serialize)]
 struct Kwargs<'a> {
-    model: Option<&'a str>,
+    model: &'a str,
     custom_llm_provider: Option<&'a str>,
     litellm_call_id: Option<&'a str>,
     litellm_trace_id: &'a str,
@@ -168,8 +168,8 @@ pub(super) struct Served<'a> {
 
 /// The `spend_log_input` document of `served`.
 pub(super) fn success(served: &Served<'_>) -> Option<serde_json::Value> {
-    let deployment = served.call.deployment.as_deref();
-    let model = deployment.map(|deployment| deployment.params.model.as_str());
+    let deployment = &served.call.deployment;
+    let model = deployment.params.model.as_str();
     let charged = served.charged;
     let now = SystemTime::now();
     let row = Row {
@@ -199,14 +199,12 @@ pub(super) fn success(served: &Served<'_>) -> Option<serde_json::Value> {
             user_api_key_end_user_id: charged.end_user_id.as_deref(),
             user_api_key_request_route: served.route,
             model_group: &served.call.model_group,
-            model_info: ModelInfo {
-                id: deployment.map(|deployment| deployment.id.as_str()),
-            },
+            model_info: ModelInfo { id: &deployment.id },
             deployment: model,
             status: "success",
         },
         litellm_params: LitellmParams {
-            api_base: deployment.and_then(|deployment| deployment.params.api_base.as_deref()),
+            api_base: deployment.params.api_base.as_deref(),
             litellm_call_id: served.call_id,
         },
         kwargs: Kwargs {
@@ -272,7 +270,7 @@ mod tests {
     fn call(first_event: Option<SystemTime>) -> ServedCall {
         ServedCall {
             model_group: "claude".to_owned(),
-            deployment: Some(deployment()),
+            deployment: deployment(),
             response_id: Some("msg_1".to_owned()),
             usage: Some(ChatCompletionsUsage {
                 prompt_tokens: 108,
