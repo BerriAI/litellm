@@ -15392,7 +15392,7 @@
       "configInfo": {
         "title": "Request/Response Data Not Available",
         "description": "To view request and response details, enable prompt storage in your LiteLLM configuration by adding the following to your <code>proxy_config.yaml</code> file, or toggle the setting in <strong>Admin Settings → Logging Settings</strong>.",
-        "note": "Note: This will only affect new requests after the configuration change."
+        "note": "Note: This will only affect new requests after the configuration change. If payloads are still missing, check the per-key and per-team \"Store prompts in spend logs\" toggles — a key or team opt-out overrides this global setting."
       },
       "tools": {
         "fallbackName": "Tool {{index}}",

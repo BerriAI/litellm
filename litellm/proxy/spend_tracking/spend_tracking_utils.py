@@ -1441,10 +1441,17 @@ def should_store_prompts_and_responses_in_spend_logs(metadata: Mapping[str, obje
     from litellm.proxy.proxy_server import general_settings
     from litellm.secret_managers.main import get_secret_bool
 
-    if metadata is not None and any(
-        _disables_prompt_storage(metadata.get(field)) for field in _TENANT_PROMPT_STORAGE_FIELDS
-    ):
-        return False
+    if metadata is not None:
+        for field in _TENANT_PROMPT_STORAGE_FIELDS:
+            if _disables_prompt_storage(metadata.get(field)):
+                # A per-key/per-team opt-out silently defeats the global
+                # setting and writes "{}" payload columns; without this line
+                # operators cannot tell why payloads stopped (see #53263).
+                verbose_proxy_logger.debug(
+                    "Spend logs: prompt storage disabled for this request by %s.store_prompts_in_spend_logs, overriding general_settings.store_prompts_in_spend_logs",
+                    field,
+                )
+                return False
 
     # Check general_settings (from DB or proxy_config.yaml)
     store_prompts_value: Final = general_settings.get("store_prompts_in_spend_logs")
