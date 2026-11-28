@@ -970,6 +970,42 @@ def release_io_token_reservation(
     return release_in_background(_async_increment_all(usage, refunds))
 
 
+def take_io_token_reservation(
+    metadata: MutableMapping[str, object],  # mutable-ok: the request metadata the reservation was stashed in
+) -> Mapping[str, object] | None:
+    """Move the reservation just stashed in ``metadata`` out of it, so the pick of another deployment for the
+    same request neither clears nor settles it."""
+    if ITPM_RESERVED_KEY not in metadata:
+        return None
+    return MappingProxyType({key: metadata.pop(key) for key in IO_TOKEN_RESERVATION_KEYS if key in metadata})
+
+
+def _claim_held_reservation(held: Mapping[str, object], purpose: str = "") -> bool:
+    reservation_id: Final = held.get(IO_TOKEN_RESERVATION_ID_KEY)
+    return isinstance(reservation_id, str) and _SETTLED_RESERVATIONS.claim(f"{reservation_id}{purpose}")
+
+
+async def async_settle_held_io_token_reservation(
+    usage: RouterUsage, held: Mapping[str, object], kwargs: Mapping[str, object] | None, response_obj: object
+) -> None:
+    """Charge the used tokens to the counters of ``held``, once. A reservation an earlier failed attempt
+    already refunded holds nothing, so the usage is charged in full."""
+    reservation: Final = _extract_reservation(held)
+    _, _, itpm_counter, otpm_counter = reservation
+    if itpm_counter is None and otpm_counter is None:
+        return
+    billable_input, completion_tokens, usage_resolved = _resolve_reconcile_usage_tokens(kwargs, response_obj)
+    if not usage_resolved or not _claim_held_reservation(held, purpose=":charged"):
+        return
+    basis: Final = reservation if _claim_held_reservation(held) else (0, 0, itpm_counter, otpm_counter)
+    await _async_increment_all(usage, _reconcile_increments(basis, billable_input, completion_tokens))
+
+
+async def async_refund_held_io_token_reservation(usage: RouterUsage, held: Mapping[str, object]) -> None:
+    if _claim_held_reservation(held):
+        await _async_increment_all(usage, _refunds(_extract_reservation(held)))
+
+
 def _refunds(reservation: _Reservation) -> tuple[tuple[UsageCounter, int], ...]:
     itpm_reserved, otpm_reserved, itpm_counter, otpm_counter = reservation
     held: Final = ((itpm_counter, itpm_reserved), (otpm_counter, otpm_reserved))

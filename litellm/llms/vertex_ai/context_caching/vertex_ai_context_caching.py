@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -153,6 +154,13 @@ def _prompt_cache_min_tokens(models: Sequence[str], custom_llm_provider: str) ->
     )
 
 
+_GEMINI_4_OR_NEWER_MODEL: Final = re.compile(r"(?:^|/)gemini-[4-9](?:[.-]|$)", re.IGNORECASE)
+
+
+def _is_implicit_caching_only(model: str) -> bool:
+    return _GEMINI_4_OR_NEWER_MODEL.search(model) is not None
+
+
 def _conversation_turns_start(
     cached_messages: Sequence[AllMessageValues],
     model: str,
@@ -234,6 +242,8 @@ def _context_caching_skip_reason(
     cache_model: str,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
 ) -> str | None:
+    if _is_implicit_caching_only(cache_model) or _is_implicit_caching_only(deployment_model):
+        return f"Vertex AI context caching: {cache_model} caches implicitly and rejects cachedContents."
     if not cached_messages_end_on_supported_turn(cached_messages):
         return (
             "Vertex AI context caching: cached message block ends on a model turn once "

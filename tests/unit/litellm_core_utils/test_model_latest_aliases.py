@@ -13,7 +13,7 @@ from litellm.litellm_core_utils.model_latest_aliases import (
 )
 
 
-@pytest.mark.parametrize("model", ("", "kimi-latest", "openai/unknown", "gemini/gemini-pro-latest"))
+@pytest.mark.parametrize("model", ("", "kimi-latest", "openai/unknown", "mistral/mistral-large-latest"))
 def test_non_alias_expansion_keeps_the_requested_name(model: str) -> None:
     assert expand_model_latest_alias(model) == (model,)
 
@@ -85,7 +85,7 @@ def test_alias_resolution_is_scoped_to_the_owning_provider() -> None:
         ("gpt-luna-latest", "anthropic", False),
         ("moonshot/kimi-latest", None, True),
         ("kimi-latest", None, False),
-        ("gemini/gemini-pro-latest", None, False),
+        ("mistral/mistral-large-latest", None, False),
         ("", None, False),
         ("openai/unknown-model", None, False),
     ),

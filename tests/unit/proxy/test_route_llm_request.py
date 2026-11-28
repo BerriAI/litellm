@@ -41,6 +41,7 @@ from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
     ADAPTIVE_ROUTER_RESPONSE_HEADER,
 )
+from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from litellm.types.router import RouterErrors, RouterGeneralSettings, RouterRateLimitError
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -1505,7 +1506,9 @@ async def test_route_request_pass_through_never_falls_back_to_the_global_model_f
     with respx.mock(assert_all_called=False) as respx_mock:
         requested: Final = respx_mock.post(
             "https://api.openai.com/v1/chat/completions", json__model="gpt-pass-through"
-        ).mock(return_value=httpx.Response(404, json={"error": {"message": "no such model", "code": "model_not_found"}}))
+        ).mock(
+            return_value=httpx.Response(404, json={"error": {"message": "no such model", "code": "model_not_found"}})
+        )
         not_granted: Final = respx_mock.post(
             "https://api.openai.com/v1/chat/completions", json__model="gpt-not-granted"
         ).mock(return_value=_chat_completion_response("gpt-not-granted"))
@@ -2739,7 +2742,9 @@ async def test_missing_vector_store_files_do_not_cool_down_the_team_deployment(
 
     with respx.mock(assert_all_called=True) as respx_mock:
         file_route: Final = respx_mock.route(method=method, url=f"{_TEAM_OPENAI_BASE}{path}").mock(
-            return_value=httpx.Response(404, json={"error": {"message": "No file found", "type": "invalid_request_error"}})
+            return_value=httpx.Response(
+                404, json={"error": {"message": "No file found", "type": "invalid_request_error"}}
+            )
         )
         chat_route: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/chat/completions").mock(
             return_value=_chat_completion_response("gpt-5.4-mini")
@@ -2968,7 +2973,6 @@ async def test_registered_store_credential_wins_over_the_team_deployment_on_a_mo
     assert route.calls.last.request.headers["Authorization"] == "Bearer store-credential-key"
 
 
-
 @pytest.mark.asyncio
 async def test_a_model_less_file_call_leaves_the_team_credential_headers_intact_for_later_file_uploads(
     monkeypatch: pytest.MonkeyPatch,
@@ -3031,6 +3035,7 @@ async def test_a_model_less_file_call_leaves_the_team_credential_headers_intact_
     assert upload.calls.last.request.headers["Content-Type"].startswith("multipart/form-data")
     assert upload.calls.last.request.headers["X-Team"] == "team-a"
 
+
 @pytest.fixture(autouse=True)
 def discard_cached_user_config_routers() -> Iterator[None]:
     yield
@@ -3081,7 +3086,9 @@ async def _settle_router_accounting() -> None:
             await GLOBAL_LOGGING_WORKER.flush()
         finally:
             await GLOBAL_LOGGING_WORKER.stop()
-        while pending := {task for task in asyncio.all_tasks() - {asyncio.current_task()} if not _is_periodic_sync(task)}:
+        while pending := {
+            task for task in asyncio.all_tasks() - {asyncio.current_task()} if not _is_periodic_sync(task)
+        }:
             _, still_running = await asyncio.wait(pending, timeout=5)
             assert not still_running, still_running
         if GLOBAL_LOGGING_WORKER.pending_count == 0:
@@ -3685,3 +3692,327 @@ async def test_a_request_a_hook_turned_streaming_runs_unbounded_under_a_header_t
 
     assert chunks
     assert deadline is not None and deadline.allows_wait(10**9)
+
+
+def _latest_alias_router_with_limits(latest_limit: Mapping[str, int], **settings: object) -> tuple[litellm.Router, str]:
+    from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
+
+    alias, target = next(iter(get_model_latest_aliases()["openai"].items()))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "latest",
+                "litellm_params": {"model": f"openai/{alias}", "api_key": "test-api-key", **latest_limit},
+                "model_info": {"id": "latest-id"},
+            },
+            {
+                "model_name": "pinned",
+                "litellm_params": {"model": f"openai/{target}", "api_key": "test-api-key"},
+                "model_info": {"id": "pinned-id"},
+            },
+        ],
+        **settings,  # pyright: ignore[reportArgumentType]  # router settings under test
+    )
+    return router, target
+
+
+_DEPLOYMENT_LIMIT_ENFORCERS: Final = (
+    {"routing_strategy": "usage-based-routing-v2"},
+    {"optional_pre_call_checks": ["enforce_model_rate_limits"]},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("settings", _DEPLOYMENT_LIMIT_ENFORCERS)
+async def test_a_rerouted_latest_alias_request_counts_against_the_rpm_of_the_latest_deployment(
+    settings: Mapping[str, object],
+) -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router, target = _latest_alias_router_with_limits({"rpm": 3}, **settings)
+    first: Final = {"model": "latest", "metadata": {}}
+    await _serve_latest_alias_from_versioned_model_group(first, router)
+    assert first["model"] == "pinned"
+    admitted: Final = first["metadata"]["latest_alias_requested_deployment"]
+    assert admitted["id"] == "latest-id"
+    assert admitted["model"] != f"openai/{target}"
+    refused: Final = await asyncio.gather(
+        *(
+            _serve_latest_alias_from_versioned_model_group({"model": "latest", "metadata": {}}, router)
+            for _ in range(3)
+        ),
+        return_exceptions=True,
+    )
+    assert any(isinstance(outcome, litellm.RateLimitError) for outcome in refused)
+    direct: Final = {"model": "pinned", "metadata": {}}
+    await _serve_latest_alias_from_versioned_model_group(direct, router)
+    assert direct == {"model": "pinned", "metadata": {}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("settings", _DEPLOYMENT_LIMIT_ENFORCERS)
+async def test_validating_a_latest_alias_as_a_fallback_leaves_the_rpm_of_the_latest_deployment_uncounted(
+    settings: Mapping[str, object],
+) -> None:
+    from litellm.proxy.auth.auth_checks import is_valid_fallback_model
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router, _ = _latest_alias_router_with_limits({"rpm": 1}, **settings)
+    for _ in range(3):
+        assert await is_valid_fallback_model(model="latest", llm_router=router, user_model=None)
+    dispatched: Final = {"model": "latest", "metadata": {}}
+    await _serve_latest_alias_from_versioned_model_group(dispatched, router)
+    assert dispatched["model"] == "pinned"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("settings", _DEPLOYMENT_LIMIT_ENFORCERS)
+async def test_tokens_of_a_rerouted_latest_alias_request_count_against_the_tpm_of_the_latest_deployment(
+    settings: Mapping[str, object],
+) -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+    from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
+    from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+
+    router, target = _latest_alias_router_with_limits({"tpm": 50}, **settings)
+    data: Final = {"model": "latest", "metadata": {}}
+    await _serve_latest_alias_from_versioned_model_group(data, router)
+    success: Final = {
+        "litellm_params": {"metadata": data["metadata"]},
+        "standard_logging_object": {
+            "model_group": "pinned",
+            "model_id": "pinned-id",
+            "total_tokens": 80,
+            "hidden_params": {"litellm_model_name": f"openai/{target}"},
+        },
+    }
+    counters: Final = [
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, (LowestTPMLoggingHandler_v2, ModelRateLimitingCheck))
+    ]
+    assert counters, "the router registered no deployment limit callback"
+    for callback in counters:
+        await callback.async_log_success_event(success, None, None, None)
+    with pytest.raises(litellm.RateLimitError):
+        await _serve_latest_alias_from_versioned_model_group({"model": "latest", "metadata": {}}, router)
+
+
+@pytest.mark.asyncio
+async def test_tokens_of_a_rerouted_latest_alias_request_count_in_the_daily_window_of_the_latest_deployment() -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router, target = _latest_alias_router_with_limits(
+        {"tpd": 50, "daily_reset_time": "12:00"}, optional_pre_call_checks=["enforce_model_rate_limits"]
+    )
+    checks: Final = [callback for callback in litellm.callbacks if isinstance(callback, ModelRateLimitingCheck)]
+    assert checks, "the router registered no deployment limit callback"
+    for check in checks:
+        check.clock = lambda: datetime(2026, 1, 2, 6, 0, tzinfo=timezone.utc)
+    data: Final = {"model": "latest", "metadata": {}}
+    await _serve_latest_alias_from_versioned_model_group(data, router)
+    success: Final = {
+        "litellm_params": {"metadata": data["metadata"]},
+        "standard_logging_object": {
+            "model_group": "pinned",
+            "model_id": "pinned-id",
+            "total_tokens": 80,
+            "hidden_params": {"litellm_model_name": f"openai/{target}"},
+        },
+    }
+    for check in checks:
+        await check.async_log_success_event(success, None, None, None)
+    with pytest.raises(litellm.RateLimitError):
+        await _serve_latest_alias_from_versioned_model_group({"model": "latest", "metadata": {}}, router)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("extra", "route_type"),
+    [({"user_config": {"model_list": []}}, "acompletion"), ({}, "_aresponses_websocket")],
+)
+async def test_a_latest_alias_request_the_shared_router_cannot_admit_per_turn_or_does_not_serve_is_not_rerouted(
+    extra: Mapping[str, object], route_type: str
+) -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router, _ = _latest_alias_router_with_limits({})
+    data: Final = {"model": "latest", "metadata": {}, **extra}
+    await _serve_latest_alias_from_versioned_model_group(data, router, route_type)
+    assert data == {"model": "latest", "metadata": {}, **extra}
+
+
+@pytest.mark.asyncio
+async def test_a_latest_alias_whose_deployments_are_all_blocked_is_refused_instead_of_rerouted() -> None:
+    from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    alias, target = next(iter(get_model_latest_aliases()["openai"].items()))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "latest",
+                "litellm_params": {"model": f"openai/{alias}", "api_key": "test-api-key"},
+                "model_info": {"id": "latest-id", "blocked": True},
+            },
+            {
+                "model_name": "pinned",
+                "litellm_params": {"model": f"openai/{target}", "api_key": "test-api-key"},
+                "model_info": {"id": "pinned-id"},
+            },
+        ]
+    )
+    data: Final = {"model": "latest", "metadata": {}}
+
+    with pytest.raises(litellm.PermissionDeniedError) as refusal:
+        await _serve_latest_alias_from_versioned_model_group(data, router)
+
+    assert refusal.value.status_code == 403
+    assert data == {"model": "latest", "metadata": {}}
+
+
+def _io_token_limited_latest_alias_router(itpm: int) -> litellm.Router:
+    router, _ = _latest_alias_router_with_limits({"itpm": itpm}, optional_pre_call_checks=["enforce_model_rate_limits"])
+    return router
+
+
+def _latest_alias_request(words: int) -> dict[str, object]:
+    return {"model": "latest", "messages": [{"role": "user", "content": "hello " * words}], "metadata": {}}
+
+
+def _rate_limit_check() -> ModelRateLimitingCheck:
+    return next(callback for callback in litellm.callbacks if isinstance(callback, ModelRateLimitingCheck))
+
+
+@pytest.mark.asyncio
+async def test_a_rerouted_latest_alias_request_larger_than_the_itpm_of_the_latest_deployment_is_refused() -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router: Final = _io_token_limited_latest_alias_router(itpm=50)
+    with pytest.raises(litellm.RateLimitError):
+        await _serve_latest_alias_from_versioned_model_group(_latest_alias_request(words=200), router)
+    small: Final = _latest_alias_request(words=5)
+    await _serve_latest_alias_from_versioned_model_group(small, router)
+    assert small["model"] == "pinned"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("words", "failed_attempts", "prompt_tokens", "refused_after"),
+    [
+        pytest.param(5, 0, 45, True, id="used_tokens_replace_the_reservation"),
+        pytest.param(30, 0, 1, False, id="unused_reserved_tokens_are_returned"),
+        pytest.param(5, 1, 45, True, id="used_tokens_are_charged_after_a_failed_attempt_refunded_the_reservation"),
+        pytest.param(5, 1, 20, False, id="used_tokens_are_charged_once"),
+    ],
+)
+async def test_input_tokens_of_a_rerouted_latest_alias_request_settle_on_the_itpm_of_the_latest_deployment(
+    words: int, failed_attempts: int, prompt_tokens: int, refused_after: bool
+) -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router: Final = _io_token_limited_latest_alias_router(itpm=50)
+    data: Final = _latest_alias_request(words=words)
+    await _serve_latest_alias_from_versioned_model_group(data, router)
+    callback_kwargs: Final = {"litellm_params": {"metadata": data["metadata"]}}
+    check: Final = _rate_limit_check()
+    for _ in range(failed_attempts):
+        await check.async_log_failure_event(callback_kwargs, None, None, None)
+    served: Final = {
+        **callback_kwargs,
+        "standard_logging_object": {"prompt_tokens": prompt_tokens, "completion_tokens": 1},
+    }
+    await check.async_log_success_event(served, None, None, None)
+    await check.async_log_success_event(served, None, None, None)
+    following: Final = (
+        await asyncio.gather(
+            _serve_latest_alias_from_versioned_model_group(_latest_alias_request(words=words), router),
+            return_exceptions=True,
+        )
+    )[0]
+    assert isinstance(following, litellm.RateLimitError) is refused_after
+
+
+@pytest.mark.asyncio
+async def test_a_failed_rerouted_latest_alias_request_returns_its_input_tokens_to_the_latest_deployment() -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    router: Final = _io_token_limited_latest_alias_router(itpm=50)
+    data: Final = _latest_alias_request(words=40)
+    await _serve_latest_alias_from_versioned_model_group(data, router)
+    with pytest.raises(litellm.RateLimitError):
+        await _serve_latest_alias_from_versioned_model_group(_latest_alias_request(words=40), router)
+    await _rate_limit_check().async_log_failure_event(
+        {"litellm_params": {"metadata": data["metadata"]}}, None, None, None
+    )
+    retried: Final = _latest_alias_request(words=40)
+    await _serve_latest_alias_from_versioned_model_group(retried, router)
+    assert retried["model"] == "pinned"
+
+
+@pytest.mark.asyncio
+async def test_a_rerouted_latest_alias_request_refused_before_dispatch_returns_its_input_tokens() -> None:
+    from litellm.proxy.route_llm_request import (
+        ProxyMissingRequiredParamError,
+        _serve_latest_alias_from_versioned_model_group,
+        route_request,
+    )
+
+    router: Final = _io_token_limited_latest_alias_router(itpm=50)
+    with pytest.raises(ProxyMissingRequiredParamError):
+        await route_request(_latest_alias_request(words=40), router, None, "arerank")
+    retried: Final = _latest_alias_request(words=40)
+    await _serve_latest_alias_from_versioned_model_group(retried, router)
+    assert retried["model"] == "pinned"
+
+
+def _latest_alias_and_two_targets() -> tuple[str, str, str]:
+    from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
+
+    (alias, target), (other_alias, _) = tuple(get_model_latest_aliases()["openai"].items())[:2]
+    return alias, target, other_alias
+
+
+def _deployment(name: str, model: str, **info: str) -> dict[str, object]:
+    return {
+        "model_name": name,
+        "litellm_params": {"model": f"openai/{model}", "api_key": "test-api-key"},
+        "model_info": {"id": f"{name}-{model}", **info},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pinned", "served_by"),
+    [
+        pytest.param(["first", "second"], "first", id="first_config_order_group_of_the_versioned_model"),
+        pytest.param([], "latest", id="no_group_of_the_versioned_model"),
+        pytest.param(["team-owned"], "latest", id="team_owned_group_is_not_a_target"),
+        pytest.param(["mixed"], "latest", id="latest_group_pointing_at_two_models"),
+        pytest.param(["first", "latest+unrelated"], "latest", id="latest_group_also_serving_an_unrelated_model"),
+        pytest.param(["first+unrelated", "second"], "second", id="group_also_serving_an_unrelated_model_is_skipped"),
+    ],
+)
+async def test_a_latest_alias_request_is_served_by_the_shared_model_group_of_its_versioned_model(
+    pinned: list[str], served_by: str
+) -> None:
+    from litellm.proxy.route_llm_request import _serve_latest_alias_from_versioned_model_group
+
+    alias, target, other_alias = _latest_alias_and_two_targets()
+    router: Final = litellm.Router(
+        model_list=[
+            _deployment("latest", alias),
+            *(_deployment("latest", other_alias) for name in pinned if name == "mixed"),
+            *(_deployment("latest", "unrelated-model") for name in pinned if name == "latest+unrelated"),
+            *(
+                _deployment(name, target, **({"team_id": "team-1"} if name == "team-owned" else {}))
+                for name in pinned
+                if name != "latest+unrelated"
+            ),
+            *(_deployment(name, "unrelated-model") for name in pinned if name == "first+unrelated"),
+        ]
+    )
+    data: Final = {"model": "latest", "metadata": {}}
+    await _serve_latest_alias_from_versioned_model_group(data, router)
+    assert data["model"] == served_by
+    assert data["metadata"].get("latest_alias_requested_model_group") == (None if served_by == "latest" else "latest")

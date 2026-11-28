@@ -31,10 +31,13 @@ from litellm.litellm_core_utils.batch_utils import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_attributes
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
-from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model, get_bedrock_cross_region_inference_regions
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
+from litellm.proxy.common_utils.latest_alias_model_group import (
+    expand_latest_alias_model_groups,
+    requested_latest_alias_model_group,
+)
 from litellm.proxy.hooks.model_budget_shared_windows import (
     PROXY_SHARED_WINDOWS,
     LocalTTLCache,
@@ -534,7 +537,7 @@ def _usable_entry(entry: str, raw_budget_config: object) -> ResolvedModelBudget 
 def team_model_budget_entries(
     model: str, team_model_max_budget: Mapping[str, object], key_model_max_budget: Mapping[str, object] | None
 ) -> Mapping[str, object]:
-    models: Final = expand_model_latest_alias(model)
+    models: Final = expand_latest_alias_model_groups(model)
     if len(models) == 1:
         return _single_team_model_budget_entries(model, team_model_max_budget, key_model_max_budget)
     entries: Final = tuple(
@@ -839,7 +842,7 @@ def _entity_model_budget_entries(
         return ()
     return tuple(
         (entity_type, entity_id, resolved)
-        for candidate in expand_model_latest_alias(model)
+        for candidate in expand_latest_alias_model_groups(model)
         if (
             resolved := resolve_model_budget(
                 model=candidate,
@@ -1143,7 +1146,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         model: str,
         exceeded_message: str,
     ) -> bool:
-        for candidate in expand_model_latest_alias(model):
+        for candidate in expand_latest_alias_model_groups(model):
             await self._is_single_entity_within_model_budget(
                 entity_type=entity_type,
                 entity_id=entity_id,
@@ -1379,8 +1382,15 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped callback kwargs
             response_obj,  # pyright: ignore[reportUnknownArgumentType]  # untyped callback response
         )
+        rerouted_from: Final = requested_latest_alias_model_group(
+            _metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+            model,
+        )
         charges: Final = (
-            ((model,), max(response_cost - sum(cost for _, cost in delegated_costs), 0.0)),
+            (
+                (model, *rerouted_from),
+                max(response_cost - sum(cost for _, cost in delegated_costs), 0.0),
+            ),
             *((budget_names_of(delegated_model), cost) for delegated_model, cost in delegated_costs),
         )
 
