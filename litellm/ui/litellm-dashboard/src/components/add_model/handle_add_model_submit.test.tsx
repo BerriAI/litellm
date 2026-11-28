@@ -52,6 +52,21 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.litellmParamsObj.cache_creation_input_token_cost_above_1hr).toBeCloseTo(0.000006, 12);
   });
 
+  it("sends the per-request price as entered, without per-million conversion", async () => {
+    const formValues = {
+      model_mappings: [{ public_name: "ocr-model", litellm_model: "hosted_vllm/ocr-model" }],
+      model_name: "hosted_vllm/ocr-model",
+      custom_pricing: true,
+      pricing_model: "per_request",
+      input_cost_per_query: "0.05",
+    };
+
+    const [deployment] = (await prepareModelAddRequest({ ...formValues }, "token", null))!;
+
+    expect(deployment.litellmParamsObj.input_cost_per_query).toBe(0.05);
+    expect(deployment.litellmParamsObj).not.toHaveProperty("pricing_model");
+  });
+
   it("converts the pricing once when several models are added together", async () => {
     const formValues = {
       model_mappings: [

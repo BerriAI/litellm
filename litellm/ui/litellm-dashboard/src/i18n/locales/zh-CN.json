@@ -19192,7 +19192,8 @@
       "ptuRatePlaceholder": "例如 2.00",
       "pricingModels": {
         "perToken": "每百万 Token",
-        "perSecond": "每秒"
+        "perSecond": "每秒",
+        "perRequest": "按请求"
       },
       "invalidPositiveNumber": "请输入有效的正数。",
       "title": "高级设置",
@@ -19229,6 +19230,8 @@
       "cacheWriteCost1hHint": "TTL 为 1 小时的提示词缓存写入费率，即 Anthropic 的 cache_control ttl 1h。留空时，已知模型使用定价表中的 1 小时费率，否则使用缓存写入成本。",
       "cacheWriteCost1hPlaceholder": "默认使用定价表中的 1 小时费率，否则使用缓存写入成本",
       "costPerSecond": "每秒成本",
+      "costPerRequest": "每次请求成本",
+      "costPerRequestPlaceholder": "例如 0.05",
       "useInPassThrough": "用于透传路由",
       "useInPassThroughHint": "允许在透传路由中使用这些凭据。<docs>了解更多</docs>",
       "kubernetesPodDiscovery": "Kubernetes Pod 发现",

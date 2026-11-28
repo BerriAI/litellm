@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, decisions_request_price
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.llm_cost_calc.per_request_pricing import deployment_request_price
 from litellm.litellm_core_utils.llm_cost_calc.pricing_bridge import rate_card
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.tool_fields import DropPolicy
@@ -746,8 +747,11 @@ def _has_explicit_positive_cost(deployments: Sequence[DeploymentTypedDict]) -> b
         if model_id is None:
             continue
         raw_entry = as_str_mapping(litellm.model_cost.get(model_id)) or _EMPTY_COST_ENTRY
-        if _prices_tokens_above_zero(_deployment_rate_card(deployment)) or _is_positive_cost(
-            _deployment_query_price(deployment["litellm_params"], raw_entry)
+        flat_request_price = deployment_request_price(model_id) if isinstance(model_id, str) else None
+        if (
+            _prices_tokens_above_zero(_deployment_rate_card(deployment))
+            or _is_positive_cost(_deployment_query_price(deployment["litellm_params"], raw_entry))
+            or _is_positive_cost(flat_request_price)
         ):
             return True
     return False

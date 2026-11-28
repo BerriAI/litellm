@@ -169,6 +169,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           key === "input_cost_per_token" ||
           key === "output_cost_per_token" ||
           key === "input_cost_per_second" ||
+          key === "input_cost_per_query" ||
           key === "cache_read_input_token_cost" ||
           key === "cache_creation_input_token_cost" ||
           key === "cache_creation_input_token_cost_above_1hr"

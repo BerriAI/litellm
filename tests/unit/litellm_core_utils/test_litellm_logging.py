@@ -1620,15 +1620,15 @@ def test_logging_success_path_reads_custom_pydantic_hidden_params() -> None:
 
 
 class TestZeroCostDiagnostic:
-    DEPLOYMENT_ID: Final = "lit7898-query-only-priced-deployment"
-    MODEL_GROUP: Final = "query-only-priced-chat"
-    QUERY_ONLY_PRICING: Final = {"input_cost_per_query": 0.00042}
+    DEPLOYMENT_ID: Final = "lit7898-reasoning-only-priced-deployment"
+    MODEL_GROUP: Final = "reasoning-only-priced-chat"
+    REASONING_ONLY_PRICING: Final = {"output_cost_per_reasoning_token": 0.00042}
     PER_SECOND_PRICING: Final = {"cost_per_second": 0.00042}
     FREE_PRICING: Final = {"input_cost_per_token": 0, "output_cost_per_token": 0}
 
-    @pytest.fixture(params=["query_only", "free"])
+    @pytest.fixture(params=["reasoning_only", "free"])
     def deployment_pricing(self, request: pytest.FixtureRequest) -> Iterator[Mapping[str, float]]:
-        pricing: Final = self.QUERY_ONLY_PRICING if request.param == "query_only" else self.FREE_PRICING
+        pricing: Final = self.REASONING_ONLY_PRICING if request.param == "reasoning_only" else self.FREE_PRICING
         litellm.register_model(model_cost={self.DEPLOYMENT_ID: pricing}, persist_across_reloads=False)
         try:
             yield pricing
@@ -1880,6 +1880,23 @@ class TestZeroCostDiagnostic:
             return
         self._assert_flagged(logging_obj, caplog)
 
+    def test_query_priced_deployment_bills_its_request_price_without_a_diagnostic(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        query_pricing: Final = {"input_cost_per_query": 0.00042}
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        litellm.register_model(model_cost={self.DEPLOYMENT_ID: query_pricing}, persist_across_reloads=False)
+        try:
+            logging_obj: Final = self._logging_obj(query_pricing)
+            with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+                cost: Final = logging_obj.response_cost_calculator(result=self._response(usage))
+
+            assert cost == pytest.approx(0.00042)
+            assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
+            assert self._zero_cost_warnings(caplog) == []
+        finally:
+            litellm.model_cost.pop(self.DEPLOYMENT_ID, None)
+
     def test_retry_that_prices_clears_the_diagnostic_and_a_later_zero_cost_is_recorded_silently(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -1887,11 +1904,11 @@ class TestZeroCostDiagnostic:
         priced_pricing: Final = {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
         usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
         litellm.register_model(
-            model_cost={self.DEPLOYMENT_ID: self.QUERY_ONLY_PRICING, priced_id: priced_pricing},
+            model_cost={self.DEPLOYMENT_ID: self.REASONING_ONLY_PRICING, priced_id: priced_pricing},
             persist_across_reloads=False,
         )
         try:
-            logging_obj: Final = self._logging_obj(self.QUERY_ONLY_PRICING)
+            logging_obj: Final = self._logging_obj(self.REASONING_ONLY_PRICING)
             with caplog.at_level(logging.WARNING, logger="LiteLLM"):
                 assert logging_obj.response_cost_calculator(result=self._response(usage)) == 0.0
                 self._assert_flagged(logging_obj, caplog)
@@ -1900,7 +1917,7 @@ class TestZeroCostDiagnostic:
                 assert logging_obj.response_cost_calculator(result=self._response(usage)) == pytest.approx(5e-05)
                 assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
 
-                self._route_to_deployment(logging_obj, self.QUERY_ONLY_PRICING)
+                self._route_to_deployment(logging_obj, self.REASONING_ONLY_PRICING)
                 assert logging_obj.response_cost_calculator(result=self._response(usage)) == 0.0
 
             assert logging_obj.model_call_details["zero_cost_diagnostic"]["reason"] == "missing_pricing_key"
@@ -1915,7 +1932,7 @@ class TestZeroCostDiagnostic:
         dated_model: Final = "lit7898-nano-2026-03-17"
         requested_model: Final = "lit7898-nano"
         usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
-        cost_map_entry: Final = {"litellm_provider": "openai", "mode": "chat", **self.QUERY_ONLY_PRICING}
+        cost_map_entry: Final = {"litellm_provider": "openai", "mode": "chat", **self.REASONING_ONLY_PRICING}
         litellm.register_model(
             model_cost={dated_model: cost_map_entry, requested_model: cost_map_entry}, persist_across_reloads=False
         )
@@ -2011,7 +2028,7 @@ class TestZeroCostDiagnostic:
         litellm.register_model(
             model_cost={
                 router_model_id: {**self.FREE_PRICING, "litellm_provider": "azure", "mode": "chat"},
-                served_model: {**self.QUERY_ONLY_PRICING, "litellm_provider": "azure", "mode": "chat"},
+                served_model: {**self.REASONING_ONLY_PRICING, "litellm_provider": "azure", "mode": "chat"},
             },
             persist_across_reloads=False,
         )

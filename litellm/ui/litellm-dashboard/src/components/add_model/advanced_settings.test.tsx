@@ -1,4 +1,5 @@
 import { act, fireEvent, render, waitFor, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useFormContext } from "react-hook-form";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MountedFormHost } from "../../../tests/mounted-form-host";
@@ -90,6 +91,19 @@ describe("AdvancedSettings", () => {
 
     expect(await screen.findByLabelText(/^Cache Write Cost \(per 1M tokens\)/)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Cache Write Cost \(1 hour, per 1M tokens\)/)).toBeInTheDocument();
+  });
+
+  it("asks for one cost per request instead of token costs when Per Request is chosen", async () => {
+    renderAdvancedSettings();
+    act(() => {
+      fireEvent.click(screen.getByText("Advanced Settings"));
+    });
+    fireEvent.click(await screen.findByRole("switch", { name: "Custom Pricing" }));
+    await userEvent.click(await screen.findByRole("combobox", { name: "Pricing Model" }));
+    await userEvent.click(await screen.findByRole("option", { name: "Per Request" }));
+
+    expect(await screen.findByLabelText("Cost Per Request")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Input Cost/)).not.toBeInTheDocument();
   });
 
   it("hides every PTU field when PTU cost attribution is disabled", async () => {

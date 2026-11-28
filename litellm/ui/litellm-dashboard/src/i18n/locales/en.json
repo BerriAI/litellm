@@ -19192,7 +19192,8 @@
       "ptuRatePlaceholder": "e.g. 2.00",
       "pricingModels": {
         "perToken": "Per Million Tokens",
-        "perSecond": "Per Second"
+        "perSecond": "Per Second",
+        "perRequest": "Per Request"
       },
       "invalidPositiveNumber": "Please enter a valid positive number",
       "title": "Advanced Settings",
@@ -19229,6 +19230,8 @@
       "cacheWriteCost1hHint": "Rate for prompt cache writes with a 1 hour TTL (Anthropic's cache_control ttl 1h). If left blank, known models use their cost map 1 hour rate, otherwise Cache Write Cost.",
       "cacheWriteCost1hPlaceholder": "Defaults to the cost map 1 hour rate, else Cache Write Cost",
       "costPerSecond": "Cost Per Second",
+      "costPerRequest": "Cost Per Request",
+      "costPerRequestPlaceholder": "e.g. 0.05",
       "useInPassThrough": "Use in pass-through routes",
       "useInPassThroughHint": "Allow using these credentials in pass-through routes. <docs>Learn more</docs>",
       "kubernetesPodDiscovery": "Kubernetes pod discovery",

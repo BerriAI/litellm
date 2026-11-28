@@ -54,6 +54,7 @@ const USAGE_COST_FIELDS = [
   "cache_creation_input_token_cost",
   "cache_creation_input_token_cost_above_1hr",
   "input_cost_per_second",
+  "input_cost_per_query",
 ];
 
 const REVALIDATED_WHEN_PTU_COUNT_CHANGES = [PTU_RATE_FIELD, PTU_START_FIELD, ...USAGE_COST_FIELDS];
@@ -61,7 +62,10 @@ const REVALIDATED_WHEN_PTU_COUNT_CHANGES = [PTU_RATE_FIELD, PTU_START_FIELD, ...
 const PRICING_MODEL_ITEMS = [
   { value: "per_token", labelKey: "addModel.advancedSettings.pricingModels.perToken" },
   { value: "per_second", labelKey: "addModel.advancedSettings.pricingModels.perSecond" },
+  { value: "per_request", labelKey: "addModel.advancedSettings.pricingModels.perRequest" },
 ] as const;
+
+type PricingModel = (typeof PRICING_MODEL_ITEMS)[number]["value"];
 
 const validateNumber = (_: unknown, value: unknown) => {
   if (!value) {
@@ -104,13 +108,13 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
   const { t } = useTranslation();
   const [jsonRules] = React.useState(() => ({ litellm: createJsonRules(), modelInfo: createJsonRules() }));
   const [customPricing, setCustomPricing] = React.useState(false);
-  const [pricingModel, setPricingModel] = React.useState<"per_token" | "per_second">("per_token");
+  const [pricingModel, setPricingModel] = React.useState<PricingModel>("per_token");
   const [showCacheControl, setShowCacheControl] = React.useState(false);
   const ptuCostAttributionEnabled = usePtuCostAttributionEnabled();
 
   const handlePricingModelChange =
     (onChange: (value: string) => void) =>
-    (value: "per_token" | "per_second" | null): void => {
+    (value: PricingModel | null): void => {
       if (value === null) return;
       onChange(value);
       setPricingModel(value);
@@ -338,7 +342,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   {(control) => (
                     <Select
                       items={PRICING_MODEL_ITEMS.map((item) => ({ value: item.value, label: t(item.labelKey) }))}
-                      value={(control.value as "per_token" | "per_second" | undefined) ?? "per_token"}
+                      value={(control.value as PricingModel | undefined) ?? "per_token"}
                       onValueChange={handlePricingModelChange(control.onChange)}
                     >
                       <SelectTrigger id={control.id} onBlur={control.onBlur} className="w-full">
@@ -355,7 +359,7 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                   )}
                 </MountedFormField>
 
-                {pricingModel === "per_token" ? (
+                {pricingModel === "per_token" && (
                   <>
                     <MountedFormField
                       name="input_cost_per_token"
@@ -445,7 +449,8 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                       )}
                     </MountedFormField>
                   </>
-                ) : (
+                )}
+                {pricingModel === "per_second" && (
                   <MountedFormField
                     name="input_cost_per_second"
                     label={t("addModel.advancedSettings.costPerSecond")}
@@ -458,6 +463,24 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
                         value={(control.value as string | undefined) ?? ""}
                         onChange={control.onChange}
                         onBlur={control.onBlur}
+                      />
+                    )}
+                  </MountedFormField>
+                )}
+                {pricingModel === "per_request" && (
+                  <MountedFormField
+                    name="input_cost_per_query"
+                    label={t("addModel.advancedSettings.costPerRequest")}
+                    rules={usageCostRules}
+                    className="mb-4"
+                  >
+                    {(control) => (
+                      <Input
+                        id={control.id}
+                        value={(control.value as string | undefined) ?? ""}
+                        onChange={control.onChange}
+                        onBlur={control.onBlur}
+                        placeholder={t("addModel.advancedSettings.costPerRequestPlaceholder")}
                       />
                     )}
                   </MountedFormField>
