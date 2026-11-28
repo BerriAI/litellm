@@ -3070,6 +3070,30 @@ def test_malformed_stored_logging_items_do_not_drop_valid_siblings(source: str, 
     assert result.callback_vars == {"langfuse_secret_key": "legacy-secret"}
 
 
+@pytest.mark.parametrize("field", ["langfuse_public_key", "langfuse_secret_key"])
+def test_add_team_callback_rejects_null_at_the_callback_field(field: str) -> None:
+    with pytest.raises(PydanticValidationError) as exc_info:
+        AddTeamCallback.model_validate({"callback_name": "langfuse_otel", "callback_vars": {field: None}})
+
+    assert [error["loc"] for error in exc_info.value.errors()] == [("callback_vars", field)]
+
+
+@pytest.mark.parametrize("source", ["metadata", "team_metadata"])
+def test_dynamic_logging_skips_null_callback_and_keeps_valid_sibling(source: str) -> None:
+    callbacks = [
+        {"callback_name": "langfuse_otel", "callback_vars": {"langfuse_public_key": None, "langfuse_secret_key": None}},
+        {"callback_name": "arize", "callback_type": "success", "callback_vars": {"arize_space_id": 42}},
+    ]
+    auth = UserAPIKeyAuth.model_validate({source: {"logging": callbacks}})
+
+    result = get_dynamic_logging_metadata(user_api_key_dict=auth, proxy_config=MagicMock())
+
+    assert result is not None
+    assert result.success_callback == ["arize"]
+    assert result.failure_callback == []
+    assert result.callback_vars == {"arize_space_id": "42"}
+
+
 def test_add_team_callback_rejects_env_reference():
     with pytest.raises(PydanticValidationError) as exc_info:
         AddTeamCallback(
