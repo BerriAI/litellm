@@ -72,6 +72,18 @@ OPENCODE_CONFIG_CONTENT_ENV: Final = "OPENCODE_CONFIG_CONTENT"
 OPENCODE_PROVIDER_ID: Final = "litellm"
 OPENCODE_PROVIDER_NAME: Final = "LiteLLM"
 OPENCODE_PROVIDER_NPM: Final = "@ai-sdk/openai-compatible"
+OPENCODE_STANDALONE_FLAG: Final = "--standalone"
+_OPENCODE_SERVER_FLAGS: Final = frozenset({OPENCODE_STANDALONE_FLAG, "--no-standalone", "--server"})
+_OPENCODE_CONFIG_COMMANDS: Final = frozenset(
+    {(), ("run",), ("mini",), ("models",), ("debug", "config"), ("debug", "agents")}
+)
+_OPENCODE_VALUE_FLAGS: Final = frozenset({"--session", "-s", "--prompt", "--log-level", "--completions"})
+_OPENCODE_HELP_USAGE: Final = re.compile(r"^USAGE\n\s+opencode((?: [^\s<\[]+)*)", re.MULTILINE)
+_OPENCODE_HELP_LISTS_STANDALONE: Final = re.compile(rf"^\s+{OPENCODE_STANDALONE_FLAG}\b", re.MULTILINE)
+_OPENCODE_PROBE_TIMEOUT_SECONDS: Final = 10.0
+_OPENCODE_SERVICE_STOPPED: Final = "stopped"
+_OPENCODE_SERVICE_ONLY_ENV: Final = frozenset({"XDG_STATE_HOME"})
+_OPENCODE_SERVICE_ONLY_COMMANDS: Final = frozenset({("machine",)})
 
 _SKIP_VERIFY_FLAG: Final = "--skip-verify"
 
@@ -885,6 +897,167 @@ def opencode_model_sync_env(
     return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing, groups)})
 
 
+@dataclass(frozen=True, slots=True)
+class _OpencodeProbeFailed:
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class OpencodeLaunch:
+    args: tuple[str, ...]
+    service_env: Mapping[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class _OpencodeStandaloneCommand:
+    insert_at: int
+    reads_config: bool
+
+
+_OPENCODE_SERVICE_ENV: Final = TypeAdapter(dict[str, str])
+
+
+def _run_opencode(
+    binary: str, words: Sequence[str], env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
+) -> str | _OpencodeProbeFailed:
+    try:
+        completed: Final = run(
+            _windows_command(binary, (binary, *words)),
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=_OPENCODE_PROBE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return _OpencodeProbeFailed(f"timed out after {_OPENCODE_PROBE_TIMEOUT_SECONDS:g} seconds")
+    except (OSError, UnicodeError) as error:
+        return _OpencodeProbeFailed(str(error) or type(error).__name__)
+    if completed.returncode != 0:
+        return _OpencodeProbeFailed(f"exit code {completed.returncode}")
+    return completed.stdout
+
+
+def _opencode_service_env(
+    binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
+) -> Mapping[str, str] | _OpencodeProbeFailed:
+    printed: Final = _run_opencode(binary, ("service", "get", "env"), env, run=run)
+    if isinstance(printed, _OpencodeProbeFailed):
+        return printed
+    try:
+        service_env: Final = _OPENCODE_SERVICE_ENV.validate_json(printed)
+    except ValidationError:
+        return _OpencodeProbeFailed("it did not print a JSON object of strings")
+    return MappingProxyType(
+        {name: value for name, value in service_env.items() if name not in _OPENCODE_SERVICE_ONLY_ENV}
+    )
+
+
+def _opencode_service_running(
+    binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
+) -> bool | _OpencodeProbeFailed:
+    printed: Final = _run_opencode(binary, ("service", "status"), env, run=run)
+    if isinstance(printed, _OpencodeProbeFailed):
+        return printed
+    return printed.strip() != _OPENCODE_SERVICE_STOPPED
+
+
+def _opencode_command_words(args: Sequence[str]) -> tuple[int, tuple[str, ...]]:
+    index: Final = next(
+        (
+            index
+            for index, (previous, arg) in enumerate(zip(("", *args), args))
+            if not arg.startswith("-") and previous not in _OPENCODE_VALUE_FLAGS
+        ),
+        None,
+    )
+    if index is None:
+        return 0, ()
+    following: Final = args[index + 1 : index + 2]
+    return index, (args[index], *(word for word in following if not word.startswith("-")))
+
+
+def _opencode_standalone_command(
+    help_text: str, index: int
+) -> _OpencodeStandaloneCommand | None | _OpencodeProbeFailed:
+    if _OPENCODE_HELP_LISTS_STANDALONE.search(help_text) is None:
+        return None
+    usage: Final = _OPENCODE_HELP_USAGE.search(help_text)
+    if usage is None:
+        return _OpencodeProbeFailed("its --help has no USAGE line lite can read")
+    command: Final = tuple(usage.group(1).split())
+    if command[:1] in _OPENCODE_SERVICE_ONLY_COMMANDS:
+        return None
+    return _OpencodeStandaloneCommand(
+        insert_at=index + len(command) if command else 0,
+        reads_config=command in _OPENCODE_CONFIG_COMMANDS,
+    )
+
+
+def with_opencode_private_server(
+    binary: str,
+    args: Sequence[str],
+    base_env: Mapping[str, str],
+    *,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    warn: Callable[[str], None] = _warn,
+) -> OpencodeLaunch:
+    """The launch args with `--standalone` added where an OpenCode 2+ launch would read its config from a shared service.
+
+    OpenCode 2 keeps a background service running after the TUI exits, and later
+    launches reuse it, so the provider config and key exported here never reach
+    the server that lists and calls models. A standalone server is a private
+    child of this launch with this env. Only a command whose own --help lists
+    it gets one, since OpenCode 1 has no such flag and 2.x adds it command by
+    command. Commands that start a session or print the config always get it,
+    and the others only when no service runs, so they never start a shared
+    service that keeps this env after they exit. `machine` never gets one,
+    since OpenCode runs it only on the shared service.
+    A `--server`, `--standalone` or `--no-standalone` the user passed wins.
+    A private server gets the env set with `opencode service set env` too, which
+    OpenCode itself applies only to the shared service.
+    """
+    unchanged: Final = OpencodeLaunch(tuple(args), _NO_EXTRA_ENV)
+    if os.path.splitext(os.path.basename(binary))[0] != "opencode":
+        return unchanged
+    if any(arg.partition("=")[0] in _OPENCODE_SERVER_FLAGS for arg in args):
+        return unchanged
+    index, words = _opencode_command_words(args)
+    help_text: Final = _run_opencode(binary, (*words, "--help"), base_env, run=run)
+    command: Final = (
+        help_text
+        if isinstance(help_text, _OpencodeProbeFailed)
+        else _opencode_standalone_command(click.unstyle(help_text), index)
+    )
+    if isinstance(command, _OpencodeProbeFailed):
+        warn(
+            f"litellm: could not check whether OpenCode takes {OPENCODE_STANDALONE_FLAG} ({command.reason}), "
+            "so a running OpenCode service may not see the LiteLLM models"
+        )
+        return unchanged
+    if command is None:
+        return unchanged
+    service_running: Final = False if command.reads_config else _opencode_service_running(binary, base_env, run=run)
+    if isinstance(service_running, _OpencodeProbeFailed):
+        warn(
+            f"litellm: could not check whether the OpenCode service is running ({service_running.reason}), "
+            "so this command may start it with the LiteLLM config"
+        )
+        return unchanged
+    if service_running:
+        return unchanged
+    service_env: Final = _opencode_service_env(binary, base_env, run=run)
+    if isinstance(service_env, _OpencodeProbeFailed):
+        warn(
+            f"litellm: could not read the env set with `opencode service set env` ({service_env.reason}), "
+            "so this launch runs without it"
+        )
+    return OpencodeLaunch(
+        (*args[: command.insert_at], OPENCODE_STANDALONE_FLAG, *args[command.insert_at :]),
+        _NO_EXTRA_ENV if isinstance(service_env, _OpencodeProbeFailed) else service_env,
+    )
+
+
 def _codex_row(
     model: ListedModel,
     upstream: ModelUpstream | None,
@@ -1272,6 +1445,7 @@ def run_agent(
     verify: Callable[[str, str], None] = verify_proxy_key,
     verify_subscription: Callable[[str, str], None] = verify_subscription_key,
     sync_models: Callable[[str, Mapping[str, str], str, str, bool], ModelSyncResult] = agent_model_sync_env,
+    private_server: Callable[[str, Sequence[str], Mapping[str, str]], OpencodeLaunch] = with_opencode_private_server,
     warn: Callable[[str], None] = _warn,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _hand_off,
     reattach_terminal: Callable[[], None] | None = None,
@@ -1362,7 +1536,12 @@ def run_agent(
     )
     if reattach_terminal is not None:
         reattach_terminal()
-    launcher(binary, [command[0], *extra_args, *settings_args, *forwarded], env)
+    launch: Final = private_server(binary, forwarded, env_before_sync)
+    launcher(
+        binary,
+        [command[0], *extra_args, *settings_args, *launch.args],
+        MappingProxyType({**launch.service_env, **env}),
+    )
 
 
 def _is_interactive() -> bool:
@@ -1478,6 +1657,7 @@ __all__ = [
     "AgentRunError",
     "ListedModel",
     "ModelSyncSkipped",
+    "OpencodeLaunch",
     "agent_commands",
     "agent_launch_args",
     "agent_model_sync_env",
@@ -1492,5 +1672,6 @@ __all__ = [
     "subscription_launch_args",
     "verify_proxy_key",
     "verify_subscription_key",
+    "with_opencode_private_server",
     "write_settings_overlay",
 ]

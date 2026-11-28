@@ -5,9 +5,9 @@ import os
 import stat
 import subprocess
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Final
+from typing import Final, NoReturn
 from unittest.mock import patch
 
 import click
@@ -32,6 +32,8 @@ from litellm.proxy.client.cli.commands.agents import (
     run_agent,
     verify_proxy_key,
     verify_subscription_key,
+    OpencodeLaunch,
+    with_opencode_private_server,
 )
 from litellm.proxy.client.cli.commands.auth import save_token
 from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError
@@ -754,6 +756,347 @@ class TestOpencodeModelSync:
     def test_default_http_client_is_requests_get(self):
         assert _default_of(agent_model_sync_env, "get") is requests.get
         assert _default_of(opencode_model_sync_env, "get") is requests.get
+
+
+_OPENCODE_COMMANDS = frozenset(
+    {
+        ("run",),
+        ("mini",),
+        ("models",),
+        ("debug", "config"),
+        ("debug", "agents"),
+        ("debug", "paths"),
+        ("auth", "login"),
+        ("session", "list"),
+        ("machine", "list"),
+        ("mcp", "list"),
+        ("service", "status"),
+        ("service", "stop"),
+        ("serve",),
+        ("pair",),
+        ("acp",),
+        ("upgrade",),
+    }
+)
+_OPENCODE_2_4_STANDALONE = _OPENCODE_COMMANDS - {
+    ("debug", "paths"),
+    ("service", "status"),
+    ("service", "stop"),
+    ("serve",),
+    ("pair",),
+    ("acp",),
+    ("upgrade",),
+}
+_OPENCODE_2_1_STANDALONE = _OPENCODE_2_4_STANDALONE - {("debug", "config"), ("debug", "agents"), ("machine", "list")}
+
+_OPENCODE_1_HELP = """opencode [project]
+
+Options:
+  --print-logs  print logs to stderr                                   [boolean]
+  --port        port to listen on                                       [number]
+"""
+
+
+_OPENCODE_2_4_COLORED_RUN_HELP = (
+    "\x1b[1mUSAGE\x1b[0m\n  \x1b[36mopencode run [flags] [<message...>]\x1b[0m\n\n\x1b[1mFLAGS\x1b[0m\n"
+    "  \x1b[32m--standalone\x1b[0m    Run with a private server instead of the background service\n"
+)
+
+
+def _opencode_2_help(command: tuple[str, ...], standalone: bool) -> str:
+    usage = " ".join(("opencode", *command)) if command else "opencode <subcommand>"
+    flag = "  --standalone      Run with a private server instead of the background service\n" if standalone else ""
+    return (
+        f"USAGE\n  {usage} [flags] [<directory>]\n\nFLAGS\n{flag}"
+        "  --print-logs      Print logs to stderr (server logs require --standalone)\n"
+    )
+
+
+class _FakeOpencode:
+    def __init__(
+        self,
+        takes_standalone: frozenset[tuple[str, ...]] = _OPENCODE_2_4_STANDALONE,
+        stdout: str | None = None,
+        returncode: int = 0,
+        error: Exception | None = None,
+        service_env: str = "{}",
+        service_status: str = "http://127.0.0.1:4096\n",
+    ) -> None:
+        self.takes_standalone = takes_standalone | {()}
+        self.stdout = stdout
+        self.returncode = returncode
+        self.error = error
+        self.service_env = service_env
+        self.service_status = service_status
+        self.calls: list[tuple[Sequence[str], dict[str, object]]] = []
+
+    def __call__(self, command: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        self.calls.append((command, kwargs))
+        if self.error is not None:
+            raise self.error
+        if tuple(command[1:]) == ("service", "get", "env"):
+            return subprocess.CompletedProcess(command, 0, self.service_env, "")
+        if tuple(command[1:]) == ("service", "status"):
+            return subprocess.CompletedProcess(command, 0, self.service_status, "")
+        words = tuple(command[1:-1])
+        resolved = next((words[:depth] for depth in (2, 1) if words[:depth] in _OPENCODE_COMMANDS), ())
+        stdout = self.stdout if self.stdout is not None else _opencode_2_help(resolved, resolved in self.takes_standalone)
+        return subprocess.CompletedProcess(command, self.returncode, stdout, "")
+
+
+def _private_launch(
+    args: Sequence[str],
+    run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    warn: Callable[[str], None] | None = None,
+) -> OpencodeLaunch:
+    return with_opencode_private_server(
+        "/usr/local/bin/opencode",
+        args,
+        {},
+        run=run if run is not None else _FakeOpencode(),
+        warn=warn if warn is not None else _unexpected_warning,
+    )
+
+
+def _private_server(
+    args: Sequence[str],
+    run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+    warn: Callable[[str], None] | None = None,
+) -> tuple[str, ...]:
+    return _private_launch(args, run=run, warn=warn).args
+
+
+def _no_private_server(binary: str, args: Sequence[str], env: Mapping[str, str]) -> OpencodeLaunch:
+    return OpencodeLaunch(tuple(args), {})
+
+
+def _unexpected_warning(message: str) -> NoReturn:
+    raise AssertionError(f"unexpected warning: {message}")
+
+
+class TestOpencodePrivateServer:
+    @pytest.mark.parametrize(
+        ("args", "launched"),
+        [
+            ([], ["--standalone"]),
+            (["-c"], ["--standalone", "-c"]),
+            (["-s", "ses_123"], ["--standalone", "-s", "ses_123"]),
+            (["--prompt", "service"], ["--standalone", "--prompt", "service"]),
+            (["--log-level", "debug"], ["--standalone", "--log-level", "debug"]),
+            (["run", "fix the tests"], ["run", "--standalone", "fix the tests"]),
+            (
+                ["run", "-m", "litellm/claude-sonnet-5-5", "hi"],
+                ["run", "--standalone", "-m", "litellm/claude-sonnet-5-5", "hi"],
+            ),
+            (["models"], ["models", "--standalone"]),
+            (["mini"], ["mini", "--standalone"]),
+            (["debug", "config"], ["debug", "config", "--standalone"]),
+            (["debug", "agents", "--print-logs"], ["debug", "agents", "--standalone", "--print-logs"]),
+            (["--log-level", "debug", "run", "hi"], ["--log-level", "debug", "run", "--standalone", "hi"]),
+            (["--print-logs", "-s", "ses_123", "mini"], ["--print-logs", "-s", "ses_123", "mini", "--standalone"]),
+            (["--log-level", "warn", "debug", "config"], ["--log-level", "warn", "debug", "config", "--standalone"]),
+            (["./my-project"], ["--standalone", "./my-project"]),
+            (["-c", "--session=ses_123", "./my-project"], ["--standalone", "-c", "--session=ses_123", "./my-project"]),
+        ],
+    )
+    def test_launches_that_read_the_provider_config_get_a_private_server(self, args, launched):
+        assert _private_server(args) == tuple(launched)
+
+    @pytest.mark.parametrize(
+        ("args", "probed"),
+        [
+            ([], ()),
+            (["-s", "ses_123", "--log-level", "debug"], ()),
+            (["run", "fix the tests", "-m", "x"], ("run", "fix the tests")),
+            (["run", "-m", "x", "hi"], ("run",)),
+            (["--log-level", "warn", "debug", "config"], ("debug", "config")),
+        ],
+    )
+    def test_the_probe_asks_for_the_help_of_the_command_being_launched(self, args, probed):
+        run = _FakeOpencode()
+        _private_server(args, run=run)
+        assert run.calls[0][0] == ("/usr/local/bin/opencode", *probed, "--help")
+
+    def test_a_command_whose_own_help_lacks_the_flag_launches_unchanged(self):
+        older = _FakeOpencode(takes_standalone=_OPENCODE_2_1_STANDALONE)
+        assert _private_server(["debug", "config"], run=older) == ("debug", "config")
+        assert _private_server(["run", "hi"], run=older) == ("run", "--standalone", "hi")
+
+    @pytest.mark.parametrize("service_status", ["http://127.0.0.1:4096\n", "stopped\n"])
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["service", "status"],
+            ["--log-level", "warn", "service", "stop"],
+            ["serve", "--port", "4096"],
+            ["-s", "ses_123", "pair"],
+            ["acp"],
+            ["upgrade"],
+            ["debug", "paths"],
+        ],
+    )
+    def test_commands_whose_help_lacks_the_flag_launch_unchanged(self, args, service_status):
+        assert _private_server(args, run=_FakeOpencode(service_status=service_status)) == tuple(args)
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["auth", "login"],
+            ["session", "list"],
+            ["--log-level", "warn", "mcp", "list"],
+        ],
+    )
+    def test_management_commands_use_a_running_service(self, args):
+        assert _private_server(args, run=_FakeOpencode(service_status="http://127.0.0.1:4096\n")) == tuple(args)
+
+    @pytest.mark.parametrize(
+        ("args", "launched"),
+        [
+            (["auth", "login"], ["auth", "login", "--standalone"]),
+            (["session", "list"], ["session", "list", "--standalone"]),
+            (["--log-level", "warn", "mcp", "list"], ["--log-level", "warn", "mcp", "list", "--standalone"]),
+        ],
+    )
+    def test_management_commands_start_no_shared_service(self, args, launched):
+        assert _private_server(args, run=_FakeOpencode(service_status="stopped\n")) == tuple(launched)
+
+    @pytest.mark.parametrize("service_status", ["http://127.0.0.1:4096\n", "stopped\n"])
+    @pytest.mark.parametrize("args", [["machine", "list"], ["--log-level", "warn", "machine", "list"]])
+    def test_machine_commands_stay_on_the_shared_service_opencode_requires(self, args, service_status):
+        assert _private_server(args, run=_FakeOpencode(service_status=service_status)) == tuple(args)
+
+    def test_a_session_launch_gets_a_private_server_while_a_service_runs(self):
+        run = _FakeOpencode(service_status="http://127.0.0.1:4096\n")
+        assert _private_server(["run", "hi"], run=run) == ("run", "--standalone", "hi")
+
+    def test_a_service_status_that_fails_warns_and_launches_unchanged(self) -> None:
+        def status_fails(command: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            if tuple(command[1:]) == ("service", "status"):
+                return subprocess.CompletedProcess(command, 1, "", "")
+            return _FakeOpencode()(command, **kwargs)
+
+        warnings: list[str] = []
+        assert _private_server(["session", "list"], run=status_fails, warn=warnings.append) == ("session", "list")
+        assert len(warnings) == 1
+        assert "service is running" in warnings[0]
+        assert "exit code 1" in warnings[0]
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["--server", "http://127.0.0.1:4096"],
+            ["--server=http://127.0.0.1:4096"],
+            ["-c", "--server", "http://127.0.0.1:4096"],
+            ["--standalone"],
+            ["run", "--standalone", "hi"],
+            ["--no-standalone"],
+            ["run", "--no-standalone", "hi"],
+            ["--no-standalone=true", "models"],
+        ],
+    )
+    def test_a_server_choice_the_user_typed_wins_without_a_probe(self, args):
+        run = _FakeOpencode()
+        assert _private_server(args, run=run) == tuple(args)
+        assert run.calls == []
+
+    @pytest.mark.parametrize("printed", [_OPENCODE_1_HELP, ""])
+    def test_opencode_1_launches_unchanged_without_a_warning(self, printed):
+        assert _private_server(["run", "hi"], run=_FakeOpencode(stdout=printed)) == ("run", "hi")
+
+    def test_a_help_colored_by_force_color_still_gets_the_flag(self) -> None:
+        run = _FakeOpencode(stdout=_OPENCODE_2_4_COLORED_RUN_HELP)
+        assert _private_server(["run", "hi"], run=run) == ("run", "--standalone", "hi")
+
+    def test_a_help_listing_the_flag_without_a_readable_usage_line_warns(self) -> None:
+        warnings: list[str] = []
+        run = _FakeOpencode(stdout="FLAGS\n  --standalone    Run with a private server\n")
+        assert _private_server(["run", "hi"], run=run, warn=warnings.append) == ("run", "hi")
+        assert len(warnings) == 1
+        assert "USAGE" in warnings[0]
+
+    def test_a_private_server_gets_the_env_set_on_the_service(self) -> None:
+        run = _FakeOpencode(service_env='{"ANTHROPIC_API_KEY": "sk-ant-service"}')
+        launch = _private_launch(["run", "hi"], run=run)
+        assert launch.args == ("run", "--standalone", "hi")
+        assert launch.service_env == {"ANTHROPIC_API_KEY": "sk-ant-service"}
+
+    def test_a_private_server_keeps_the_launch_state_folder_like_the_service_does(self) -> None:
+        run = _FakeOpencode(service_env='{"ANTHROPIC_API_KEY": "sk-ant-service", "XDG_STATE_HOME": "/srv/state"}')
+        assert _private_launch(["run", "hi"], run=run).service_env == {"ANTHROPIC_API_KEY": "sk-ant-service"}
+
+    @pytest.mark.parametrize(
+        ("args", "printed"),
+        [
+            (["service", "status"], None),
+            (["--no-standalone"], None),
+            (["run", "hi"], _OPENCODE_1_HELP),
+        ],
+    )
+    def test_a_launch_left_on_the_shared_service_adds_no_service_env(self, args, printed) -> None:
+        run = _FakeOpencode(stdout=printed, service_env='{"ANTHROPIC_API_KEY": "sk-ant-service"}')
+        assert _private_launch(args, run=run).service_env == {}
+
+    @pytest.mark.parametrize("printed", ["not json sk-ant-service", '{"ANTHROPIC_API_KEY": 1}', '["sk-ant-service"]'])
+    def test_an_unreadable_service_env_warns_without_echoing_it_and_still_launches_privately(self, printed) -> None:
+        warnings: list[str] = []
+        launch = _private_launch(["models"], run=_FakeOpencode(service_env=printed), warn=warnings.append)
+        assert launch == OpencodeLaunch(("models", "--standalone"), {})
+        assert len(warnings) == 1
+        assert "service set env" in warnings[0]
+        assert "sk-ant-service" not in warnings[0]
+
+    @pytest.mark.parametrize(
+        ("run", "reason"),
+        [
+            (_FakeOpencode(returncode=1), "exit code 1"),
+            (_FakeOpencode(error=FileNotFoundError("opencode")), "opencode"),
+            (_FakeOpencode(error=subprocess.TimeoutExpired("opencode --help", 10)), "timed out after 10 seconds"),
+            (_FakeOpencode(error=UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")), "utf-8"),
+        ],
+    )
+    def test_a_probe_that_fails_warns_and_launches_unchanged(self, run, reason):
+        warnings = []
+        assert _private_server(["models"], run=run, warn=warnings.append) == ("models",)
+        assert len(warnings) == 1
+        assert "--standalone" in warnings[0]
+        assert reason in warnings[0]
+
+    def test_a_probe_timeout_keeps_the_typed_prompt_out_of_the_warning(self) -> None:
+        def time_out(command: Sequence[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            raise subprocess.TimeoutExpired(command, 10)
+
+        warnings: list[str] = []
+        launched = _private_server(["run", "ship the q3 numbers"], run=time_out, warn=warnings.append)
+        assert launched == ("run", "ship the q3 numbers")
+        assert len(warnings) == 1
+        assert "ship the q3 numbers" not in warnings[0]
+
+    def test_the_probe_runs_with_the_launch_env(self):
+        run = _FakeOpencode()
+        with_opencode_private_server("/usr/local/bin/opencode", [], {"PATH": "/opt/node/bin"}, run=run)
+        assert run.calls[0][1]["env"] == {"PATH": "/opt/node/bin"}
+        assert run.calls[0][1]["stdin"] is subprocess.DEVNULL
+
+    def test_other_agents_are_never_probed(self):
+        run = _FakeOpencode()
+        launch = with_opencode_private_server("/usr/local/bin/codex", ["exec", "hi"], {}, run=run)
+        assert launch == OpencodeLaunch(("exec", "hi"), {})
+        assert run.calls == []
+
+    def test_a_windows_npm_shim_is_probed_through_cmd(self):
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append(command)
+            printed = "{}" if command.endswith('"service" "get" "env""') else _opencode_2_help(("models",), True)
+            return subprocess.CompletedProcess(command, 0, printed, "")
+
+        launch = with_opencode_private_server("C:/npm/opencode.cmd", ["models"], {}, run=run, warn=_unexpected_warning)
+        assert launch.args == ("models", "--standalone")
+        assert isinstance(calls[0], str)
+        assert calls[0].startswith("cmd.exe /d /e:on /v:off /s /c ")
+        assert "models" in calls[0]
+        assert "--help" in calls[0]
 
 
 class TestCodexModelSync:
@@ -1645,6 +1988,51 @@ class TestRunAgent:
         assert calls["env"]["OPENAI_API_KEY"] == "sk-key"
         assert "model_catalog_json" not in json.dumps(calls["env"])
 
+    def test_opencode_2_launches_a_session_on_a_private_server(self):
+        calls = {}
+        run = _FakeOpencode()
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["opencode", "run", "fix the tests"],
+            base_env={"PATH": "/opt/node/bin"},
+            sync_models=lambda *a: {"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
+            private_server=functools.partial(with_opencode_private_server, run=run),
+            which=lambda name: "/opt/node/bin/opencode",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: calls.update(path=p, args=tuple(a), env=dict(e)),
+        )
+        assert calls["args"] == ("opencode", "run", "--standalone", "fix the tests")
+        assert run.calls[0][0] == ("/opt/node/bin/opencode", "run", "fix the tests", "--help")
+        assert run.calls[0][1]["env"] == {"PATH": "/opt/node/bin"}
+        assert calls["env"]["OPENCODE_CONFIG_CONTENT"] == '{"provider":{}}'
+        assert calls["env"]["OPENAI_API_KEY"] == "sk-key"
+
+    def test_the_service_env_fills_in_under_the_shell_and_lite_env(self) -> None:
+        calls: dict[str, object] = {}
+        service_env = {"ANTHROPIC_API_KEY": "sk-ant-service", "OPENAI_API_KEY": "sk-service", "HOME": "/srv"}
+        run = _FakeOpencode(service_env=json.dumps(service_env))
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["opencode"],
+            base_env={"PATH": "/opt/node/bin", "HOME": "/home/me"},
+            sync_models=lambda *a: {"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
+            private_server=functools.partial(with_opencode_private_server, run=run, warn=_unexpected_warning),
+            which=lambda name: "/opt/node/bin/opencode",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: calls.update(args=tuple(a), env=dict(e)),
+        )
+        assert calls["args"] == ("opencode", "--standalone")
+        assert calls["env"] == {
+            "PATH": "/opt/node/bin",
+            "HOME": "/home/me",
+            "ANTHROPIC_API_KEY": "sk-ant-service",
+            "OPENAI_API_KEY": "sk-key",
+            "OPENAI_BASE_URL": "http://localhost:4000/v1",
+            "OPENCODE_CONFIG_CONTENT": '{"provider":{}}',
+        }
+
     def test_synced_model_config_reaches_the_agent_alongside_profile_env(self):
         calls = {}
         run_agent(
@@ -1654,6 +2042,7 @@ class TestRunAgent:
             base_env={"HOME": "/home/me"},
             sync_models=lambda *a: {"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
             which=lambda name: "/usr/local/bin/opencode",
+            private_server=_no_private_server,
             verify=lambda *a: None,
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
@@ -1678,6 +2067,7 @@ class TestRunAgent:
             base_env={"HOME": "/home/me"},
             sync_models=fake_sync,
             which=lambda name: "/usr/local/bin/opencode",
+            private_server=_no_private_server,
             verify=lambda *a: order.append("verify"),
             launcher=lambda p, a, e: order.append("launch"),
         )
@@ -1705,6 +2095,7 @@ class TestRunAgent:
                 base_env={},
                 sync_models=boom,
                 which=lambda name: "/usr/local/bin/opencode",
+                private_server=_no_private_server,
                 verify=failing_verify,
                 launcher=lambda *a: None,
             )
@@ -1726,6 +2117,7 @@ class TestRunAgent:
             sync_models=fake_sync,
             warn=warnings.append,
             which=lambda name: "/usr/local/bin/opencode",
+            private_server=_no_private_server,
             verify=lambda *a: pytest.fail("--skip-verify must not verify"),
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
@@ -1743,6 +2135,7 @@ class TestRunAgent:
             sync_models=lambda *a: ModelSyncSkipped("proxy said no"),
             warn=lambda message: calls.setdefault("warned", message),
             which=lambda name: "/usr/local/bin/opencode",
+            private_server=_no_private_server,
             verify=lambda *a: None,
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
