@@ -14,7 +14,7 @@ from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import (
     _decode_refresh_error,
     _encode_refresh_error,
 )
-from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
+from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy.mcp_server.outbound_credentials.types import CredError
 
 
@@ -123,6 +123,17 @@ class _BlockingStore:
         self.started.set()
         await self.release.wait()
         return OAuthToken(access_token=self._access_token)
+
+    async def refresh_now(
+        self, user_id: str, server_id: str, failed_access_token: str
+    ) -> Result[OAuthToken, CredError]:
+        self.calls.append((user_id, server_id))
+        self.started.set()
+        await self.release.wait()
+        return Ok(OAuthToken(access_token=self._access_token))
+
+    async def peek(self, user_id: str, server_id: str) -> OAuthToken | None:
+        return await self.fetch(user_id, server_id)
 
     async def invalidate(self, user_id: str, server_id: str) -> None:
         self.invalidations.append((user_id, server_id))
@@ -289,6 +300,49 @@ async def test_cancelled_local_fetch_still_blocks_the_redis_rebuild_until_it_fin
     second = await second_fetch
 
     assert second is not None and second.access_token == "redis"
+    assert redis_store.calls == [("u", "s")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["refresh_now", "peek"])
+async def test_cancelled_local_reactive_read_still_blocks_the_redis_rebuild_until_it_finishes(operation: str) -> None:
+    local_store = _BlockingStore("local")
+    redis_store = _RecordingStore("redis")
+    redis_available = _RedisAvailability()
+
+    def build_store(_server_lookup: ServerLookup) -> tuple[InvalidatableOAuthTokenStore, bool]:
+        if redis_available.available:
+            return redis_store, True
+        return local_store, False
+
+    def server_lookup(_server_id: str) -> None:
+        return None
+
+    store = LazyPerUserOAuthTokenStore(
+        server_lookup,
+        store_builder=build_store,
+        redis_available=redis_available,
+    )
+
+    refresh = asyncio.create_task(
+        store.refresh_now("u", "s", "rejected") if operation == "refresh_now" else store.peek("u", "s")
+    )
+    await local_store.started.wait()
+    refresh.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await refresh
+
+    redis_available.available = True
+    fetch = asyncio.create_task(store.fetch("u", "s"))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert redis_store.calls == []
+
+    local_store.release.set()
+    fetched = await fetch
+
+    assert fetched is not None and fetched.access_token == "redis"
     assert redis_store.calls == [("u", "s")]
 
 
@@ -614,3 +668,42 @@ def test_refresh_error_publication_roundtrips_the_exact_failure_class():
 
 def test_refresh_error_publication_never_encodes_a_token():
     assert _encode_refresh_error(Ok(OAuthToken(access_token="secret-access-token"))) is None
+
+
+@pytest.mark.asyncio
+async def test_lazy_store_peek_enforces_identity_binding_and_invalidates_mismatch():
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv",
+        name="srv",
+        url="https://mcp.example/mcp",
+        transport="http",
+        auth_type="oauth2",
+        oauth_identity_binding={"mode": "enforce", "issuer": "https://idp.example", "audiences": ["client"]},
+    )
+    invalidated: list[tuple[str, str]] = []
+
+    class FakeReactiveStore:
+        async def fetch(self, user_id: str, server_id: str):
+            return OAuthToken(access_token="cached")
+
+        async def fetch_result(self, user_id: str, server_id: str):
+            return Ok(OAuthToken(access_token="cached"))
+
+        async def peek(self, user_id: str, server_id: str):
+            return OAuthToken(access_token="cached", identity_binding_proof=None)
+
+        async def refresh_now(self, user_id: str, server_id: str, failed_access_token: str):
+            return Error(CredError.of_unauthorized("expired"))
+
+        async def invalidate(self, user_id: str, server_id: str):
+            invalidated.append((user_id, server_id))
+
+    store = LazyPerUserOAuthTokenStore(
+        lambda _: server,
+        store_builder=lambda _: (FakeReactiveStore(), False),
+        redis_available=lambda: False,
+    )
+    assert await store.peek("alice", "srv") is None
+    assert invalidated == [("alice", "srv")]

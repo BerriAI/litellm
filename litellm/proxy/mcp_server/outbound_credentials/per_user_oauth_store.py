@@ -14,7 +14,7 @@ import asyncio
 import json
 from collections.abc import Callable, Mapping
 from functools import partial
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -32,8 +32,8 @@ from litellm.proxy.mcp_server.outbound_credentials.dual_cache_token_backend impo
 )
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     CachedOAuthTokenStore,
-    InvalidatableOAuthTokenStore,
     OAuthToken,
+    ReactiveOAuthTokenStore,
     RefreshCoordinator,
     RefreshingTokenStore,
     TokenCacheBackend,
@@ -58,8 +58,8 @@ if TYPE_CHECKING:
 # A token with no declared expiry is cached for this long; one with an expiry is cached until then.
 _DEFAULT_TTL_SECONDS: Final = 300.0
 
-ServerLookup = Callable[[str], "MCPServer | None"]
-StoreBuilder = Callable[[ServerLookup], tuple[InvalidatableOAuthTokenStore, bool]]
+ServerLookup: TypeAlias = Callable[[str], "MCPServer | None"]
+StoreBuilder: TypeAlias = Callable[[ServerLookup], tuple[ReactiveOAuthTokenStore, bool]]
 _TOKEN_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
@@ -67,7 +67,7 @@ async def _read_credential(user_id: str, server_id: str) -> Mapping[str, object]
     from litellm.proxy.mcp_server.db import (  # noqa: PLC0415
         get_user_oauth_credential,
     )
-    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global is wired after module import
 
     if prisma_client is None:
         raise TokenStoreUnavailable("Database not connected")
@@ -88,7 +88,7 @@ async def _persist_credential(
     from litellm.proxy.mcp_server.db import (  # noqa: PLC0415
         store_user_oauth_credential,
     )
-    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global is wired after module import
 
     if prisma_client is None:
         return
@@ -291,7 +291,7 @@ class LazyPerUserOAuthTokenStore:
         self._server_lookup = server_lookup
         self._store_builder = store_builder
         self._redis_available = redis_available
-        self._store: InvalidatableOAuthTokenStore | None = None
+        self._store: ReactiveOAuthTokenStore | None = None
         self._uses_redis = False
         self._fetch_lock = asyncio.Condition()
         self._local_fetches = 0
@@ -300,11 +300,7 @@ class LazyPerUserOAuthTokenStore:
         outcome: Final = await self.fetch_result(user_id, server_id)
         return outcome.ok if isinstance(outcome, Ok) else None
 
-    async def fetch_result(self, user_id: str, server_id: str) -> Result[OAuthToken, CredError]:
-        outcome: Final = await self._fetch_token_result(user_id, server_id)
-        if isinstance(outcome, Error):
-            return outcome
-        token: Final = outcome.ok
+    async def _enforce_identity_binding(self, user_id: str, server_id: str, token: OAuthToken) -> bool:
         server: Final = self._server_lookup(server_id)
         binding: Final = server.oauth_identity_binding if server else None
         if binding is not None and binding.mode == "enforce":
@@ -312,25 +308,77 @@ class LazyPerUserOAuthTokenStore:
                 binding, user_id, server_id, {"identity_binding_proof": token.identity_binding_proof}
             ):
                 await self.invalidate(user_id, server_id)
-                return Error(
-                    CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server.")
-                )
+                return False
+        return True
+
+    async def fetch_result(self, user_id: str, server_id: str) -> Result[OAuthToken, CredError]:
+        outcome: Final = await self._fetch_token_result(user_id, server_id)
+        if isinstance(outcome, Error):
+            return outcome
+        if not await self._enforce_identity_binding(user_id, server_id, outcome.ok):
+            return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
         return outcome
 
     async def _fetch_token_result(self, user_id: str, server_id: str) -> Result[OAuthToken, CredError]:
         if self._uses_redis:
-            store = self._store
-            if store is not None:
-                return await fetch_token_result(store, user_id, server_id)
+            cached_store: Final = self._store
+            if cached_store is not None:
+                return await fetch_token_result(cached_store, user_id, server_id)
 
         store, uses_redis = await self._store_for_fetch()
         return await asyncio.shield(self._fetch_then_finish(store, uses_redis, user_id, server_id))
 
     async def _fetch_then_finish(
-        self, store: InvalidatableOAuthTokenStore, uses_redis: bool, user_id: str, server_id: str
+        self, store: ReactiveOAuthTokenStore, uses_redis: bool, user_id: str, server_id: str
     ) -> Result[OAuthToken, CredError]:
         try:
             return await fetch_token_result(store, user_id, server_id)
+        finally:
+            if not uses_redis:
+                await self._finish_local_fetch()
+
+    async def peek(self, user_id: str, server_id: str) -> OAuthToken | None:
+        token: Final = await self._peek_token(user_id, server_id)
+        if token is not None and not await self._enforce_identity_binding(user_id, server_id, token):
+            return None
+        return token
+
+    async def _peek_token(self, user_id: str, server_id: str) -> OAuthToken | None:
+        if self._uses_redis:
+            cached_store: Final = self._store
+            if cached_store is not None:
+                return await cached_store.peek(user_id, server_id)
+
+        store, uses_redis = await self._store_for_fetch()
+        return await asyncio.shield(self._peek_then_finish(store, uses_redis, user_id, server_id))
+
+    async def _peek_then_finish(
+        self, store: ReactiveOAuthTokenStore, uses_redis: bool, user_id: str, server_id: str
+    ) -> OAuthToken | None:
+        try:
+            return await store.peek(user_id, server_id)
+        finally:
+            if not uses_redis:
+                await self._finish_local_fetch()
+
+    async def refresh_now(
+        self, user_id: str, server_id: str, failed_access_token: str
+    ) -> Result[OAuthToken, CredError]:
+        if self._uses_redis:
+            cached_store: Final = self._store
+            if cached_store is not None:
+                return await cached_store.refresh_now(user_id, server_id, failed_access_token)
+
+        store, uses_redis = await self._store_for_fetch()
+        return await asyncio.shield(
+            self._refresh_then_finish(store, uses_redis, user_id, server_id, failed_access_token)
+        )
+
+    async def _refresh_then_finish(
+        self, store: ReactiveOAuthTokenStore, uses_redis: bool, user_id: str, server_id: str, failed_access_token: str
+    ) -> Result[OAuthToken, CredError]:
+        try:
+            return await store.refresh_now(user_id, server_id, failed_access_token)
         finally:
             if not uses_redis:
                 await self._finish_local_fetch()
@@ -342,9 +390,9 @@ class LazyPerUserOAuthTokenStore:
         on an empty cache.
         """
         if self._uses_redis:
-            store = self._store
-            if store is not None:
-                await store.invalidate(user_id, server_id)
+            cached_store: Final = self._store
+            if cached_store is not None:
+                await cached_store.invalidate(user_id, server_id)
                 return
 
         store, uses_redis = await self._store_for_fetch()
@@ -354,7 +402,7 @@ class LazyPerUserOAuthTokenStore:
             if not uses_redis:
                 await self._finish_local_fetch()
 
-    async def _store_for_fetch(self) -> tuple[InvalidatableOAuthTokenStore, bool]:
+    async def _store_for_fetch(self) -> tuple[ReactiveOAuthTokenStore, bool]:
         async with self._fetch_lock:
             while (
                 self._store is not None and not self._uses_redis and self._redis_available() and self._local_fetches > 0
