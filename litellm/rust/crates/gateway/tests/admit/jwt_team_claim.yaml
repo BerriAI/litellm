@@ -1,7 +1,6 @@
 # With a team claim configured, a JWT naming a team has the team read natively. A team the
-# database holds is found, and its caller still goes to Python, since the native spend log
-# charges no team yet. A team the database does not hold, and a JWT naming none, are the core's
-# to refuse.
+# database holds is found, and its caller is served. A team the database does not hold, and a JWT
+# naming none, are the core's to refuse.
 enterprise: true
 
 config:
@@ -23,9 +22,7 @@ requests:
   - name: a JWT naming a team
     jwt: {claims: {sub: user-123, team_id: team-1}}
     body: {model: claude, max_tokens: 16, messages: []}
-    expect: python
-    reason: credential
-    over: team
+    expect: rust
 
   - name: a JWT naming a team the database does not hold
     jwt: {claims: {sub: user-123, team_id: team-gone}}

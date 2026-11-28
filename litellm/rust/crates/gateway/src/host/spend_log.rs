@@ -1,10 +1,11 @@
 //! The gateway's answers to the spend log callback's host calls, the counterpart of the proxy's
 //! `SpendLogHost` (`rust_spend_logger.py`) and the counter step's `_CounterHost`.
 //!
-//! A caller the gateway serves is the master key or a key that names no team, owner, project,
-//! organization, budget or access group, since `host/auth` declines any other. So the key's
-//! identity is already whole and its charge debits no budget window, customer, access group or
-//! committed counter. A lifetime counter's stored spend is read from its row (`Rows`), which a
+//! A caller the gateway serves is the master key, a key that names no team, owner, project,
+//! organization, budget or access group, or a JWT whose user, team and membership hold no budget or
+//! access group, since `host/auth` and `admit` send any other to Python. So the caller's identity
+//! is already whole and its charge debits no budget window, customer, access group or committed
+//! counter. A lifetime counter's stored spend is read from its row (`Rows`), which a
 //! spend reader seeds and floors a counter from too. The work Python does after a row is written
 //! or charged, its alerts and the logging payload's cost have no counterpart here yet and are
 //! answered with nothing.

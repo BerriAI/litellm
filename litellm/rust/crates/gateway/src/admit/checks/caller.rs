@@ -18,7 +18,8 @@ use crate::{
 /// with Python over the first unserved column or association. This also applies to mapped keys.
 /// Python resolves a JWT customer claim after auth and applies its budgets and models. A key
 /// that sends the team header also stays with Python, which reads that header after auth.
-/// A JWT naming a team or user stays with Python until Rust charges those associations.
+/// A JWT whose caller belongs to a team or names a user is served, unless its team or its user
+/// holds a column nothing native reads yet, which it goes to Python over.
 pub(super) fn caller(
     admit: &Admit,
     request: &Parts,
@@ -64,8 +65,8 @@ pub(super) fn caller(
                     .or_else(scope_mappings)
                     .or_else(|| customer_claims(admit)),
                 Credential::Jwt { .. } => customer_claims(admit).or_else(|| {
-                    let holder = &caller.affiliation.holder;
-                    Some(Reason::new(Refused::Credential, charged(holder)?))
+                    let column = unserved_held(&caller.affiliation.holder)?;
+                    Some(Reason::new(Refused::Credential, column))
                 }),
             }
         }
@@ -78,13 +79,20 @@ pub(super) fn caller(
 
 /// What keeps a key's holder with Python, if it holds a team or an owner.
 fn charged(holder: &Holder<NativeRows>) -> Option<&'static str> {
-    let team = holder.team();
-    let user = holder.user();
-    team.and_then(unserved_team_column)
-        .or_else(|| user.and_then(Named::stored).and_then(unserved_user))
+    unserved_held(holder)
+        .or_else(|| holder.team().map(|_| "team"))
+        .or_else(|| holder.user().map(|_| "user"))
+}
+
+/// The first column the holder's team, then its user and membership, holds that nothing native
+/// reads yet.
+fn unserved_held(holder: &Holder<NativeRows>) -> Option<&'static str> {
+    let user = holder.user().and_then(Named::stored);
+    holder
+        .team()
+        .and_then(unserved_team_column)
+        .or_else(|| user.and_then(unserved_user))
         .or_else(|| holder.membership().and_then(unserved_membership))
-        .or_else(|| team.map(|_| "team"))
-        .or_else(|| user.map(|_| "user"))
 }
 
 /// The column of the caller's team that keeps the caller with Python. A team no row stands behind

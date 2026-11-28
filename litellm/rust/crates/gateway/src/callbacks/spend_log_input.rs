@@ -31,9 +31,10 @@ const CACHE_OFF: &str = "Cache OFF";
 ///   budget. `BACKGROUND_INTERACTION_COST_POLLING_ENABLED` is a variable `Environment` does not
 ///   read, so admit cannot see it, but it only reaches background Responses jobs, which this
 ///   route never serves.
-/// - `end_user_max_budget` and `window_resets`: none. `host/auth` declines any key with a team,
-///   owner, budget or access group and any end user whose row holds a budget, so only the master
-///   key or a bare key is served, for nobody or for an end user that holds no budget.
+/// - `end_user_max_budget` and `window_resets`: none. `host/auth` and `admit` send to Python any
+///   key with a team, owner, budget or access group, any JWT whose user, team or membership holds
+///   a budget, and any end user whose row holds a budget, so no served caller has a budget window
+///   or an end user that holds a budget.
 /// - `batch_accounting`: false. `/v1/messages` is the only route served, and it runs no batch.
 /// - `response` and `kwargs_response_cost`: none. The gateway builds no logging payload yet, and
 ///   the cost comes from `Field::Cost`, which the served attempt's settled cost fills.

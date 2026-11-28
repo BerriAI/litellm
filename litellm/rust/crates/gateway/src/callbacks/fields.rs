@@ -49,8 +49,9 @@ pub enum Unwritable {
 }
 
 /// Who `identity` is charged as: a key by the hash its row is stored under, its alias and its
-/// owner, and the master key by Python's alias for it and the proxy admin, each with the team,
-/// organization, project and end user it names. Only a stored row gives an alias.
+/// owner, the master key by Python's alias for it and the proxy admin, and a JWT by the user it
+/// names, as Python's `UserAPIKeyAuth` for a JWT holds no key, each with the team, organization,
+/// project and end user it names. Only a stored row gives an alias.
 pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
     let Caller {
         credential,
@@ -73,7 +74,7 @@ pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
             key.alias().map(str::to_owned),
             key.record().user_id.clone(),
         ),
-        Credential::Jwt { .. } => (None, None, None),
+        Credential::Jwt { .. } => (None, None, holder.user().map(|user| user.id().to_owned())),
     };
     Charged {
         key_hash,
@@ -437,8 +438,9 @@ pub fn write(entries: &mut CallState, op: PatchOp) -> Result<(), Unwritable> {
 
 #[cfg(test)]
 mod tests {
+    use litellm_config::LitellmRole;
     use litellm_gateway_auth_core::{
-        Holder, TeamCopy,
+        Holder, JwtActor, JwtStamp, TeamCopy,
         record::{EndUserRecord, OrgRecord, ProjectRecord, TeamRecord, UserRecord},
     };
     use litellm_gateway_inference::{
@@ -745,6 +747,41 @@ mod tests {
         )
     }
 
+    fn jwt(holder: Holder<NativeRows>) -> Authenticated<NativeRows> {
+        Authenticated::from(Caller {
+            credential: Credential::Jwt {
+                jwt: JwtStamp {
+                    claims: Map::new(),
+                    user_email: None,
+                },
+                actor: JwtActor::User {
+                    role: LitellmRole::InternalUser,
+                },
+            },
+            affiliation: Affiliation {
+                holder,
+                org: None,
+                project: None,
+            },
+            end_user: None,
+        })
+    }
+
+    fn jwt_user() -> Named<UserRecord> {
+        Named::Stored(UserRecord {
+            user_id: "u1".to_owned(),
+            ..UserRecord::default()
+        })
+    }
+
+    fn jwt_team() -> Team<NativeRows> {
+        Team::Row(TeamRecord {
+            team_id: "t1".to_owned(),
+            team_alias: Some("team one".to_owned()),
+            ..TeamRecord::default()
+        })
+    }
+
     fn master_for(end_user_id: &str) -> Authenticated<NativeRows> {
         Authenticated::from(Caller::master_key(Some(EndUserRecord {
             end_user_id: Some(end_user_id.to_owned()),
@@ -799,6 +836,28 @@ mod tests {
             key_hash: Some(MASTER_KEY_ALIAS.to_owned()),
             user_id: Some(PROXY_ADMIN_NAME.to_owned()),
             end_user_id: Some("e1".to_owned()),
+            ..Charged::default()
+        }
+    )]
+    #[case::a_jwt_that_names_a_user(
+        jwt(Holder::User(jwt_user())),
+        Charged {
+            user_id: Some("u1".to_owned()),
+            ..Charged::default()
+        }
+    )]
+    #[case::a_jwt_whose_user_belongs_to_its_team(
+        jwt(Holder::Member {
+            user: jwt_user(),
+            team: jwt_team(),
+            membership: None,
+        }),
+        Charged {
+            user_id: Some("u1".to_owned()),
+            team: Some(Label {
+                id: "t1".to_owned(),
+                alias: Some("team one".to_owned()),
+            }),
             ..Charged::default()
         }
     )]
