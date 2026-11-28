@@ -134,8 +134,8 @@ if [ "$mode" = parity ]; then
   export INTEGRATION_WORKERS=1
 else
   case "$suite" in
-    management|accounting) export INTEGRATION_WORKERS=2 ;;
-    providers|extensions) export INTEGRATION_WORKERS=4 ;;
+    management|authorization|configuration|accounting|spend) export INTEGRATION_WORKERS=2 ;;
+    providers|routing|messages|extensions) export INTEGRATION_WORKERS=4 ;;
   esac
 fi
 if [ "$suite" = cost ]; then
@@ -206,7 +206,8 @@ if [ "$isolated_workers" = false ]; then
   curl --noproxy '*' -sSf -X POST "$INTEGRATION_PROXY_URL/config/update" \
     -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
     -d '{"router_settings": {"num_retries": 0}}' > "$results/seed-router-settings.json"
-  if [ "$suite" = management ] || [ "$suite" = mcp ] || [ "$suite" = accounting ]; then
+  case "$suite" in management|authorization|configuration|mcp|accounting|spend) peer_group=true ;; *) peer_group=false ;; esac
+  if [ "$peer_group" = true ]; then
     export INTEGRATION_PEER_URL=http://127.0.0.1:4001
     start_proxy 4001 peer.log
     peer_pid="$launched_pid"
