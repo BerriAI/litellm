@@ -8933,6 +8933,84 @@ class TestRoutingPlugins:
         assert second.model == "gpt-4o-mini"
         assert spy.call_count == 2
 
+    @staticmethod
+    def _select_with_unavailable_mini(mock_router_instance):
+        async def select(
+            model,
+            request_kwargs,
+            *,
+            kind,
+            messages=None,
+            input=None,
+            specific_deployment=False,
+            parent_otel_span=None,
+            health_check_probe=False,
+        ):
+            if model == "gpt-4o-mini":
+                return []
+            return [{"model_name": model, "model_info": {"id": f"deployment-{model}"}}]
+
+        mock_router_instance.select = select
+
+    @pytest.mark.asyncio
+    async def test_health_gate_serves_default_model_when_plugins_keep_it(self, mock_router_instance):
+        """Regression: with routing plugins configured, the health gate refused to fall
+        back to default_model at all, so a request whose classified model was in cooldown
+        failed even though default_model could serve it. The default may serve once the
+        plugin pipeline has kept it as a candidate."""
+
+        class KeepEverything:
+            async def run(self, context):
+                return context
+
+        self._select_with_unavailable_mini(mock_router_instance)
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            ctx=RoutingContext(mock_router_instance),
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["gpt-4o-mini"], "MEDIUM": ["gpt-4o-nano"]},
+                "default_model": "gpt-4o-nano",
+                "plugins": [KeepEverything()],
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-nano"
+        assert result.routing_decision["cause"] == "health_default_fallback"
+
+    @pytest.mark.asyncio
+    async def test_health_gate_default_model_blocked_when_plugins_filter_it_out(self, mock_router_instance):
+        """The health gate's default_model fallback must stay closed when a routing
+        plugin filters default_model out. Serving it anyway would let the fallback
+        bypass the plugin's policy decision."""
+
+        class ExcludeNano:
+            async def run(self, context):
+                context.candidate_models = [m for m in context.candidate_models if m != "gpt-4o-nano"]
+                return context
+
+        self._select_with_unavailable_mini(mock_router_instance)
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            ctx=RoutingContext(mock_router_instance),
+            complexity_router_config={
+                "tiers": {"SIMPLE": ["gpt-4o-mini"], "MEDIUM": ["gpt-4o-nano"]},
+                "default_model": "gpt-4o-nano",
+                "plugins": [ExcludeNano()],
+            },
+        )
+        result = await router.async_pre_routing_hook(
+            model="test-model",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        assert result is not None
+        assert result.model == "gpt-4o-mini"
+
 
 class _FixedTierClassifier:
     """Classifier plugin double returning a fixed verdict; records the context it received."""

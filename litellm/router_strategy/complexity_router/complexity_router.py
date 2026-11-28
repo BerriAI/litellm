@@ -4180,12 +4180,17 @@ class ComplexityRouter(CustomLogger):
         plan_mode_active: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages) is not None
         if (
             plan_mode_active
-            or self.config.plugins
             or not default_model
             or default_model == response.model
             or not fit.accepts(default_model)
             or (eligible is not None and default_model not in eligible)
             or not await self._model_group_can_serve(default_model, messages, input, request_kwargs)
+            or (
+                self.config.plugins
+                and not await self._default_model_survives_plugins(
+                    default_model, messages, resolved_messages, request_kwargs, retained_pin
+                )
+            )
         ):
             return response
         self._restamp_adaptive_choice(request_kwargs, response.model, default_model)
@@ -4216,6 +4221,36 @@ class ComplexityRouter(CustomLogger):
                 "routing_decision": default_decision,
             }
         )
+
+    async def _default_model_survives_plugins(
+        self,
+        default_model: str,
+        messages: list[dict[str, object]] | None,  # mutable-ok: forwarded verbatim to the list-typed pick
+        resolved_messages: Sequence[Mapping[str, object]] | None,
+        request_kwargs: dict[str, object],  # mutable-ok: same shape the hook receives
+        retained_pin: _SessionAffinityPin | None = None,
+    ) -> bool:
+        pools: Final = self._tier_pools()
+        tier_name: Final = next(
+            (candidate for candidate in self.config.tier_names() if default_model in pools.get(candidate, ())),
+            None,
+        )
+        if tier_name is None:
+            return False
+        tier: Final = tier_name if self.config.has_custom_tiers else ComplexityTier(tier_name)
+        repick_messages: Final = list(resolved_messages) if resolved_messages else None
+        try:
+            picked: Final = await self._pick_model_for_tier(
+                tier,
+                messages,
+                repick_messages,  # pyright: ignore[reportArgumentType]  # hook-resolved message dicts; the pick only reads them
+                request_kwargs,
+                allowed_models=(default_model,),
+                retained_pin=retained_pin,
+            )
+        except ValueError:
+            return False
+        return picked == default_model
 
     def _placed_default_model(self) -> str:
         """The default_model behind a usable-default verdict; the raise is the type-level
