@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_cooldowns import RouterCooldowns, RouterCooldownStore
 from litellm.router_api import RoutingContext
+from litellm.router_utils import cooldown_callbacks
 from litellm.router_utils.cooldown_cache import CooldownCache, CooldownCacheValue
 from litellm.router_utils.cooldown_callbacks import resolved_model_and_provider, router_cooldown_event_callback
 from litellm.router_utils.cooldown_handlers import (
@@ -1518,6 +1519,8 @@ async def test_a_late_cooldown_event_ends_the_deployment_state_cooldown_when_the
 ) -> None:
     clock: Final = ManualClock()
     monkeypatch.setattr(deployment_state_series, "monotonic_seconds", clock)
+    started: Final = time.time()
+    monkeypatch.setattr(cooldown_callbacks, "wall_seconds", lambda: started + 2.0)
     prometheus_logger: Final = PrometheusLogger()
     monkeypatch.setattr(litellm, "callbacks", [prometheus_logger])
     router: Final = Router(
@@ -1530,7 +1533,7 @@ async def test_a_late_cooldown_event_ends_the_deployment_state_cooldown_when_the
         ]
     )
     started_two_seconds_ago: Final = CooldownCacheValue(
-        exception_received="401", status_code="401", timestamp=time.time() - 2.0, cooldown_time=5.0
+        exception_received="401", status_code="401", timestamp=started, cooldown_time=5.0
     )
     RoutingContext(router).health().cooldowns.cooldown_store.put("dep-1", started_two_seconds_ago, 5.0)
     await router_cooldown_event_callback(
