@@ -933,3 +933,449 @@ async def test_a_failing_redis_cache_is_delivered_to_datadog_as_redis_warnings(
     assert {message["service"] for message in messages} == {"redis"}
     assert all(message["is_error"] is True for message in messages)
     assert all(absent_socket in message["error"] for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_datadog_secret_redaction_in_messages_and_tool_call_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Verify Datadog secret redaction masks passwords, AWS keys, bearer tokens,
+    and tool-call JSON arguments while preserving non-sensitive data and leaving
+    the shared standard logging payload intact.
+    """
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+
+    with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
+        dd_logger = DataDogLogger(datadog_redact_secrets=True)
+
+    standard_payload = _standard_logging_payload()
+    secret_prompt = "user password=SuperSecretPassword123 with key AKIAIOSFODNN7EXAMPLE"
+    tool_args_raw = json.dumps(
+        {
+            "password": "ToolSecretPassword456",
+            "api_key": "sk-1234567890abcdef1234567890",
+            "email": "user@example.com",
+        }
+    )
+    original_messages = [
+        {"role": "user", "content": secret_prompt},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": tool_args_raw},
+                }
+            ],
+        },
+    ]
+    standard_payload["messages"] = original_messages
+    standard_payload["response"] = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "Bearer abcdef1234567890 authenticated",
+                }
+            }
+        ]
+    }
+    kwargs = {"standard_logging_object": standard_payload}
+
+    dd_payload = dd_logger.create_datadog_logging_payload(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=STANDARD_START_TIME,
+        end_time=STANDARD_END_TIME,
+    )
+
+    # 1. Verify shared kwargs was NOT mutated
+    assert kwargs["standard_logging_object"]["messages"] is original_messages
+    assert "SuperSecretPassword123" in kwargs["standard_logging_object"]["messages"][0]["content"]
+
+    # 2. Verify logged payload message had secrets scrubbed
+    logged_msg = json.loads(dd_payload["message"])
+    logged_messages = logged_msg["messages"]
+    assert "SuperSecretPassword123" not in logged_messages[0]["content"]
+    assert "AKIAIOSFODNN7EXAMPLE" not in logged_messages[0]["content"]
+    assert "REDACTED" in logged_messages[0]["content"]
+
+    # Tool call arguments redacted
+    logged_tool_args = logged_messages[1]["tool_calls"][0]["function"]["arguments"]
+    assert "ToolSecretPassword456" not in logged_tool_args
+    assert "sk-1234567890abcdef1234567890" not in logged_tool_args
+    assert "user@example.com" in logged_tool_args  # non-credential preserved
+
+    # Response content redacted
+    logged_response_content = logged_msg["response"]["choices"][0]["message"]["content"]
+    assert "abcdef1234567890" not in logged_response_content
+    assert "REDACTED" in logged_response_content
+
+
+@pytest.mark.asyncio
+async def test_datadog_secret_redaction_disabled_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ensure secrets remain unredacted when datadog_redact_secrets is False/unset."""
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+
+    with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
+        dd_logger = DataDogLogger()
+
+    standard_payload = _standard_logging_payload()
+    secret_prompt = "user password=SuperSecretPassword123"
+    standard_payload["messages"] = [{"role": "user", "content": secret_prompt}]
+    kwargs = {"standard_logging_object": standard_payload}
+
+    dd_payload = dd_logger.create_datadog_logging_payload(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=STANDARD_START_TIME,
+        end_time=STANDARD_END_TIME,
+    )
+
+    logged_msg = json.loads(dd_payload["message"])
+    assert "SuperSecretPassword123" in logged_msg["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_datadog_secret_redaction_config_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test resolution via litellm.datadog_params, litellm.datadog_redact_secrets, and env vars."""
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+
+    with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
+        # 1. Via litellm.datadog_params
+        monkeypatch.setattr(litellm, "datadog_params", DatadogInitParams(datadog_redact_secrets=True))
+        logger1 = DataDogLogger()
+        assert logger1._should_redact_secrets() is True
+
+        # 2. Via litellm.datadog_redact_secrets
+        monkeypatch.setattr(litellm, "datadog_params", None)
+        monkeypatch.setattr(litellm, "datadog_redact_secrets", True)
+        logger2 = DataDogLogger()
+        assert logger2._should_redact_secrets() is True
+
+        # 3. Via env var DD_REDACT_SECRETS
+        monkeypatch.setattr(litellm, "datadog_redact_secrets", False)
+        monkeypatch.setenv("DD_REDACT_SECRETS", "true")
+        logger3 = DataDogLogger()
+        assert logger3._should_redact_secrets() is True
+
+        # 4. Via env var LITELLM_DATADOG_REDACT_SECRETS
+        monkeypatch.delenv("DD_REDACT_SECRETS", raising=False)
+        monkeypatch.setenv("LITELLM_DATADOG_REDACT_SECRETS", "1")
+        logger4 = DataDogLogger()
+        assert logger4._should_redact_secrets() is True
+
+
+@pytest.mark.asyncio
+async def test_datadog_secret_redaction_v0_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test secret redaction applies when using legacy litellm.datadog_use_v1."""
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+    monkeypatch.setattr(litellm, "datadog_use_v1", True)
+
+    with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
+        dd_logger = DataDogLogger(datadog_redact_secrets=True)
+
+    kwargs = {
+        "messages": [{"role": "user", "content": "password=LegacySecret123"}],
+        "optional_params": {"secret_token": "Bearer token1234567890"},
+        "model": "gpt-4",
+    }
+    response_obj = {"id": "chatcmpl-1", "usage": {"prompt_tokens": 10}}
+
+    dd_payload = dd_logger._create_v0_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=STANDARD_START_TIME,
+        end_time=STANDARD_END_TIME,
+    )
+
+    logged_msg = json.loads(dd_payload["message"])
+    assert "LegacySecret123" not in logged_msg["messages"][0]["content"]
+    assert "REDACTED" in logged_msg["messages"][0]["content"]
+    assert "token1234567890" not in str(logged_msg["model_parameters"])
+
+
+@pytest.mark.asyncio
+async def test_datadog_secret_redaction_failure_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test secret redaction applies to proxy failure hook error messages."""
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+
+    with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
+        dd_logger = DataDogLogger(datadog_redact_secrets=True)
+
+    exc = Exception("Connection failed with password=HookSecretPw123")
+    user_api_key_dict = type("DummyAuth", (), {"user_id": "test_user"})()
+
+    await dd_logger.async_post_call_failure_hook(
+        request_data={},
+        original_exception=exc,
+        user_api_key_dict=user_api_key_dict,
+        traceback_str="traceback with password=HookSecretPw123 in line 42",
+    )
+
+    assert len(dd_logger.log_queue) == 1
+    logged_msg = json.loads(dd_logger.log_queue[0]["message"])
+    assert "HookSecretPw123" not in logged_msg["exception"]
+    assert "HookSecretPw123" not in logged_msg["traceback"]
+    assert "REDACTED" in logged_msg["exception"]
+    assert "REDACTED" in logged_msg["traceback"]
+
+
+def test_datadog_secret_redaction_bounds_oversized_string_and_handles_exception() -> None:
+    """Test ReDoS protection on strings >50,000 chars and fail-closed exception fallback."""
+    # 1. String > 50,000 characters is masked with REDACTED
+    oversized = "a" * 60_000 + " password=SecretEnd123"
+    redacted = DataDogLogger.redact_payload_secrets(oversized)
+    assert redacted == "REDACTED"
+
+    # 2. Fail-closed fallback: if redact_structured_value throws, returns "REDACTED"
+    with patch(
+        "litellm.litellm_core_utils.secret_redaction.redact_structured_value",
+        side_effect=RuntimeError("Regex error"),
+    ):
+        failed = DataDogLogger.redact_payload_secrets("password=NormalSecret123")
+        assert failed == "REDACTED"
+
+
+@pytest.mark.asyncio
+async def test_datadog_secret_redaction_structured_values_and_nested_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Verify key-aware structured redaction scrubs metadata (e.g. metadata.requester_metadata={'password': '...'}),
+    nested Pydantic response models (Choices, Message), and embedded JSON tool arguments.
+    """
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+
+    with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
+        dd_logger = DataDogLogger(datadog_redact_secrets=True)
+
+    standard_payload = _standard_logging_payload()
+    standard_payload["metadata"] = {
+        "requester_metadata": {
+            "password": "SuperSecretPassword123",
+            "api_key": "sk-1234567890abcdef1234567890",
+            "username": "alice",
+        }
+    }
+    # Nested ModelResponse with Choices and Message
+    standard_payload["response"] = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content="Bearer secrettoken1234567890",
+                    tool_calls=[
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {
+                                "name": "do_task",
+                                "arguments": json.dumps(
+                                    {
+                                        "config": {
+                                            "password": "NestedToolSecret456",
+                                            "endpoint": "https://api.example.com",
+                                        }
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                )
+            )
+        ]
+    )
+    kwargs = {"standard_logging_object": standard_payload}
+
+    dd_payload = dd_logger.create_datadog_logging_payload(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=STANDARD_START_TIME,
+        end_time=STANDARD_END_TIME,
+    )
+
+    logged_msg = json.loads(dd_payload["message"])
+
+    # 1. Structured metadata credentials redacted
+    req_meta = logged_msg["metadata"]["requester_metadata"]
+    assert req_meta["password"] == "REDACTED"
+    assert req_meta["api_key"] == "REDACTED"
+    assert req_meta["username"] == "alice"  # non-credential preserved
+
+    # 2. Nested model content and tool call credentials redacted
+    resp_choice = logged_msg["response"]["choices"][0]["message"]
+    assert resp_choice["content"] == "REDACTED"
+    parsed_args = json.loads(resp_choice["tool_calls"][0]["function"]["arguments"])
+    assert parsed_args["config"]["password"] == "REDACTED"
+    assert parsed_args["config"]["endpoint"] == "https://api.example.com"
+
+
+@pytest.mark.asyncio
+async def test_datadog_secret_redaction_pem_delimiters_and_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Verify:
+    1. PEM keys in payloads > 10,000 characters are redacted before truncation strips closing markers.
+    2. Unterminated PEM blocks arriving without END markers are masked rather than leaked.
+    3. Oversized strings (> 50,000 characters) are masked with REDACTED rather than emitting prefixes.
+    """
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+
+    with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
+        dd_logger = DataDogLogger(datadog_redact_secrets=True)
+
+    # 1. Payload > 10,000 chars where PEM key crosses or ends past 10,000 chars
+    # With truncation before redaction, the -----END RSA PRIVATE KEY----- would have been sliced off.
+    pem_body = "MIIEowIBAAKCAQEA0" * 200
+    pem_key = f"-----BEGIN RSA PRIVATE KEY-----\n{pem_body}\n-----END RSA PRIVATE KEY-----"
+    long_prompt = "x" * 9_500 + " " + pem_key
+    assert len(long_prompt) > 10_000
+
+    standard_payload = _standard_logging_payload()
+    standard_payload["messages"] = [{"role": "user", "content": long_prompt}]
+    kwargs = {"standard_logging_object": standard_payload}
+
+    dd_payload = dd_logger.create_datadog_logging_payload(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=STANDARD_START_TIME,
+        end_time=STANDARD_END_TIME,
+    )
+
+    logged_msg = json.loads(dd_payload["message"])
+    assert pem_body not in str(logged_msg)
+    assert "BEGIN RSA PRIVATE KEY" not in str(logged_msg)
+
+    # 2. Unterminated PEM key (e.g. pre-truncated input missing the END marker)
+    unterminated_pem = "config: -----BEGIN RSA PRIVATE KEY-----\n" + "MIIEowIBAAKCAQEA" * 50
+    standard_payload2 = _standard_logging_payload()
+    standard_payload2["messages"] = [{"role": "user", "content": unterminated_pem}]
+
+    dd_payload2 = dd_logger.create_datadog_logging_payload(
+        kwargs={"standard_logging_object": standard_payload2},
+        response_obj=None,
+        start_time=STANDARD_START_TIME,
+        end_time=STANDARD_END_TIME,
+    )
+    logged_msg2 = json.loads(dd_payload2["message"])
+    assert "MIIEowIBAAKCAQEA" not in str(logged_msg2)
+    assert "REDACTED" in logged_msg2["messages"][0]["content"]
+
+    # 3. Oversized string > 50,000 characters is masked with REDACTED
+    oversized = "a" * 60_000
+    assert DataDogLogger.redact_payload_secrets(oversized) == "REDACTED"
+
+
+@pytest.mark.asyncio
+async def test_datadog_backtracking_linear_time_and_work_budget() -> None:
+    """
+    Verify:
+    1. Repeated '-----BEGIN ' strings do not trigger catastrophic regex backtracking
+       and complete in linear time (< 0.2s).
+    2. Operations exceeding the redaction work budget fail closed to 'REDACTED'.
+    """
+    import time
+
+    # 1. Linear-time matching on repeated BEGIN prefixes
+    repeated_prefix = "-----BEGIN " * 4544
+    t0 = time.perf_counter()
+    res = DataDogLogger._redact_structured_leaf("content", repeated_prefix)
+    elapsed = time.perf_counter() - t0
+    assert elapsed < 0.2
+    assert res == repeated_prefix
+
+    # 2. Timeout budget triggers fail-closed fallback
+    with patch.object(
+        DataDogLogger,
+        "_do_redact_payload_secrets",
+        side_effect=lambda payload: time.sleep(0.7) or payload,
+    ):
+        result = DataDogLogger.redact_payload_secrets({"password": "secret"})
+        assert result == "REDACTED"
+
+
+@pytest.mark.asyncio
+async def test_datadog_service_events_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Verify service-event hooks (failure and success) apply secret redaction
+    to both payload fields and event_metadata when redaction is enabled.
+    """
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+
+    with patch("asyncio.create_task", side_effect=_discard_periodic_flush):
+        dd_logger = DataDogLogger(datadog_redact_secrets=True)
+
+    from litellm.types.services import ServiceLoggerPayload, ServiceTypes
+
+    # 1. Failure hook redaction
+    failure_payload = ServiceLoggerPayload(
+        is_error=True,
+        error="Postgres connection failed: password=ServiceSecret123",
+        service=ServiceTypes.DB,
+        duration=0.1,
+        call_type="query",
+        caller="test",
+        target="auth_objects",
+        event_metadata={"connection_string": "postgres://user:SuperPass@host:5432/db", "safe_field": "val"},
+    )
+
+    await dd_logger.async_service_failure_hook(
+        payload=failure_payload,
+        event_metadata={"password": "AnotherSecret123", "db_name": "production"},
+    )
+
+    assert len(dd_logger.log_queue) == 1
+    logged_item = dd_logger.log_queue[-1]
+    assert logged_item["status"] == "warning"
+    logged_msg = json.loads(logged_item["message"])
+    assert "ServiceSecret123" not in str(logged_msg)
+    assert "SuperPass" not in str(logged_msg)
+    assert "AnotherSecret123" not in str(logged_msg)
+    assert logged_msg["db_name"] == "production"
+
+    # 2. Success hook redaction
+    success_payload = ServiceLoggerPayload(
+        is_error=False,
+        error=None,
+        service=ServiceTypes.RESET_BUDGET_JOB,
+        duration=0.05,
+        call_type="reset",
+        caller="test",
+        target="budget",
+        event_metadata={"api_key": "sk-secret-key-123", "initial_val": 100},
+    )
+
+    await dd_logger.async_service_success_hook(
+        payload=success_payload,
+        event_metadata={"master_key": "master-secret-abc", "healthy": True},
+    )
+
+    assert len(dd_logger.log_queue) == 2
+    success_item = dd_logger.log_queue[-1]
+    assert success_item["status"] == "info"
+    success_msg = json.loads(success_item["message"])
+    assert "sk-secret-key-123" not in str(success_msg)
+    assert "master-secret-abc" not in str(success_msg)
+    assert success_msg["healthy"] is True
