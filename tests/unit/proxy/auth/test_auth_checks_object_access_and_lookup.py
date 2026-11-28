@@ -10600,6 +10600,52 @@ async def test_get_object_permission_db_fetch_returns_validated_permission(rust_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("grants", [None, {}, {"server": "Build"}])
+async def test_a_grant_column_read_uses_the_writer_and_is_reused_until_eviction(
+    rust_auth_stores: RustAuthStores, grants: Mapping[str, str] | None
+) -> None:
+    cache: Final = UserApiKeyCache()
+    prisma: Final = MagicMock()
+    key: Final = AuthObject.object_permission("linked")
+    rows: Final = rust_auth_stores.object_permission
+    rows.writer["linked"] = LiteLLM_ObjectPermissionTable(object_permission_id="linked", mcp_auth_profiles=grants)
+    await cache.async_set_cache(key, LiteLLM_ObjectPermissionTable(object_permission_id="linked"))
+
+    for fresh in (True, False):
+        row = await auth_checks.get_object_permission(
+            "linked", prisma, cache, check_db_only=fresh, require_profile_grants=True
+        )
+        assert row is not None and "mcp_auth_profiles" in row.model_fields_set
+        assert (row.mcp_auth_profiles or {}) == (grants or {})
+    assert rows.lookups == [("linked", True)]
+
+    await cache.async_delete_cache(key.key)
+    rows.writer["linked"] = LiteLLM_ObjectPermissionTable(object_permission_id="linked", mcp_auth_profiles={"s": "Ops"})
+    current: Final = await auth_checks.get_object_permission("linked", prisma, cache, require_profile_grants=True)
+    assert current is not None and current.mcp_auth_profiles == {"s": "Ops"}
+
+
+@pytest.mark.asyncio
+async def test_permission_read_finishing_after_eviction_leaves_the_cache_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache: Final = UserApiKeyCache()
+    key: Final = AuthObject.object_permission("fixture")
+
+    async def read_fixture(object_permission_id: str, *, use_writer: bool) -> str:
+        await cache.async_delete_cache(key.key)
+        return LiteLLM_ObjectPermissionTable(object_permission_id=object_permission_id).model_dump_json()
+
+    def repository(kind: object) -> SimpleNamespace | None:
+        if kind is RustObjectPermissionRepository:
+            return SimpleNamespace(find_by_object_permission_id=read_fixture)
+        return None
+
+    monkeypatch.setattr(rust_database, "repository", repository)
+    row: Final = await auth_checks.get_object_permission("fixture", MagicMock(), cache, require_profile_grants=True)
+    assert row is not None and row.object_permission_id == "fixture"
+    assert cache.get_local(key) is None
+
+
+@pytest.mark.asyncio
 async def test_get_managed_vector_store_rows_by_uuids_db_fetch_validates_rows():
     from litellm.proxy._types import LiteLLM_ManagedVectorStoresTable
     from litellm.proxy.auth.auth_checks import get_managed_vector_store_rows_by_uuids

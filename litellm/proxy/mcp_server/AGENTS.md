@@ -18,6 +18,7 @@ litellm/proxy/mcp_server/
   mcp_server_manager.py      # upstream server registry, clients, tool routing  [PR7: _create_mcp_client swaps resolve_mcp_auth -> resolve_credentials]
   auth/
     user_api_key_auth_mcp.py # LiteLLM admission auth and MCP request headers
+    auth_profile_grants.py   # the caller's per-server auth profile grants (agent, key, team)
     token_exchange.py        # OAuth token exchange handling                    [unchanged, V1TokenExchangeAdapter delegates here]
     litellm_auth_handler.py  # authenticated-user adapter for MCP sessions
   client_allowlist.py        # gateway-level client application allowlist (mcp_allowed_clients), a leaf module with no litellm.proxy imports

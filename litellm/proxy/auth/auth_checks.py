@@ -115,7 +115,7 @@ from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     evict_shared,
     publish_cache_invalidation,
 )
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec, CacheData
 from litellm.proxy.common_utils.customer_usage import customer_usage_key_fields, customer_usage_requested
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -4467,7 +4467,13 @@ async def _with_object_permission(
         proxy_logging_obj=proxy_logging_obj,
         check_db_only=check_db_only,
     )
-    return key if permission is None else {**key, "object_permission": permission.model_dump(mode="json")}
+    return key if permission is None else {**key, "object_permission": _dump_keeping_grant_read(permission)}
+
+
+def _dump_keeping_grant_read(permission: LiteLLM_ObjectPermissionTable) -> Mapping[str, CacheData]:
+    dumped: Final = permission.model_dump(mode="json")
+    omitted: Final = "mcp_auth_profiles" in permission.model_fields_set and "mcp_auth_profiles" not in dumped
+    return {**dumped, "mcp_auth_profiles": permission.mcp_auth_profiles} if omitted else dumped
 
 
 async def _fetch_key(
@@ -4606,11 +4612,14 @@ async def get_object_permission(
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
     check_db_only: bool = False,
+    *,
+    require_profile_grants: bool = False,
 ) -> LiteLLM_ObjectPermissionTable | None:
     """
     - Check if object permission id in proxy ObjectPermissionTable
     - if valid, return LiteLLM_ObjectPermissionTable object
     - if not, then raise an error
+    - ``require_profile_grants`` reads the writer, under a cache lease, when the cached row lacks the grant column
     """
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
@@ -4625,32 +4634,36 @@ async def get_object_permission(
             model_type=LiteLLM_ObjectPermissionTable,
         )
     )
-    if deserialized_perm is not None:
+    if deserialized_perm is not None and (
+        not require_profile_grants or "mcp_auth_profiles" in deserialized_perm.model_fields_set
+    ):
         return deserialized_perm
 
     # else, check db
+    use_writer: Final = check_db_only or require_profile_grants
     try:
+        lease: Final = await user_api_key_cache.lease(key) if require_profile_grants else None
         _perm_obj: Final = await bounded_db_lookup(
             ObjectPermissionRepository(prisma_client).find_by_object_permission_id(
-                object_permission_id, use_writer=check_db_only
+                object_permission_id, use_writer=use_writer
             ),
             name="object_permission",
         )
 
         if _perm_obj is None:
-            if check_db_only:
+            if use_writer:
                 raise HTTPException(status_code=403, detail="Referenced object permission does not exist")
             return None
-        await user_api_key_cache.async_set_cache(
-            key=key,
-            value=_perm_obj,
-            model_type=LiteLLM_ObjectPermissionTable,
-            ttl=get_management_object_ttl(user_api_key_cache),
-        )
+        payload: Final = _dump_keeping_grant_read(_perm_obj)
+        ttl: Final = get_management_object_ttl(user_api_key_cache)
+        if lease is None:
+            await user_api_key_cache.async_set_cache(key=key, value=payload, ttl=ttl)
+        elif not await user_api_key_cache.async_set_leased(lease, payload, ttl):
+            verbose_proxy_logger.debug("Object permission %s was evicted during its read", object_permission_id)
 
         return _perm_obj
     except Exception:
-        if check_db_only:
+        if use_writer:
             raise
         return None
 

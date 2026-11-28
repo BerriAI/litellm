@@ -11139,6 +11139,55 @@ async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session
     assert caller.access_group_ids == ["original-group"]
 
 
+def _agent_caller(case: str) -> UserAPIKeyAuth:
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import ManagedAgentContext
+
+    policy: Final = AgentResponse(agent_id="runner", agent_name="Runner", agent_card_params={}, identity_managed=True)
+    mode: Final = "delegated" if case == "managed-delegated" else "autonomous"
+    context: Final = ManagedAgentContext(
+        agent_id="runner", binding_revision="current", mode=mode, user_id="reader" if mode == "delegated" else None
+    )
+    caller: Final = UserAPIKeyAuth(api_key="fixture", agent_id="runner")
+    caller.via_virtual_key = case in ("key-bound", "key-rebound")
+    if case.startswith("managed"):
+        return caller.model_copy(update={"managed_agent_policy": policy, "managed_agent_context": context})
+    return caller.model_copy(update={"jwt_claims": {"agent": "runner"}}) if case == "jwt" else caller
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "key-bound",
+        "key-rebound",
+        "jwt",
+        "managed-autonomous",
+        "managed-delegated",
+        "no-database",
+        "managed-no-database",
+    ],
+)
+async def test_catalog_refresh_of_an_agent_caller_reads_no_agent_policy(
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores, case: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    database: Final = None if case.endswith("no-database") else MagicMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    bound: Final = "other" if case == "key-rebound" else "runner"
+    rust_auth_stores.key.writer = {"fixture": {"token": "fixture", "agent_id": bound}}
+    caller: Final = _agent_caller(case)
+
+    refreshed: Final = await MCPRequestHandler.refresh_catalog_authority(caller)
+
+    assert refreshed is not None and refreshed.requires_fresh_policy
+    assert (refreshed.agent_id, refreshed.managed_agent_policy) == (caller.agent_id, caller.managed_agent_policy)
+    assert database is None or database.mock_calls == []
+    assert rust_auth_stores.user.sign_ins == []
+
+
 @pytest.mark.asyncio
 async def test_admission_request_body_serves_stashed_peek_callable():
     from litellm.constants import MCP_PEEKED_BODY_SCOPE_KEY

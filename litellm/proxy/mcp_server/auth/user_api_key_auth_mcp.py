@@ -1571,8 +1571,7 @@ class MCPRequestHandler:
             refreshed.org_id = current.org_id
         elif auth.via_virtual_key and auth.api_key and auth.api_key != LITELLM_PROXY_MASTER_KEY_ALIAS:
             current = await MCPRequestHandler._reload_admitted_key(auth.api_key, check_db_only=True)
-            refreshed.object_permission = current.object_permission
-            refreshed.object_permission_id = current.object_permission_id
+            refreshed.attach_catalog_key(current)
             refreshed.team_id = current.team_id
             refreshed.org_id = current.org_id
             refreshed.project_id = current.project_id
@@ -2918,12 +2917,11 @@ class MCPRequestHandler:
     async def _get_team_object_permission(
         user_api_key_auth: UserAPIKeyAuth | None = None,
     ) -> LiteLLM_ObjectPermissionTable | None:
-        """
-        Get team object_permission - automatically loaded by get_team_object() in main auth flow.
+        team: Final = await MCPRequestHandler.permission_team(user_api_key_auth)
+        return team.object_permission if team is not None else None
 
-        Note: object_permission is automatically populated when the team is fetched via
-        get_team_object() in litellm/proxy/auth/auth_checks.py
-        """
+    @staticmethod
+    async def permission_team(user_api_key_auth: UserAPIKeyAuth | None) -> LiteLLM_TeamTable | None:
         from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import (
             prisma_client,
@@ -2941,7 +2939,7 @@ class MCPRequestHandler:
             return None
 
         # Get the team object (which has object_permission already loaded)
-        team_obj: Final[LiteLLM_TeamTable | None] = await get_team_object(
+        return await get_team_object(
             team_id=user_api_key_auth.team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -2949,11 +2947,6 @@ class MCPRequestHandler:
             proxy_logging_obj=proxy_logging_obj,
             check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
         )
-
-        if not team_obj:
-            return None
-
-        return team_obj.object_permission
 
     @staticmethod
     async def _toolset_tool_permissions(
