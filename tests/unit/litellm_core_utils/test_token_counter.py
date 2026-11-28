@@ -44,6 +44,7 @@ from litellm.litellm_core_utils.token_counter import (
     _resolve_exact_count,
     calculate_img_tokens,
     estimate_image_tokens,
+    get_image_type,
     has_only_text_content,
     high_detail_image_token_upper_bound,
     inline_pdf_token_delta,
@@ -1087,6 +1088,25 @@ def test_img_url_token_counter(img_url, monkeypatch):
 
     assert width is not None
     assert height is not None
+
+
+@pytest.mark.parametrize(
+    ("header_bytes", "expected_type"),
+    [
+        (b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic", "heic"),
+        (b"\x00\x00\x00\x1cftypheix\x00\x00\x00\x00mif1heixhevx", "heic"),
+        (b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2", None),
+        (b"\x00\x00\x00\x14ftypqt  \x00\x00\x02\x00qt  ", None),
+        (b"\x00\x00\x00\x1cftypavif\x00\x00\x00\x00avifmif1miaf", None),
+    ],
+    ids=["heic", "heix", "mp4", "mov", "avif"],
+)
+def test_get_image_type_checks_the_ftyp_brand_not_just_the_box_marker(
+    header_bytes: bytes, expected_type: str | None
+) -> None:
+    """MP4, MOV, and AVIF files share the same ISOBMFF ftyp box as HEIC, distinguished only by
+    the brand that follows it, so get_image_type must not treat every ftyp box as HEIC."""
+    assert get_image_type(header_bytes) == expected_type
 
 
 def test_token_encode_disallowed_special():
