@@ -6884,7 +6884,7 @@ def _wrapper_with_partial_chunks(
     usage: Optional[Usage] = None,
     model: str = "gpt-4o-mini",
     custom_llm_provider: str = "openai",
-) -> tuple:
+) -> tuple[CustomStreamWrapper, Logging]:
     logging_obj = Logging(
         model=model,
         messages=[{"role": "user", "content": "Tell me a long story"}],
@@ -6921,6 +6921,145 @@ def _wrapper_with_partial_chunks(
         )
     ]
     return wrapper, logging_obj
+
+
+@pytest.mark.parametrize(
+    "expected_tokens",
+    (
+        None,
+        5,
+        0,
+    ),
+)
+@pytest.mark.parametrize("provider", ("openai", "anthropic", "bedrock"))
+def test_interrupted_chat_stream_only_recovers_available_usage_when_counting_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    expected_tokens: int | None,
+    provider: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    reported: Final = (
+        Usage(prompt_tokens=0, completion_tokens=expected_tokens, total_tokens=expected_tokens)
+        if expected_tokens is not None
+        else None
+    )
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="gpt-4o-mini",
+        usage=reported,
+        custom_llm_provider=provider,
+    )
+
+    wrapper._record_partial_usage_for_failure()
+
+    recovered: Final[object] = logging_obj.model_call_details.get("combined_usage_object")
+    assert (getattr(recovered, "completion_tokens", None), recovered is None) == (
+        expected_tokens,
+        expected_tokens is None,
+    )
+
+
+@pytest.mark.parametrize("has_placeholder", (False, True))
+@pytest.mark.parametrize("disable_counting", (False, True))
+def test_interrupted_chat_preserves_provider_usage_kept_in_chunk_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    has_placeholder: bool,
+    disable_counting: bool,
+) -> None:
+    from litellm.litellm_core_utils.hidden_params import set_hidden_param
+    from litellm.types.utils import UnreportedUsage
+
+    monkeypatch.setattr(litellm, "disable_token_counter", disable_counting)
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model="gpt-4o-mini",
+        custom_llm_provider="anthropic",
+    )
+    chunk: Final = wrapper.chunks[0]
+    chunk.usage = UnreportedUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0) if has_placeholder else None
+    set_hidden_param(chunk, "usage", Usage(prompt_tokens=4, completion_tokens=6, total_tokens=10))
+
+    wrapper._record_partial_usage_for_failure()
+
+    recovered: Final[object] = logging_obj.model_call_details.get("combined_usage_object")
+    assert isinstance(recovered, Usage)
+    assert (recovered.prompt_tokens, recovered.completion_tokens, recovered.total_tokens) == (4, 6, 10)
+
+
+@pytest.mark.parametrize(
+    "delta_kwargs",
+    (
+        {"reasoning_content": "step by step"},
+        {"tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "search", "arguments": "{}"}}]},
+    ),
+)
+def test_interrupted_chat_skips_rebuild_for_reasoning_and_tool_streams_when_counting_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    delta_kwargs: dict[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    wrapper, logging_obj = _wrapper_with_partial_chunks(chunk_model="gpt-4o-mini", custom_llm_provider="openai")
+    wrapper._accumulate_streamed_delta(delta_kwargs)
+    assert wrapper._emitted_disqualifying_content is True
+
+    def fail_builder(*_args: object, **_kwargs: object) -> object:  # kwargs-ok: spies on untyped builder signature
+        raise AssertionError("stream_chunk_builder should not run without provider usage")
+
+    monkeypatch.setattr(litellm, "stream_chunk_builder", fail_builder)
+    wrapper._record_partial_usage_for_failure()
+
+    assert logging_obj.model_call_details.get("combined_usage_object") is None
+
+
+@pytest.mark.parametrize(
+    ("margin_config", "expects_rebuild"),
+    (
+        ({"openai": 0.1}, False),
+        ({"openai": {"percentage": 0.1}}, False),
+        ({"openai": {"fixed_amount": 0.001}}, True),
+    ),
+)
+def test_interrupted_chat_margin_config_only_rebuilds_for_fixed_margin(
+    monkeypatch: pytest.MonkeyPatch,
+    margin_config: dict[str, object],
+    expects_rebuild: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    monkeypatch.setattr(litellm, "cost_margin_config", margin_config)
+    wrapper, logging_obj = _wrapper_with_partial_chunks(chunk_model="gpt-4o-mini", custom_llm_provider="openai")
+
+    wrapper._record_partial_usage_for_failure()
+
+    assert (logging_obj.model_call_details.get("combined_usage_object") is not None) is expects_rebuild
+
+
+@pytest.mark.parametrize(
+    ("source", "pricing_entry", "expects_rebuild"),
+    (
+        ("custom_model_info", {"input_cost_per_second": 0.05}, True),
+        ("custom_model_info", {"input_cost_per_token": 0.001, "input_cost_per_second": 0.05}, False),
+        ("catalog", {"output_cost_per_second": 0.02, "mode": "chat"}, True),
+    ),
+)
+def test_interrupted_chat_preserves_per_second_model_pricing_when_counting_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    pricing_entry: dict[str, object],
+    expects_rebuild: bool,
+) -> None:
+    model_name: Final = "per-second-test-model"
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    wrapper, logging_obj = _wrapper_with_partial_chunks(
+        chunk_model=model_name,
+        model=model_name,
+        custom_llm_provider="openai",
+    )
+    if source == "custom_model_info":
+        logging_obj.set_per_call_pricing(pricing_entry)  # pyright: ignore[reportArgumentType]  # partial test ModelInfo
+    else:
+        monkeypatch.setitem(litellm.model_cost, model_name, pricing_entry)
+
+    wrapper._record_partial_usage_for_failure()
+
+    assert (logging_obj.model_call_details.get("combined_usage_object") is not None) is expects_rebuild
 
 
 def test_record_partial_usage_for_failure_prices_alias_restamped_chunks_at_real_model():

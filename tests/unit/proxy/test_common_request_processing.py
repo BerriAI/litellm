@@ -11207,7 +11207,51 @@ class TestStreamingClientDisconnectBilling:
         return response
 
     @pytest.mark.asyncio
-    async def test_disconnect_bills_partial_streamed_spend(self):
+    @pytest.mark.parametrize("reported_tokens", (None, 7))
+    async def test_disconnect_without_local_counting_logs_499_and_preserves_reported_chat_usage(
+        self, monkeypatch: pytest.MonkeyPatch, reported_tokens: int | None
+    ) -> None:
+        from pydantic import TypeAdapter
+
+        from litellm.types.utils import ModelResponse, StandardLoggingPayload, Usage
+
+        monkeypatch.setattr(litellm, "disable_token_counter", True)
+        recorder: Final = _RecordingSuccessLogger()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        stream_obj: Final[object] = await self._start_partial_stream()
+        assert isinstance(stream_obj, litellm.CustomStreamWrapper)
+        stream: Final = stream_obj
+        if reported_tokens is not None:
+            stream.chunks.append(
+                ModelResponseStream(
+                    choices=[],
+                    usage=Usage(prompt_tokens=0, completion_tokens=reported_tokens, total_tokens=reported_tokens),
+                )
+            )
+        await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(
+            request=None,
+            request_data={"litellm_logging_obj": stream.logging_obj},
+            response=stream,
+            client_disconnected=True,
+        )
+        await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+
+        (event,) = recorder.success_events
+        partial: Final[object] = event["response_obj"]
+        payload: Final = TypeAdapter(StandardLoggingPayload).validate_python(event["kwargs"]["standard_logging_object"])
+        assert isinstance(partial, ModelResponse)
+        error: Final = payload.get("error_information")
+        assert error is not None
+        assert (error.get("error_code"), payload["completion_tokens"], bool(partial.choices)) == (
+            "499",
+            reported_tokens or 0,
+            reported_tokens is not None,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("disable_counting", (False, True))
+    async def test_disconnect_bills_partial_streamed_spend(self, monkeypatch: pytest.MonkeyPatch, disable_counting: bool):
+        monkeypatch.setattr(litellm, "disable_token_counter", disable_counting)
         recorder = _RecordingSuccessLogger()
         original_callbacks = litellm.callbacks
         litellm.callbacks = [recorder]
@@ -11234,7 +11278,7 @@ class TestStreamingClientDisconnectBilling:
 
         assert len(recorder.success_events) == 1
         standard_logging_object = recorder.success_events[0]["kwargs"]["standard_logging_object"]
-        assert standard_logging_object["total_tokens"] > 0
+        assert (standard_logging_object["total_tokens"] == 0) is disable_counting
         assert standard_logging_object["response_cost"] >= 0.002
 
     @pytest.mark.asyncio

@@ -70,6 +70,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
 from litellm.litellm_core_utils.socket_logging import track_socket_logging
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import has_stream_cost_without_token_usage
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
@@ -1084,16 +1085,23 @@ class BaseResponsesAPIStreamingIterator:
             pass
 
     def _record_partial_usage_for_failure(self) -> None:
-        generated_text: Final = self._generated_content + self._generated_tool_arguments
+        if not self._generated_content and not self._generated_tool_arguments:
+            return
         if (
-            not generated_text
-            or self._replays_stored_stream
+            self._replays_stored_stream
             or requests_background(self.request_data)
             or is_background_response(self._created_response)
             or self._completed_response_logged
             or self.logging_obj.model_call_details.get("combined_usage_object") is not None
         ):
             return
+        if (
+            litellm.disable_token_counter is True
+            and self._earlier_rounds_spend is None
+            and not has_stream_cost_without_token_usage(self.logging_obj)
+        ):
+            return
+        generated_text: Final = self._generated_content + self._generated_tool_arguments
         estimate: Final = _estimate_usage_safely(
             self.model or "",
             self.request_data.get("input"),
@@ -1208,15 +1216,23 @@ class BaseResponsesAPIStreamingIterator:
         created: Final = self._created_response
         if self._replays_stored_stream or created is None or self._billed_without_disconnect():
             return None
-        generated: Final = self._generated_content + self._generated_tool_arguments
         reported: Final = self._usage_of_the_response_failed_while_read_on()
-        if reported is None and not generated:
+        if reported is None and not (self._generated_content or self._generated_tool_arguments):
             return None
+        if (
+            reported is None
+            and litellm.disable_token_counter is True
+            and not has_stream_cost_without_token_usage(self.logging_obj)
+        ):
+            return ResponseIncompleteEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                response=created.model_copy(update={"status": "incomplete", "usage": None, "output": []}),
+            )
         usage: Final = reported or _estimate_usage_safely(
             self.model or "",
             self.request_data.get("input"),
             self.request_data,
-            generated,
+            self._generated_content + self._generated_tool_arguments,
             use_default_image_token_count=False,
         )
         if usage is None:
@@ -2121,6 +2137,8 @@ def _estimate_usage_safely(
     *,
     use_default_image_token_count: bool,
 ) -> ResponseAPIUsage | None:
+    if litellm.disable_token_counter is True:
+        return ResponseAPIUsage(input_tokens=0, output_tokens=0, total_tokens=0)
     try:
         return _estimate_usage_from_text(
             model=model,

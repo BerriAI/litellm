@@ -59,6 +59,7 @@ from typing import (
 
 import anyio
 
+import litellm
 import litellm.exceptions as litellm_exceptions
 from litellm._logging import verbose_router_logger
 from litellm.exceptions import MidStreamFallbackError
@@ -76,6 +77,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.on_end_byte_stream import StreamClosedEarly, StreamCompleted, StreamEnd, StreamFailed
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import chunk_has_reported_usage
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -1822,7 +1824,17 @@ def _extract_partial_responses_usage(source_iterator: BaseResponsesAPIStreamingI
     )
 
     if isinstance(source_iterator, LiteLLMCompletionStreamingIterator):
-        chunks: Final = source_iterator.collected_chat_completion_chunks
+        kept: Final = source_iterator.litellm_custom_stream_wrapper.chunks
+        collected: Final = source_iterator.collected_chat_completion_chunks
+        chunks: Final = (
+            collected
+            if litellm.disable_token_counter is not True
+            else kept
+            if any(map(chunk_has_reported_usage, kept))
+            else collected
+            if any(map(chunk_has_reported_usage, collected))
+            else None
+        )
         if chunks:
             try:
                 from litellm.main import (

@@ -91,6 +91,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     FinishEvidence,
+    as_str_mapping,
     attribute_or_none,
     finish_evidence_of,
     finite_cost,
@@ -109,6 +110,7 @@ from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
+from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsDispatch
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -128,7 +130,10 @@ from litellm.litellm_core_utils.served_output_texts import (
     record_served_output_texts,
     served_output_texts,
 )
-from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+    ChunkProcessor,
+    should_skip_partial_stream_rebuild,
+)
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
@@ -604,6 +609,22 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: Mapping[str, 
     chunk_source: Final[object] = chunks
     if not isinstance(chunks, list) or not chunks:
         return False
+    typed_chunks: Final = cast("Sequence[object]", chunks)  # cast-ok: chunks is a runtime-checked list
+    if should_skip_partial_stream_rebuild(typed_chunks, logging_obj):
+        first_chunk: Final = typed_chunks[0]
+        fields: Final = as_str_mapping(first_chunk)
+        response_id: Final[object] = fields.get("id") if fields is not None else getattr(first_chunk, "id", None)
+        created: Final[object] = fields.get("created") if fields is not None else getattr(first_chunk, "created", None)
+        partial_model: Final[object] = getattr(response, "model", None)
+        empty_partial: Final = ModelResponse(
+            id=response_id if isinstance(response_id, str) else None,
+            created=created if isinstance(created, int) else None,
+            model=partial_model if isinstance(partial_model, str) and partial_model else logging_obj.model,
+            choices=[],
+            usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+            hidden_params=dict(get_hidden_params(first_chunk) or {}),
+        )
+        return await _dispatch_disconnect_billing_event(logging_obj, empty_partial)
     verbose_proxy_logger.debug(
         "Billing partial streamed spend for %s chunks after client disconnect, litellm_call_id=%s",
         len(chunks),

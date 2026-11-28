@@ -26,7 +26,12 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses import streaming_iterator as responses_streaming_iterator_module
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
-from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamingResponse
+from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
+)
 from litellm.types.utils import StandardLoggingPayload
 
 
@@ -614,6 +619,71 @@ def test_partial_response_on_disconnect_bills_the_relayed_text_at_the_served_ser
     assert partial.usage.total_tokens == partial.usage.input_tokens + partial.usage.output_tokens
 
 
+def test_native_responses_failure_without_local_counting_skips_partial_usage_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    logging_obj: Final = _make_logging_obj()
+    iterator: Final = _live_iterator(logging_obj)
+    iterator._process_chunk(json.dumps(_CREATED_WITH_PRIORITY_TIER))
+    iterator._process_chunk(json.dumps(_text_delta("Once upon a time", 1)))
+
+    iterator._record_partial_usage_for_failure()
+
+    assert logging_obj.model_call_details.get("combined_usage_object") is None
+
+
+def test_native_responses_disconnect_without_local_counting_has_no_estimated_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    iterator: Final = _live_iterator(_make_logging_obj())
+    created: Final[object] = iterator._process_chunk(json.dumps(_CREATED_WITH_PRIORITY_TIER))
+    assert isinstance(created, ResponseCreatedEvent)
+    iterator._process_chunk(json.dumps(_text_delta("Once upon a time", 1)))
+
+    incomplete: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete is not None
+    assert (incomplete.response.id, incomplete.response.status, incomplete.response.usage) == (
+        created.response.id,
+        "incomplete",
+        None,
+    )
+
+
+@pytest.mark.parametrize(("reported", "expected"), ((None, (0, 0, 0)), ((5, 7, 12), (5, 7, 12))))
+async def test_native_responses_terminal_without_local_counting_preserves_reported_usage_only(
+    monkeypatch: pytest.MonkeyPatch,
+    reported: tuple[int, int, int] | None,
+    expected: tuple[int, int, int],
+) -> None:
+    def count_tokens(**_kwargs: object) -> int:  # kwargs-ok: matches the tokenizer's two call forms
+        return 9
+
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    monkeypatch.setattr(litellm, "token_counter", count_tokens)
+    iterator: Final = _live_iterator(_make_logging_obj())
+    terminal: Final = {
+        "type": "response.completed",
+        "sequence_number": 2,
+        "response": {
+            **_CREATED_RESPONSE_WITH_PRIORITY_TIER,
+            "status": "completed",
+            "usage": dict(zip(("input_tokens", "output_tokens", "total_tokens"), reported)) if reported else None,
+        },
+    }
+    for event in (_CREATED_WITH_PRIORITY_TIER, _text_delta("Once upon a time", 1), terminal):
+        iterator._process_chunk(json.dumps(event))
+    await iterator._await_pending_logging()
+
+    completed: Final[object] = iterator.completed_response
+    assert isinstance(completed, ResponseCompletedEvent)
+    usage: Final = completed.response.usage
+    assert usage is not None
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == expected
+
+
 def test_disconnecting_from_a_resumed_background_stream_bills_no_partial_answer():
     iterator: Final = ResponsesAPIStreamingIterator(
         response=httpx.Response(200),
@@ -949,9 +1019,12 @@ class _UpstreamWhoseProviderFailsTheResponseOnceReleased:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("disable_counting", (False, True))
 async def test_a_response_the_provider_fails_while_draining_is_billable_with_the_usage_that_event_reports(
     monkeypatch: pytest.MonkeyPatch,
+    disable_counting: bool,
 ) -> None:
+    monkeypatch.setattr(litellm, "disable_token_counter", disable_counting)
     upstream: Final = _UpstreamWhoseProviderFailsTheResponseOnceReleased()
     iterator, recorder = _recorded_stream(monkeypatch, upstream)
     iterator.outlive_consumer_until_settled()

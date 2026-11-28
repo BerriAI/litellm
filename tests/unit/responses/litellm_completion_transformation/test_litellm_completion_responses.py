@@ -8547,11 +8547,16 @@ def test_a_continued_chain_stores_the_replayed_turns_as_its_path_to_the_root(
 
 
 @pytest.mark.asyncio
-async def test_bridge_partial_response_on_disconnect_bills_the_relayed_chat_chunks():
+@pytest.mark.parametrize(("disable_counting", "buffered_usage"), ((False, None), (True, None), (True, 7)))
+async def test_bridge_partial_response_on_disconnect_bills_the_relayed_chat_chunks(
+    monkeypatch: pytest.MonkeyPatch, disable_counting: bool, buffered_usage: int | None
+) -> None:
     from litellm.responses.litellm_completion_transformation.streaming_iterator import (
         LiteLLMCompletionStreamingIterator,
     )
+    from litellm.types.utils import ModelResponseStream, Usage
 
+    monkeypatch.setattr(litellm, "disable_token_counter", disable_counting)
     chat_stream: Final = await litellm.acompletion(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "tell me a story"}],
@@ -8572,17 +8577,27 @@ async def test_bridge_partial_response_on_disconnect_bills_the_relayed_chat_chun
         getattr(event, "delta", "") for event in events if event.type == "response.output_text.delta"
     )
     assert relayed_text, "the bridge should have relayed some text by now"
+    if buffered_usage is not None:
+        iterator.litellm_custom_stream_wrapper.chunks.append(
+            ModelResponseStream(
+                choices=[],
+                usage=Usage(prompt_tokens=0, completion_tokens=buffered_usage, total_tokens=buffered_usage),
+            )
+        )
 
     incomplete_event: Final = iterator.partial_response_on_disconnect()
 
     assert incomplete_event is not None
     assert incomplete_event.type == "response.incomplete"
     assert incomplete_event.response.status == "incomplete"
-    assert incomplete_event.response.usage is not None
-    assert incomplete_event.response.usage.output_tokens == litellm.token_counter(
-        model="gpt-4o-mini", text=relayed_text
+    expected: Final = (
+        buffered_usage if disable_counting else litellm.token_counter(model="gpt-4o-mini", text=relayed_text)
     )
-    assert incomplete_event.response.usage.input_tokens > 0
+    usage: Final = incomplete_event.response.usage
+    assert (None if usage is None else usage.output_tokens, bool(incomplete_event.response.output)) == (
+        expected,
+        expected is not None,
+    )
 
 
 async def _input_tokens_billed_on_disconnect(request_input: ResponseInputParam) -> int:
