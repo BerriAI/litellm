@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 
 from litellm.integrations.bitbucket.bitbucket_client import BitBucketClient
@@ -65,6 +66,25 @@ def test_bitbucket_client_initialization():
     client_basic = BitBucketClient(config_basic)
     assert client_basic.auth_method == "basic"
     assert client_basic.username == "test-user"
+
+
+def test_bitbucket_client_uses_configured_base_url():
+    config = {
+        "workspace": "test-workspace",
+        "repository": "test-repo",
+        "access_token": "test-token",
+        "base_url": "https://bitbucket.example.com/2.0",
+    }
+
+    with respx.mock:
+        respx.get(
+            "https://bitbucket.example.com/2.0/repositories/test-workspace/test-repo/src/main/prompts/test.prompt"
+        ).mock(return_value=httpx.Response(200, text="prompt", headers={"content-type": "text/plain"}))
+        client = BitBucketClient(config)
+
+        content = client.get_file_content("prompts/test.prompt")
+
+    assert content == "prompt"
 
 
 def test_bitbucket_client_missing_required_fields():
