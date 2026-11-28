@@ -30,6 +30,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import (
     MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS,
     MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH,
+    MCP_LEGACY_SUBSCRIPTIONS_ENABLED,
     MCP_PEEKED_BODY_SCOPE_KEY,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -1027,6 +1028,16 @@ if MCP_AVAILABLE:
 
         raise MCPError(code=METHOD_NOT_FOUND, message="Operation unavailable on /mcp/proxy")
 
+    def _reject_disabled_legacy_subscriptions() -> NoReturn:
+        from mcp.shared.exceptions import MCPError
+        from mcp.types import METHOD_NOT_FOUND
+
+        # Without the legacy listener a subscription would wait for it until legacy_resource times out.
+        raise MCPError(
+            code=METHOD_NOT_FOUND,
+            message="Resource subscriptions are disabled (LITELLM_MCP_LEGACY_SUBSCRIPTIONS=false)",
+        )
+
     from litellm.proxy.mcp_server.operations import (
         _build_virtual_call_logging_obj,
         _dispatch_virtual_mcp_tool,
@@ -1165,7 +1176,7 @@ if MCP_AVAILABLE:
             return await subscriptions.listen(ctx, params, authorization, authorization.owner)
 
     async def legacy_notifications(ctx: ServerRequestContext, params: NotificationParams) -> None:
-        if _mcp_proxy_mode.get():
+        if _mcp_proxy_mode.get() or not MCP_LEGACY_SUBSCRIPTIONS_ENABLED:
             return
         async with subscriptions.initializing(ctx) as start:
             if start:
@@ -1175,12 +1186,16 @@ if MCP_AVAILABLE:
     async def subscribe_resource(ctx: ServerRequestContext, params: SubscribeRequestParams) -> EmptyResult:
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
+        if not MCP_LEGACY_SUBSCRIPTIONS_ENABLED:
+            _reject_disabled_legacy_subscriptions()
         await subscriptions.legacy_resource(ctx, str(params.uri), subscribe=True)
         return EmptyResult()
 
     async def unsubscribe_resource(ctx: ServerRequestContext, params: UnsubscribeRequestParams) -> EmptyResult:
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
+        if not MCP_LEGACY_SUBSCRIPTIONS_ENABLED:
+            _reject_disabled_legacy_subscriptions()
         await subscriptions.legacy_resource(ctx, str(params.uri), subscribe=False)
         return EmptyResult()
 

@@ -10,7 +10,13 @@ from mcp.server.context import ServerRequestContext
 from mcp.server.session import ServerSession
 from mcp.server.subscriptions import ListenHandler
 from mcp.shared.subscriptions import PromptsListChanged, ToolsListChanged
-from mcp.types import ListToolsRequest, ListToolsResult, SubscriptionFilter, SubscriptionsListenRequestParams
+from mcp.types import (
+    ListToolsRequest,
+    ListToolsResult,
+    NotificationParams,
+    SubscriptionFilter,
+    SubscriptionsListenRequestParams,
+)
 
 from litellm.mcp_client.client import MCPClient
 from litellm.proxy._types import UserAPIKeyAuth
@@ -377,7 +383,9 @@ async def test_proxy_route_rejects_legacy_resource_subscription_before_setup(met
 
     from litellm.proxy.mcp_server import server
 
-    params = (SubscribeRequestParams if method == "subscribe_resource" else UnsubscribeRequestParams)(uri="test://value")
+    params = (SubscribeRequestParams if method == "subscribe_resource" else UnsubscribeRequestParams)(
+        uri="test://value"
+    )
     token = server._mcp_proxy_mode.set(True)
     try:
         with pytest.raises(MCPError, match="/mcp/proxy"):
@@ -506,17 +514,13 @@ async def test_all_failed_tools_listing_keeps_empty_catalog_digest(monkeypatch: 
 
     listener_context: Final = OperationContext(_caller=UserAPIKeyAuth(user_id="listener"))
     empty_gateway: Final = _ListingGateway(result=ListToolsResult(tools=[]))
-    monkeypatch.setattr(
-        "litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway
-    )
+    monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: empty_gateway)
     empty_digest: Final = await subscriptions._listing(ToolsListChanged(), listener_context)
 
     failed_gateway: Final = _ListingGateway(
         error=ToolListingFailedOutright(code=-32603, message="Every MCP server in scope failed")
     )
-    monkeypatch.setattr(
-        "litellm.proxy.mcp_server.operations.GatewayOperations", lambda: failed_gateway
-    )
+    monkeypatch.setattr("litellm.proxy.mcp_server.operations.GatewayOperations", lambda: failed_gateway)
     failed_digest: Final = await subscriptions._listing(ToolsListChanged(), listener_context)
 
     assert failed_digest == empty_digest
@@ -534,3 +538,72 @@ async def test_tools_listing_propagates_other_mcp_errors(monkeypatch: pytest.Mon
         await subscriptions._listing(ToolsListChanged(), listener_context)
 
     assert exc_info.value is failure
+
+
+@pytest.mark.asyncio
+async def test_disabled_legacy_subscriptions_start_no_listener_and_do_not_hold_listings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import anyio
+
+    from litellm.proxy.mcp_server import server
+
+    monkeypatch.setattr(server, "MCP_LEGACY_SUBSCRIPTIONS_ENABLED", False)
+    legacy_session = AsyncMock()
+    monkeypatch.setattr(server.subscriptions, "legacy_session", legacy_session)
+    legacy = context(Mock(spec=ServerSession), "2025-11-25")
+
+    await server.legacy_notifications(legacy, NotificationParams())
+
+    legacy_session.assert_not_awaited()
+    with anyio.fail_after(1):
+        await server.subscriptions.wait_initialized(legacy)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["subscribe_resource", "unsubscribe_resource"])
+async def test_disabled_legacy_subscriptions_reject_resource_subscription_without_waiting(
+    monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    from mcp.types import SubscribeRequestParams, UnsubscribeRequestParams
+
+    from litellm.proxy.mcp_server import server
+
+    monkeypatch.setattr(server, "MCP_LEGACY_SUBSCRIPTIONS_ENABLED", False)
+    legacy_resource = AsyncMock()
+    monkeypatch.setattr(server.subscriptions, "legacy_resource", legacy_resource)
+    params = (SubscribeRequestParams if method == "subscribe_resource" else UnsubscribeRequestParams)(
+        uri="test://value"
+    )
+
+    with pytest.raises(MCPError, match="LITELLM_MCP_LEGACY_SUBSCRIPTIONS"):
+        await getattr(server, method)(context(Mock(spec=ServerSession), "2025-11-25"), params)
+    legacy_resource.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enabled_legacy_subscriptions_still_start_the_listener(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.mcp_server import server
+
+    monkeypatch.setattr(server, "MCP_LEGACY_SUBSCRIPTIONS_ENABLED", True)
+    legacy_session = AsyncMock()
+    monkeypatch.setattr(server.subscriptions, "legacy_session", legacy_session)
+    session = Mock(spec=ServerSession)
+    session.client_params = object()
+    authorization = Mock()
+
+    class Authorize:
+        async def __aenter__(self):
+            return authorization
+
+        async def __aexit__(self, *_):
+            return None
+
+    def authorize(_ctx: ServerRequestContext) -> Authorize:
+        return Authorize()
+
+    monkeypatch.setattr(server, "_subscription_authorization", authorize)
+
+    await server.legacy_notifications(context(session, "2025-11-25"), NotificationParams())
+
+    legacy_session.assert_awaited_once()

@@ -285,6 +285,10 @@ MCP_MAX_SSE_EVENT_SIZE_BYTES: Final = get_env_int_in_range(
     "LITELLM_MCP_MAX_SSE_EVENT_SIZE_BYTES", 64 * 1024 * 1024, 1, sys.maxsize
 )
 MCP_TOOL_LISTING_TIMEOUT: Final = get_env_float("LITELLM_MCP_TOOL_LISTING_TIMEOUT", 30.0)
+# "false" skips the listener that notifications/initialized starts for clients on MCP revisions
+# before 2026-07-28. tools/list then answers without waiting for it, and those clients receive no
+# list_changed notifications or resources/subscribe.
+MCP_LEGACY_SUBSCRIPTIONS_ENABLED: Final = os.getenv("LITELLM_MCP_LEGACY_SUBSCRIPTIONS", "true").lower() == "true"
 MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES: Final = get_env_int("LITELLM_MCP_UPSTREAM_RATE_LIMIT_MAX_RETRIES", 3)
 MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS: Final = get_env_float(
     "LITELLM_MCP_UPSTREAM_RATE_LIMIT_BASE_DELAY_SECONDS", 0.5
