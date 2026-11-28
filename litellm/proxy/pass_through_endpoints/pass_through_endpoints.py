@@ -107,6 +107,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
 from litellm.llms.oss_decision import validate_oss_request
+from litellm.llms.pass_through.guardrail_translation.handler import skipped_by_full_payload_scan
 from litellm.llms.vertex_ai.common_utils import get_vertex_model_id_from_url
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._lazy_features import lazy_owned_routes
@@ -1494,10 +1495,44 @@ def _anthropic_user_id_to_forward(
     return user_id
 
 
-def _with_anthropic_user_id(body: Mapping[str, object] | None, user_id: str | None) -> Mapping[str, object] | None:
-    if body is None or user_id is None:
+def _with_anthropic_user_id(
+    body: Mapping[str, object] | None, user_id: str | None, url: str
+) -> Mapping[str, object] | None:
+    if body is None or anthropic_upstream_user_id_limit(url) is None:
         return body
-    return {**body, "metadata": {"user_id": user_id}}
+    body_without_metadata: Final = {k: v for k, v in body.items() if k != "metadata"}
+    return body_without_metadata if user_id is None else {**body_without_metadata, "metadata": {"user_id": user_id}}
+
+
+def _client_litellm_fields(
+    client_body: Mapping[str, object], builtin_provider_route: bool
+) -> Mapping[str, object] | None:
+    if builtin_provider_route:
+        return None
+    return MappingProxyType(
+        {k: copy.deepcopy(v) for k, v in client_body.items() if k in types_utils.all_litellm_params}
+    )
+
+
+def _client_fields_safe_to_forward(
+    client_fields: Mapping[str, object] | None,
+    hooked_body: Mapping[str, object],
+    has_pre_call_guardrails: Callable[[Mapping[str, object]], bool],
+) -> Mapping[str, object] | None:
+    if client_fields is None:
+        return None
+    unchanged_by_hooks: Final = {k: v for k, v in client_fields.items() if hooked_body.get(k) == v}
+    if not any(map(skipped_by_full_payload_scan, unchanged_by_hooks)) or not has_pre_call_guardrails(hooked_body):
+        return unchanged_by_hooks
+    return {k: v for k, v in unchanged_by_hooks.items() if not skipped_by_full_payload_scan(k)}
+
+
+def _with_client_litellm_fields(
+    body: Mapping[str, object] | None, client_fields: Mapping[str, object] | None
+) -> Mapping[str, object] | None:
+    if body is None or client_fields is None:
+        return body
+    return {**body, **client_fields}
 
 
 def _eu_jev_client_body(custom_llm_provider: str | None, body: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -1741,6 +1776,7 @@ async def pass_through_request(
         client_body: Final = _prepare_passthrough_client_body(
             TypeAdapter(Mapping[str, object]).validate_python(_parsed_body), user_api_key_dict, custom_llm_provider
         )
+        client_litellm_fields: Final = _client_litellm_fields(client_body.body, builtin_provider_route)
         _parsed_body = dict(client_body.body)
 
         customer_request: Final = await _customer_passthrough_request_auth(request, client_body.body, user_api_key_dict)
@@ -1851,6 +1887,9 @@ async def pass_through_request(
         hooked_body: Final = _json_object(_parsed_body)
         client_user_id: Final = _anthropic_user_id_to_forward(
             hooked_body, str(url), proxy_logging_obj.request_has_pre_call_guardrails
+        )
+        forwarded_client_fields: Final = _client_fields_safe_to_forward(
+            client_litellm_fields, hooked_body, proxy_logging_obj.request_has_pre_call_guardrails
         )
         kwargs = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(  # rebind-ok: pre-existing rebinding on a rename-only line
             user_api_key_dict=user_api_key_dict,
@@ -2024,7 +2063,9 @@ async def pass_through_request(
         outbound_headers, upstream_body = _filtered_upstream_request(
             upstream_request_filter,
             upstream_headers,
-            _with_anthropic_user_id(outgoing_body, client_user_id),
+            _with_anthropic_user_id(
+                _with_client_litellm_fields(outgoing_body, forwarded_client_fields), client_user_id, str(url)
+            ),
             _METADATA_ADAPTER.validate_python(kwargs["litellm_params"]),
         )
         hooked_body_for_logging: Final = safe_dumps(await truncate_base64_in_messages_async(_parsed_body))
@@ -2339,18 +2380,7 @@ async def pass_through_request(
         )
 
         if response.status_code < 400 and response_body is not None and guardrails_to_run:
-            # Build an enriched data dict: _parsed_body has been stripped of
-            # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
-            # so we re-attach the configured guardrails here so should_run_guardrail
-            # sees them.
-            hook_data: Final = dict(_parsed_body or {})
-            existing_metadata = hook_data.get("metadata")
-            if not isinstance(existing_metadata, dict):
-                existing_metadata = {}
-            hook_data["metadata"] = {
-                **existing_metadata,
-                "guardrails": guardrails_to_run,
-            }
+            hook_data: Final = {**_json_object(_parsed_body), "metadata": {"guardrails": guardrails_to_run}}
             post_call_guardrail_data = hook_data
             response_body = await proxy_logging_obj.post_call_success_hook(
                 data=hook_data,
