@@ -266,13 +266,11 @@ def test_long_unit_spelling_resets_on_the_schedule_it_is_charged_for(long_spelli
     assert is_annual_budget_duration(long_spelling) == is_annual_budget_duration(short_form)
 
 
-def test_long_month_spelling_without_a_calendar_schedule_keeps_its_nightly_reset() -> None:
+def test_multi_month_canonical_duration_uses_the_calendar_schedule() -> None:
     now: Final = datetime(2026, 11, 13, 18, 0, tzinfo=timezone.utc)
-    with pytest.raises(ValueError, match="1 month or 12 month"):
-        get_next_standardized_reset_time("3mo", now, "UTC")
-    reset: Final = get_next_standardized_reset_time("3months", now, "UTC")
-    assert reset == datetime(2026, 11, 14, tzinfo=timezone.utc)
-    assert get_budget_window_start("3months", reset) == datetime(2026, 11, 13, tzinfo=timezone.utc)
+    reset: Final = get_next_standardized_reset_time("3mo", now, "UTC")
+    assert reset == datetime(2027, 2, 1, tzinfo=timezone.utc)
+    assert get_budget_window_start("3mo", reset) == datetime(2026, 11, 1, tzinfo=timezone.utc)
 
 
 @pytest.mark.parametrize(
@@ -370,6 +368,33 @@ class TestResetTimeOfDay(unittest.TestCase):
         result = get_next_standardized_reset_time("1mo", now, "UTC", reset_time_of_day=time(12, 0))
         self.assertEqual(result, datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
 
+    def test_multi_month_reset_rolls_the_requested_number_of_months(self):
+        now = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time("2mo", now, "UTC"),
+            datetime(2023, 7, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(
+            get_next_standardized_reset_time(
+                "3mo", datetime(2023, 5, 15, 15, 0, 0, tzinfo=timezone.utc), "UTC", reset_time_of_day=time(12, 0)
+            ),
+            datetime(2023, 8, 1, 12, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_multi_month_reset_crosses_the_year_boundary(self):
+        now = datetime(2023, 12, 15, 9, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time("2mo", now, "UTC"),
+            datetime(2024, 2, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_multi_month_reset_before_this_months_offset_stays_this_month(self):
+        now = datetime(2023, 6, 1, 9, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time("2mo", now, "UTC", reset_time_of_day=time(12, 0)),
+            datetime(2023, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
+        )
+
     def test_custom_day_reset_applies_offset(self):
         now = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
         result = get_next_standardized_reset_time("3d", now, "UTC", reset_time_of_day=time(12, 0))
@@ -461,7 +486,7 @@ class TestWordFormBudgetDurations(unittest.TestCase):
 class TestGetBudgetWindowStart(unittest.TestCase):
     def test_window_start_is_the_previous_reset_on_the_same_schedule(self):
         created_at: Final = datetime(2024, 10, 1, 0, 30, tzinfo=timezone.utc)
-        durations: Final = "1d 24h daily 7d weekly 2w 10d 30d monthly 1mo 4h 5h 30m 45s 1hr fortnightly".split()
+        durations: Final = "1d 24h daily 7d weekly 2w 10d 30d monthly 1mo 2mo 3mo 4h 5h 30m 45s 1hr fortnightly".split()
         for duration in durations:
             with self.subTest(duration=duration):
                 reset_at = get_next_standardized_reset_time(duration, created_at, "UTC")

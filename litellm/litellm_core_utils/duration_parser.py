@@ -399,11 +399,11 @@ def _handle_month_reset(
             if annual_candidate.astimezone(timezone.utc) <= current_time.astimezone(timezone.utc)
             else annual_candidate
         )
-    if value != 1:
-        raise ValueError("Calendar resets support 1 month or 12 month intervals")
+    if value < 1:
+        raise ValueError("Calendar resets require a positive number of months")
 
     first_of_this_month: Final = base_midnight.replace(day=1)
     candidate: Final = _apply_time_of_day(first_of_this_month, reset_time_of_day)
     if candidate.astimezone(timezone.utc) <= current_time.astimezone(timezone.utc):
-        return _apply_time_of_day(_first_of_next_month(first_of_this_month), reset_time_of_day)
+        return _apply_time_of_day(_shift_months(first_of_this_month, value), reset_time_of_day)
     return candidate
