@@ -699,6 +699,36 @@ class TestStreamedGenericEventIdEncryption:
         )
 
     @pytest.mark.asyncio
+    async def test_tool_event_reference_reuses_the_owned_response_id(
+        self, responses_id_security: ResponsesIDSecurity, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-abcdefghij")
+        caller: Final = UserAPIKeyAuth(user_id="user-a", team_id="team-a", request_route="/v1/responses")
+        other_caller: Final = UserAPIKeyAuth(user_id="user-b", team_id="team-b")
+        upstream: Final = (
+            self._typed_event(ResponsesAPIStreamEvents.RESPONSE_CREATED),
+            GenericEvent(type="response.function_call_arguments.delta", response_id=self.RAW_ID, item_id="fc_tool"),
+            GenericEvent(type="response.function_call_arguments.delta", response_id="resp_other", item_id="fc_other"),
+            self._typed_event(ResponsesAPIStreamEvents.RESPONSE_COMPLETED),
+        )
+
+        created, tool_delta, unrelated_delta, completed = [
+            event.model_dump()
+            async for event in responses_id_security.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=caller, response=self._agen(upstream), request_data={}
+            )
+        ]
+
+        protected_id: Final = created["response"]["id"]
+        assert tool_delta["response_id"] == completed["response"]["id"] == protected_id
+        assert tool_delta["item_id"] == "fc_tool"
+        assert unrelated_delta["response_id"] == "resp_other"
+        assert responses_id_security.authorize_response_id(protected_id, caller) == self.RAW_ID
+        with pytest.raises(HTTPException) as denied:
+            responses_id_security.authorize_response_id(protected_id, other_caller)
+        assert denied.value.status_code == 403
+
+    @pytest.mark.asyncio
     async def test_raw_provider_id_never_reaches_the_client(self, responses_id_security, monkeypatch):
         events = await self._drain(responses_id_security, monkeypatch)
 
