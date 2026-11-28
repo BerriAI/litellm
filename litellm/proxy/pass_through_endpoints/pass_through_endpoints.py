@@ -11,6 +11,7 @@ from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
     Callable,
+    Collection,
     Coroutine,
     Iterable,
     Mapping,
@@ -1427,6 +1428,19 @@ def _caller_query_source(
     return query_params or request.query_params
 
 
+def _forwarded_query_params(
+    params: Mapping[str, object], excluded: Collection[str]
+) -> dict[str, object] | None:  # mutable-ok: rewrite_query_ids and the httpx request helpers take a plain dict
+    return {k: v for k, v in params.items() if k not in excluded} or None
+
+
+def _upstream_client_params(
+    timeout: float, follow_redirects: bool
+) -> dict[str, object]:  # mutable-ok: get_async_httpx_client takes a plain dict
+    # follow_redirects joins the client cache key only when it is off, so the other routes keep their shared client
+    return {"timeout": timeout} if follow_redirects else {"timeout": timeout, "follow_redirects": False}
+
+
 def _json_object(value: object) -> Mapping[str, object]:
     return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})  # cast-ok: json
 
@@ -1631,6 +1645,8 @@ async def pass_through_request(
     merge_query_params: bool | None = False,
     query_params: dict[str, object] | None = None,
     default_query_params: dict | None = None,
+    excluded_query_params: Collection[str] = (),
+    follow_redirects: bool = True,
     stream: bool | None = None,
     cost_per_request: float | None = None,
     custom_llm_provider: str | None = None,
@@ -1658,6 +1674,8 @@ async def pass_through_request(
         merge_query_params: Whether to merge query params
         query_params: The query params
         default_query_params: The default query params to be applied if not overridden by client
+        excluded_query_params: Query param names dropped before the request is sent upstream
+        follow_redirects: Whether the upstream client follows redirects; when False, a redirect is relayed to the caller
         stream: Whether to stream the response
         cost_per_request: Optional field - cost per request to the target endpoint
         custom_llm_provider: Optional field - custom LLM provider for the endpoint
@@ -1709,9 +1727,9 @@ async def pass_through_request(
             user_api_key_dict.parent_otel_span,
         )
 
-        requested_query_params: dict | None = (
-            dict(_caller_query_source(keep_target_query, query_params, request))  # pyright: ignore[reportUnknownArgumentType]  # query_params keeps its legacy untyped dict annotation
-            or None
+        requested_query_params: dict | None = _forwarded_query_params(
+            _caller_query_source(keep_target_query, query_params, request),  # pyright: ignore[reportUnknownArgumentType]  # query_params keeps its legacy untyped dict annotation
+            excluded_query_params,
         )
 
         endpoint_type: Final[EndpointType] = HttpPassThroughEndpointHelpers.get_endpoint_type(
@@ -1839,7 +1857,7 @@ async def pass_through_request(
         resolved_timeout: Final = resolve_pass_through_request_timeout(timeout)
         async_client_obj: Final = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.PassThroughEndpoint,
-            params={"timeout": resolved_timeout},
+            params=_upstream_client_params(resolved_timeout, follow_redirects),
         )
         async_client: Final = async_client_obj.client
         passthrough_logging_payload: Final = PassthroughStandardLoggingPayload(
@@ -2732,6 +2750,8 @@ def create_pass_through_route(
     is_streaming_request: bool | None = False,
     query_params: dict | None = None,
     default_query_params: dict[str, object] | None = None,
+    excluded_query_params: Collection[str] = (),
+    follow_redirects: bool = True,
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
@@ -2883,6 +2903,8 @@ def create_pass_through_route(
                         merge_query_params=cast(bool | None, param_merge_query_params),
                         query_params=final_query_params,
                         default_query_params=cast(dict | None, param_default_query_params),
+                        excluded_query_params=excluded_query_params,
+                        follow_redirects=follow_redirects,
                         stream=is_stream,
                         custom_body=final_custom_body,
                         cost_per_request=cast(float | None, param_cost_per_request),
