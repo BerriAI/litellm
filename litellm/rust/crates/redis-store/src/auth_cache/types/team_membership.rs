@@ -30,7 +30,7 @@ record! {
 /// the membership, or `NotMember` for a user who is not a member of the team.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TeamMembershipReservation {
-    Member(TeamMembershipEntry),
+    Member(Box<TeamMembershipEntry>),
     NotMember,
 }
 
@@ -38,7 +38,8 @@ impl FromValue for TeamMembershipReservation {
     fn from_value(value: &Value) -> Result<Self, DecodeError> {
         match value {
             Value::Str(word) if word == NOT_MEMBER => Ok(Self::NotMember),
-            _ => TeamMembershipEntry::from_value(value).map(Self::Member),
+            _ => TeamMembershipEntry::from_value(value)
+                .map(|membership| Self::Member(Box::new(membership))),
         }
     }
 }
@@ -87,11 +88,11 @@ mod tests {
     fn a_membership_reads_back_as_the_membership() {
         let entry = json::loads(r#"{"user_id": "u", "team_id": "t"}"#).unwrap();
         let membership = TeamMembershipEntry::from_value(&entry).unwrap();
-        let value = TeamMembershipReservation::Member(membership.clone()).into_value();
+        let value = TeamMembershipReservation::Member(Box::new(membership.clone())).into_value();
 
         assert_eq!(
             TeamMembershipReservation::from_value(&value).ok(),
-            Some(TeamMembershipReservation::Member(membership))
+            Some(TeamMembershipReservation::Member(Box::new(membership)))
         );
     }
 
