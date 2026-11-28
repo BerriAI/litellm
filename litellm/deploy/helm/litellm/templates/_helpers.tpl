@@ -182,6 +182,10 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 - name: LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS
   value: {{ . | quote }}
 {{- end }}
+{{- with .Values.billingMetrics.deploymentId }}
+- name: LITELLM_BILLING_METRICS_DEPLOYMENT_ID
+  value: {{ . | quote }}
+{{- end }}
 {{- end -}}
 
 

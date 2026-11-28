@@ -252,6 +252,7 @@ billingMetrics:
   tokenUrl: https://litellm-prod.auth.us-west-1.amazoncognito.com/oauth2/token
   secretName: litellm-billing-metrics
   exportIntervalMs: ""
+  deploymentId: ""
 
 # Postgres connection. The chart ships no database; point `writer` at your
 # own PostgreSQL (managed or self hosted) and its credentials Secret.

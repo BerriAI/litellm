@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, TypedDict
+from uuid import uuid4
 
 import requests
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
@@ -41,6 +42,7 @@ CLIENT_ID_ENV: Final = "LITELLM_BILLING_METRICS_CLIENT_ID"
 CLIENT_SECRET_ENV: Final = "LITELLM_BILLING_METRICS_CLIENT_SECRET"
 TOKEN_URL_ENV: Final = "LITELLM_BILLING_METRICS_TOKEN_URL"
 EXPORT_INTERVAL_ENV: Final = "LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS"
+DEPLOYMENT_ID_ENV: Final = "LITELLM_BILLING_METRICS_DEPLOYMENT_ID"
 DEFAULT_EXPORT_INTERVAL_MS: Final = 60_000
 SHUTDOWN_FLUSH_TIMEOUT_MS: Final = 5_000
 _TOKEN_REFRESH_SKEW_SECONDS: Final = 60
@@ -61,6 +63,7 @@ class BillingMetricsConfig:
     export_interval_ms: int
     litellm_version: str
     license_id: str | None
+    deployment_id: str | None = None
 
 
 class _BillingMetricsOAuthToken(BaseModel):
@@ -82,7 +85,8 @@ def resource_attributes(config: BillingMetricsConfig) -> dict[str, AttributeValu
         "litellm.version": config.litellm_version,
     }
     license_attr: dict[str, AttributeValue] = {"litellm.license.id": config.license_id} if config.license_id else {}
-    return {**base, **license_attr}
+    deployment_id: Final = config.deployment_id
+    return {**base, **license_attr, **({"litellm.deployment.id": deployment_id} if deployment_id else {})}
 
 
 def billable_attributes(
@@ -185,7 +189,8 @@ def build_bearer_meter_provider(config: BillingMetricsConfig) -> MeterProvider:
     session: Final = _BillingMetricsBearerSession(auth)
     exporter: Final = OTLPMetricExporter(endpoint=_metrics_endpoint(config.endpoint), session=session)
     reader: Final = PeriodicExportingMetricReader(exporter, export_interval_millis=config.export_interval_ms)
-    return MeterProvider(metric_readers=[reader], resource=Resource.create(resource_attributes(config)))
+    resource: Final = Resource({**resource_attributes(config), "service.instance.id": str(uuid4())})
+    return MeterProvider(metric_readers=[reader], resource=resource)
 
 
 class BillingMetricsRecorder:
@@ -252,6 +257,7 @@ def load_billing_metrics_config(
         export_interval_ms=_export_interval_ms(),
         litellm_version=litellm_version,
         license_id=(license_data or {}).get("user_id"),
+        deployment_id=os.getenv(DEPLOYMENT_ID_ENV) or None,
     )
 
 
