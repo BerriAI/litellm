@@ -1743,7 +1743,6 @@ def test_text_completion_pre_call_denial_returns_text_completion_without_upstrea
 def test_text_completion_pre_call_denial_streams_text_completion_without_upstream(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    pytest.skip("BUG: a streamed /v1/completions pre_call denial sends one frame with no text and no [DONE]")
     identity: Final = "guardrail" + uuid.uuid4().hex
     config: Final = _responses_denial_config(tmp_path, identity)
     with (
@@ -3181,7 +3180,6 @@ def test_a_non_streaming_response_and_its_cache_hit_are_each_scanned_once(gatewa
 
 
 def test_a_cache_hit_row_records_the_post_call_verdict_of_its_scan(gateway: Gateway, tmp_path: Path) -> None:
-    pytest.skip("BUG: LIT-9088 the cache-hit spend row drops the post_call verdict of the scan that ran on it")
     with _disconnect_rig(gateway, tmp_path, gated=False) as rig:
         assert _cached_twin_rows(rig) == (("success",), ("success",))
 

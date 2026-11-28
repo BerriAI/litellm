@@ -476,10 +476,6 @@ def test_audio_transcription_forwards_plain_response_format_to_upstream(gateway:
 def test_audio_transcription_plain_response_format_returns_the_raw_transcript(
     gateway: Gateway, response_format: str
 ) -> None:
-    pytest.skip(
-        "BUG: response_format=text/srt/vtt transcriptions return application/json "
-        '{"text": ...} instead of the raw transcript, so the OpenAI SDK returns a JSON string as the transcript'
-    )
     wav: Final = _WAV_BYTES + uuid.uuid4().bytes
 
     def respond(request: Request) -> Reply:
