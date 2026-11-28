@@ -3,7 +3,6 @@ import type { TFunction } from "i18next";
 import { Info, UserPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
-import { useForm } from "react-hook-form";
 import { userFilterUICall } from "@/components/networking";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
@@ -13,6 +12,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { emptyUserSearch } from "./user_search_modal_form/mapper";
+import { userSearchSchema, type UserSearchFields } from "./user_search_modal_form/schema";
 
 type User = Awaited<ReturnType<typeof userFilterUICall>>[number];
 
@@ -28,16 +30,10 @@ interface Role {
   description: string;
 }
 
-interface FormValues {
-  user_email: string | null | undefined;
-  user_id: string | null | undefined;
-  role: string;
-}
-
 interface UserSearchModalProps {
   isVisible: boolean;
   onCancel: () => void;
-  onSubmit: (values: FormValues) => void | Promise<void>;
+  onSubmit: (values: UserSearchFields) => void | Promise<void>;
   accessToken: string | null;
   title?: string;
   roles?: Role[];
@@ -62,8 +58,8 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
 }) => {
   const { t } = useTranslation();
   const roleOptions = roles ?? defaultRoles(t);
-  const emptyValues: FormValues = { user_email: undefined, user_id: undefined, role: defaultRole };
-  const form = useForm<FormValues>({ defaultValues: emptyValues });
+  const emptyValues = emptyUserSearch(defaultRole);
+  const form = useZodForm(userSearchSchema, { defaultValues: emptyValues });
   const selectedUserId = form.watch("user_id");
   const selectedUserEmail = form.watch("user_email");
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
@@ -121,7 +117,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     form.setValue("user_id", option.user.user_id);
   };
 
-  const handleSubmit = async (values: FormValues): Promise<void> => {
+  const handleSubmit = async (values: UserSearchFields): Promise<void> => {
     setIsSubmitting(true);
     try {
       await onSubmit(values);

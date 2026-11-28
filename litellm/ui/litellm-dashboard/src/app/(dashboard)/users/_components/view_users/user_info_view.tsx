@@ -3,6 +3,7 @@ import { useUrlTab } from "@/hooks/useUrlTab";
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import { MemberRoleSelect } from "./MemberRoleSelect";
 import React, { useState } from "react";
+import { useController } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -38,7 +39,10 @@ import { UserEditView } from "../user_edit_view";
 import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { ArrowLeft, CheckIcon, CopyIcon, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
+import { addTeamToMember, emptyAddTeam } from "./add_team_form/mapper";
+import { addTeamSchema } from "./add_team_form/schema";
 import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -119,8 +123,10 @@ export default function UserInfoView({
   const [isAddingTeam, setIsAddingTeam] = useState(false);
   const [isRemovingTeam, setIsRemovingTeam] = useState(false);
   const [allTeams, setAllTeams] = useState<Array<{ team_id: string; team_alias: string }>>([]);
-  const [selectedTeamId, setSelectedTeamId] = useState<string>("");
-  const [selectedRole, setSelectedRole] = useState<string>("user");
+  const addTeamForm = useZodForm(addTeamSchema, { defaultValues: emptyAddTeam });
+  const { field: teamIdField } = useController({ control: addTeamForm.control, name: "team_id" });
+  const { field: roleField } = useController({ control: addTeamForm.control, name: "role" });
+  const selectedTeamId = teamIdField.value;
   const { data: allMcpServers = [] } = useMCPServers();
   const { data: allMcpToolsets = [] } = useMCPToolsets();
 
@@ -190,8 +196,7 @@ export default function UserInfoView({
   };
 
   const handleOpenAddTeamModal = () => {
-    setSelectedTeamId("");
-    setSelectedRole("user");
+    addTeamForm.reset(emptyAddTeam);
     setIsAddTeamModalOpen(true);
     fetchAllTeams();
   };
@@ -200,11 +205,7 @@ export default function UserInfoView({
     if (!accessToken || !selectedTeamId) return;
     setIsAddingTeam(true);
     try {
-      const member: Member = {
-        role: selectedRole,
-        user_id: userId,
-      };
-      await teamMemberAddCall(accessToken, selectedTeamId, member);
+      await teamMemberAddCall(accessToken, selectedTeamId, addTeamToMember(addTeamForm.getValues(), userId));
       toast.success(t("users.userInfo.toasts.addedToTeam"));
       setIsAddTeamModalOpen(false);
       // Re-fetch user data to refresh teams
@@ -829,7 +830,7 @@ export default function UserInfoView({
                 <Combobox
                   items={availableTeamsForAdd}
                   value={selectedTeamOption}
-                  onValueChange={(team: TeamOption | null) => setSelectedTeamId(team?.team_id ?? "")}
+                  onValueChange={(team: TeamOption | null) => teamIdField.onChange(team?.team_id ?? "")}
                   itemToStringLabel={(team: TeamOption) => team.team_alias}
                   isItemEqualToValue={(team: TeamOption, value: TeamOption) => team.team_id === value.team_id}
                 >
@@ -847,7 +848,7 @@ export default function UserInfoView({
                 </Combobox>
               </Field>
 
-              <MemberRoleSelect value={selectedRole} onChange={setSelectedRole} />
+              <MemberRoleSelect value={roleField.value} onChange={roleField.onChange} />
             </FieldGroup>
 
             <div className="text-right mt-4">

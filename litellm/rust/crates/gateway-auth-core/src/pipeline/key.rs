@@ -278,7 +278,7 @@ mod tests {
         };
         assert_eq!(
             run(&host, "sk-1", "/chat/completions", &settings).await,
-            Err(Error::BudgetExceeded(over_budget()))
+            Err(Error::EndUserBudgetExceeded(over_budget()))
         );
         assert_eq!(host.calls(), ["prefetch_identity - unread", "end_user -"]);
     }
@@ -961,6 +961,22 @@ mod tests {
                 "normalize mapped+prepared"
             ]
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_resolved_key_refused_for_its_end_users_budget_is_a_key_budget_refusal(
+        settings: KeySettings,
+    ) {
+        let host = ScriptedHost {
+            end_user_over_budget: Some(over_budget()),
+            ..ScriptedHost::default()
+        };
+        let refused = run_resolved(&host, virtual_key(), &settings)
+            .await
+            .unwrap_err();
+        assert_eq!(*refused.error, Error::BudgetExceeded(over_budget()));
+        assert_eq!(refused.key.as_deref(), Some("mapped"));
     }
 
     #[rstest]

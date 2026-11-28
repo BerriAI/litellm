@@ -9,7 +9,7 @@
 ## get_model_cost_map.py
 
 - This module decides when to fetch and install. Fetching, parsing, integrity checks and alias expansion run in Rust
-- The install order is publish, `add_known_models`, router replay, then `model_cost_inputs.reapply`
+- The install order is publish, `install_known_models`, router replay, then `model_cost_inputs.reapply`
   - Registrations land by lookup in the published table, so they are written after publishing
 - Startup and `register_model(url)` fetch with `use_http_settings=False`, which reads env vars only like main's bare httpx. Reload passes `use_http_settings=True`, so Rust layers the configured HTTP settings on top
 - Startup falls back to the bundled map on any failure. Reload never falls back and keeps the current map

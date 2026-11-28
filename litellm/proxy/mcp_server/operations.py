@@ -13,6 +13,7 @@ from datetime import datetime
 from functools import partial, reduce
 from types import EllipsisType
 from typing import Final, NoReturn, Protocol, TypeAlias, overload
+from urllib.parse import urlsplit
 
 import anyio
 from fastapi import HTTPException
@@ -289,6 +290,36 @@ _ResourceOwnerFailure: TypeAlias = (
 )
 
 
+def _resource_uri_without_query(uri: str) -> tuple[str, str, str, str] | None:
+    try:
+        parts: Final = urlsplit(uri)
+    except ValueError:
+        return None
+    if not parts.scheme:
+        return None
+    return parts.scheme, parts.netloc, parts.path, parts.fragment
+
+
+def _resolve_resource_path_owner(
+    listings: Sequence[tuple[MCPServer, tuple[Resource, ...]]], requested_uri: str
+) -> MCPServer | _ResourceOwnerAmbiguous | None:
+    if not any(server.resource_uri_match == "path_only" for server, _ in listings):
+        return None
+    requested: Final = _resource_uri_without_query(requested_uri)
+    if requested is None:
+        return None
+    owners: Final = tuple(
+        server
+        for server, listing in listings
+        if any(_resource_uri_without_query(str(resource.uri)) == requested for resource in listing)
+    )
+    if len(owners) == 1:
+        return owners[0] if owners[0].resource_uri_match == "path_only" else None
+    if any(owner.resource_uri_match == "path_only" for owner in owners):
+        return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in owners))
+    return None
+
+
 def _withhold_fanned_out_caller_authorization(
     server: MCPServer, extra_headers: dict[str, str] | None, scope_servers: Sequence[MCPServer]
 ) -> dict[str, str] | None:
@@ -301,7 +332,7 @@ def _withhold_fanned_out_caller_authorization(
     return extra_headers
 
 
-def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl) -> NoReturn:
+def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl | str) -> NoReturn:
     match failure:
         case _ResourceOwnerRateLimited(error=error):
             raise error
@@ -3291,7 +3322,7 @@ async def mcp_get_prompt(
 
 
 async def mcp_read_resource(
-    url: AnyUrl,
+    url: AnyUrl | str,
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
     mcp_servers: list[str] | None = None,
@@ -3319,7 +3350,7 @@ async def mcp_read_resource(
 
     candidates: Final = tuple(server for server in allowed_mcp_servers if not is_mcp_stdio_blocked(server.transport))
 
-    async def owner(candidate: MCPServer) -> MCPServer | ResourceListingFailed | None:
+    async def list_candidate(candidate: MCPServer) -> tuple[MCPServer, tuple[Resource, ...] | ResourceListingFailed]:
         candidate_auth, candidate_headers = _prepare_mcp_server_headers(
             server=candidate,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -3338,30 +3369,30 @@ async def mcp_read_resource(
             raw_headers=raw_headers,
             client_ip=client_ip,
         )
-        if isinstance(listing, ResourceListingFailed):
-            return listing
-        return candidate if any(str(resource.uri) == str(url) for resource in listing) else None
+        return candidate, listing
 
     async def resolve_owner() -> MCPServer | _ResourceOwnerFailure:
         admission: Final = await _admit_mcp_servers(candidates, user_api_key_auth)
         if admission.rejected_servers:
             return _ResourceOwnerRateLimited(error=admission.rejected_servers[0][1])
-        lookups: Final = tuple(asyncio.create_task(owner(candidate)) for candidate in candidates)
-        try:
-            for lookup in asyncio.as_completed(lookups):
-                if isinstance(failure := await lookup, ResourceListingFailed):
-                    return failure
-        finally:
-            for lookup in lookups:
-                lookup.cancel()
-            await asyncio.gather(*lookups, return_exceptions=True)
-        results: Final = tuple(lookup.result() for lookup in lookups)
-        owners: Final = tuple(result for result in results if isinstance(result, MCPServer))
-        if len(owners) == 1:
-            return owners[0]
-        if not owners:
-            return _ResourceOwnerMissing()
-        return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in owners))
+        results: Final = await asyncio.gather(*(list_candidate(candidate) for candidate in candidates))
+        failures: Final = tuple(listing for _, listing in results if isinstance(listing, ResourceListingFailed))
+        listings: Final = tuple(
+            (candidate, listing) for candidate, listing in results if not isinstance(listing, ResourceListingFailed)
+        )
+        requested_uri: Final = str(url)
+        exact_owners: Final = tuple(
+            candidate
+            for candidate, listing in listings
+            if any(str(resource.uri) == requested_uri for resource in listing)
+        )
+        if len(exact_owners) == 1:
+            return exact_owners[0]
+        if len(exact_owners) > 1:
+            return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in exact_owners))
+        if failures:
+            return failures[0]
+        return _resolve_resource_path_owner(listings, requested_uri) or _ResourceOwnerMissing()
 
     if len(allowed_mcp_servers) == 1:
         await _enforce_mcp_server_rate_limit(user_api_key_auth, allowed_mcp_servers[0])

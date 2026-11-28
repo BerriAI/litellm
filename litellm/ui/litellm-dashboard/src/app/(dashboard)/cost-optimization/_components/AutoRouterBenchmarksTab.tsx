@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimpleTooltip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/http/client";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 import {
@@ -38,6 +39,9 @@ import ShadowEvalSection from "./ShadowEvalSection";
 import TierTurnsChart from "./TierTurnsChart";
 import { useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 import { DailyActivityRange } from "./useDailyActivityRange";
+import { useVisitedUrlTabs } from "./useVisitedUrlTabs";
+
+const ROUTER_TABS = ["usage", "shadow-evals"] as const;
 
 const Message: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <p className="py-8 text-center text-sm text-muted-foreground">{children}</p>
@@ -454,18 +458,16 @@ export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({
 
 const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity }) => {
   const { t } = useTranslation();
-  const [visitedTabs, setVisitedTabs] = useState<readonly string[]>(["usage"]);
+  const [tab, setTab] = useUrlTab(ROUTER_TABS, "usage", "router_tab");
+  const visitedTabs = useVisitedUrlTabs(tab);
 
   const handleTabChange = (value: unknown) => {
-    if (typeof value !== "string") {
-      return;
-    }
-
-    setVisitedTabs((currentTabs) => (currentTabs.includes(value) ? currentTabs : [...currentTabs, value]));
+    const next = ROUTER_TABS.find((routerTab) => routerTab === value);
+    if (next) setTab(next);
   };
 
   return (
-    <Tabs defaultValue="usage" onValueChange={handleTabChange} className="w-full gap-4">
+    <Tabs value={tab} onValueChange={handleTabChange} className="w-full gap-4">
       <TabsList>
         <TabsTrigger value="usage" className="px-3">
           {t("costOptimization.autoRouter.tabs.usage")}
