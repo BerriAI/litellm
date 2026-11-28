@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_VerificationToken\"\nSET budget_limits = $3::jsonb,\n    updated_at = NOW() AT TIME ZONE 'UTC'\nWHERE token = $1 AND budget_limits::jsonb = $2::text::jsonb\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dbbd64a4e9731028b0cf369349fbd257159f58966678492a14a9c67fce0603d0"
+}

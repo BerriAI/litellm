@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT budget_id AS id, budget_limits::jsonb AS \"limits!: RawJson\"\nFROM \"LiteLLM_BudgetTable\"\nWHERE budget_id > $1 AND jsonb_typeof(budget_limits::jsonb) = 'array'\nORDER BY budget_id\nLIMIT $2\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "limits!: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "budget_limits"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "342b1dec1d616ac7320924c9b4dcb7007186f6e39e185393cf26d4241fad47ff"
+}

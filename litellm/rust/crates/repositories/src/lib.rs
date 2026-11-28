@@ -17,6 +17,7 @@ mod access_group;
 mod agent_identity;
 mod audit_log;
 mod budget;
+mod budget_reset;
 mod config;
 mod credential;
 mod customer_hierarchy;
@@ -48,6 +49,7 @@ pub use access_group::{AccessGroup, AccessGroupRepository};
 pub use agent_identity::AgentIdentityRepository;
 pub use audit_log::{AuditLogRepository, NewAuditLog};
 pub use budget::{Budget, BudgetRepository};
+pub use budget_reset::{BudgetResetRepository, BudgetWindows, WindowAdvance, WindowOwner};
 pub use config::{ConfigParam, ConfigRepository};
 pub use credential::{Credential, CredentialRepository};
 pub use customer_hierarchy::{

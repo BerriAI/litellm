@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_BudgetWindowSpend\" AS stored\nSET window_start = advanced.window_start,\n    spend = 0,\n    updated_at = NOW() AT TIME ZONE 'UTC'\nFROM unnest($3::text[], $4::timestamp[]) AS advanced(duration, window_start)\nWHERE stored.entity_type = $1 AND stored.entity_id = $2\n  AND stored.window_duration = advanced.duration\n  AND stored.window_start < advanced.window_start\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "TextArray",
+        "TimestampArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "06ff1415ba4848547b0b3a55df535e1463e86c1d382ad5e64add72abd0993fd0"
+}

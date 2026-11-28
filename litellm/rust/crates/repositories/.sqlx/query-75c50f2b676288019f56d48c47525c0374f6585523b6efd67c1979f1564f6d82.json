@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT token AS id, budget_limits::jsonb AS \"limits!: RawJson\"\nFROM \"LiteLLM_VerificationToken\"\nWHERE token > $1 AND jsonb_typeof(budget_limits::jsonb) = 'array'\nORDER BY token\nLIMIT $2\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "token"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "limits!: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "budget_limits"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "75c50f2b676288019f56d48c47525c0374f6585523b6efd67c1979f1564f6d82"
+}
