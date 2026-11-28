@@ -2590,44 +2590,83 @@ class TestResponsesWSStreamingFirstMessage:
 
 
 @pytest.mark.parametrize(
-    ("failure", "expected_status", "expected_type"),
+    ("failure", "expected_status", "expected_type", "expected_close"),
     [
-        (ValueError("No deployments available - crossed budget: Exceeded budget for deployment"), 429, "rate_limit_exceeded"),
-        (litellm.BadRequestError(message="bad input", model="m", llm_provider="openai"), 400, "invalid_request_error"),
-        (RuntimeError("boom"), 500, "server_error"),
-        (ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}=['free']"), 401, "invalid_request_error"),
-        (ProxyException(message="Authentication Error", type="auth_error", param=None, code=401), 401, "invalid_request_error"),
-        (HTTPException(status_code=403, detail="key not allowed"), 403, "invalid_request_error"),
+        (
+            ValueError("No deployments available - crossed budget: Exceeded budget for deployment"),
+            429,
+            "rate_limit_exceeded",
+            (1013, "No deployments available - crossed budget: Exceeded budget for deployment"),
+        ),
+        (
+            litellm.RateLimitError(
+                message="Model rate limit exceeded. ITPM limit=350\n\nLiteLLM: model group 'g' failed with the error above",
+                model="m",
+                llm_provider="openai",
+            ),
+            429,
+            "rate_limit_exceeded",
+            (1013, "litellm.RateLimitError: Model rate limit exceeded. ITPM limit=350"),
+        ),
+        (
+            litellm.BadRequestError(message="bad input", model="m", llm_provider="openai"),
+            400,
+            "invalid_request_error",
+            (1011, "Internal server error"),
+        ),
+        (RuntimeError("boom"), 500, "server_error", (1011, "Internal server error")),
+        (
+            ValueError(f"{RouterErrors.no_deployments_with_tag_routing.value}=['free']"),
+            401,
+            "invalid_request_error",
+            (1008, "Not allowed to access model due to tags configuration=['free']"),
+        ),
+        (
+            ProxyException(message="Authentication Error", type="auth_error", param=None, code=401),
+            401,
+            "invalid_request_error",
+            (1008, "Authentication Error"),
+        ),
+        (
+            HTTPException(status_code=403, detail="key not allowed"),
+            403,
+            "invalid_request_error",
+            (1008, "key not allowed"),
+        ),
     ],
-    ids=["crossed-budget", "bad-request", "unexpected", "tag-routing", "proxy-auth", "http-exception"],
+    ids=["crossed-budget", "model-rate-limit", "bad-request", "unexpected", "tag-routing", "proxy-auth", "http-exception"],
 )
-def test_responses_ws_failure_frame_uses_the_http_status_for_the_same_failure(
-    failure: Exception, expected_status: int, expected_type: str
+def test_responses_ws_failure_reply_uses_the_http_status_for_the_same_failure(
+    failure: Exception, expected_status: int, expected_type: str, expected_close: tuple[int, str]
 ):
-    from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_failure_frame
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_failure_reply
     from litellm.proxy.utils import handle_exception_on_proxy
 
-    frame: Final = json.loads(_responses_ws_failure_frame(failure))
+    reply: Final = _responses_ws_failure_reply(failure)
+    frame: Final = json.loads(reply.frame)
 
     assert frame["status"] == expected_status
     assert frame["error"]["type"] == expected_type
     assert frame["error"]["message"] == handle_exception_on_proxy(failure).message
+    assert (reply.close_code, reply.close_reason) == expected_close
 
 
-def test_responses_ws_failure_frame_shows_only_the_refusal_for_a_model_that_refuses_the_endpoint():
+def test_responses_ws_failure_reply_shows_only_the_refusal_for_a_model_that_refuses_the_endpoint():
     from litellm.exceptions import EndpointNotSupportedByModelError
-    from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_failure_frame
+    from litellm.proxy.response_api_endpoints.endpoints import _responses_ws_failure_reply
 
     refusal: Final = "/v1/responses is not supported by model=embed-only. Supported endpoints: /v1/embeddings"
     failure: Final = EndpointNotSupportedByModelError(
         message=f"{refusal}\n\nLiteLLM: model group 'embed-only' failed with the error above", model="embed-only"
     )
+    reply: Final = _responses_ws_failure_reply(failure)
 
-    assert json.loads(_responses_ws_failure_frame(failure)) == {
+    assert json.loads(reply.frame) == {
         "type": "error",
         "status": 400,
         "error": {"type": "invalid_request_error", "message": refusal},
     }
+    assert (reply.close_code, reply.close_reason) == (1008, "Pre-call error")
 
 
 class TestWSSessionCostTracking:
@@ -2996,15 +3035,21 @@ class TestResponsesWSFirstFrameModelAuth:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "open_failure, refusal, close_reason, logged_traceback",
+        "open_failure, refusal, message_fragment, close, logged_traceback",
         [
             (
-                ProxyRateLimitError(detail="Rate limit exceeded for api_key: tokens"),
+                ProxyRateLimitError(
+                    detail=(
+                        f"Rate limit exceeded for api_key: {'a' * 64}. Limit type: requests. "
+                        "Current limit: 1, Remaining: 0. Limit resets at: 2026-11-26 05:00:00 UTC"
+                    )
+                ),
                 (429, "rate_limit_exceeded"),
-                "Rate limit exceeded",
+                "Limit type: requests. Current limit: 1",
+                (1008, "Rate limit exceeded"),
                 False,
             ),
-            (ValueError("bad metadata"), (500, "server_error"), "Pre-call error", True),
+            (ValueError("bad metadata"), (500, "server_error"), "bad metadata", (1008, "Pre-call error"), True),
         ],
         ids=["rate-limited", "other-failure"],
     )
@@ -3012,7 +3057,8 @@ class TestResponsesWSFirstFrameModelAuth:
         self,
         open_failure: Exception,
         refusal: tuple[int, str],
-        close_reason: str,
+        message_fragment: str,
+        close: tuple[int, str],
         logged_traceback: bool,
     ):
         import logging
@@ -3059,7 +3105,8 @@ class TestResponsesWSFirstFrameModelAuth:
 
         sent: Final = json.loads(ws.send_text.await_args.args[0])
         assert (sent.get("status"), sent["error"]["type"]) == refusal
-        ws.close.assert_awaited_once_with(code=1008, reason=close_reason)
+        assert message_fragment in sent["error"]["message"]
+        ws.close.assert_awaited_once_with(code=close[0], reason=close[1])
         assert [record.exc_info is not None for record in recorder.records] == [logged_traceback]
 
     @pytest.mark.asyncio
@@ -5103,10 +5150,41 @@ class TestResponsesWSFirstFrameModelAuth:
         assert closes == [(1011, "Internal server error")]
 
     @pytest.mark.asyncio
-    async def test_endpoint_sends_an_error_frame_when_routing_rejects_the_connection(self):
+    @pytest.mark.parametrize(
+        ("rejection", "expected_status", "expected_close"),
+        [
+            (
+                litellm.RateLimitError(
+                    message="origin deployment is cooling down", model="gpt-4o-mini", llm_provider="openai"
+                ),
+                429,
+                (1013, "litellm.RateLimitError: origin deployment is cooling down"),
+            ),
+            (
+                litellm.RateLimitError(
+                    message="Model rate limit exceeded. ITPM limit=350, current usage=430"
+                    "\n\nLiteLLM: model group 'gpt-4o-mini' failed with the error above. No fallback was attempted.",
+                    model="gpt-4o-mini",
+                    llm_provider="openai",
+                ),
+                429,
+                (1013, "litellm.RateLimitError: Model rate limit exceeded. ITPM limit=350, current usage=430"),
+            ),
+            (
+                litellm.InternalServerError(message="upstream exploded", model="gpt-4o-mini", llm_provider="openai"),
+                500,
+                (1011, "Internal server error"),
+            ),
+        ],
+        ids=["cooling-down", "deployment-limit", "server-error"],
+    )
+    async def test_endpoint_sends_an_error_frame_when_routing_rejects_the_connection(
+        self, rejection: Exception, expected_status: int, expected_close: tuple[int, str]
+    ):
         from litellm.proxy.response_api_endpoints.endpoints import (
             responses_websocket_endpoint,
         )
+        from litellm.proxy.utils import handle_exception_on_proxy
 
         ws = MagicMock()
         ws.headers = {}
@@ -5123,9 +5201,6 @@ class TestResponsesWSFirstFrameModelAuth:
         processor = MagicMock()
         processor.common_processing_pre_call_logic = AsyncMock(
             return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
-        )
-        rejection = litellm.RateLimitError(
-            message="origin deployment is cooling down", model="gpt-4o-mini", llm_provider="openai"
         )
         proxy_logging_obj = MagicMock(during_call_hook=AsyncMock())
         proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
@@ -5159,10 +5234,9 @@ class TestResponsesWSFirstFrameModelAuth:
 
         frame = json.loads(ws.send_text.await_args.args[0])
         assert frame["type"] == "error"
-        assert frame["status"] == 429
-        assert frame["error"]["type"] == "rate_limit_exceeded"
-        assert "cooling down" in frame["error"]["message"]
-        ws.close.assert_awaited_once_with(code=1011, reason="Internal server error")
+        assert frame["status"] == expected_status
+        assert frame["error"]["message"] == handle_exception_on_proxy(rejection).message
+        ws.close.assert_awaited_once_with(code=expected_close[0], reason=expected_close[1])
         booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
         assert booked["original_exception"] is rejection
         assert booked["user_api_key_dict"] is user_api_key_dict

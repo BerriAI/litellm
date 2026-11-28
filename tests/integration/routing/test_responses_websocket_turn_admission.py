@@ -802,7 +802,7 @@ def test_a_socket_opened_after_websocket_turns_spent_the_budget_is_refused_and_s
         received, close_code = asyncio.run(spend_then_reopen())
 
         _assert_refused(received)
-        assert close_code == 1011, close_code
+        assert close_code == 1013, close_code
         assert peer.paths.qsize() == 1
         assert deployment.forwarded_turns() == 1
         http: Final = limited.request(

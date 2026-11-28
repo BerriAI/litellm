@@ -41,11 +41,9 @@ def realtime_error_event(message: str, error_type: str) -> str:
 
 
 def websocket_close_reason(message: str, fallback: str) -> str:
-    encoded: Final = message.encode("utf-8")
+    encoded: Final = message.encode("utf-8", errors="replace")
     if not encoded:
         return fallback
-    if len(encoded) <= WEBSOCKET_CLOSE_REASON_MAX_BYTES:
-        return message
     return encoded[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode("utf-8", errors="ignore")
 
 
@@ -57,7 +55,7 @@ def client_close_code(upstream_code: int) -> int:
     return int(CloseCode.INTERNAL_ERROR)
 
 
-def upstream_handshake_close_code(status_code: int) -> int:
+def refusal_close_code(status_code: int) -> int:
     from websockets.frames import CloseCode
 
     refusal_codes: Final = MappingProxyType(
@@ -77,6 +75,6 @@ async def close_after_upstream_handshake_refusal(websocket: _ClientWebSocket, st
     except Exception:  # noqa: BLE001  # best-effort notice: a dead client socket must not skip the close below
         pass
     await websocket.close(
-        code=upstream_handshake_close_code(status_code),
+        code=refusal_close_code(status_code),
         reason=websocket_close_reason(message, fallback="Upstream handshake rejected"),
     )
