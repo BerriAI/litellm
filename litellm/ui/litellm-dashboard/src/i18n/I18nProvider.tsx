@@ -26,23 +26,35 @@ export function LanguageGate({ i18n, locales, store, children }: LanguageGatePro
     () => DEFAULT_LANGUAGE,
   );
   const [settled, setSettled] = useState(DEFAULT_LANGUAGE);
+  const needsBundle = locales.has(language);
 
   useEffect(() => {
     const load = locales.get(language);
-    if (!load) return;
+    if (!load) {
+      if (i18n.language !== language) void i18n.changeLanguage(language);
+      document.documentElement.lang = language;
+      return;
+    }
+    let cancelled = false;
     load()
       .then((messages) => {
+        if (cancelled) return undefined;
         i18n.addResourceBundle(language, "translation", messages);
         return i18n.changeLanguage(language);
       })
       .then(() => {
-        document.documentElement.lang = language;
+        if (!cancelled) document.documentElement.lang = language;
       })
       .catch((error: unknown) => console.warn(`Couldn't load the "${language}" translations`, error))
-      .finally(() => setSettled(language));
+      .finally(() => {
+        if (!cancelled) setSettled(language);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [i18n, language, locales]);
 
-  return language === settled ? children : <LoadingScreen />;
+  return !needsBundle || language === settled ? children : <LoadingScreen />;
 }
 
 export default function I18nProvider({ children }: { children: React.ReactNode }) {
