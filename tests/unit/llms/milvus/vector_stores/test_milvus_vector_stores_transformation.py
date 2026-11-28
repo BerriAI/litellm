@@ -294,6 +294,27 @@ class TestMilvusVectorStore:
         assert request_data["dbName"] == "tenant_a_db"
         assert request_data["partitionNames"] == ["tenant_a_partition"]
 
+    def test_backend_configured_vector_field_is_forwarded(self, respx_mock: respx.MockRouter):
+        """milvus_vector_field from litellm_params must be sent as annsField."""
+        _mock_embedding_route(respx_mock)
+        search_route = _mock_zilliz_search_route(respx_mock)
+
+        kwargs = {key: value for key, value in ZILLIZ_SEARCH_KWARGS.items() if key != "annsField"}
+        vector_store_search(**kwargs, milvus_vector_field="dense_vector")
+
+        request_data = _search_request_body(search_route)
+        assert request_data["annsField"] == "dense_vector"
+
+    def test_user_supplied_anns_field_overrides_backend_vector_field(self, respx_mock: respx.MockRouter):
+        """A per-request annsField must win over the stored milvus_vector_field."""
+        _mock_embedding_route(respx_mock)
+        search_route = _mock_zilliz_search_route(respx_mock)
+
+        vector_store_search(**ZILLIZ_SEARCH_KWARGS, milvus_vector_field="dense_vector")
+
+        request_data = _search_request_body(search_route)
+        assert request_data["annsField"] == "book_intro_vector"
+
 
 def _assert_alias_resolved(embedding_route: respx.Route, search_route: respx.Route, response):
     embedding_request = embedding_route.calls.last.request
@@ -438,6 +459,39 @@ async def test_transform_uses_injected_executor_without_embedding_config(respx_m
     }
     assert logging_obj.model_call_details["input"] == "what is milvus?"
     assert logging_obj.model_call_details["embedding_model"] == "multilingual-e5-large"
+
+
+def test_transform_search_request_resolves_vector_field_by_precedence():
+    executor = RecordingEmbeddingExecutor(ALIAS_EMBEDDING_RESPONSE)
+    config = MilvusVectorStoreConfig()
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    base_kwargs = {
+        "vector_store_id": "docs_collection",
+        "query": "what is milvus?",
+        "api_base": "https://milvus.example",
+        "litellm_logging_obj": logging_obj,
+        "litellm_params": {"litellm_embedding_model": "multilingual-e5-large", "milvus_vector_field": "dense_vector"},
+        "embedding_executor": executor,
+    }
+
+    _, stored_body = config.transform_search_vector_store_request(
+        **base_kwargs, vector_store_search_optional_params={}
+    )
+    assert stored_body == {
+        "collectionName": "docs_collection",
+        "data": [ALIAS_QUERY_VECTOR],
+        "annsField": "dense_vector",
+    }
+
+    _, override_body = config.transform_search_vector_store_request(
+        **base_kwargs, vector_store_search_optional_params={"annsField": "per_request_vector"}
+    )
+    assert override_body == {
+        "collectionName": "docs_collection",
+        "data": [ALIAS_QUERY_VECTOR],
+        "annsField": "per_request_vector",
+    }
 
 
 def test_transform_falls_back_to_sdk_embedding_without_executor_or_config(
