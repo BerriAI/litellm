@@ -2905,3 +2905,93 @@ async def test_common_checks_enforces_key_max_budget_for_custom_auth_keys(
         assert (exc_info.value.current_cost, exc_info.value.max_budget) == (spend, max_budget)
     else:
         assert await run() is True
+
+
+_TEAM_ALIASES: Final = {"smart": "openai/gpt-4.1", "fast": "openai/gpt-4.1-mini"}
+
+
+def _router_serving_alias_targets() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": name, "api_key": "test-api-key"}}
+            for name in ("openai/gpt-4.1-mini", "openai/gpt-4.1")
+        ]
+    )
+
+
+def _team_alias_key(models: list[str]) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(api_key="sk-test", team_id="team-1", models=models, team_model_aliases=_TEAM_ALIASES)
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_denies_team_alias_whose_target_is_outside_key_models():
+    from litellm.proxy._types import ProxyErrorTypes
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_key_call_model(
+            model="smart",
+            llm_model_list=None,
+            valid_token=_team_alias_key(["openai/gpt-4.1-mini"]),
+            llm_router=_router_serving_alias_targets(),
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert exc_info.value.code == str(status.HTTP_403_FORBIDDEN)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("key_models", "model"), [(["openai/gpt-4.1-mini"], "fast"), (["smart"], "smart")])
+async def test_can_key_call_model_allows_team_alias_by_target_or_listed_alias_name(key_models: list[str], model: str):
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    assert await can_key_call_model(
+        model=model,
+        llm_model_list=None,
+        valid_token=_team_alias_key(key_models),
+        llm_router=_router_serving_alias_targets(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_can_team_access_model_denies_team_alias_whose_target_is_outside_team_models():
+    from litellm.proxy._types import ProxyErrorTypes
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_team_access_model(
+            model="smart",
+            team_object=LiteLLM_TeamTable(team_id="team-1", models=["openai/gpt-4.1-mini"]),
+            llm_router=_router_serving_alias_targets(),
+            team_model_aliases=_TEAM_ALIASES,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("team_models", "model"), [(["openai/gpt-4.1-mini"], "fast"), (["smart"], "smart")])
+async def test_can_team_access_model_allows_team_alias_by_target_or_listed_alias_name(
+    team_models: list[str], model: str
+):
+    assert await can_team_access_model(
+        model=model,
+        team_object=LiteLLM_TeamTable(team_id="team-1", models=team_models),
+        llm_router=_router_serving_alias_targets(),
+        team_model_aliases=_TEAM_ALIASES,
+    )
+
+
+@pytest.mark.parametrize(("model", "expected"), [("smart", False), ("fast", True)])
+def test_check_model_access_helper_matches_team_alias_target(model: str, expected: bool):
+    from litellm.proxy.auth.auth_checks import check_model_access_helper
+
+    assert (
+        check_model_access_helper(
+            model=model,
+            llm_router=_router_serving_alias_targets(),
+            models=["openai/gpt-4.1-mini"],
+            team_model_aliases=_TEAM_ALIASES,
+            team_id="team-1",
+        )
+        is expected
+    )
