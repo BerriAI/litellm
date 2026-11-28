@@ -209,27 +209,31 @@ const ValidationForm = ({ children }: { readonly children: ReactNode }) => {
 };
 
 describe("ProviderSpecificFields", () => {
-  it("reads a picked service-account file into the vertex credentials field", async () => {
-    const queryClient = createQueryClient();
-    render(
-      <QueryClientProvider client={queryClient}>
-        <MountedFormHost>
-          <ProviderSpecificFields selectedProvider={"Vertex_AI" as Providers} />
-          <VertexCredentialsProbe />
-        </MountedFormHost>
-      </QueryClientProvider>,
-    );
+  it.each(["application/json", "", "application/octet-stream", "text/plain"])(
+    'reads a picked .json service-account file reported as "%s" into the vertex credentials field',
+    async (mimeType) => {
+      const queryClient = createQueryClient();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MountedFormHost>
+            <ProviderSpecificFields selectedProvider={"Vertex_AI" as Providers} />
+            <VertexCredentialsProbe />
+          </MountedFormHost>
+        </QueryClientProvider>,
+      );
 
-    const fileInput = await screen.findByLabelText("Vertex Credentials");
-    const serviceAccount = '{"project_id":"example"}';
-    fireEvent.change(fileInput, {
-      target: { files: [new File([serviceAccount], "vertex.json", { type: "application/json" })] },
-    });
+      const fileInput = await screen.findByLabelText("Vertex Credentials");
+      const serviceAccount = '{"project_id":"example"}';
+      fireEvent.change(fileInput, {
+        target: { files: [new File([serviceAccount], "vertex.json", { type: mimeType })] },
+      });
 
-    await waitFor(() => expect(screen.getByTestId("vertex-credentials")).toHaveTextContent(serviceAccount));
-  });
+      await waitFor(() => expect(screen.getByTestId("vertex-credentials")).toHaveTextContent(serviceAccount));
+      expect(screen.getByText("JSON file provided. Upload a replacement to change it.")).toBeInTheDocument();
+    },
+  );
 
-  it("ignores a picked file that is not JSON", async () => {
+  it("rejects a picked file that is not JSON with an error", async () => {
     const queryClient = createQueryClient();
     render(
       <QueryClientProvider client={queryClient}>
@@ -245,7 +249,7 @@ describe("ProviderSpecificFields", () => {
       target: { files: [new File(["not json"], "vertex.txt", { type: "text/plain" })] },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await screen.findByText("Choose a .json file.")).toBeInTheDocument();
     expect(screen.getByTestId("vertex-credentials")).toBeEmptyDOMElement();
   });
 
