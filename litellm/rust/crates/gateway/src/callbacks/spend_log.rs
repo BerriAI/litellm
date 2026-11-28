@@ -14,7 +14,7 @@ use std::{
 };
 
 use litellm_callbacks::ErasedCallback;
-use litellm_callbacks_budgets::Budgets;
+use litellm_callbacks_budgets::{Budgets, SpendReader};
 use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
 use litellm_config::Environment;
 use litellm_redaction::TokenRedactor;
@@ -26,10 +26,10 @@ use litellm_spend_log_writer::{
 use rand::Rng;
 use tokio::sync::Notify;
 
-use super::{Registered, parallel_request_limiter::REDIS_DEFAULT_TTL};
+use super::{Registered, budget_check::BudgetCheck, parallel_request_limiter::REDIS_DEFAULT_TTL};
 use crate::{
     RedisClients,
-    host::{Rows, RustSpendLogHost},
+    host::{FreeModels, Rows, RustSpendLogHost},
 };
 
 /// `PROXY_BATCH_WRITE_AT` when unset.
@@ -81,6 +81,8 @@ pub struct SpendLog {
     host: Arc<RustSpendLogHost>,
     /// The spend counters the callback charges.
     budgets: Arc<Budgets>,
+    /// The rows a cold spend counter is seeded from.
+    rows: Arc<Rows>,
 }
 
 impl SpendLog {
@@ -101,6 +103,7 @@ impl SpendLog {
             default_ttl: REDIS_DEFAULT_TTL,
         }));
         let budgets = Arc::new(Budgets::new(Arc::new(counters)));
+        let rows = Arc::new(Rows::new(database.clone()));
         let callback = SpendLogCallback::new(SpendLogParts {
             writer: logs.writer.clone(),
             budgets: budgets.clone(),
@@ -109,10 +112,9 @@ impl SpendLog {
         Self {
             logs,
             callback: Arc::new(callback),
-            host: Arc::new(RustSpendLogHost::new(Some(Arc::new(Rows::new(
-                database.clone(),
-            ))))),
+            host: Arc::new(RustSpendLogHost::new(Some(rows.clone()))),
             budgets,
+            rows,
         }
     }
 
@@ -120,6 +122,15 @@ impl SpendLog {
     /// applied to.
     pub(crate) fn spend_counters(&self) -> &Arc<SpendCounters> {
         self.budgets.store()
+    }
+
+    /// The budget checks over the counters this callback charges, so a check reads what every
+    /// served call charged, skipped for a call to a model `free` holds free.
+    pub(crate) fn budget_check(&self, free: Arc<FreeModels>) -> Arc<BudgetCheck> {
+        BudgetCheck::new(
+            SpendReader::new(self.budgets.store().clone(), self.rows.clone()),
+            free,
+        )
     }
 
     /// The callback as one config's callback stage runs it.
