@@ -27,7 +27,7 @@ def normalize_duration(duration: str) -> str:
 
 
 def _extract_from_regex(duration: str) -> tuple[int, str]:
-    match: Final = re.match(r"(\d+)(mo|[smhdw]?)", duration)
+    match: Final = re.match(r"^(\d+)(mo|[smhdw]?)$", duration)
 
     if not match:
         raise ValueError("Invalid duration format")
@@ -291,13 +291,17 @@ def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[
 
 def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     """Parse the duration string into value and unit."""
-    match: Final = re.match(r"(\d+)([a-z]+)", duration)
+    match: Final = re.match(r"^(\d+)([a-z]+)$", duration)
     if not match:
         return None, None
 
     value: Final = int(match.group(1))
     spelled_unit: Final = match.group(2)
-    unit: Final = _extract_from_regex(duration)[1] or spelled_unit
+    try:
+        extracted_unit: Final = _extract_from_regex(duration)[1]
+    except ValueError:
+        extracted_unit = None
+    unit: Final = extracted_unit or spelled_unit
     if unit == "mo" and spelled_unit != "mo" and value not in (1, 12):
         return value, spelled_unit
     return value, unit
