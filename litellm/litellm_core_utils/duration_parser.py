@@ -21,13 +21,46 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
     "monthly": "30d",
 }
 
+_SPELLED_UNIT_MAP: Final[dict[str, str]] = {
+    "months": "mo",
+    "month": "mo",
+    "mos": "mo",
+    "days": "d",
+    "day": "d",
+    "hours": "h",
+    "hour": "h",
+    "hrs": "h",
+    "hr": "h",
+    "minutes": "m",
+    "minute": "m",
+    "mins": "m",
+    "min": "m",
+    "seconds": "s",
+    "second": "s",
+    "secs": "s",
+    "sec": "s",
+    "weeks": "w",
+    "week": "w",
+    "wks": "w",
+    "wk": "w",
+}
+
 
 def normalize_duration(duration: str) -> str:
-    return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
+    stripped = duration.strip().lower()
+    if stripped in _BUDGET_DURATION_WORD_ALIASES:
+        return _BUDGET_DURATION_WORD_ALIASES[stripped]
+    # Normalize long-form unit suffixes: "7days" → "7d", "12months" → "12mo"
+    m = re.match(r"(\d+)([a-z]+)$", stripped)
+    if m:
+        short = _SPELLED_UNIT_MAP.get(m.group(2))
+        if short:
+            return f"{m.group(1)}{short}"
+    return stripped
 
 
 def _extract_from_regex(duration: str) -> tuple[int, str]:
-    match: Final = re.match(r"(\d+)(mo|[smhdw]?)", duration)
+    match: Final = re.match(r"(\d+)(mo|[smhdw])$", duration)
 
     if not match:
         raise ValueError("Invalid duration format")
@@ -297,7 +330,10 @@ def _parse_duration(duration: str) -> tuple[int | None, str | None]:
 
     value: Final = int(match.group(1))
     spelled_unit: Final = match.group(2)
-    unit: Final = _extract_from_regex(duration)[1] or spelled_unit
+    try:
+        unit = _extract_from_regex(duration)[1] or spelled_unit
+    except ValueError:
+        unit = _SPELLED_UNIT_MAP.get(spelled_unit, spelled_unit)
     if unit == "mo" and spelled_unit != "mo" and value not in (1, 12):
         return value, spelled_unit
     return value, unit
