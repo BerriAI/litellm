@@ -13,6 +13,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.anthropic.messages.caller_model_checks import CallerModelVerdict, caller_model_verdict
 from litellm.llms.anthropic.messages.utils import (
+    ProxySubCallForwardedHeaders,
     ProxySubCallLoggingKwargs,
     proxy_general_settings,
     proxy_sub_call_metadata,
@@ -92,6 +93,7 @@ class ClassifierCallKwargs(ProxySubCallLoggingKwargs):
     litellm_metadata: ReadOnly[Mapping[str, object]]
     user: ReadOnly[NotRequired[str]]
     allowed_model_region: ReadOnly[NotRequired[str]]
+    headers: ReadOnly[NotRequired[Mapping[str, str]]]
 
 
 class ClassifierAcompletion(Protocol):
@@ -145,6 +147,7 @@ class SafeguardsEvaluator:
     allowed_model_region: str | None
     acompletion: ClassifierAcompletion
     caller_model_verdict: CallerModelGate
+    forwarded_headers: ProxySubCallForwardedHeaders | None = None
     timeout_seconds: float = CLASSIFIER_TIMEOUT_SECONDS
     logging_kwargs: ProxySubCallLoggingKwargs = field(default_factory=ProxySubCallLoggingKwargs)
 
@@ -232,6 +235,8 @@ class SafeguardsEvaluator:
 
     def _call_kwargs(self) -> ClassifierCallKwargs:
         end_user_id: Final = self.litellm_metadata.get("user_api_key_end_user_id")
+        forwarding: Final = self.forwarded_headers
+        proxy_request: Final = _sub_call_proxy_request(self.logging_kwargs, forwarding)
         base: Final[ClassifierCallKwargs] = {
             **self.logging_kwargs,
             "model": self.classifier_model,
@@ -239,12 +244,52 @@ class SafeguardsEvaluator:
             "num_retries": 0,
             "litellm_metadata": self.litellm_metadata,
         }
+        with_proxy_request: Final[ClassifierCallKwargs] = (
+            {**base, "proxy_server_request": proxy_request} if proxy_request else base
+        )
         with_user: Final[ClassifierCallKwargs] = (
-            {**base, "user": end_user_id} if isinstance(end_user_id, str) and end_user_id else base
+            {**with_proxy_request, "user": end_user_id}
+            if isinstance(end_user_id, str) and end_user_id
+            else with_proxy_request
+        )
+        with_headers: Final[ClassifierCallKwargs] = (
+            {**with_user, "headers": forwarding.headers} if forwarding is not None else with_user
         )
         if self.allowed_model_region is None:
-            return with_user
-        return {**with_user, "allowed_model_region": self.allowed_model_region}
+            return with_headers
+        return {**with_headers, "allowed_model_region": self.allowed_model_region}
+
+
+def _sub_call_proxy_request(
+    logging_kwargs: ProxySubCallLoggingKwargs, forwarding: ProxySubCallForwardedHeaders | None
+) -> Mapping[str, object]:
+    """The parent's proxy request record for the classifier, carrying the stamp of the client headers the proxy
+    forwarded, so a classifier fallback re-checks the scope the parent's forwarding was admitted under."""
+    request: Final = _mapping(logging_kwargs.get("proxy_server_request")) or {}
+    return {**request, "forwarded_client_headers": forwarding.stamp.model_dump()} if forwarding is not None else request
+
+
+def _classifier_group_admits_client_headers(
+    classifier_model: str, user_api_key_auth: "UserAPIKeyAuth | None", llm_router: "Router | None"
+) -> bool:
+    """Whether the forwarding scope an operator configured covers the model group the classifier request lands on.
+    The caller's team alias on the classifier's name only resolves that destination, and having a team alias never
+    stands in for the group being listed in the scope."""
+    from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
+    from litellm.proxy.auth.auth_checks import check_model_access_helper
+
+    settings: Final = litellm.model_group_settings
+    scope: Final = settings.forward_client_headers_to_llm_api if settings is not None else None
+    if scope is None or llm_router is None:
+        return False
+    aliases: Final = user_api_key_auth.team_model_aliases if user_api_key_auth is not None else None
+    destination: Final = resolve_model_group_alias(aliases, classifier_model) or classifier_model
+    return check_model_access_helper(
+        model=destination,
+        llm_router=llm_router,
+        models=scope,
+        team_id=user_api_key_auth.team_id if user_api_key_auth is not None else None,
+    )
 
 
 def _mapping(value: object) -> Mapping[str, object] | None:
@@ -290,6 +335,7 @@ def build_safeguards_evaluator(
     llm_router: "Router | None",
     logging_kwargs: ProxySubCallLoggingKwargs,
     parent_trace_id: str | None = None,
+    forwarded_headers: ProxySubCallForwardedHeaders | None = None,
 ) -> SafeguardsEvaluator | None:
     request: Final = requested_dangerous_tool_use(safeguards)
     if request is None:
@@ -297,6 +343,15 @@ def build_safeguards_evaluator(
     classifier_model: Final = read_classifier_model_setting()
     if classifier_model is None:
         return None
+    classifier_forwarding: Final = (
+        forwarded_headers
+        if forwarded_headers is not None
+        and (
+            not forwarded_headers.stamp.model_group_scoped
+            or _classifier_group_admits_client_headers(classifier_model, user_api_key_auth, llm_router)
+        )
+        else None
+    )
     router_acompletion: Final[ClassifierAcompletion | None] = getattr(llm_router, "acompletion", None)
 
     async def caller_verdict(model: str) -> CallerModelVerdict:
@@ -317,6 +372,7 @@ def build_safeguards_evaluator(
         acompletion=router_acompletion if router_acompletion is not None else litellm.acompletion,
         caller_model_verdict=caller_verdict,
         logging_kwargs=logging_kwargs,
+        forwarded_headers=classifier_forwarding,
     )
 
 
