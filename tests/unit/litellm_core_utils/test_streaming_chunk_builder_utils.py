@@ -2871,6 +2871,26 @@ def _vllm_chat_chunk(index: int, content: str, finish_reason: str | None = None,
     )
 
 
+@pytest.mark.parametrize("as_dict", [False, True], ids=["objects", "snapshots"])
+def test_stream_chunk_builder_keeps_sparse_choice_fields_when_later_chunks_are_empty(as_dict: bool) -> None:
+    chunks: Final = [
+        _vllm_chat_chunk(0, "a", token_ids=None, provider_specific_fields={"phase": "start"}),
+        _vllm_chat_chunk(1, "b", token_ids=[]),
+        _vllm_chat_chunk(0, "c", token_ids=[7], stop_reason=0, provider_specific_fields={"phase": "end"}),
+        _vllm_chat_chunk(2, "d", stop_reason=None),
+        _vllm_chat_chunk(0, "", "stop", token_ids=None, stop_reason=None, provider_specific_fields={}),
+    ]
+    built: Final = stream_chunk_builder(chunks=[chunk.model_dump() for chunk in chunks] if as_dict else chunks)
+    assert built is not None
+    assert [
+        choice.model_dump(include={"token_ids", "stop_reason", "provider_specific_fields"}) for choice in built.choices
+    ] == [
+        {"token_ids": [7], "stop_reason": 0, "provider_specific_fields": {"phase": "end"}},
+        {"token_ids": []},
+        {"stop_reason": None},
+    ]
+
+
 @pytest.mark.parametrize("finish_content", ["", "4"], ids=["finish-only", "content-then-finish"])
 def test_stream_chunk_builder_keeps_the_vllm_stop_reason_and_every_token_id_of_each_choice(
     finish_content: str,

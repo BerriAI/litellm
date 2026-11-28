@@ -13,7 +13,7 @@ from typing_extensions import TypedDict as ExtraItemsTypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.constants import VLLM_CHOICE_FIELDS, VLLM_STREAM_PROMPT_FIELDS
+from litellm.constants import VLLM_STREAM_PROMPT_FIELDS
 from litellm.litellm_core_utils.core_helpers import (
     PROVIDERS_BILLED_FROM_THEIR_OWN_USAGE_FIELDS,
     UPSTREAM_USAGE_COST,
@@ -455,16 +455,14 @@ class ChunkProcessor:
 
     @staticmethod
     def build_base_choice(index: int, chunks: Sequence["_BaseChunk"]) -> Choices:
-        choices: Final = tuple(chain.from_iterable(chunk.get("choices") or () for chunk in chunks))
-        provider_specific_fields: Final = _last_provider_specific_fields(choices)
+        choices: Final = chain.from_iterable(chunk.get("choices") or () for chunk in chunks)
         return Choices(
             index=index,
             finish_reason=ChunkProcessor._finish_reason_of_chunks(
                 chunks, unreported="tool_calls" if _carries_tool_calls(chunks) else "stop"
             ),
             message={"role": ChunkProcessor._get_role_from_chunks(chunks), "content": ""},
-            provider_specific_fields=dict(provider_specific_fields) if provider_specific_fields is not None else None,
-            **_streamed_vllm_choice_fields(choices),
+            **_streamed_choice_fields(choices, include_provider_fields=True),
         )
 
     @staticmethod
@@ -508,7 +506,6 @@ class ChunkProcessor:
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason: Final = ChunkProcessor._finish_reason_of_chunks(chunks)
-        single_choice_fields: Final = _last_provider_specific_fields(_first_choices(chunks))
 
         # Initialize the response dictionary
         response = ModelResponse(
@@ -537,10 +534,10 @@ class ChunkProcessor:
                             "index": 0,
                             "message": {"role": role, "content": ""},
                             "finish_reason": finish_reason,
-                            "provider_specific_fields": (
-                                dict(single_choice_fields) if single_choice_fields is not None else None
+                            **_streamed_choice_fields(
+                                (choices[0] for part in chunks if (choices := part.get("choices"))),
+                                include_provider_fields=True,
                             ),
-                            **_streamed_vllm_choice_fields(_first_choices(chunks)),
                         }
                     ]
                 ),
@@ -1417,7 +1414,7 @@ def _rebuilt_text_choice(index: int, choices: Sequence[TextChoices]) -> TextChoi
         index=index,
         logprobs=_merged_logprobs(choices),
         finish_reason=next((choice.finish_reason for choice in reversed(choices) if choice.finish_reason), None),
-        **_streamed_vllm_choice_fields(choices),
+        **_streamed_choice_fields(choices, include_provider_fields=False),
     )
 
 
@@ -1571,38 +1568,44 @@ def streamed_prompt_fields(chunks: Sequence[object]) -> Mapping[str, object]:
     )
 
 
-def _first_choices(chunks: Iterable[object]) -> tuple[object, ...]:
-    return tuple(next(iter(object_items(_field_of(chunk, "choices"))), None) for chunk in chunks)
-
-
 def _choice_extras(choice: object) -> Mapping[str, object]:
     if isinstance(choice, BaseModel):
         return choice.model_extra or {}
     return object_mapping(choice) or {}
 
 
-def _streamed_vllm_choice_fields(choices: Iterable[object]) -> Mapping[str, object]:
-    extras: Final = tuple(map(_choice_extras, choices))
-    token_id_runs: Final = tuple(object_items(fields.get("token_ids")) for fields in extras)
-    stop_reasons: Final = tuple(reason for fields in extras if (reason := fields.get("stop_reason")) is not None)
-    has_token_ids: Final = any(fields.get("token_ids") is not None for fields in extras)
-    streamed_values: Final[Mapping[str, object]] = MappingProxyType(
-        {
-            "token_ids": list(chain.from_iterable(token_id_runs)) if has_token_ids else None,
-            "stop_reason": stop_reasons[-1] if stop_reasons else None,
-        }
-    )
-    present_fields: Final = frozenset(chain.from_iterable(fields.keys() for fields in extras))
-    return MappingProxyType({field: streamed_values[field] for field in VLLM_CHOICE_FIELDS if field in present_fields})
+class _StreamedChoiceFields(ExtraItemsTypedDict, total=False, closed=True):
+    provider_specific_fields: ReadOnly[dict[str, object] | None]  # mutable-ok: Choices accepts a dict for this field
+    stop_reason: ReadOnly[object]
+    token_ids: ReadOnly[Sequence[object] | None]
 
 
-def _last_provider_specific_fields(choices: Iterable[object]) -> Mapping[str, object] | None:
-    carried: Final = tuple(
-        fields
-        for choice in choices
-        if (fields := object_mapping(_choice_extras(choice).get("provider_specific_fields")))
+def _streamed_choice_fields(choices: Iterable[object], *, include_provider_fields: bool) -> _StreamedChoiceFields:
+    fields: Final[dict[str, object]] = (  # mutable-ok: accumulate reported fields across streaming choices
+        {"provider_specific_fields": None} if include_provider_fields else {}
     )
-    return carried[-1] if carried else None
+    token_ids: Final[list[object]] = []  # mutable-ok: join token ID runs in stream order
+    for extras in map(_choice_extras, choices):
+        if (
+            include_provider_fields
+            and (raw_fields := extras.get("provider_specific_fields")) is not None
+            and (provider_fields := object_mapping(raw_fields))
+        ):
+            fields["provider_specific_fields"] = dict(provider_fields)
+        if "token_ids" in extras:
+            if (ids := extras["token_ids"]) is None:
+                fields.setdefault("token_ids", None)
+            else:
+                token_ids.extend(object_items(ids))
+                fields["token_ids"] = token_ids
+        if "stop_reason" in extras:
+            if (reason := extras["stop_reason"]) is None:
+                fields.setdefault("stop_reason", None)
+            else:
+                fields["stop_reason"] = reason
+    if "token_ids" in fields:
+        fields["token_ids"] = fields.pop("token_ids")
+    return cast(_StreamedChoiceFields, fields)  # cast-ok: the loop populates only the three optional choice fields
 
 
 def _delta_reasoning_items(delta: object) -> Sequence[object]:
