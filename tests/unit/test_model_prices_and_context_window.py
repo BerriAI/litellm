@@ -563,6 +563,24 @@ def test_openai_gpt_4_series_aliases_retire_with_their_snapshots(path: Path, ali
     assert snapshot_dates == {_ShutdownRow.model_validate(prices[alias]).deprecation_date}
 
 
+@pytest.mark.parametrize(
+    ("alias", "version"),
+    (
+        ("glm-5-2", "zai-glm-5-2"),
+        ("mistral-medium-latest", "mistral-medium-3-5"),
+        ("voxtral-mini-latest", "voxtral-mini-2602"),
+        ("voxtral-mini-realtime-latest", "voxtral-mini-transcribe-realtime-2602"),
+    ),
+)
+def test_mistral_aliases_retire_with_the_documented_versions(prices: CostMap, alias: str, version: str) -> None:
+    alias_row: Final = prices[f"mistral/{alias}"]
+    version_row: Final = prices[f"mistral/{version}"]
+    assert (alias_row["deprecation_date"], alias_row["successor_model"]) == (
+        version_row["deprecation_date"],
+        version_row["successor_model"],
+    )
+
+
 def _sampling_flags_across_provider_twins(prices: Mapping[str, Mapping[str, object]], key: str) -> frozenset[object]:
     bare: Final = key.split("/")[-1]
     twins: Final = tuple(twin for twin in (bare, f"vertex_ai/{bare}", f"gemini/{bare}") if twin in prices)
