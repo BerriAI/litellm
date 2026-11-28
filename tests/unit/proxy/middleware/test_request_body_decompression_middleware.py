@@ -10,7 +10,7 @@ import sys
 import tracemalloc
 import zlib
 from collections.abc import Callable
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 
 import anyio
@@ -23,6 +23,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 from starlette.types import Message, Receive, Scope, Send
 
+from litellm.proxy.middleware import request_body_decompression_middleware
 from litellm.proxy.middleware.request_body_decompression_middleware import (
     GZIP,
     GZIP_MAGIC,
@@ -764,3 +765,65 @@ def test_a_messages_body_the_proxy_cannot_take_gets_the_anthropic_envelope(
     assert response.json()["type"] == "error"
     assert response.json()["error"]["type"] == anthropic_type
     assert message is None or response.json()["error"]["message"] == message
+
+
+def _captured_rejection_logs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    logged: list[str] = []
+
+    def warning(message: str, *args: object) -> None:
+        logged.append(message % args if args else message)
+
+    monkeypatch.setattr(
+        request_body_decompression_middleware, "verbose_proxy_logger", SimpleNamespace(warning=warning)
+    )
+    return logged
+
+
+def test_a_body_with_data_after_the_end_of_its_stream_logs_what_the_data_was(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    logged: Final = _captured_rejection_logs(monkeypatch)
+
+    response: Final = _post(
+        _client(max_decompressed_body_size_mb=50.0), zstd.compress(REQUEST_JSON) + b"{}", ("zstd",)
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == (
+        "Request body has data after the end of its zstd stream (2 trailing bytes: unrecognized bytes)"
+    )
+    assert len(logged) == 1
+    assert "data after the end of the stream" in logged[0]
+    assert "trailing_len=2" in logged[0]
+
+
+def test_a_second_zstd_frame_is_named_in_the_rejection_log(monkeypatch: pytest.MonkeyPatch):
+    logged: Final = _captured_rejection_logs(monkeypatch)
+
+    response: Final = _post(_client(max_decompressed_body_size_mb=50.0), zstd.compress(REQUEST_JSON) * 2, ("zstd",))
+
+    assert response.status_code == 400
+    assert "a second zstd frame, from a body compressed as multiple frames" in response.json()["error"]["message"]
+    assert len(logged) == 1
+    assert "a second zstd frame" in logged[0]
+
+
+def test_a_body_decoding_past_the_cap_logs_the_sizes(monkeypatch: pytest.MonkeyPatch):
+    logged: Final = _captured_rejection_logs(monkeypatch)
+    decoded: Final = _low_entropy_text(2 * int(CAP_MB * MIB))
+
+    response: Final = _post(_client(), zstd.compress(decoded), ("zstd",))
+
+    assert response.status_code == 413
+    assert len(logged) == 1
+    assert "decoded past the cap" in logged[0]
+    assert f"cap_bytes={int(CAP_MB * MIB)}" in logged[0]
+
+
+def test_an_accepted_body_logs_nothing(monkeypatch: pytest.MonkeyPatch):
+    logged: Final = _captured_rejection_logs(monkeypatch)
+
+    response: Final = _post(_client(max_decompressed_body_size_mb=50.0), zstd.compress(REQUEST_JSON), ("zstd",))
+
+    assert response.status_code == 200
+    assert logged == []

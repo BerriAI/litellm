@@ -12,6 +12,7 @@ from starlette.requests import ClientDisconnect, Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions import AnthropicErrorType
 from litellm.constants import (
     MAX_DECOMPRESSED_REQUEST_BODIES_IN_FLIGHT_MB,
@@ -87,6 +88,17 @@ def _starts_a_zstd_frame(data: bytes) -> bool:
     if data.startswith(ZSTD_FRAME_MAGIC):
         return True
     return len(data) >= 4 and data[0] & 0xF0 == 0x50 and data[1:4] == ZSTD_SKIPPABLE_FRAME_MAGIC_HIGH_BYTES
+
+
+def _trailing_data_hint(trailing: bytes) -> str:
+    """What the bytes after a complete stream look like, to point at the client-side cause."""
+    if trailing.startswith(ZSTD_FRAME_MAGIC):
+        return "a second zstd frame, from a body compressed as multiple frames"
+    if trailing.startswith(GZIP_MAGIC):
+        return "a gzip member, from a body encoded twice"
+    if len(trailing) >= 4 and trailing[0] & 0xF0 == 0x50 and trailing[1:4] == ZSTD_SKIPPABLE_FRAME_MAGIC_HIGH_BYTES:
+        return "a zstd skippable metadata frame"
+    return "unrecognized bytes"
 
 
 def load_zstd_codec() -> Codec | None:
@@ -263,17 +275,63 @@ def _decode(codec: Codec, data: bytes, limits: _Limits) -> _DecodedBody:
     try:
         decoded: Final = decompressor.decompress(data, max_length=max_length + 1)
     except codec.error as error:
-        return _Undecodable(f"Request body is not valid {codec.name} data: {error}")
+        message: Final = f"Request body is not valid {codec.name} data: {error}"
+        verbose_proxy_logger.warning(
+            "rejected a compressed request body: %s | codec=%s wire_len=%d",
+            message,
+            codec.name,
+            len(data),
+        )
+        return _Undecodable(message)
     if len(decoded) > limits.max_bytes:
+        verbose_proxy_logger.warning(
+            "rejected a compressed request body: decoded past the cap | codec=%s wire_len=%d cap_bytes=%d",
+            codec.name,
+            len(data),
+            limits.max_bytes,
+        )
         return _DecodedTooLarge()
     if len(decoded) > max_by_ratio:
+        verbose_proxy_logger.warning(
+            "rejected a compressed request body: decoded over the ratio | codec=%s wire_len=%d ratio=%d",
+            codec.name,
+            len(data),
+            limits.max_ratio,
+        )
         return _OverRatio()
     if declared is not None and len(decoded) > declared:
+        verbose_proxy_logger.warning(
+            "rejected a compressed request body: decoded past the size it declares | "
+            "codec=%s wire_len=%d declared_bytes=%d",
+            codec.name,
+            len(data),
+            declared,
+        )
         return _Undecodable(f"Request body decodes past the size its {codec.name} data declares")
     if not decompressor.eof:
+        verbose_proxy_logger.warning(
+            "rejected a compressed request body: stream ended early | codec=%s wire_len=%d decoded_len=%d",
+            codec.name,
+            len(data),
+            len(decoded),
+        )
         return _Undecodable(f"Request body ends before the end of its {codec.name} stream")
     if decompressor.unused_data:
-        return _Undecodable(f"Request body has data after the end of its {codec.name} stream")
+        trailing: Final = decompressor.unused_data
+        hint: Final = _trailing_data_hint(trailing)
+        verbose_proxy_logger.warning(
+            "rejected a compressed request body: data after the end of the stream | codec=%s wire_len=%d "
+            "decoded_len=%d trailing_len=%d trailing_looks_like=%s",
+            codec.name,
+            len(data),
+            len(decoded),
+            len(trailing),
+            hint,
+        )
+        return _Undecodable(
+            f"Request body has data after the end of its {codec.name} stream "
+            f"({len(trailing)} trailing bytes: {hint})"
+        )
     return _Body(decoded)
 
 
@@ -372,6 +430,11 @@ class RequestBodyDecompressionMiddleware:
         codec: Final = self.codecs.get(coding)
         if codec is None:
             supported: Final = ", ".join(sorted(self.codecs))
+            verbose_proxy_logger.warning(
+                "rejected a compressed request body: this proxy cannot decode %s request bodies (supported: %s)",
+                coding,
+                supported,
+            )
             await _error_response(
                 scope,
                 f"This proxy cannot decode {coding} request bodies. Supported encodings: {supported}",
@@ -393,6 +456,11 @@ class RequestBodyDecompressionMiddleware:
             case _Body(data=data):
                 await self._decode_within_budget(scope, receive, send, codec, data, limits)
             case _TooLarge():
+                verbose_proxy_logger.warning(
+                    "rejected a compressed request body: over the wire size limit | codec=%s max_mb=%s",
+                    codec.name,
+                    max_mb,
+                )
                 await send_request_too_large(scope=scope, send=send, max_request_size_mb=max_mb)
             case _ClientDisconnected():
                 return
@@ -402,6 +470,13 @@ class RequestBodyDecompressionMiddleware:
     ) -> None:
         reservation: Final = _max_decoded_length(codec, data, limits)
         if not self.budget.try_reserve(reservation):
+            verbose_proxy_logger.warning(
+                "rejected a compressed request body: decoded bodies in flight over the budget | "
+                "codec=%s wire_len=%d reservation_bytes=%d",
+                codec.name,
+                len(data),
+                reservation,
+            )
             await _error_response(
                 scope,
                 "The proxy is decoding too many compressed request bodies right now. "
