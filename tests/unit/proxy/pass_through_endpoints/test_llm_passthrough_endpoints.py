@@ -1318,3 +1318,74 @@ async def test_gemini_pass_through_endpoint_keeps_provider_key_out_of_url(
     assert dict(outbound.url.params) == {"alt": "sse"}
     assert "sk-9876" not in str(outbound.url)
     assert "sk-9876" not in str(outbound.headers)
+
+
+@pytest.mark.asyncio
+async def test_gemini_pass_through_relays_a_redirect_instead_of_sending_the_key_to_its_location(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """httpx keeps x-goog-api-key on a cross-origin redirect, so the Gemini route does not follow redirects."""
+    import httpx
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    endpoint: Final = "v1beta/models/gemini-2.5-flash"
+    respx_mock.get(f"https://generativelanguage.googleapis.com/{endpoint}").mock(
+        return_value=httpx.Response(302, headers={"location": "https://redirect-target.test/landing"})
+    )
+    redirect_target: Final = respx_mock.get("https://redirect-target.test/landing").mock(
+        return_value=httpx.Response(200, json={"ok": True})
+    )
+
+    response: Final = await _call_gemini_pass_through("GET", endpoint)
+
+    assert (response.status_code, response.headers["location"]) == (302, "https://redirect-target.test/landing")
+    assert redirect_target.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_pass_through_route_keeps_following_redirects_after_the_gemini_route_ran(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the Gemini route stops following redirects; routes on the default client still follow them."""
+    import httpx
+    from unittest.mock import MagicMock
+
+    from fastapi import Request
+    from starlette.datastructures import Headers, QueryParams
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_request
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    endpoint: Final = "v1beta/models/gemini-2.5-flash"
+    respx_mock.get(f"https://generativelanguage.googleapis.com/{endpoint}").mock(
+        return_value=httpx.Response(302, headers={"location": "https://redirect-target.test/landing"})
+    )
+    respx_mock.get("https://upstream.test/redirect/1").mock(
+        return_value=httpx.Response(302, headers={"location": "/get"})
+    )
+    final: Final = respx_mock.get("https://upstream.test/get").mock(return_value=httpx.Response(200, json={"ok": True}))
+    _ = await _call_gemini_pass_through("GET", endpoint)
+    request: Final = MagicMock(spec=Request)
+    request.method = "GET"
+    request.headers = Headers({})
+    request.query_params = QueryParams("")
+
+    async def body() -> bytes:
+        return b""
+
+    request.body = body
+
+    response: Final = await pass_through_request(
+        request=request,
+        target="https://upstream.test/redirect/1",
+        custom_headers={},
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    assert response.status_code == 200
+    assert final.call_count == 1

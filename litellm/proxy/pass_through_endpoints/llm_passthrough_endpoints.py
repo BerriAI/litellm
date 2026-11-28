@@ -735,6 +735,8 @@ async def gemini_proxy_route(
         query_params=dict(request.query_params),
         # `key` is the LiteLLM virtual key; the provider key goes in the x-goog-api-key header.
         excluded_query_params=("key",),
+        # httpx keeps x-goog-api-key on a cross-origin redirect, so the caller gets the redirect instead.
+        follow_redirects=False,
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value: Final = await endpoint_func(
         request,
