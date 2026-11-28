@@ -210,7 +210,7 @@ impl AuthStore {
             team_id: team_id.to_owned(),
         };
         match self.read(&object).await {
-            Some(TeamMembershipReservation::Member(membership)) => return Ok(Some(membership)),
+            Some(TeamMembershipReservation::Member(membership)) => return Ok(Some(*membership)),
             Some(TeamMembershipReservation::NotMember) => return Ok(None),
             None => {}
         }
@@ -218,10 +218,11 @@ impl AuthStore {
             .memberships
             .team_membership(user_id, team_id, Side::Read)
             .await?;
-        let cached = membership.clone().map_or(
-            TeamMembershipReservation::NotMember,
-            TeamMembershipReservation::Member,
-        );
+        let cached = membership
+            .clone()
+            .map_or(TeamMembershipReservation::NotMember, |membership| {
+                TeamMembershipReservation::Member(Box::new(membership))
+            });
         self.write(&object, cached, None).await;
         Ok(membership)
     }
