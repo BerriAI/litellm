@@ -1,4 +1,397 @@
 {
+  "acedatacloud": {
+    "base_url": "https://api.acedata.cloud/v1",
+    "api_key_env": "ACEDATACLOUD_API_KEY",
+    "supported_endpoints": [],
+    "model_supported_endpoints": {
+      "gpt-6.2-astra": [
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages"
+      ],
+      "gpt-6.2-sol": [
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages"
+      ],
+      "gpt-6.1-sol": [
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages"
+      ],
+      "gpt-6.1-terra": [
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages"
+      ],
+      "gpt-6-sol": [
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages"
+      ],
+      "gpt-6-luna": [
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages"
+      ],
+      "claude-opus-5-5": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "grok-4.7": [
+        "/v1/chat/completions"
+      ],
+      "gpt-6-astra": [
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages"
+      ],
+      "gpt-4.1": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-4.1-mini": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-4.1-nano": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-4o": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-4o-mini": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-4o-all": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-4o-image": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-4": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5-all": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5.1-all": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "o4-mini": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "o3": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "o3-mini": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "o3-pro": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "o1": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "o1-mini": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "o1-pro": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "claude-opus-4-6": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-sonnet-4-6": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-sonnet-4-5-20250929": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-opus-4-5-20251101": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-opus-4-1-20250805": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-opus-4-20250514": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-sonnet-4-20250514": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-haiku-4-5-20251001": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-3-7-sonnet-20250219": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-3-5-sonnet-20241022": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-3-5-sonnet-20240620": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-3-5-haiku-20241022": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-3-sonnet-20240229": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-3-haiku-20240307": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "deepseek-flash": [
+        "/v1/chat/completions"
+      ],
+      "deepseek-v4-pro": [
+        "/v1/chat/completions"
+      ],
+      "deepseek-v3.2": [
+        "/v1/chat/completions"
+      ],
+      "deepseek-v4.1-flash": [
+        "/v1/chat/completions"
+      ],
+      "deepseek-v4.1-flash-1017": [
+        "/v1/chat/completions"
+      ],
+      "deepseek-v4-flash": [
+        "/v1/chat/completions"
+      ],
+      "gemini-4-carbon": [
+        "/v1/chat/completions"
+      ],
+      "gemini-4-hydrogen": [
+        "/v1/chat/completions"
+      ],
+      "gemini-4-argon": [
+        "/v1/chat/completions"
+      ],
+      "gemini-3.8-flash": [
+        "/v1/chat/completions"
+      ],
+      "gemini-3.7-flash": [
+        "/v1/chat/completions"
+      ],
+      "gemini-3.6-flash": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "gemini-3.5-flash": [
+        "/v1/chat/completions"
+      ],
+      "gemini-3.5-flash-lite": [
+        "/v1/chat/completions"
+      ],
+      "gemini-3.1-flash-lite": [
+        "/v1/chat/completions"
+      ],
+      "gemini-3.1-pro-preview": [
+        "/v1/chat/completions"
+      ],
+      "gemini-3-flash-preview": [
+        "/v1/chat/completions"
+      ],
+      "gemini-2.5-pro": [
+        "/v1/chat/completions"
+      ],
+      "gemini-2.5-flash": [
+        "/v1/chat/completions"
+      ],
+      "gemini-2.5-flash-lite": [
+        "/v1/chat/completions"
+      ],
+      "grok-4.5": [
+        "/v1/chat/completions"
+      ],
+      "grok-4": [
+        "/v1/chat/completions"
+      ],
+      "grok-3": [
+        "/v1/chat/completions"
+      ],
+      "kimi-k3.1-pro": [
+        "/v1/chat/completions"
+      ],
+      "kimi-k3": [
+        "/v1/chat/completions"
+      ],
+      "kimi-k2.6": [
+        "/v1/chat/completions"
+      ],
+      "kimi-k2.7-code": [
+        "/v1/chat/completions"
+      ],
+      "glm-4.7": [
+        "/v1/chat/completions"
+      ],
+      "glm-5.3": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "glm-5.2": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "glm-5": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "glm-5-turbo": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "glm-4.5": [
+        "/v1/chat/completions"
+      ],
+      "glm-4.5v": [
+        "/v1/chat/completions"
+      ],
+      "glm-3-turbo": [
+        "/v1/chat/completions"
+      ],
+      "glm-4.6": [
+        "/v1/chat/completions"
+      ],
+      "glm-5.1": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "gpt-5": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5-mini": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5-nano": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5-pro": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5.1": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5.2": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5.4": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5.4-mini": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5.4-nano": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5.4-pro": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5.5": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5.5-pro": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5.6-luna": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5.6-terra": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ],
+      "gpt-5.6-sol-fast": [
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages"
+      ],
+      "gpt-5.6-sol": [
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages"
+      ],
+      "claude-fable-5-2": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-fable-5-1": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-fable-5": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-sonnet-5-5": [
+        "/v1/messages"
+      ],
+      "claude-sonnet-5": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-opus-5": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-opus-4-8": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "claude-opus-4-7": [
+        "/v1/chat/completions",
+        "/v1/messages"
+      ],
+      "mimo-v2.6-pro": [
+        "/v1/chat/completions"
+      ],
+      "mimo-v2.6-flash": [
+        "/v1/chat/completions"
+      ]
+    }
+  },
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",

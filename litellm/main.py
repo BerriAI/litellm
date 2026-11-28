@@ -3099,7 +3099,9 @@ def _complete_custom_openai(
         if is_app_session:
             headers = dict[str, object](copilot_headers)  # rebind-ok: pin App headers in both transports
 
-    use_base_llm_http_handler: Final = get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER")
+    use_base_llm_http_handler: Final = custom_llm_provider == "acedatacloud" or get_secret_bool(
+        "EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"
+    )
     request_headers: Final = headers
     attribution_source: Final = (
         provider_config if provider_config is not None else JSONProviderRegistry.get(custom_llm_provider)

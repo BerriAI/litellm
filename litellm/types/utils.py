@@ -4768,6 +4768,7 @@ GenericBudgetConfigType = dict[str, BudgetConfig]
 
 
 class LlmProviders(str, Enum):
+    ACEDATACLOUD = "acedatacloud"
     REFUSELESS = "refuseless"
     OPENAI = "openai"
     CHATGPT = "chatgpt"

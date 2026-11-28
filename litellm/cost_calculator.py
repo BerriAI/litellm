@@ -586,6 +586,13 @@ def cost_per_token(
     if response_cost is not None:
         return response_cost[0], response_cost[1]
 
+    if custom_llm_provider == "acedatacloud":
+        from litellm.llms.openai_like.acedatacloud import request_price
+
+        ace_fee: Final = request_price(model, requested_model_info_override)
+        if ace_fee is not None:
+            return ace_fee, 0.0
+
     if requested_model_info_override is not None:
         per_second: Final = _per_second_pricing_cost_from_info(
             requested_model_info_override, response_time_ms, audio_transcription_file_duration

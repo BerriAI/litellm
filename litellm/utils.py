@@ -11478,6 +11478,10 @@ class ProviderConfigManager:
         model: str | None,
         provider: LlmProviders,
     ) -> BaseLLMModelInfo | None:
+        if provider == LlmProviders.ACEDATACLOUD:
+            from litellm.llms.openai_like.acedatacloud import AceDataCloudChatConfig
+
+            return AceDataCloudChatConfig()
         if provider == LlmProviders.OPENCODE_GO:
             from litellm.llms.opencode.chat.transformation import OpenCodeGoChatConfig
 
