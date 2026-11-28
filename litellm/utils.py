@@ -8483,8 +8483,8 @@ def function_to_dict(input_function: Callable[..., object]) -> dict:
 
     Returns
     -------
-    dictionnary
-        A dictionnary to add to the list passed to `functions` parameter of `litellm.completion`
+    dict
+        A dictionary to add to the list passed to `functions` parameter of `litellm.completion`
     """
     # Get function name and docstring
     try:
@@ -10185,7 +10185,7 @@ def add_dummy_tool(custom_llm_provider: str) -> list[ChatCompletionToolParam]:
     """
     Prevent Anthropic from raising error when tool_use block exists but no tools are provided.
 
-    Relevent Issues: https://github.com/BerriAI/litellm/issues/5388, https://github.com/BerriAI/litellm/issues/5747
+    Relevant Issues: https://github.com/BerriAI/litellm/issues/5388, https://github.com/BerriAI/litellm/issues/5747
     """
     return [
         ChatCompletionToolParam(
