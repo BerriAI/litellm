@@ -2,8 +2,6 @@
 #    On success + failure, log events to Supabase
 
 import os
-import subprocess
-import sys
 import traceback
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
@@ -36,9 +34,10 @@ class Supabase:
         self.supabase_key = os.getenv("SUPABASE_KEY")
         try:
             import supabase
-        except ImportError:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "supabase"])
-            import supabase
+        except ImportError as e:
+            raise ImportError(
+                "Package 'supabase' is missing. Please install it at build time using 'pip install supabase'."
+            ) from e
 
         if self.supabase_url is None or self.supabase_key is None:
             raise ValueError(
