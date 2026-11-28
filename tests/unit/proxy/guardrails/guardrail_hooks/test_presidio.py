@@ -7037,6 +7037,84 @@ async def test_apply_guardrail_records_its_verdict_on_a_request_dict_that_starts
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["completion", "acompletion", "anthropic_messages", "aanthropic_messages"])
+async def test_logging_hook_masks_standard_logging_object_messages(call_type: str) -> None:
+    """
+    Regression test for #52131:
+    When `logging_only=True`, `async_logging_hook` must mask PII not only in
+    `kwargs["messages"]` (LOGGED_INPUT) but also in `kwargs["standard_logging_object"]["messages"]`
+    (SLO_INPUT) across /chat/completions, streaming, and /v1/messages.
+    """
+    guardrail = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        logging_only=True,
+        pii_entities_config={"TR_NATIONAL_ID": PiiAction.MASK},
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("10000000146", "<TR_NATIONAL_ID>")
+
+    guardrail.check_pii = mock_check_pii
+
+    raw_messages = [{"role": "user", "content": "TC kimlik no 10000000146"}]
+    test_kwargs = {
+        "messages": copy.deepcopy(raw_messages),
+        "model": "mock",
+        "standard_logging_object": {
+            "id": "call-1",
+            "call_type": call_type,
+            "messages": copy.deepcopy(raw_messages),
+        },
+    }
+
+    result_kwargs, _ = await guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result={"choices": [{"message": {"content": "ok"}}]},
+        call_type=call_type,
+    )
+
+    assert result_kwargs["messages"][0]["content"] == "TC kimlik no <TR_NATIONAL_ID>"
+    assert result_kwargs["standard_logging_object"]["messages"][0]["content"] == "TC kimlik no <TR_NATIONAL_ID>"
+    assert raw_messages[0]["content"] == "TC kimlik no 10000000146"
+
+
+@pytest.mark.asyncio
+async def test_logging_hook_masks_anthropic_system_prompt_in_slo() -> None:
+    """
+    Ensure top-level `system` prompt in /v1/messages requests is also redacted
+    before being prepended into `standard_logging_object["messages"]`.
+    """
+    guardrail = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        logging_only=True,
+        pii_entities_config={"TR_NATIONAL_ID": PiiAction.MASK},
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("10000000146", "<TR_NATIONAL_ID>")
+
+    guardrail.check_pii = mock_check_pii
+
+    raw_messages = [{"role": "user", "content": "Hello"}]
+    test_kwargs = {
+        "system": "System ID 10000000146",
+        "messages": copy.deepcopy(raw_messages),
+        "model": "claude-3-5-sonnet",
+        "standard_logging_object": {
+            "id": "call-sys-1",
+            "call_type": "aanthropic_messages",
+            "messages": [{"role": "system", "content": "System ID 10000000146"}, *copy.deepcopy(raw_messages)],
+        },
+    }
+
+    result_kwargs, _ = await guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result={"type": "message", "content": [{"type": "text", "text": "ok"}]},
+        call_type="aanthropic_messages",
+    )
+
+    assert result_kwargs["system"] == "System ID <TR_NATIONAL_ID>"
+    assert result_kwargs["standard_logging_object"]["messages"][0]["content"] == "System ID <TR_NATIONAL_ID>"
 async def test_the_presidio_callback_masks_reply_text_and_leaves_tool_calls_as_the_model_wrote_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7235,3 +7313,64 @@ async def test_apply_to_output_ends_a_responses_stream_cut_short_mid_tool_call_b
 
     with pytest.raises(UndeliverableStreamRewrite):
         await anext(released)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["responses", "aresponses"])
+async def test_logging_hook_masks_responses_api_input_and_output(call_type: str) -> None:
+    """
+    Regression test for #52348:
+    When `logging_only=True` and a Responses API call carries `kwargs["messages"]`,
+    `async_logging_hook` must mask both the input messages/SLO and the
+    `ResponsesAPIResponse.output` returned to logging callbacks.
+    """
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    guardrail = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        logging_only=True,
+        pii_entities_config={"EMAIL_ADDRESS": PiiAction.MASK},
+    )
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("alice@example.com", "<EMAIL_ADDRESS>").replace("bob@example.com", "<EMAIL_ADDRESS>")
+
+    guardrail.check_pii = mock_check_pii
+
+    raw_messages = [{"role": "user", "content": "Contact alice@example.com"}]
+    test_kwargs = {
+        "messages": copy.deepcopy(raw_messages),
+        "model": "gpt-4o",
+        "standard_logging_object": {
+            "id": "call-resp-1",
+            "call_type": call_type,
+            "messages": copy.deepcopy(raw_messages),
+        },
+    }
+    response = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model="gpt-4o",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Reply to bob@example.com", "annotations": []}],
+            }
+        ],
+    )
+
+    result_kwargs, result_response = await guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result=response,
+        call_type=call_type,
+    )
+
+    assert result_kwargs["messages"][0]["content"] == "Contact <EMAIL_ADDRESS>"
+    assert result_kwargs["standard_logging_object"]["messages"][0]["content"] == "Contact <EMAIL_ADDRESS>"
+    assert isinstance(result_response, ResponsesAPIResponse)
+    assert result_response.output[0].content[0].text == "Reply to <EMAIL_ADDRESS>"

@@ -1535,18 +1535,32 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Masks the input and output before logging to langfuse, datadog, etc.
         """
-        masks_response_only: Final = self._callback_role is not None and self.apply_to_output
-        if call_type in ("completion", "acompletion") and not masks_response_only:  # /chat/completions requests
-            messages: Final[list | None] = kwargs.get("messages", None)
-            tasks: Final[list[Awaitable[str]]] = []
-            task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
+        import copy
 
-            if messages is None:
+        from litellm.types.utils import CallTypes
+
+        masks_response_only: Final = self._callback_role is not None and self.apply_to_output
+        supported_call_types: Final = {
+            CallTypes.completion.value,
+            CallTypes.acompletion.value,
+            CallTypes.anthropic_messages.value,
+            CallTypes.aanthropic_messages.value,
+        }
+        if (call_type in supported_call_types or kwargs.get("messages") is not None) and not masks_response_only:
+            raw_messages: Final[list | None] = kwargs.get("messages", None)
+            if raw_messages is None:
                 return kwargs, result
+
+            messages: Final[list] = copy.deepcopy(raw_messages)
+            tasks: Final[list[Awaitable[str]]] = []
+
+            task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
 
             presidio_config: Final = self.get_presidio_settings_from_request_data(kwargs)
 
             for msg_idx, m in enumerate(messages):
+                if not isinstance(m, dict):
+                    continue
                 content = m.get("content", None)
                 if content is None:
                     continue
@@ -1562,6 +1576,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     task_mappings.append((msg_idx, None))  # None indicates string content
                 elif isinstance(content, list):
                     for content_idx, c in enumerate(content):
+                        if not isinstance(c, dict):
+                            continue
                         text_str = c.get("text", None)
                         if text_str is None:
                             continue
@@ -1592,7 +1608,77 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
             verbose_proxy_logger.debug("Presidio PII Masking: Redacted pii message: %s", messages)
             kwargs["messages"] = messages
+            if isinstance(kwargs.get("input"), list):
+                kwargs["input"] = copy.deepcopy(messages)
 
+            raw_system = kwargs.get("system")
+            if raw_system is not None:
+                masked_system = copy.deepcopy(raw_system)
+                if isinstance(masked_system, str):
+                    masked_system = await self.check_pii(
+                        text=masked_system,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=kwargs,
+                    )
+                elif isinstance(masked_system, list):
+                    for block in masked_system:
+                        if isinstance(block, dict) and isinstance(block.get("text"), str):
+                            block["text"] = await self.check_pii(
+                                text=block["text"],
+                                output_parse_pii=False,
+                                presidio_config=presidio_config,
+                                request_data=kwargs,
+                            )
+                kwargs["system"] = masked_system
+
+            litellm_params: Final = kwargs.get("litellm_params")
+            if isinstance(litellm_params, dict):
+                proxy_server_request: Final = litellm_params.get("proxy_server_request")
+                if isinstance(proxy_server_request, dict):
+                    request_body: Final = proxy_server_request.get("body")
+                    if isinstance(request_body, dict) and ("messages" in request_body or "system" in request_body):
+                        masked_body: dict = {**request_body}
+                        if "messages" in masked_body:
+                            masked_body["messages"] = copy.deepcopy(messages)
+                        if "system" in masked_body and "system" in kwargs:
+                            masked_body["system"] = copy.deepcopy(kwargs["system"])
+                        kwargs["litellm_params"] = {
+                            **litellm_params,
+                            "proxy_server_request": {
+                                **proxy_server_request,
+                                "body": masked_body,
+                            },
+                        }
+
+            additional_args: Final = kwargs.get("additional_args")
+            if isinstance(additional_args, dict):
+                complete_input_dict: Final = additional_args.get("complete_input_dict")
+                if isinstance(complete_input_dict, dict) and (
+                    "messages" in complete_input_dict or "system" in complete_input_dict
+                ):
+                    masked_complete_input: dict = {**complete_input_dict}
+                    if "messages" in masked_complete_input:
+                        masked_complete_input["messages"] = copy.deepcopy(messages)
+                    if "system" in masked_complete_input and "system" in kwargs:
+                        masked_complete_input["system"] = copy.deepcopy(kwargs["system"])
+                    kwargs["additional_args"] = {
+                        **additional_args,
+                        "complete_input_dict": masked_complete_input,
+                    }
+
+            standard_logging_object: Final = kwargs.get("standard_logging_object")
+            if isinstance(standard_logging_object, dict) and "messages" in standard_logging_object:
+                from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+                from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
+
+                standard_logging_object["messages"] = truncate_base64_in_messages(
+                    StandardLoggingPayloadSetup.append_system_prompt_messages(
+                        kwargs=kwargs, messages=copy.deepcopy(messages)
+                    )
+                )
+
+        if call_type in supported_call_types:
             if (
                 isinstance(result, ModelResponse)
                 and result.choices
