@@ -27,11 +27,12 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 import pytest
-
 from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
+
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -39,11 +40,10 @@ from claude_code.cli_driver import (
     run_claude_models_parallel,
 )
 
-
 BEDROCK_CONVERSE_MODELS = [
     "claude-haiku-4-5-bedrock-converse",
     "claude-sonnet-4-5-bedrock-converse",
-    "claude-opus-4-7-bedrock-converse",
+    "claude-opus-5-5-bedrock-converse",
 ]
 
 # A prompt the model cannot answer from training data alone — it forces
