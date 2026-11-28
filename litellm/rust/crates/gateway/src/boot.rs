@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::host::NativeBootHost;
 use litellm_config::{Config, Environment, LiteLlmSettings, Spelled};
-use litellm_inference_messages::MessagesSettings;
+use litellm_gateway_inference::messages::Configured;
 use litellm_python_compat::number::float;
 use litellm_router_core::{BuildPath, Router, RouterConfig, build::Install};
 use serde_json::{Map, Value};
@@ -64,12 +64,9 @@ const MAX_DETACHED_DRAINS: u64 = 100;
 /// stream whose client left is still read to its end, for as long and in as many calls at once
 /// as Python's async relay reads a Bedrock invoke stream. The route drains only a stream it
 /// decodes itself.
-pub(crate) fn configured(
-    settings: &LiteLlmSettings,
-    environment: &Environment,
-) -> MessagesSettings {
-    MessagesSettings {
-        drop_params: settings.drop_params == Some(true),
+pub(crate) fn configured(settings: &LiteLlmSettings, environment: &Environment) -> Configured {
+    Configured {
+        drop_params: settings.drop_params,
         reasoning_auto_summary: settings.reasoning_auto_summary,
         request_timeout: request_timeout(settings),
         detached_drain_timeout: Some(
@@ -85,7 +82,6 @@ pub(crate) fn configured(
             )
             .unwrap_or(usize::MAX),
         ),
-        ..MessagesSettings::default()
     }
 }
 
@@ -143,15 +139,20 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unset("model_list: []\n", (false, false, None))]
+    #[case::unset("model_list: []\n", (None, false, None))]
     #[case::set(
         "litellm_settings:\n  drop_params: true\n  reasoning_auto_summary: true\n  request_timeout: 30\n",
-        (true, true, Some(30.0))
+        (Some(true), true, Some(30.0))
     )]
-    #[case::drop_params_as_text("litellm_settings:\n  drop_params: \"true\"\n", (true, false, None))]
+    #[case::drop_params_as_text("litellm_settings:\n  drop_params: \"true\"\n", (Some(true), false, None))]
+    #[case::drop_params_off("litellm_settings:\n  drop_params: false\n", (Some(false), false, None))]
+    #[case::drop_params_as_a_word_that_is_no_flag(
+        "litellm_settings:\n  drop_params: maybe\n",
+        (None, false, None)
+    )]
     fn litellm_settings_reach_every_messages_call(
         #[case] yaml: &str,
-        #[case] expected: (bool, bool, Option<f64>),
+        #[case] expected: (Option<bool>, bool, Option<f64>),
     ) {
         let config = Config::from_yaml(yaml).unwrap();
 

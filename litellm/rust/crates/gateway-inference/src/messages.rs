@@ -5,7 +5,6 @@ use std::time::Duration;
 use axum::{Json, body::Bytes, http::HeaderMap, response::Response};
 use futures_util::StreamExt;
 use litellm_cache_response::CachePolicy;
-use litellm_config::Spelled;
 use litellm_framer::sse;
 use litellm_host::call::CallOutput;
 use litellm_host_http::Sse;
@@ -22,13 +21,13 @@ use litellm_llms_types::formats::messages::{
 };
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use litellm_model_catalog::Catalog;
-use litellm_python_compat::{flags::lax_bool, json::from_json};
 use litellm_router_core::{Attempt, Deployment, Op};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::{
     Checked, Error, Gateway, JsonObject,
+    drop_params::{Sources, drops, written},
     error::ErrorFormat,
     hooks::CallType,
     model_restamp::{ReportedModel, Stamp},
@@ -53,6 +52,27 @@ const VERTEX_AI: &str = "vertex_ai";
 /// The keys a request sets its own messages settings by. Python reads them from the call's kwargs
 /// and never sends them on.
 pub const REQUEST_SETTINGS: [&str; 2] = ["drop_params", "additional_drop_params"];
+
+/// What `litellm_settings` sets for a messages call to any deployment.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct Configured {
+    /// `litellm_settings.drop_params`, unset when neither the config nor its variable wrote a
+    /// flag.
+    pub drop_params: Option<bool>,
+    pub reasoning_auto_summary: bool,
+    pub request_timeout: Option<f64>,
+    pub detached_drain_timeout: Option<f64>,
+    pub detached_drain_limit: Option<usize>,
+}
+
+impl Configured {
+    fn request_timeout(&self) -> Option<Duration> {
+        self.request_timeout
+            .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+            .filter(|timeout| !timeout.is_zero())
+    }
+}
 
 pub async fn create<H: Host>(Checked { call, body }: Checked<H, JsonObject>) -> Response {
     serve::run(&call, body.map(|JsonObject(body)| body), |body| {
@@ -141,7 +161,7 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
     }
 
     fn configured_timeout<G: Host>(gateway: &Gateway<G>, _: &str) -> Option<Duration> {
-        gateway.messages_settings.request_timeout()
+        gateway.configured.request_timeout()
     }
 
     fn render(ran: Self::Output, reported: ReportedModel<'_>) -> Result<Response, Error> {
@@ -169,7 +189,7 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
         let mut shaping = shaping(
             deployment,
             cost_map.catalog(),
-            &self.gateway.messages_settings,
+            &self.gateway.configured,
             &body,
         );
         shaping.settings.pricing = pricing::priced_as(
@@ -213,43 +233,40 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
     }
 }
 
-fn is_set(flag: Option<&Spelled<bool>>) -> bool {
-    match flag {
-        Some(Spelled::Value(on)) => *on,
-        Some(Spelled::Text(text)) => lax_bool(&text.as_str().into()) == Some(true),
-        None => false,
-    }
-}
-
 /// How the messages route shapes a call to `deployment` with `body`: the `configured` settings,
-/// the capabilities `catalog` and its `model_info` declare, the deployment's `drop_params` and
-/// `additional_drop_params` with the request's own laid over them, as Python lays a call's
-/// kwargs over the deployment's (`{**deployment, **request}`), and for Claude on Vertex AI the
-/// model's `supported_regions`, which route the call as they route it in Python. The request's
-/// `drop_params` turns dropping on or off for its call, and `litellm_settings.drop_params` keeps
-/// it on whatever the request says (`litellm.drop_params or drop_params`).
+/// the capabilities `catalog` and its `model_info` declare, whether the call [`drops`] what the
+/// provider rejects, the deployment's `additional_drop_params` with the request's own in their
+/// place, as Python lays a call's kwargs over the deployment's (`{**deployment, **request}`),
+/// except that a request's `null` is not written and leaves the deployment's, and for Claude on
+/// Vertex AI the model's `supported_regions`, which route the call as they
+/// route it in Python.
 fn shaping(
     deployment: &Deployment,
     catalog: &Catalog,
-    configured: &MessagesSettings,
+    configured: &Configured,
     body: &Map<String, Value>,
 ) -> MessagesShaping {
     let params = &deployment.params;
-    let drop_params = configured.drop_params
-        || body
-            .get("drop_params")
-            .map_or_else(|| is_set(params.drop_params.as_ref()), is_on);
     let base_model = params.extra.get("base_model").and_then(Value::as_str);
     MessagesShaping {
         settings: MessagesSettings {
-            drop_params,
+            drop_params: drops(&Sources {
+                request: body.get("drop_params").and_then(written),
+                deployment: params.drop_params,
+                global: configured.drop_params,
+            }),
+            reasoning_auto_summary: configured.reasoning_auto_summary,
+            request_timeout: configured.request_timeout,
+            detached_drain_timeout: configured.detached_drain_timeout,
+            detached_drain_limit: configured.detached_drain_limit,
             additional_drop_params: body
                 .get("additional_drop_params")
+                .filter(|sent| !sent.is_null())
                 .or_else(|| params.extra.get("additional_drop_params"))
                 .map(drop_paths)
                 .unwrap_or_default(),
             base_model: base_model.map(str::to_owned),
-            ..configured.clone()
+            ..MessagesSettings::default()
         },
         capabilities: messages_route_capabilities(
             catalog,
@@ -303,11 +320,6 @@ fn project(
         timeout: None,
         shaping,
     })
-}
-
-/// `lax_bool(value) is True`, the rule Python reads a call's `drop_params` by.
-fn is_on(value: &Value) -> bool {
-    lax_bool(&from_json(value.clone())) == Some(true)
 }
 
 /// `additional_drop_paths`: the text entries of a list, and none for any other value.
@@ -435,49 +447,89 @@ mod tests {
     use super::*;
     use crate::test_support::deployment;
 
-    fn requested(global: bool, deployment_drops: bool, body: &Value) -> MessagesSettings {
-        let deployment = deployment(
-            json!({
-                "model": "provider/model",
-                "drop_params": deployment_drops,
-                "additional_drop_params": ["deployment"],
-            }),
-            json!({}),
-        );
-        let configured = MessagesSettings {
-            drop_params: global,
-            ..MessagesSettings::default()
+    /// What each source of `drop_params` holds for one call.
+    #[derive(Default)]
+    struct Written {
+        configured: Option<bool>,
+        deployment: Option<Value>,
+        request: Option<Value>,
+    }
+
+    fn shaped(sources: Written) -> MessagesSettings {
+        let params = json!({"model": "provider/model", "additional_drop_params": ["deployment"]})
+            .as_object()
+            .cloned()
+            .into_iter()
+            .flatten()
+            .chain(
+                sources
+                    .deployment
+                    .map(|flag| ("drop_params".to_owned(), flag)),
+            )
+            .collect();
+        let body = sources
+            .request
+            .and_then(|body| body.as_object().cloned())
+            .unwrap_or_default();
+        let configured = Configured {
+            drop_params: sources.configured,
+            ..Configured::default()
         };
 
         shaping(
-            &deployment,
+            &deployment(Value::Object(params), json!({})),
             &catalog(),
             &configured,
-            body.as_object().unwrap(),
+            &body,
         )
         .settings
     }
 
     #[rstest]
-    #[case::the_deployments_when_the_request_names_none(json!({}), false, true, true)]
-    #[case::a_request_turning_it_on(json!({"drop_params": true}), false, false, true)]
-    #[case::a_flag_word(json!({"drop_params": " yes "}), false, false, true)]
-    #[case::a_number_that_is_no_flag(json!({"drop_params": 2}), false, true, false)]
-    #[case::a_request_turning_it_off(json!({"drop_params": false}), false, true, false)]
-    #[case::null_turning_it_off(json!({"drop_params": null}), false, true, false)]
-    #[case::the_config_over_a_request_turning_it_off(
-        json!({"drop_params": false}),
-        true,
-        true,
+    #[case::nothing_written(Written::default(), false)]
+    #[case::the_setting(Written { configured: Some(true), ..Written::default() }, true)]
+    #[case::the_deployment(Written { deployment: Some(json!(true)), ..Written::default() }, true)]
+    #[case::the_deployments_flag_word(
+        Written { deployment: Some(json!(" True ")), ..Written::default() },
         true
     )]
-    fn a_requests_drop_params_lays_over_the_deployments(
-        #[case] body: Value,
-        #[case] global: bool,
-        #[case] deployment: bool,
+    #[case::the_deployments_word_that_is_no_flag(
+        Written { deployment: Some(json!("maybe")), configured: Some(true), ..Written::default() },
+        true
+    )]
+    #[case::the_request(
+        Written { request: Some(json!({"drop_params": "yes"})), ..Written::default() },
+        true
+    )]
+    #[case::the_request_over_the_deployment(
+        Written {
+            deployment: Some(json!(true)),
+            request: Some(json!({"drop_params": false})),
+            ..Written::default()
+        },
+        false
+    )]
+    #[case::a_request_null_under_the_deployment(
+        Written {
+            deployment: Some(json!(true)),
+            request: Some(json!({"drop_params": null})),
+            ..Written::default()
+        },
+        true
+    )]
+    #[case::the_deployment_over_the_setting(
+        Written {
+            configured: Some(true),
+            deployment: Some(json!(false)),
+            ..Written::default()
+        },
+        false
+    )]
+    fn every_source_of_drop_params_reaches_the_call(
+        #[case] sources: Written,
         #[case] expected: bool,
     ) {
-        assert_eq!(requested(global, deployment, &body).drop_params, expected);
+        assert_eq!(shaped(sources).drop_params, expected);
     }
 
     #[rstest]
@@ -486,16 +538,21 @@ mod tests {
         json!({"additional_drop_params": ["request", 1, "nested.path"]}),
         &["request", "nested.path"]
     )]
-    #[case::none_for_null(json!({"additional_drop_params": null}), &[])]
+    #[case::the_deployments_when_the_request_sends_null(
+        json!({"additional_drop_params": null}),
+        &["deployment"]
+    )]
     #[case::none_for_text(json!({"additional_drop_params": "request"}), &[])]
     fn a_requests_additional_drop_params_replace_the_deployments(
         #[case] body: Value,
         #[case] expected: &[&str],
     ) {
-        assert_eq!(
-            requested(false, false, &body).additional_drop_params,
-            expected
-        );
+        let sources = Written {
+            request: Some(body),
+            ..Written::default()
+        };
+
+        assert_eq!(shaped(sources).additional_drop_params, expected);
     }
 
     const CACHED_USAGE: &str = r#""usage":{"input_tokens":7,"output_tokens":5,"cache_creation_input_tokens":100,"cache_read_input_tokens":20}"#;
@@ -521,79 +578,32 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unset(false, json!({}), false)]
-    #[case::deployment_flag(false, json!({"drop_params": true}), true)]
-    #[case::deployment_word(false, json!({"drop_params": " True "}), true)]
-    #[case::deployment_off(false, json!({"drop_params": false}), false)]
-    #[case::deployment_unknown_word(false, json!({"drop_params": "maybe"}), false)]
-    #[case::deployment_yes(false, json!({"drop_params": "yes"}), true)]
-    #[case::deployment_no(false, json!({"drop_params": "no"}), false)]
-    #[case::global(true, json!({}), true)]
-    #[case::global_over_deployment_off(true, json!({"drop_params": false}), true)]
-    fn configured_drop_params_reach_the_deployment(
-        #[case] drops_params_globally: bool,
-        #[case] litellm_params: Value,
-        #[case] expected: bool,
-    ) {
-        let params = json!({"model": "provider/model"})
-            .as_object()
-            .cloned()
-            .into_iter()
-            .flatten()
-            .chain(litellm_params.as_object().cloned().unwrap())
-            .collect();
-        let deployment = deployment(Value::Object(params), json!({}));
-
-        let configured = MessagesSettings {
-            drop_params: drops_params_globally,
-            ..MessagesSettings::default()
-        };
-
-        let settings = shaping(&deployment, &catalog(), &configured, &Map::new()).settings;
-
-        assert_eq!(settings.drop_params, expected);
-    }
-
-    #[rstest]
     #[case::declared(json!({"supports_reasoning": true}), true)]
     #[case::declared_off(json!({"supports_reasoning": false}), false)]
     #[case::undeclared(json!({}), false)]
     fn model_info_flags_reach_the_deployment(#[case] model_info: Value, #[case] expected: bool) {
         let deployment = deployment(json!({"model": "anthropic/claude-unlisted-9"}), model_info);
 
-        let capabilities = shaping(
-            &deployment,
-            &catalog(),
-            &MessagesSettings::default(),
-            &Map::new(),
-        )
-        .capabilities;
+        let capabilities =
+            shaping(&deployment, &catalog(), &Configured::default(), &Map::new()).capabilities;
 
         assert_eq!(capabilities.supports_reasoning, expected);
     }
 
     #[test]
     fn configured_settings_reach_the_deployment() {
-        let deployment = deployment(
-            json!({"model": "provider/model", "drop_params": false}),
-            json!({}),
-        );
-        let configured = MessagesSettings {
-            drop_params: true,
+        let deployment = deployment(json!({"model": "provider/model"}), json!({}));
+        let configured = Configured {
             reasoning_auto_summary: true,
             request_timeout: Some(30.0),
-            ..MessagesSettings::default()
+            ..Configured::default()
         };
 
         let settings = shaping(&deployment, &catalog(), &configured, &Map::new()).settings;
 
         assert_eq!(
-            (
-                settings.drop_params,
-                settings.reasoning_auto_summary,
-                settings.request_timeout
-            ),
-            (true, true, Some(30.0))
+            (settings.reasoning_auto_summary, settings.request_timeout),
+            (true, Some(30.0))
         );
     }
 
@@ -610,13 +620,8 @@ mod tests {
             json!({}),
         );
 
-        let settings = shaping(
-            &deployment,
-            &catalog(),
-            &MessagesSettings::default(),
-            &Map::new(),
-        )
-        .settings;
+        let settings =
+            shaping(&deployment, &catalog(), &Configured::default(), &Map::new()).settings;
 
         assert_eq!(settings.additional_drop_params, expected);
     }

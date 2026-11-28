@@ -189,10 +189,7 @@ future_section:
         Some(Spelled::Text("os.environ/TPM_LIMIT".to_string()))
     );
     assert_eq!(model.litellm_params.rpm, Some(Spelled::Value(5.0)));
-    assert_eq!(
-        model.litellm_params.drop_params,
-        Some(Spelled::Text("true".to_string()))
-    );
+    assert_eq!(model.litellm_params.drop_params, Some(true));
     assert_eq!(
         model.litellm_params.vertex.vertex_project.as_deref(),
         Some("test-project")
