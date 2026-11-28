@@ -12,6 +12,7 @@ would be a bug waiting to differ.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Final, TypeVar
 
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
@@ -27,10 +28,14 @@ from litellm.proxy.mcp_server.outbound_credentials.redis_refresh_coordinator imp
 CoordinatorOutcomeT = TypeVar("CoordinatorOutcomeT")
 
 
-def runtime_refresh_coordinator() -> RefreshCoordinator[CoordinatorOutcomeT] | None:
-    from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415  # runtime global
+def runtime_refresh_coordinator(
+    *,
+    encode_error: Callable[[CoordinatorOutcomeT], str | None] | None = None,
+    decode_error: Callable[[str], CoordinatorOutcomeT | None] | None = None,
+) -> RefreshCoordinator[CoordinatorOutcomeT] | None:
+    from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # runtime global
 
-    redis_cache: Final = user_api_key_cache.redis_connection
+    redis_cache: Final = redis_usage_cache
     if redis_cache is None:
         return None
     # The Redis client from init_async_client() is only partially typed; the lock validates every
@@ -40,4 +45,6 @@ def runtime_refresh_coordinator() -> RefreshCoordinator[CoordinatorOutcomeT] | N
         redis_client,  # pyright: ignore[reportArgumentType,reportUnknownArgumentType]  # litellm redis wrapper is untyped
         namespace_key=redis_cache.check_and_fix_namespace,
     )
-    return RedisRefreshCoordinator(lock)
+    if encode_error is None or decode_error is None:
+        return RedisRefreshCoordinator(lock)
+    return RedisRefreshCoordinator(lock, encode_error=encode_error, decode_error=decode_error)

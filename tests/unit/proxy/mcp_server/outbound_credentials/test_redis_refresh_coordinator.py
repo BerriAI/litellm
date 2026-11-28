@@ -22,6 +22,7 @@ class _FakeLock:
         self.acquire_calls = []
         self.extend_calls = []
         self.released = []
+        self.results = {}
         self.extended = asyncio.Event()
 
     async def acquire(self, key, token, ttl_seconds):
@@ -38,6 +39,15 @@ class _FakeLock:
 
     async def is_held(self, key):
         return self._held.pop(0) if self._held else False
+
+    async def held_token(self, key: str) -> str | None:
+        return "holder-token" if await self.is_held(key) else None
+
+    async def publish_result(self, key: str, token: str, outcome: str, ttl_seconds: float) -> None:
+        self.results[(key, token)] = outcome
+
+    async def read_result(self, key: str, token: str) -> str | None:
+        return self.results.get((key, token))
 
 
 class _Clock:
@@ -66,7 +76,6 @@ async def test_winner_acquires_and_releases_with_the_same_token_and_never_reread
 
     async def reread():
         reread_calls.append(1)
-        return None
 
     coord = RedisRefreshCoordinator(lock, new_token=lambda: "tok")
     result = await coord.run("u", "s", refresh, reread)
@@ -139,7 +148,6 @@ async def test_loser_waits_for_the_holder_then_rereads_persisted_token():
 
     async def refresh():
         refresh_calls.append(1)
-        return None
 
     async def reread():
         return OAuthToken(access_token="persisted-by-winner")
@@ -218,7 +226,6 @@ async def test_loser_with_default_timeout_waits_past_the_lease_ttl_for_the_holde
 
     async def refresh():
         refresh_calls.append(1)
-        return None
 
     async def reread():
         return OAuthToken(access_token="persisted-by-winner")
@@ -268,3 +275,105 @@ async def test_winner_stops_renewing_after_the_refresh_budget():
     assert result is not None and result.access_token == "new"
     assert extends_during_budget == 4  # renewed at clock 5, 10, 15, 20 then stopped
     assert len(lock.extend_calls) == 4  # no further renewals after the budget
+
+
+@pytest.mark.asyncio
+async def test_cancelled_winner_keeps_the_lease_until_the_surviving_refresh_finishes():
+    lock = _FakeLock(acquired=LockAcquisition.ACQUIRED)
+    refresh_started = asyncio.Event()
+    refresh_finished = asyncio.Event()
+
+    async def refresh():
+        refresh_started.set()
+        await refresh_finished.wait()
+        return OAuthToken(access_token="new")
+
+    async def reread():
+        return None
+
+    coord = RedisRefreshCoordinator(lock, new_token=lambda: "tok")
+    run_task = asyncio.create_task(coord.run("u", "s", refresh, reread))
+    await refresh_started.wait()
+
+    run_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run_task
+
+    assert lock.released == []
+
+    refresh_finished.set()
+    cleanup_task = next(iter(coord.background_tasks))
+    await cleanup_task
+
+    assert lock.released == [(_KEY, "tok")]
+
+
+@pytest.mark.asyncio
+async def test_winner_publishes_a_typed_error_and_the_loser_uses_it_instead_of_rereading():
+    clock = _Clock()
+
+    async def winner_refresh():
+        return "error-outcome"
+
+    async def winner_reread():
+        raise AssertionError("winner never rereads")
+
+    winner_lock = _FakeLock(acquired=LockAcquisition.ACQUIRED)
+
+    def encode_error(outcome: str) -> str | None:
+        return "encoded" if outcome == "error-outcome" else None
+
+    def decode_error(payload: str) -> str | None:
+        return "decoded-error" if payload == "encoded" else None
+
+    winner = RedisRefreshCoordinator(
+        winner_lock,
+        new_token=lambda: "holder-token",
+        encode_error=encode_error,
+        decode_error=decode_error,
+    )
+    assert await winner.run("u", "s", winner_refresh, winner_reread) == "error-outcome"
+    assert winner_lock.results[(_KEY, "holder-token")] == "encoded"
+
+    loser_lock = _FakeLock(acquired=LockAcquisition.HELD, held_sequence=[True, False])
+    loser_lock.results[(_KEY, "holder-token")] = "encoded"
+
+    async def loser_refresh():
+        raise AssertionError("loser never refreshes")
+
+    async def loser_reread():
+        raise AssertionError("loser uses the published error instead of rereading")
+
+    loser = RedisRefreshCoordinator(
+        loser_lock,
+        clock=clock,
+        sleep=_advancing_sleep(clock),
+        encode_error=encode_error,
+        decode_error=decode_error,
+    )
+    assert await loser.run("u", "s", loser_refresh, loser_reread) == "decoded-error"
+
+
+@pytest.mark.asyncio
+async def test_loser_waits_for_successor_holder_when_original_holder_lapses_without_result():
+    clock = _Clock()
+    tokens = iter(["holder-1", "holder-2", "holder-2", None])
+
+    class _SuccessorLock(_FakeLock):
+        async def held_token(self, key: str) -> str | None:
+            return next(tokens, None)
+
+    lock = _SuccessorLock(acquired=LockAcquisition.HELD)
+    rereads: list[float] = []
+
+    async def refresh():
+        raise AssertionError("loser never refreshes")
+
+    async def reread():
+        rereads.append(clock.t)
+        return OAuthToken(access_token="from-successor")
+
+    coord = RedisRefreshCoordinator(lock, clock=clock, sleep=_advancing_sleep(clock, step=1.0))
+    result = await coord.run("u", "s", refresh, reread)
+    assert result == OAuthToken(access_token="from-successor")
+    assert rereads == [2.0]

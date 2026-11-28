@@ -152,9 +152,9 @@ async def _post_token_endpoint(
 
 
 def _redis_cache_is_available() -> bool:
-    from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+    from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # runtime global
 
-    return user_api_key_cache.has_redis
+    return redis_usage_cache is not None
 
 
 def _runtime_backend_and_coordinator() -> tuple[
@@ -163,20 +163,20 @@ def _runtime_backend_and_coordinator() -> tuple[
     """The cross-replica cache + coordinator when Redis is wired, else ``(None, None, False)`` so the
     foundation's in-process defaults are used (a single replica needs no shared cache or lock).
     """
-    from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: PLC0415
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: PLC0415  # runtime global
         decrypt_value_helper,
         encrypt_value_helper,
     )
-    from litellm.proxy.proxy_server import mcp_state_cache  # noqa: PLC0415
+    from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # runtime global
 
     coordinator: Final[RefreshCoordinator[OAuthToken | None] | None] = runtime_refresh_coordinator()
-    if coordinator is None:
+    if coordinator is None or redis_usage_cache is None:
         return None, None, False
     codec: Final = OAuthTokenCacheCodec(
         encrypt_value_helper,
         lambda blob: decrypt_value_helper(blob, "mcp_per_user_token", exception_type="debug"),
     )
-    backend: Final = DualCacheTokenCacheBackend(mcp_state_cache, codec)
+    backend: Final = DualCacheTokenCacheBackend(redis_usage_cache, codec)
     return backend, coordinator, True
 
 
@@ -252,6 +252,11 @@ class LazyPerUserOAuthTokenStore:
                 return await store.fetch(user_id, server_id)
 
         store, uses_redis = await self._store_for_fetch()
+        return await asyncio.shield(self._fetch_then_finish(store, uses_redis, user_id, server_id))
+
+    async def _fetch_then_finish(
+        self, store: InvalidatableOAuthTokenStore, uses_redis: bool, user_id: str, server_id: str
+    ) -> OAuthToken | None:
         try:
             return await store.fetch(user_id, server_id)
         finally:

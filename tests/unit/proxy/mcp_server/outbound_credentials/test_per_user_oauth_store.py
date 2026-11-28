@@ -1,5 +1,6 @@
 import asyncio
 from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -243,6 +244,46 @@ async def test_lazy_store_waits_for_in_flight_local_fetch_before_redis_rebuild()
     assert first is not None and first.access_token == "local"
     assert second is not None and second.access_token == "redis"
     assert local_store.calls == [("u", "s")]
+    assert redis_store.calls == [("u", "s")]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_local_fetch_still_blocks_the_redis_rebuild_until_it_finishes() -> None:
+    local_store = _BlockingStore("local")
+    redis_store = _RecordingStore("redis")
+    redis_available = _RedisAvailability()
+
+    def build_store(_server_lookup: ServerLookup) -> tuple[InvalidatableOAuthTokenStore, bool]:
+        if redis_available.available:
+            return redis_store, True
+        return local_store, False
+
+    def server_lookup(_server_id: str) -> None:
+        return None
+
+    store = LazyPerUserOAuthTokenStore(
+        server_lookup,
+        store_builder=build_store,
+        redis_available=redis_available,
+    )
+
+    first_fetch = asyncio.create_task(store.fetch("u", "s"))
+    await local_store.started.wait()
+    first_fetch.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_fetch
+
+    redis_available.available = True
+    second_fetch = asyncio.create_task(store.fetch("u", "s"))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert redis_store.calls == []
+
+    local_store.release.set()
+    second = await second_fetch
+
+    assert second is not None and second.access_token == "redis"
     assert redis_store.calls == [("u", "s")]
 
 
@@ -493,3 +534,63 @@ async def test_token_endpoint_malformed_200_body_is_typed_denied(monkeypatch, ra
     assert outcome.status_code == 200
     assert outcome.body == {}
     assert outcome.detail == "token endpoint returned a non-JSON-object body"
+
+
+def test_redis_availability_reads_the_shared_usage_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import _redis_cache_is_available
+
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", object())
+    assert _redis_cache_is_available() is True
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    assert _redis_cache_is_available() is False
+
+
+@pytest.mark.asyncio
+async def test_assembled_store_shares_cached_tokens_through_redis_usage_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.outbound_credentials import per_user_oauth_store
+
+    class _FakeRedisUsageCache:
+        def __init__(self) -> None:
+            self.data: dict[str, object] = {}
+
+        async def async_get_cache(self, key: str) -> object:
+            return self.data.get(key)
+
+        async def async_set_cache(self, key: str, value: object, ttl: int | None = None) -> None:
+            self.data[key] = value
+
+        async def async_delete_cache(self, key: str) -> None:
+            self.data.pop(key, None)
+
+        def init_async_client(self) -> object:
+            return object()
+
+        def check_and_fix_namespace(self, key: str) -> str:
+            return key
+
+    redis_cache: Final = _FakeRedisUsageCache()
+    db_reads: Final[list[tuple[str, str]]] = []
+
+    async def _fake_read_credential(
+        user_id: str,
+        server_id: str,
+    ) -> dict[str, object]:
+        db_reads.append((user_id, server_id))
+        return {"access_token": "shared-tok", "expires_at": 9999999999.0}
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key")
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", redis_cache)
+    monkeypatch.setattr(per_user_oauth_store, "_read_credential", _fake_read_credential)
+
+    store: Final = per_user_oauth_store.build_per_user_oauth_token_store(lambda _sid: None)
+    first: Final = await store.fetch("user-1", "srv-1")
+    second: Final = await store.fetch("user-1", "srv-1")
+
+    assert first is not None and first.access_token == "shared-tok"
+    assert second is not None and second.access_token == "shared-tok"
+    assert db_reads == [("user-1", "srv-1")]
+    assert len(redis_cache.data) == 1

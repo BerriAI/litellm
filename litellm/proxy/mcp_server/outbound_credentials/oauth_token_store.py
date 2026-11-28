@@ -241,7 +241,7 @@ class InProcessRefreshCoordinator(Generic[OutcomeT]):
             task = asyncio.ensure_future(refresh())
             self._inflight[key] = task
             task.add_done_callback(lambda _t, k=key: self._inflight.pop(k, None))
-        return await task
+        return await asyncio.shield(task)
 
 
 class RefreshingTokenStore:
