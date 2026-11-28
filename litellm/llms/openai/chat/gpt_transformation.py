@@ -3,7 +3,6 @@ Support for gpt model family
 """
 
 import asyncio
-import json
 import os
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextvars import ContextVar
@@ -18,7 +17,6 @@ from typing_extensions import TypedDict
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
 from litellm.litellm_core_utils.core_helpers import (
-    as_str_mapping,
     drops_unsupported_params,
     map_finish_reason,
     require_attributes,
@@ -86,7 +84,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import convert_to_model_response_object, declares_system_first
 
-from ..common_utils import OpenAIError, RelayOnlyBodyOpenAIError, without_cache_control
+from ..common_utils import OpenAIError, stream_error_from_chunk, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 if TYPE_CHECKING:
@@ -1112,31 +1110,11 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                 delta["reasoning_content"] = delta.pop("reasoning")
         return choices
 
-    @staticmethod
-    def _extract_error_from_chunk(chunk: Mapping[str, object]) -> tuple[str, int] | None:
-        """OpenAI-compatible backends (vLLM, sglang) can return an HTTP 200
-        stream whose body carries an error payload, e.g.
-        ``data: {"error": {"message": "...", "code": 400}}``."""
-        error: Final = chunk.get("error")
-        if not error:
-            return None
-        if not isinstance(error, dict):
-            return str(error), 500
-        message: Final = error.get("message")
-        code: Final = error.get("code")
-        status_code: Final = code if isinstance(code, int) and 400 <= code < 600 else 500
-        return (message if isinstance(message, str) else json.dumps(error)), status_code
-
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
-            error_details: Final = self._extract_error_from_chunk(chunk)
-            if error_details is not None:
-                error_message, error_status_code = error_details
-                raise RelayOnlyBodyOpenAIError(
-                    status_code=error_status_code,
-                    message=error_message,
-                    body=as_str_mapping(_OBJECT_MAPPING.validate_python(chunk).get("error")),
-                )
+            stream_error: Final = stream_error_from_chunk(_OBJECT_MAPPING.validate_python(chunk))
+            if stream_error is not None:
+                raise stream_error
             raw_choices: Final = chunk.get("choices") or []
             if any(choice.get("finish_reason") == "abort" for choice in _CHOICE_MAPPINGS.validate_python(raw_choices)):
                 raise OpenAIError(
