@@ -1,4 +1,5 @@
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { benchmarksWindow } from "@/app/(dashboard)/cost-optimization/_components/useAutoRouterBenchmarks";
 import { StackedUsageChart, type StackedUsageScale } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { getProviderSpend, getTopAgents, getTopAPIKeys, getTopModels } from "./entityUsageAggregations";
@@ -177,11 +178,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         ? {
             accessToken: accessToken as string,
             startTime: startTime as Date,
-            endTime: endTime as Date,
+            endTime: new Date(`${benchmarksWindow(dateValue, new Date()).end_date}T12:00:00`),
             entityIds: selectedTags.length > 0 ? selectedTags : null,
           }
         : null,
-    [hasRequestWindow, accessToken, startTime, endTime, selectedTags],
+    [hasRequestWindow, accessToken, startTime, endTime, selectedTags, dateValue],
   );
   const agentRequest = useMemo<DailyActivityRequest | null>(
     () =>
@@ -189,11 +190,11 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         ? {
             accessToken: accessToken as string,
             startTime: startTime as Date,
-            endTime: endTime as Date,
+            endTime: new Date(`${benchmarksWindow(dateValue, new Date()).end_date}T12:00:00`),
             entityIds: null,
           }
         : null,
-    [hasRequestWindow, accessToken, startTime, endTime],
+    [hasRequestWindow, accessToken, startTime, endTime, dateValue],
   );
 
   const {
