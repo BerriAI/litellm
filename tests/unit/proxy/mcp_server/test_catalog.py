@@ -262,6 +262,73 @@ async def test_listing_continues_on_another_replica_and_cursor_is_reusable(monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("protocol_version", ["2025-11-25", "2026-07-28"])
+async def test_session_bound_cursor_carries_sealed_session_only_for_its_caller(
+    monkeypatch: pytest.MonkeyPatch, protocol_version: str
+) -> None:
+    from litellm.mcp_client.client import ToolListingSession
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "session-bound-catalog-test")
+    session_id: Final = "upstream-session-secret"
+    calls: Final[list[tuple[str, str | None, str | None, str | None]]] = []
+
+    async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
+        raise AssertionError("session-aware fetch should be used")
+
+    async def session_fetch(
+        server_id: str, cursor: str | None, session: ToolListingSession
+    ) -> ListToolsResult:
+        calls.append((server_id, cursor, session.session_id, session.protocol_version))
+        if cursor is None:
+            session.session_id = session_id
+            session.protocol_version = protocol_version
+            return page("first", "upstream-next")
+        assert session.session_id == session_id
+        assert session.protocol_version == protocol_version
+        return page("second")
+
+    first: Final = await catalog.list_tools_page(
+        cursor=None,
+        caller_scope="caller-a",
+        snapshot="registry-generation",
+        server_ids=("server",),
+        fetch=fetch,
+        session_fetch=session_fetch,
+        now=100,
+    )
+    assert first.next_cursor is not None
+    assert session_id not in first.next_cursor
+    assert session_id not in first.model_dump_json()
+    assert calls == [("server", None, None, None)]
+
+    second: Final = await catalog.list_tools_page(
+        cursor=first.next_cursor,
+        caller_scope="caller-a",
+        snapshot="registry-generation",
+        server_ids=("server",),
+        fetch=fetch,
+        session_fetch=session_fetch,
+        now=101,
+    )
+    assert [tool.name for tool in second.tools] == ["second"]
+    assert calls[1] == ("server", "upstream-next", session_id, protocol_version)
+
+    call_count: Final = len(calls)
+    with pytest.raises(MCPError):
+        await catalog.list_tools_page(
+            cursor=first.next_cursor,
+            caller_scope="caller-b",
+            snapshot="registry-generation",
+            server_ids=("server",),
+            fetch=fetch,
+            session_fetch=session_fetch,
+            now=101,
+        )
+    assert len(calls) == call_count
+    assert second.next_cursor is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "changes",
     [

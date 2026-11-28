@@ -45,6 +45,12 @@ def config_file(directory: Path, upstream: str, protocol: str | None = None) -> 
     return config
 
 
+def wait_for_startup_mapping_sessions(peer: McpPeer, worker_count: int) -> None:
+    events: list[dict[str, object]] = list(peer.drain())
+    while sum(event.get("method") == "DELETE" for event in events) < worker_count:
+        events.append(peer.calls.get(timeout=30))
+
+
 REMOVE_DATABASE = ("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "LITELLM_LICENSE", "LITELLM_LICENSE_PATH")
 
 
@@ -624,3 +630,93 @@ def test_discovery_cache_freshness_and_caller_isolation_over_http(ttl_ms: int) -
         observed: Final = peer.drain()
         listings: Final = [item for item in observed if item.get("body", {}).get("method") == "prompts/list"]
         assert len(listings) == (8 if ttl_ms == 0 else 4)
+
+
+@pytest.mark.parametrize(("page_size", "walks"), [(30, 10), (1, 1)])
+def test_session_bound_tools_listing_crosses_proxy_workers(tmp_path: Path, page_size: int, walks: int) -> None:
+    from collections.abc import Mapping
+
+    async def exercise(first: Gateway, second: Gateway, peer: McpPeer) -> None:
+        def session_id(event: dict[str, object]) -> bytes | None:
+            headers: Final = event.get("headers")
+            value: Final = headers.get(b"mcp-session-id") if isinstance(headers, Mapping) else None
+            return value if isinstance(value, bytes) else None
+
+        page_count: Final = (100 + page_size - 1) // page_size
+        for _ in range(walks):
+            cursor: Final[list[str | None]] = [None]
+            names: Final[list[str]] = []
+            events: Final[list[dict[str, object]]] = []
+            for index in range(page_count):
+                worker: Final = first if index % 2 == 0 else second
+                async with catalog_session(worker) as session:
+                    page: Final = await session.list_tools(params=PaginatedRequestParams(cursor=cursor[0]))
+                names.extend(tool.name for tool in page.tools)
+                cursor[0] = page.next_cursor
+                page_events: Final = peer.drain()
+                page_session_ids: Final = tuple(
+                    session_id(event)
+                    for event in page_events
+                    if isinstance(event.get("body"), Mapping) and event["body"].get("method") == "tools/list"
+                )
+                assert page_session_ids
+                listing_session_id: Final = page_session_ids[-1]
+                assert listing_session_id is not None
+                if index < page_count - 1:
+                    assert not any(
+                        event.get("method") == "DELETE" and session_id(event) == listing_session_id
+                        for event in page_events
+                    )
+                events.extend(page_events)
+                assert (page.next_cursor is None) == (index == page_count - 1)
+
+            assert names == [f"pages-add{index}" for index in range(100)]
+            tool_events: Final = tuple(
+                event
+                for event in events
+                if isinstance(event.get("body"), Mapping) and event["body"].get("method") == "tools/list"
+            )
+            tool_bodies: Final = tuple(event["body"] for event in tool_events)
+            request_ids: Final = tuple(body.get("id") for body in tool_bodies)
+            tool_headers: Final = tuple(event.get("headers") for event in tool_events)
+            session_ids: Final = tuple(
+                next(
+                    (value for name, value in headers.items() if name.lower() == b"mcp-session-id"),
+                    None,
+                )
+                for headers in tool_headers
+                if isinstance(headers, Mapping)
+            )
+            assert len(tool_bodies) == page_count
+            assert len(session_ids) == page_count
+            assert None not in request_ids and len(set(request_ids)) == page_count
+            assert session_ids[0] is not None and len(set(session_ids)) == 1
+            assert all(
+                next(
+                    (value for name, value in headers.items() if name.lower() == b"mcp-protocol-version"),
+                    None,
+                )
+                == b"2025-11-25"
+                for headers in tool_headers[1:]
+                if isinstance(headers, Mapping)
+            )
+            assert sum(
+                event.get("method") == "DELETE" and session_id(event) == session_ids[0] for event in events
+            ) == 1
+
+    with paginated_mcp_peer(page_size=page_size, total_tools=100, session_bound=True) as peer, httpx.Client() as client:
+        seed: Final = Gateway(client, "sk-pagination-test", peer.url)
+        config: Final = config_file(tmp_path, peer.url, "2025-11-25")
+        environment: Final = {
+            "STORE_MODEL_IN_DB": "False",
+            "DISABLE_SCHEMA_UPDATE": "true",
+            "LITELLM_SALT_KEY": "shared-session-bound-test",
+        }
+        remove_environment: Final = REMOVE_DATABASE + ("REDIS_HOST", "REDIS_URL", "REDIS_PORT", "REDIS_PASSWORD")
+        options: Final = dict(config=config, database_setup=(), remove_environment=remove_environment)
+        with (
+            owned_proxy(seed, tmp_path / "worker-a", environment, **options) as first,
+            owned_proxy(seed, tmp_path / "worker-b", environment, **options) as second,
+        ):
+            wait_for_startup_mapping_sessions(peer, worker_count=2)
+            asyncio.run(exercise(first, second, peer))

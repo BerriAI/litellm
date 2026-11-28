@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import time
 from collections import UserDict
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, MutableMapping, Sequence
@@ -19,11 +20,12 @@ from typing import TYPE_CHECKING, Final, Generic, ParamSpec, Protocol, TypeAlias
 
 from mcp.shared.exceptions import MCPError
 from mcp.types import CacheableResult
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from typing_extensions import Self
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.mcp_client.client import ToolListingSession
 from litellm.proxy.mcp_server.result_conversion import age_freshness, aggregate_freshness
 
 if TYPE_CHECKING:
@@ -625,6 +627,7 @@ async def paginate_catalog(
     server_ids: tuple[str, ...],
     fetch: Callable[[str, str | None], Awaitable[_Page]],
     now: int,
+    session_fetch: Callable[[str, str | None, ToolListingSession], Awaitable[_Page]] | None = None,
 ) -> tuple[tuple[_Page, ...], str | None, Mapping[str, JsonValue]]:
     from mcp.shared.exceptions import MCPError
     from mcp.types import INVALID_PARAMS
@@ -662,7 +665,12 @@ async def paginate_catalog(
     async def advance(position: _UpstreamPosition) -> tuple[_UpstreamPosition, _Page | None]:
         if position.complete:
             return position, None
-        result: Final = await fetch(position.server_id, position.cursor)
+        listing_session: Final = ToolListingSession(position.session_id, position.protocol_version)
+        result: Final = (
+            await session_fetch(position.server_id, position.cursor, listing_session)
+            if session_fetch is not None
+            else await fetch(position.server_id, position.cursor)
+        )
         revision: Final = (result.meta or {}).get("revision")
         available_revision: Final = revision if isinstance(revision, (str, int)) else None
         if position.revision is not None and position.revision != available_revision:
@@ -684,6 +692,8 @@ async def paginate_catalog(
                 complete=following is None,
                 revision=available_revision,
                 seen=position.seen + ((fingerprint,) if fingerprint is not None else ()),
+                session_id=listing_session.session_id,
+                protocol_version=listing_session.protocol_version if listing_session.session_id is not None else None,
             ),
             result,
         )
@@ -739,6 +749,7 @@ async def list_tools_page(
     server_ids: tuple[str, ...],
     fetch: Callable[[str, str | None], Awaitable[ListToolsResult]],
     now: int,
+    session_fetch: Callable[[str, str | None, ToolListingSession], Awaitable[ListToolsResult]] | None = None,
 ) -> ListToolsResult:
     from mcp.types import ListToolsResult
 
@@ -752,6 +763,7 @@ async def list_tools_page(
         server_ids=server_ids,
         fetch=fetch,
         now=now,
+        session_fetch=session_fetch,
     )
     return ListToolsResult(
         tools=list(chain.from_iterable(page.tools for page in pages)),
@@ -772,6 +784,8 @@ class _UpstreamPosition(BaseModel):
     complete: bool = False
     revision: str | int | None = None
     seen: tuple[str, ...] = ()
+    session_id: str | None = Field(default=None, repr=False)
+    protocol_version: str | None = None
 
 
 class _ListingState(BaseModel):
@@ -873,6 +887,7 @@ async def get_filtered_server_tools(
     record_listing: bool = False,
     listing_updates: ExitStack | None = None,
     use_tool_list_cache: bool = True,
+    listing_session: ToolListingSession | None = None,
 ) -> tuple[ListToolsResult, ServerOutcome]:
     from mcp.types import ListToolsResult
 
@@ -932,6 +947,7 @@ async def get_filtered_server_tools(
                 oauth2_headers=oauth2_headers,
                 proxy_logging_obj=proxy_logging_obj,
                 params=params,
+                listing_session=listing_session,
                 catalog_auth_header=catalog_auth_header,
                 record_listing=False,
                 listing_updates=listing_updates,
@@ -1052,7 +1068,9 @@ async def aggregate_gateway_tools(
         listing_updates: Final = ExitStack()
         rejections: Final[list[ProxyRateLimitError]] = []  # mutable-ok: concurrent fetches share first-page errors
 
-        async def fetch(server_id: str, cursor: str | None) -> ListToolsResult:
+        async def fetch(
+            server_id: str, cursor: str | None, listing_session: ToolListingSession | None = None
+        ) -> ListToolsResult:
             if enforce_rate_limits:
                 error: Final = await _mcp_server_rate_limit_rejection(servers[server_id], context.user_api_key_auth)
                 if error is not None:
@@ -1075,6 +1093,7 @@ async def aggregate_gateway_tools(
                 allowed_mcp_servers=allowed,
                 prefetched_oauth_creds=prefetched,
                 params=PaginatedRequestParams(cursor=cursor),
+                listing_session=listing_session,
                 record_listing=record_listing,
                 listing_updates=listing_updates,
                 use_tool_list_cache=use_tool_list_cache,
@@ -1101,6 +1120,7 @@ async def aggregate_gateway_tools(
             snapshot=snapshot.identity,
             server_ids=tuple(servers),
             fetch=fetch,
+            session_fetch=fetch if os.getenv("LITELLM_SALT_KEY") else None,
             now=int(time.time()),
         )
         if params.cursor is None and servers and len(rejections) == len(servers):

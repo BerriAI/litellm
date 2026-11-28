@@ -41,7 +41,9 @@ from mcp.types import (
     JSONRPCNotification,
     JSONRPCRequest,
     JSONRPCResponse,
+    ListToolsResult,
     LoggingMessageNotificationParams,
+    PaginatedRequestParams,
     ServerCapabilities,
     TextContent,
 )
@@ -59,6 +61,7 @@ from litellm.mcp_client.client import (
     MCPClient,
     MCPSigV4Auth,
     PersistentMCPSession,
+    ToolListingSession,
     _first_non_cancelled_cause,
     _TransportContext,
     _TransportStreams,
@@ -2857,8 +2860,11 @@ def test_outer_deadline_delivers_session_termination(termination: str, grouped: 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("original_error", (False, True))
-async def test_task_cancellation_during_cleanup_preserves_failure(original_error: bool) -> None:
+@pytest.mark.parametrize("original_error", (False, True), ids=("operation_succeeds", "operation_fails"))
+@pytest.mark.parametrize("listing_session_enabled", (False, True), ids=("default_session", "listing_session"))
+async def test_task_cancellation_during_cleanup_preserves_failure(
+    original_error: bool, listing_session_enabled: bool
+) -> None:
     deleting: Final = asyncio.Event()
     drained: Final = asyncio.Event()
     original: Final = RuntimeError("operation failed before teardown")
@@ -2894,10 +2900,20 @@ async def test_task_cancellation_during_cleanup_preserves_failure(original_error
             raise original
         return "completed"
 
-    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", timeout=30)
-    task: Final = asyncio.create_task(client.run_with_session(operation))
+    if listing_session_enabled:
+        client: Final = MCPClient(
+            server_url="https://example.com/mcp",
+            timeout=30,
+            upstream_transport=httpx2.MockTransport(respond),
+        )
+        listing_session: Final = ToolListingSession()
+    else:
+        client = _MockTransportClient(respond, server_url="https://example.com/mcp", timeout=30)
+        listing_session = None
+    task: Final = asyncio.create_task(client.run_with_session(operation, listing_session=listing_session))
     await asyncio.wait_for(deleting.wait(), 2)
-    for _ in range(3):
+    cancel_count: Final = 1 if listing_session_enabled else 3
+    for _ in range(cancel_count):
         task.cancel()
         await asyncio.sleep(0)
     with pytest.raises(RuntimeError if original_error else asyncio.CancelledError) as caught:
@@ -2907,6 +2923,65 @@ async def test_task_cancellation_during_cleanup_preserves_failure(original_error
         assert caught.value is original
     else:
         assert task.cancelled()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", (302, 307))
+async def test_session_bound_cleanup_does_not_follow_redirect(status_code: int) -> None:
+    protocol_version: Final = "2025-11-25"
+    session_id: Final = "redirect-session"
+    requests: Final[list[httpx2.Request]] = []
+    redirected: Final[list[httpx2.Request]] = []
+    message_adapter: Final = TypeAdapter(JSONRPCMessage)
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        if request.url.host == "redirect.example":
+            redirected.append(request)
+            return httpx2.Response(200)
+        if request.method == "DELETE":
+            assert request.headers.get("mcp-session-id") == session_id
+            assert request.headers.get("mcp-protocol-version") == protocol_version
+            return httpx2.Response(
+                status_code,
+                headers={"Location": "https://redirect.example/termination"},
+            )
+
+        message: Final = message_adapter.validate_json(request.content)
+        if isinstance(message, JSONRPCNotification):
+            return httpx2.Response(202)
+        assert isinstance(message, JSONRPCRequest)
+        if message.method == "initialize":
+            return httpx2.Response(
+                200,
+                headers={"mcp-session-id": session_id},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": message.id,
+                    "result": {
+                        "protocolVersion": protocol_version,
+                        "capabilities": {},
+                        "serverInfo": {"name": "redirect-test", "version": "1"},
+                    },
+                },
+            )
+        assert message.method == "tools/list"
+        return httpx2.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": message.id, "result": {"tools": [], "nextCursor": None}},
+        )
+
+    client: Final = MCPClient(
+        server_url="https://example.com/mcp",
+        protocol_version=protocol_version,
+        upstream_transport=httpx2.MockTransport(respond),
+    )
+    await client.list_tools_page(PaginatedRequestParams(), listing_session=ToolListingSession())
+
+    deletes: Final = tuple(request for request in requests if request.method == "DELETE")
+    assert len(deletes) == 1
+    assert str(deletes[0].url) == "https://example.com/mcp"
+    assert not redirected
 
 
 @pytest.mark.asyncio
@@ -4034,3 +4109,229 @@ async def test_a_skipped_validation_passes_the_upstreams_result_through_unchange
 
     assert isinstance(result, CallToolResult)
     assert result.structured_content == {"n": "not-an-integer"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("session_bound", "tool_count", "page_size", "abandon"),
+    [
+        (True, 100, 30, False),
+        (True, 100, 1, False),
+        (False, 100, 30, False),
+        (True, 0, 30, False),
+        (True, 1, 30, False),
+        (False, 0, 30, False),
+        (False, 1, 30, False),
+        (True, 100, 30, True),
+    ],
+)
+async def test_session_bound_tools_listing_reattaches_across_fresh_clients(
+    session_bound: bool, tool_count: int, page_size: int, abandon: bool
+) -> None:
+    protocol_version: Final = "2025-11-25"
+    session_id: Final = "upstream-session-secret"
+    requests: Final[list[httpx2.Request]] = []
+    listed_tools: Final[list[str]] = []
+    session_state: Final[list[tuple[str | None, str | None]]] = [(None, None)]
+    page_count: Final = 1 if abandon else max(1, (tool_count + page_size - 1) // page_size)
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        assert request.headers.get("authorization") == "Bearer listing-test"
+        if request.method == "DELETE":
+            assert request.headers.get("mcp-session-id") == (session_id if session_bound else None)
+            assert request.headers.get("mcp-protocol-version") == (protocol_version if session_bound else None)
+            return httpx2.Response(200)
+
+        message: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(message, (JSONRPCRequest, JSONRPCNotification))
+        if isinstance(message, JSONRPCNotification):
+            assert message.method == "notifications/initialized"
+            return httpx2.Response(202)
+        if message.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": message.id,
+                    "result": {
+                        "protocolVersion": protocol_version,
+                        "capabilities": {},
+                        "serverInfo": {"name": "session-bound-test", "version": "1"},
+                    },
+                },
+                headers={"mcp-session-id": session_id} if session_bound else {},
+            )
+
+        assert message.method == "tools/list"
+        cursor: Final = (message.params or {}).get("cursor")
+        if session_bound:
+            assert request.headers.get("mcp-session-id") == session_id
+            assert request.headers.get("mcp-protocol-version") == protocol_version
+        else:
+            assert request.headers.get("mcp-session-id") is None
+        offset: Final = int(cursor) if isinstance(cursor, str) else 0
+        end: Final = min(offset + page_size, tool_count)
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": message.id,
+                "result": {
+                    "tools": [
+                        {"name": f"tool-{index}", "inputSchema": {"type": "object"}}
+                        for index in range(offset, end)
+                    ],
+                    "nextCursor": str(end) if end < tool_count else None,
+                },
+            },
+        )
+
+    async def fetch_page(
+        cursor: str | None, retained_session: tuple[str | None, str | None]
+    ) -> tuple[ListToolsResult, tuple[str | None, str | None]]:
+        retained: Final = ToolListingSession(*retained_session)
+        client: Final = MCPClient(
+            server_url="https://example.com/mcp",
+            protocol_version=protocol_version,
+            extra_headers={"Authorization": "Bearer listing-test"},
+            upstream_transport=httpx2.MockTransport(respond),
+        )
+        page: Final = await client.list_tools_page(
+            PaginatedRequestParams(cursor=cursor), listing_session=retained
+        )
+        return page, (retained.session_id, retained.protocol_version)
+
+    for index in range(page_count):
+        cursor: Final = str(index * page_size) if index else None
+        page, state = await fetch_page(cursor, session_state[-1])
+        listed_tools.extend(tool.name for tool in page.tools)
+        session_state.append(state)
+        if session_bound and page.next_cursor is not None:
+            assert session_id not in page.model_dump_json()
+            assert session_id not in page.next_cursor
+        if abandon:
+            assert page.next_cursor is not None
+            assert not any(request.method == "DELETE" for request in requests)
+
+    expected_count: Final = min(tool_count, page_size) if abandon else tool_count
+    assert listed_tools == [f"tool-{index}" for index in range(expected_count)]
+    request_pairs: Final = tuple(
+        (request, _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content))
+        for request in requests
+        if request.method == "POST" and request.content
+    )
+    request_messages: Final = tuple(
+        message for _, message in request_pairs if isinstance(message, JSONRPCRequest)
+    )
+    initializations: Final = tuple(message for message in request_messages if message.method == "initialize")
+    tools_requests: Final = tuple(message for message in request_messages if message.method == "tools/list")
+    deletes: Final = tuple(request for request in requests if request.method == "DELETE")
+    assert len(initializations) == (1 if session_bound else page_count)
+    assert len(tools_requests) == page_count
+    assert len(deletes) == (1 if session_bound and not abandon else 0)
+    if deletes:
+        assert requests[-1] == deletes[0]
+    if session_bound:
+        assert len({message.id for message in request_messages}) == len(request_messages)
+        continued_requests: Final = tuple(
+            request
+            for request, message in request_pairs
+            if isinstance(message, JSONRPCRequest)
+            and message.method == "tools/list"
+            and (message.params or {}).get("cursor") is not None
+        )
+        assert all(request.headers.get("mcp-session-id") == session_id for request in continued_requests)
+        assert all(request.headers.get("mcp-protocol-version") == protocol_version for request in continued_requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["gone_session", "invalid_cursor"])
+async def test_session_bound_tools_listing_fails_continuation_without_reinitializing(failure: str) -> None:
+    protocol_version: Final = "2025-11-25"
+    session_id: Final = "upstream-session-secret"
+    requests: Final[list[httpx2.Request]] = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        requests.append(request)
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        message: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        assert isinstance(message, (JSONRPCRequest, JSONRPCNotification))
+        if isinstance(message, JSONRPCNotification):
+            return httpx2.Response(202)
+        if message.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": message.id,
+                    "result": {
+                        "protocolVersion": protocol_version,
+                        "capabilities": {},
+                        "serverInfo": {"name": "session-bound-test", "version": "1"},
+                    },
+                },
+                headers={"mcp-session-id": session_id},
+            )
+        assert message.method == "tools/list"
+        if (message.params or {}).get("cursor"):
+            if failure == "gone_session":
+                return httpx2.Response(404)
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": message.id,
+                    "error": {"code": INVALID_PARAMS, "message": "Invalid cursor"},
+                },
+            )
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": message.id,
+                "result": {"tools": [], "nextCursor": "next"},
+            },
+        )
+
+    async def fetch_page(cursor: str | None, retained_session: ToolListingSession) -> ListToolsResult:
+        client: Final = MCPClient(
+            server_url="https://example.com/mcp",
+            protocol_version=protocol_version,
+            extra_headers={"Authorization": "Bearer listing-test"},
+            upstream_transport=httpx2.MockTransport(respond),
+        )
+        return await client.list_tools_page(PaginatedRequestParams(cursor=cursor), listing_session=retained_session)
+
+    retained: Final = ToolListingSession()
+    first: Final = await fetch_page(None, retained)
+    assert first.next_cursor == "next"
+    with pytest.raises(MCPError):
+        await fetch_page(first.next_cursor, ToolListingSession(retained.session_id, retained.protocol_version))
+
+    request_pairs: Final = tuple(
+        (request, _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content))
+        for request in requests
+        if request.method == "POST" and request.content
+    )
+    request_messages: Final = tuple(
+        message for _, message in request_pairs if isinstance(message, JSONRPCRequest)
+    )
+    assert tuple(message.method for message in request_messages).count("initialize") == 1
+    assert tuple(message.method for message in request_messages).count("tools/list") == 2
+    assert sum(request.method == "DELETE" for request in requests) == 1
+    continuation: Final = next(
+        request
+        for request, message in request_pairs
+        if isinstance(message, JSONRPCRequest)
+        and message.method == "tools/list"
+        and (message.params or {}).get("cursor") is not None
+    )
+    assert continuation.headers.get("authorization") == "Bearer listing-test"
+    assert continuation.headers.get("mcp-session-id") == session_id
+    assert continuation.headers.get("mcp-protocol-version") == protocol_version
+    deletion: Final = next(request for request in requests if request.method == "DELETE")
+    assert deletion.headers.get("authorization") == "Bearer listing-test"
+    assert deletion.headers.get("mcp-session-id") == session_id
+    assert deletion.headers.get("mcp-protocol-version") == protocol_version
