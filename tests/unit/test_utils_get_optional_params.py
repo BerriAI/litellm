@@ -2416,3 +2416,9 @@ def test_image_params_keep_the_builtin_mapping_when_a_custom_provider_reuses_its
     assert get_optional_params_image_gen(
         model="imagegeneration", custom_llm_provider=custom_provider_named, n=2, size="1024x1024"
     ) == {"sampleCount": 2, "aspectRatio": "1:1"}
+
+def test_openai_chat_completion_params_no_duplicates():
+    from litellm.constants import OPENAI_CHAT_COMPLETION_PARAMS
+    seen = set()
+    duplicates = [p for p in OPENAI_CHAT_COMPLETION_PARAMS if p in seen or seen.add(p)]
+    assert not duplicates, f"Found duplicate params in OPENAI_CHAT_COMPLETION_PARAMS: {duplicates}"
