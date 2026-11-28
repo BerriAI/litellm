@@ -18,6 +18,7 @@ const keyStatusDeleted = "deleted"
 type Client struct {
 	APIBase            string
 	APIKey             string
+	Headers            map[string]string
 	httpClient         *http.Client
 	InsecureSkipVerify bool
 }
@@ -44,9 +45,24 @@ func NewClient(apiBase, apiKey string, insecureSkipVerify bool) *Client {
 	return &Client{
 		APIBase:            apiBase,
 		APIKey:             apiKey,
-		httpClient:         &http.Client{Transport: tr},
+		httpClient:         &http.Client{Transport: tr, CheckRedirect: refuseCrossOriginRedirect},
 		InsecureSkipVerify: insecureSkipVerify,
 	}
+}
+
+// Go follows a redirect with x-api-key and the provider's headers to any host, and keeps every header
+// on a redirect from https to http, so a redirect must stay on the host it started on, and on https.
+func refuseCrossOriginRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if first := via[0].URL; req.URL.Host != first.Host {
+		return fmt.Errorf("refusing to follow a redirect from %s to another host, %s", first.Host, req.URL.Host)
+	}
+	if previous := via[len(via)-1].URL; previous.Scheme == "https" && req.URL.Scheme != "https" {
+		return fmt.Errorf("refusing to follow a redirect from https to %s on %s", req.URL.Scheme, req.URL.Host)
+	}
+	return nil
 }
 
 // Organization member methods
@@ -442,6 +458,9 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 		return nil, fmt.Errorf("error creating request: %v", err)
 	}
 
+	for name, value := range c.Headers {
+		req.Header.Set(name, value)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", c.APIKey)
 	req.Header.Set("accept", "application/json")

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
 func TestSendRequestAcceptsFullSuccessRange(t *testing.T) {
@@ -59,6 +61,112 @@ func TestSendRequestAcceptsFullSuccessRange(t *testing.T) {
 				t.Errorf("result[value] = %v, want %q", result["value"], tt.wantValue)
 			}
 		})
+	}
+}
+
+func TestProviderHeadersAreSentWithoutReplacingTheProvidersOwn(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	d := schema.TestResourceDataRaw(t, Provider().Schema, map[string]interface{}{
+		"api_base": srv.URL,
+		"api_key":  "test-key",
+		"headers": map[string]interface{}{
+			"Proxy-Authorization": "Bearer proxy-token",
+			"x-api-key":           "not-the-key",
+		},
+	})
+	meta, err := providerConfigure(d)
+	if err != nil {
+		t.Fatalf("providerConfigure returned error: %v", err)
+	}
+	client := meta.(*Client)
+
+	requests := map[string]func() error{
+		"sendRequest": func() error {
+			_, err := client.sendRequest("GET", "/whatever", nil)
+			return err
+		},
+		"MakeRequest": func() error {
+			resp, err := MakeRequest(client, "GET", "/whatever", nil)
+			if err == nil {
+				resp.Body.Close()
+			}
+			return err
+		},
+	}
+	for name, send := range requests {
+		t.Run(name, func(t *testing.T) {
+			got = nil
+			if err := send(); err != nil {
+				t.Fatalf("request returned error: %v", err)
+			}
+			if v := got.Get("Proxy-Authorization"); v != "Bearer proxy-token" {
+				t.Errorf("Proxy-Authorization = %q, want %q", v, "Bearer proxy-token")
+			}
+			if v := got.Get("x-api-key"); v != "test-key" {
+				t.Errorf("x-api-key = %q, want the provider's api_key", v)
+			}
+		})
+	}
+}
+
+func TestRedirectsMayNotLeaveTheHostOrDropTLS(t *testing.T) {
+	redirect := func(from, to string) error {
+		first := httptest.NewRequest("GET", from, nil)
+		next := httptest.NewRequest("GET", to, nil)
+		return refuseCrossOriginRedirect(next, []*http.Request{first})
+	}
+
+	allowed := map[string][2]string{
+		"same host":             {"https://litellm.example.com/team/info", "https://litellm.example.com/v2/team/info"},
+		"http to https upgrade": {"http://litellm.example.com/team/info", "https://litellm.example.com/team/info"},
+	}
+	for name, urls := range allowed {
+		if err := redirect(urls[0], urls[1]); err != nil {
+			t.Errorf("%s: redirect refused: %v", name, err)
+		}
+	}
+
+	refused := map[string][2]string{
+		"another host":            {"https://litellm.example.com/team/info", "https://login.example.net/"},
+		"https to http downgrade": {"https://litellm.example.com/team/info", "http://litellm.example.com/team/info"},
+	}
+	for name, urls := range refused {
+		if err := redirect(urls[0], urls[1]); err == nil {
+			t.Errorf("%s: redirect followed, want it refused", name)
+		}
+	}
+}
+
+func TestProviderHeadersAreNotSentToARedirectsOtherHost(t *testing.T) {
+	var reached bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+	}))
+	defer other.Close()
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/login", http.StatusFound)
+	}))
+	defer gateway.Close()
+
+	client := NewClient(gateway.URL, "test-key", false)
+	client.Headers = map[string]string{"Proxy-Authorization": "Bearer proxy-token"}
+
+	if _, err := client.sendRequest("GET", "/team/info", nil); err == nil {
+		t.Error("sendRequest followed the redirect, want an error")
+	}
+	if resp, err := MakeRequest(client, "GET", "/team/info", nil); err == nil {
+		resp.Body.Close()
+		t.Error("MakeRequest followed the redirect, want an error")
+	}
+	if reached {
+		t.Error("the redirect's other host received a request")
 	}
 }
 

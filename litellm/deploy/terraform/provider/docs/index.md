@@ -95,6 +95,7 @@ The following arguments are supported in the provider block:
 
 * `api_base` - (Required) The base URL of your LiteLLM instance. This can also be provided via the `LITELLM_API_BASE` environment variable.
 * `api_key` - (Required) The API key used to authenticate with LiteLLM. This can also be provided via the `LITELLM_API_KEY` environment variable.
+* `headers` - (Optional, Sensitive) Extra HTTP headers sent on every request, for example a token for an authenticating proxy in front of LiteLLM such as Google Cloud IAP (`Proxy-Authorization = "Bearer ${...}"`). They cannot replace `Content-Type`, `accept` or `x-api-key`, which the provider sets itself.
 
 ## Getting Started
 
