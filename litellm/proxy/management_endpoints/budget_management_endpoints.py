@@ -69,7 +69,7 @@ from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, lock_budget_limits
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
-from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.prisma_protocols import TableActions, TransactionDatabase
 from litellm.repositories.table_repositories import (
     CustomerMemberRepository,
     CustomerOrganizationRepository,
@@ -199,7 +199,9 @@ def _field_default(field: _FieldWithDefault) -> object:
 async def new_budget(
     budget_obj: BudgetNewRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+    *,
+    transaction: TransactionDatabase | None = None,
+) -> "prisma_models.LiteLLM_BudgetTable":
     """
     Create a new budget object. Can apply this to teams, orgs, end-users, keys.
 
@@ -222,7 +224,7 @@ async def new_budget(
 
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
-    if prisma_client is None:
+    if transaction is None and prisma_client is None:
         raise HTTPException(
             status_code=500,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
@@ -278,7 +280,7 @@ async def new_budget(
         else {}
     )
     try:
-        response: Final = await BudgetRepository(prisma_client).table.create(
+        response: Final = await BudgetRepository(prisma_client if transaction is None else transaction).table.create(
             data={
                 **budget_obj_jsonified,
                 **window_data,

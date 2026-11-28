@@ -165,6 +165,9 @@ if TYPE_CHECKING:
         def litellm_mcpuserenvvars(self) -> TableActions[prisma_models.LiteLLM_MCPUserEnvVars]: ...
 
         @property
+        def litellm_modeltable(self) -> TableActions[prisma_models.LiteLLM_ModelTable]: ...
+
+        @property
         def litellm_objectpermissiontable(self) -> TableActions[prisma_models.LiteLLM_ObjectPermissionTable]: ...
 
         @property

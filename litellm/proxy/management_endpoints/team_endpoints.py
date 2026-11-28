@@ -262,7 +262,7 @@ from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import delete_many_in, find_many_in, update_many_in
 from litellm.repositories.daily_activity_buckets import api_key_from_bucket
 from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.prisma_protocols import DatabaseClient, TableActions, TransactionDatabase
 from litellm.repositories.table_repositories import (
     DeletedTeamRepository,
     ModelTableRepository,
@@ -511,11 +511,6 @@ class _TeamBudgetGuardWhere(_TeamIdWhere):
     organization_id: ReadOnly[str | None]
 
 
-class _TeamCreateTx(AccessGroupSyncTx, Protocol):
-    @property
-    def litellm_teamtable(self) -> "TableActions[prisma_models.LiteLLM_TeamTable]": ...
-
-
 class _TeamUpdateTx(BudgetLimitsTransaction, Protocol):
     @property
     def litellm_teamtable(self) -> "TableActions[prisma_models.LiteLLM_TeamTable]": ...
@@ -620,7 +615,7 @@ def _user_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.
     return UserRepository(prisma_client).table
 
 
-def _model_db(prisma_client: PrismaClient | None) -> "TableActions[prisma_models.LiteLLM_ModelTable]":
+def _model_db(prisma_client: DatabaseClient | None) -> "TableActions[prisma_models.LiteLLM_ModelTable]":
     return ModelTableRepository(prisma_client).table
 
 
@@ -768,7 +763,7 @@ class TeamMemberBudgetHandler:
 
     @staticmethod
     @with_service_target("team_member_budgets")
-    async def _evict_default_budget_cache(
+    async def evict_default_budget_cache(
         budget_id: str,
         user_api_key_cache: UserApiKeyCache | None,
     ) -> None:
@@ -777,6 +772,8 @@ class TeamMemberBudgetHandler:
                 await user_api_key_cache.async_delete_cache(key=f"team_member_default_budget:{budget_id}")
             except Exception:  # noqa: BLE001  # Cache failure must not fail a committed budget update.
                 verbose_proxy_logger.warning("Failed to evict the team member default budget cache", exc_info=True)
+
+    _evict_default_budget_cache: Final = evict_default_budget_cache
 
     @staticmethod
     async def create_team_member_budget_table(
@@ -791,6 +788,7 @@ class TeamMemberBudgetHandler:
         team_member_model_max_budget: GenericBudgetConfigType | None = None,
         user_api_key_cache: UserApiKeyCache | None = None,
         explicitly_set_fields: AbstractSet[str] = frozenset(),
+        transaction: TransactionDatabase | None = None,
     ) -> dict[str, object]:
         """Create team member budget table with provided limits.
 
@@ -831,14 +829,16 @@ class TeamMemberBudgetHandler:
             )
         )
 
-        team_member_budget_table: Final = await _as_budget_write(new_budget)(
+        team_member_budget_table: Final = await new_budget(
             budget_obj=budget_request,
             user_api_key_dict=user_api_key_dict,
+            transaction=transaction,
         )
-        await TeamMemberBudgetHandler._evict_default_budget_cache(
-            budget_id=team_member_budget_table.budget_id,
-            user_api_key_cache=user_api_key_cache,
-        )
+        if transaction is None:
+            await TeamMemberBudgetHandler._evict_default_budget_cache(
+                budget_id=team_member_budget_table.budget_id,
+                user_api_key_cache=user_api_key_cache,
+            )
 
         # Add team_member_budget_id as metadata field to team table
         if new_team_data_json.get("metadata") is None:
@@ -2128,126 +2128,138 @@ async def new_team(
             llm_router=llm_router,
         )
 
-        ## ADD TO MODEL TABLE
-        _model_id = None
-        if data.model_aliases is not None and isinstance(data.model_aliases, dict):
-            litellm_modeltable: Final = LiteLLM_ModelTable(
-                model_aliases=json.dumps(data.model_aliases),
-                created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-                updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-            )
-            model_dict: Final = await _model_db(prisma_client).create({**litellm_modeltable.json(exclude_none=True)})
-
-            _model_id = model_dict.id
-
-        data_json = data.json()
-
-        ## Handle Object Permission - MCP, Vector Stores etc.
         await enforce_all_proxy_mcp_servers_grant_is_admin_only(
             requested_mcp_servers=(data.object_permission.mcp_servers if data.object_permission is not None else None),
             existing_object_permission_id=None,
             is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
             prisma_client=prisma_client,
         )
-        data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
-            data_json=data_json,
-            prisma_client=prisma_client,
-            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
-        )
 
-        if TeamMemberBudgetHandler.should_create_budget(
-            team_member_budget=data.team_member_budget,
-            team_member_rpm_limit=data.team_member_rpm_limit,
-            team_member_tpm_limit=data.team_member_tpm_limit,
-            team_member_budget_duration=data.team_member_budget_duration,
-            team_member_rollover_max_budget=data.team_member_rollover_max_budget,
-            team_member_model_max_budget=data.team_member_model_max_budget,
-        ):
-            data_json = await TeamMemberBudgetHandler.create_team_member_budget_table(
-                data=data,
-                new_team_data_json=data_json,
-                user_api_key_dict=user_api_key_dict,
+        async with prisma_client.db.tx() as tx:
+            edit: Final = TransactionDatabase(tx)
+
+            ## ADD TO MODEL TABLE
+            _model_id = None
+            if data.model_aliases is not None and isinstance(data.model_aliases, dict):
+                litellm_modeltable: Final = LiteLLM_ModelTable(
+                    model_aliases=json.dumps(data.model_aliases),
+                    created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
+                )
+                model_dict: Final = await _model_db(edit).create({**litellm_modeltable.json(exclude_none=True)})
+
+                _model_id = model_dict.id
+
+            data_json = data.json()
+
+            ## Handle Object Permission - MCP, Vector Stores etc.
+            data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
+                data_json=data_json,
+                prisma_client=edit,
+                can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            )
+
+            created_member_budget: Final = TeamMemberBudgetHandler.should_create_budget(
                 team_member_budget=data.team_member_budget,
                 team_member_rpm_limit=data.team_member_rpm_limit,
                 team_member_tpm_limit=data.team_member_tpm_limit,
                 team_member_budget_duration=data.team_member_budget_duration,
                 team_member_rollover_max_budget=data.team_member_rollover_max_budget,
                 team_member_model_max_budget=data.team_member_model_max_budget,
-                user_api_key_cache=user_api_key_cache,
-                explicitly_set_fields=data.model_fields_set,
             )
-
-        ## ADD TO TEAM TABLE
-        complete_team_data: Final = LiteLLM_TeamTable(
-            **data_json,
-            model_id=_model_id,
-        )
-
-        # Set Management Endpoint Metadata Fields
-        for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
-            if getattr(data, field, None) is not None:
-                set_object_metadata_field(
-                    object_data=complete_team_data,
-                    field_name=field,
-                    value=attribute_or_none(data, field),
+            if created_member_budget:
+                data_json = await TeamMemberBudgetHandler.create_team_member_budget_table(
+                    data=data,
+                    new_team_data_json=data_json,
+                    user_api_key_dict=user_api_key_dict,
+                    team_member_budget=data.team_member_budget,
+                    team_member_rpm_limit=data.team_member_rpm_limit,
+                    team_member_tpm_limit=data.team_member_tpm_limit,
+                    team_member_budget_duration=data.team_member_budget_duration,
+                    team_member_rollover_max_budget=data.team_member_rollover_max_budget,
+                    team_member_model_max_budget=data.team_member_model_max_budget,
+                    user_api_key_cache=user_api_key_cache,
+                    explicitly_set_fields=data.model_fields_set,
+                    transaction=edit,
                 )
 
-        for field in LiteLLM_ManagementEndpoint_MetadataFields:
-            if getattr(data, field, None) is not None:
-                set_object_metadata_field(
-                    object_data=complete_team_data,
-                    field_name=field,
-                    value=attribute_or_none(data, field),
-                )
-
-        # If budget_duration is set, set `budget_reset_at`
-        if complete_team_data.budget_duration is not None:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-            complete_team_data.budget_reset_at = get_budget_reset_time(
-                budget_duration=complete_team_data.budget_duration,
+            ## ADD TO TEAM TABLE
+            complete_team_data: Final = LiteLLM_TeamTable(
+                **data_json,
+                model_id=_model_id,
             )
 
-        # If budget_limits is set, initialize reset_at for each window
-        if complete_team_data.budget_limits:
-            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+            # Set Management Endpoint Metadata Fields
+            for field in LiteLLM_ManagementEndpoint_MetadataFields_Premium:
+                if getattr(data, field, None) is not None:
+                    set_object_metadata_field(
+                        object_data=complete_team_data,
+                        field_name=field,
+                        value=attribute_or_none(data, field),
+                    )
 
-            initialized_windows: Final = []
-            for window in complete_team_data.budget_limits:
-                w = window if isinstance(window, dict) else window.model_dump()
-                initialized_windows.append({**w, **get_budget_window_reset_fields(str(w["budget_duration"]))})
-            complete_team_data.budget_limits = initialized_windows
+            for field in LiteLLM_ManagementEndpoint_MetadataFields:
+                if getattr(data, field, None) is not None:
+                    set_object_metadata_field(
+                        object_data=complete_team_data,
+                        field_name=field,
+                        value=attribute_or_none(data, field),
+                    )
 
-        ## Add Team Member Budget Table
-        members_with_roles: list[Member] = []
-        if complete_team_data.members_with_roles is not None:
-            members_with_roles = complete_team_data.members_with_roles
-            complete_team_data.members_with_roles = []
+            # If budget_duration is set, set `budget_reset_at`
+            if complete_team_data.budget_duration is not None:
+                from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
-        complete_team_data_dict: dict[str, object] = complete_team_data.model_dump(exclude_none=True)
+                complete_team_data.budget_reset_at = get_budget_reset_time(
+                    budget_duration=complete_team_data.budget_duration,
+                )
 
-        # Serialize router_settings to JSON (matching key creation pattern)
-        router_settings_value: Final = data.router_settings
-        router_settings_json: Final = (
-            safe_dumps(router_settings_value) if router_settings_value is not None else safe_dumps({})
-        )
-        complete_team_data_dict["router_settings"] = router_settings_json
+            # If budget_limits is set, initialize reset_at for each window
+            if complete_team_data.budget_limits:
+                from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
-        if complete_team_data_dict.get("metadata") is not None:
-            complete_team_data_dict["metadata"] = encrypt_callback_vars(complete_team_data_dict["metadata"])
+                initialized_windows: Final = []
+                for window in complete_team_data.budget_limits:
+                    w = window if isinstance(window, dict) else window.model_dump()
+                    initialized_windows.append({**w, **get_budget_window_reset_fields(str(w["budget_duration"]))})
+                complete_team_data.budget_limits = initialized_windows
 
-        complete_team_data_dict = prisma_client.jsonify_team_object(db_data=complete_team_data_dict)
-        team_creation_data: Final[Mapping[str, object]] = complete_team_data_dict
+            ## Add Team Member Budget Table
+            members_with_roles: list[Member] = []
+            if complete_team_data.members_with_roles is not None:
+                members_with_roles = complete_team_data.members_with_roles
+                complete_team_data.members_with_roles = []
 
-        tx: _TeamCreateTx
-        async with prisma_client.db.tx() as tx:
-            team_row: Final[prisma_models.LiteLLM_TeamTable] = await tx.litellm_teamtable.create(
+            complete_team_data_dict: dict[str, object] = complete_team_data.model_dump(exclude_none=True)
+
+            # Serialize router_settings to JSON (matching key creation pattern)
+            router_settings_value: Final = data.router_settings
+            router_settings_json: Final = (
+                safe_dumps(router_settings_value) if router_settings_value is not None else safe_dumps({})
+            )
+            complete_team_data_dict["router_settings"] = router_settings_json
+
+            if complete_team_data_dict.get("metadata") is not None:
+                complete_team_data_dict["metadata"] = encrypt_callback_vars(complete_team_data_dict["metadata"])
+
+            complete_team_data_dict = prisma_client.jsonify_team_object(db_data=complete_team_data_dict)
+            team_creation_data: Final[Mapping[str, object]] = complete_team_data_dict
+
+            team_row: Final = await tx.litellm_teamtable.create(
                 data=team_creation_data,
                 include=_INCLUDE_MODEL_TABLE,
             )
             affected_access_groups: Final = await reconcile_team_access_group_membership(tx, team_row.team_id)
 
         await invalidate_access_group_caches(affected_access_groups)
+        created_member_budget_id: Final = (
+            _team_metadata_value(data_json.get("metadata"), "team_member_budget_id") if created_member_budget else None
+        )
+        if isinstance(created_member_budget_id, str):
+            await TeamMemberBudgetHandler.evict_default_budget_cache(
+                budget_id=created_member_budget_id,
+                user_api_key_cache=user_api_key_cache,
+            )
 
         ## ADD TEAM ID TO USER TABLE ##
         team_member_add_request: Final = TeamMemberAddRequest(
