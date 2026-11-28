@@ -428,6 +428,7 @@ async def _count_tokens(
             request=token_request,
             call_endpoint=True,
             messages_format="anthropic",
+            require_deployment=True,
             litellm_call_id=litellm_call_id,
             client_oauth_token=forwarded_anthropic_oauth_token(request.headers),
             caller=user_api_key_dict,

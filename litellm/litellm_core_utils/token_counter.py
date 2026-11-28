@@ -1651,6 +1651,41 @@ def _anthropic_rendered_page_image_tokens(width: float, height: float) -> int:
     return math.ceil(min(float(ANTHROPIC_IMAGE_MAX_PIXELS), area_at_max_edge) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
 
 
+def _anthropic_image_pixels(width: float, height: float) -> float:
+    """The pixel area Anthropic bills for an image: downscaled to its limits, never upscaled."""
+    if width <= 0 or height <= 0:
+        return 0.0
+    scale: Final = min(
+        1.0,
+        ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX / max(width, height),
+        math.sqrt(ANTHROPIC_IMAGE_MAX_PIXELS / (width * height)),
+    )
+    return width * height * scale * scale
+
+
+def _anthropic_image_block_tokens(data: str, use_default_image_token_count: bool) -> int:
+    """An Anthropic `image` is billed by its pixel area (w * h / 750), not a flat per-image cost.
+
+    The image is downscaled when it exceeds Anthropic's limits, but a small image keeps its own area
+    (Anthropic does not upscale), so this differs from the PDF page rule in
+    `_anthropic_rendered_page_image_tokens`. An image whose dimensions cannot be read keeps the flat
+    estimate the block used before.
+    https://platform.claude.com/docs/en/build-with-claude/vision
+
+    Only inline base64 `data:image/` sources within `MAX_IMAGE_URL_DOWNLOAD_SIZE_MB` are measured. Any
+    other source (an `http(s)` URL, an empty file id, an oversized payload) keeps the flat estimate
+    from `calculate_img_tokens`, so a count never fetches or decodes more than it did before.
+    """
+    dimensions: Final = None if use_default_image_token_count else _auto_image_dimensions(data)
+    if dimensions is None:
+        return calculate_img_tokens(
+            data=data,
+            mode="auto",
+            use_default_image_token_count=use_default_image_token_count,
+        )
+    return math.ceil(_anthropic_image_pixels(*dimensions) / ANTHROPIC_IMAGE_PIXELS_PER_TOKEN)
+
+
 def _pdf_dictionary(node: object) -> Mapping[str, object] | None:
     return node if isinstance(node, Mapping) else None  # pyright: ignore[reportUnknownVariableType]  # read per key
 
@@ -1912,11 +1947,7 @@ def _count_opaque_document_tokens(
     )
     if pdf_tokens is not None:
         return pdf_tokens
-    return calculate_img_tokens(
-        data=data_url,
-        mode="auto",
-        use_default_image_token_count=use_default_image_token_count,
-    )
+    return _anthropic_image_block_tokens(data_url, use_default_image_token_count)
 
 
 def inline_pdf_token_deltas(
@@ -2234,10 +2265,8 @@ def _count_content_list(
                 image_url = c.get("image_url")
                 num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
             elif c["type"] == "image":
-                num_tokens += calculate_img_tokens(
-                    data=_anthropic_image_source_data(c["source"]),
-                    mode="auto",
-                    use_default_image_token_count=use_default_image_token_count,
+                num_tokens += _anthropic_image_block_tokens(
+                    _anthropic_image_source_data(c["source"]), use_default_image_token_count
                 )
             elif c["type"] == "document":
                 num_tokens += _count_document_tokens(
