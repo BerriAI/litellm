@@ -1,5 +1,6 @@
 import json
 import re
+from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
@@ -81,12 +82,14 @@ class _GenAIPart(TypedDict, total=False):
 
 
 class _GenAIFunctionResponse(TypedDict, total=False):
+    id: ReadOnly[str]
     name: ReadOnly[str]
     response: ReadOnly[object]
     parts: ReadOnly[object]
 
 
 class _GenAIRequestFunctionCall(TypedDict, total=False):
+    id: ReadOnly[str]
     name: ReadOnly[str]
     args: ReadOnly[object]
 
@@ -344,7 +347,10 @@ def _genai_message_parts(parts: object) -> tuple[_GenAIMessagePart, ...]:
     return tuple(converted for part in items if (converted := _genai_message_part(part)) is not None)
 
 
-def _genai_tool_response(part: object) -> ChatCompletionToolMessage | None:
+def _genai_tool_response(
+    part: object,
+    pending_call_ids: dict[str, deque[str]] | None = None,
+) -> ChatCompletionToolMessage | None:
     fields: Final = _validated(_CONFIG_FIELDS, part)
     if fields is None:
         return None
@@ -353,6 +359,14 @@ def _genai_tool_response(part: object) -> ChatCompletionToolMessage | None:
     )
     if response is None:
         return None
+    name: Final = response.get("name", "unknown")
+    explicit_id: Final = response.get("id")
+    if isinstance(explicit_id, str) and explicit_id:
+        tool_call_id = explicit_id
+    elif pending_call_ids is not None and pending_call_ids.get(name):
+        tool_call_id = pending_call_ids[name].popleft()
+    else:
+        tool_call_id = f"call_{name}"
     result: Final = json.dumps(response.get("response", {}))
     media_fields: Final = (
         part_fields
@@ -362,12 +376,16 @@ def _genai_tool_response(part: object) -> ChatCompletionToolMessage | None:
     media: Final = tuple(converted for fields in media_fields if (converted := genai_media_part(fields)) is not None)
     return ChatCompletionToolMessage(
         role="tool",
-        tool_call_id=f"call_{response.get('name', 'unknown')}",
+        tool_call_id=tool_call_id,
         content=[ChatCompletionTextObject(type="text", text=result), *media] if media else result,
     )
 
 
-def _genai_tool_call(part: object) -> ChatCompletionAssistantToolCall | None:
+def _genai_tool_call(
+    part: object,
+    call_counts: dict[str, int] | None = None,
+    pending_call_ids: dict[str, deque[str]] | None = None,
+) -> ChatCompletionAssistantToolCall | None:
     fields: Final = _validated(_CONFIG_FIELDS, part)
     if fields is None:
         return None
@@ -376,8 +394,20 @@ def _genai_tool_call(part: object) -> ChatCompletionAssistantToolCall | None:
     )
     if call is None:
         return None
+    name: Final = call.get("name", "unknown")
+    explicit_id: Final = call.get("id")
+    if isinstance(explicit_id, str) and explicit_id:
+        call_id = explicit_id
+    elif call_counts is not None:
+        call_counts[name] += 1
+        count = call_counts[name]
+        call_id = f"call_{name}" if count == 1 else f"call_{name}_{count}"
+    else:
+        call_id = f"call_{name}"
+    if pending_call_ids is not None:
+        pending_call_ids[name].append(call_id)
     return ChatCompletionAssistantToolCall(
-        id=f"call_{call.get('name', 'unknown')}",
+        id=call_id,
         type="function",
         function=ChatCompletionToolCallFunctionChunk(
             name=call.get("name", ""), arguments=json.dumps(call.get("args", {}))
@@ -385,7 +415,11 @@ def _genai_tool_call(part: object) -> ChatCompletionAssistantToolCall | None:
     )
 
 
-def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
+def _genai_content_messages(
+    content: object,
+    call_counts: dict[str, int] | None = None,
+    pending_call_ids: dict[str, deque[str]] | None = None,
+) -> tuple[AllMessageValues, ...]:
     fields: Final = _validated(_CONFIG_FIELDS, content)
     if fields is None:
         return ()
@@ -405,12 +439,20 @@ def _genai_content_messages(content: object) -> tuple[AllMessageValues, ...]:
             if converted
             else ()
         )
-        responses: Final = tuple(response for part in parts if (response := _genai_tool_response(part)) is not None)
+        responses: Final = tuple(
+            response
+            for part in parts
+            if (response := _genai_tool_response(part, pending_call_ids=pending_call_ids)) is not None
+        )
         return (*user_message, *responses)
     if role != "model":
         return ()
     text: Final = "".join(part["text"] for part in converted if part["type"] == "text")
-    calls: Final = [call for part in parts if (call := _genai_tool_call(part)) is not None]
+    calls: Final = [
+        call
+        for part in parts
+        if (call := _genai_tool_call(part, call_counts=call_counts, pending_call_ids=pending_call_ids)) is not None
+    ]
     assistant_content: Final = list(converted) if any(part["type"] != "text" for part in converted) else text or None
     return (
         ChatCompletionAssistantMessage(role="assistant", content=assistant_content, tool_calls=calls)
@@ -763,9 +805,14 @@ class GoogleGenAIAdapter:
             if system_parts and "text" in system_parts[0]
             else ()
         )
+        call_counts: dict[str, int] = defaultdict(int)
+        pending_call_ids: dict[str, deque[str]] = defaultdict(deque)
         return [
             *system_messages,
-            *chain.from_iterable(_genai_content_messages(content) for content in iter_items(contents)),
+            *chain.from_iterable(
+                _genai_content_messages(content, call_counts=call_counts, pending_call_ids=pending_call_ids)
+                for content in iter_items(contents)
+            ),
         ]
 
     def translate_completion_to_generate_content(
