@@ -222,10 +222,33 @@ def _is_model_output(item: object) -> bool:
     return not (isinstance(item, Mapping) and item.get("type") in _MCP_AUTO_EXECUTE_OUTPUT_TYPES)
 
 
+def _is_redacted_mcp_call(item: object) -> bool:
+    mapping: Final = as_str_mapping(item)
+    return mapping is not None and mapping.get("type") == "mcp_call" and mapping.get("arguments") == REDACTED_BY_LITELLM
+
+
+def _is_replayable_output(item: object) -> bool:
+    return _is_model_output(item) and not _is_redacted_mcp_call(item)
+
+
+def _has_redacted_arguments(server_tool_call: object) -> bool:
+    function: Final = as_str_mapping((as_str_mapping(server_tool_call) or {}).get("function"))
+    return function is not None and function.get("arguments") == REDACTED_BY_LITELLM
+
+
+def _without_redacted_server_tool_calls(message: Message) -> Message:
+    fields: Final = message.provider_specific_fields or {}
+    calls: Final = as_object_list(fields.get("server_tool_calls"))
+    if calls is None or not any(_has_redacted_arguments(call) for call in calls):
+        return message
+    kept: Final = [call for call in calls if not _has_redacted_arguments(call)]
+    return message.model_copy(update={"provider_specific_fields": {**fields, "server_tool_calls": kept}})
+
+
 def _stored_responses_api_output(stored_response: object) -> ResponseInputParam | None:
     match stored_response:
         case {"object": "response", "output": list() as output}:
-            return [item for item in output if _is_model_output(item)]
+            return [item for item in output if _is_replayable_output(item)]
         case {"object": "response"}:
             return []
         case _:
@@ -607,6 +630,7 @@ class ResponsesSessionHandler:
         tool_call_provider_fields: bool = False,
         stored_turns: StoredTurns | None = None,
         empty_user_turn_text: str | None = None,
+        replay_mcp_calls: bool = False,
         keep_tool_references: bool = False,
     ) -> ChatCompletionSession:
         """
@@ -652,6 +676,7 @@ class ResponsesSessionHandler:
             item_cache_control,
             tool_call_provider_fields,
             empty_user_turn_text,
+            replay_mcp_calls,
             keep_tool_references,
         )
         history_before_replay: Final = ResponsesSessionHandler._history_of_turns(
@@ -661,6 +686,7 @@ class ResponsesSessionHandler:
             item_cache_control,
             tool_call_provider_fields,
             empty_user_turn_text,
+            replay_mcp_calls,
             keep_tool_references,
         )
         chat_completion_message_history: Final = (
@@ -729,6 +755,7 @@ class ResponsesSessionHandler:
         item_cache_control: bool,
         tool_call_provider_fields: bool,
         empty_user_turn_text: str | None = None,
+        replay_mcp_calls: bool = False,
         keep_tool_references: bool = False,
     ) -> list["SessionMessage"]:
         return reduce(
@@ -740,6 +767,7 @@ class ResponsesSessionHandler:
                 tool_call_provider_fields=tool_call_provider_fields,
                 empty_user_turn_text=empty_user_turn_text,
                 tool_names=turn[2],
+                replay_mcp_calls=replay_mcp_calls,
                 keep_tool_references=keep_tool_references,
             ),
             zip(spend_logs, proxy_server_requests, sent_tool_names, strict=True),
@@ -760,6 +788,7 @@ class ResponsesSessionHandler:
         item_cache_control: bool = False,
         tool_call_provider_fields: bool = False,
         empty_user_turn_text: str | None = None,
+        replay_mcp_calls: bool = False,
         keep_tool_references: bool = False,
         *,
         tool_names: SentToolNames = _NO_TOOL_NAMES,
@@ -799,6 +828,7 @@ class ResponsesSessionHandler:
             declared_tool_names,
             item_cache_control,
             tool_call_provider_fields,
+            replay_mcp_calls,
         )
         if response_input_param is not None:
             stored_input: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
@@ -810,6 +840,7 @@ class ResponsesSessionHandler:
                 only_since_compaction=True,
                 replay_tool_search=True,
                 tool_names=tool_names,
+                replay_mcp_calls=replay_mcp_calls,
                 keep_tool_references=keep_tool_references,
             )
             input_before_blank_tail: Final = without_blank_user_tail(stored_input)
@@ -840,6 +871,7 @@ class ResponsesSessionHandler:
         declared_tool_names: frozenset[str],
         item_cache_control: bool,
         tool_call_provider_fields: bool,
+        replay_mcp_calls: bool,
     ) -> Sequence[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -861,6 +893,7 @@ class ResponsesSessionHandler:
                 only_since_compaction=True,
                 replay_tool_search=True,
                 tool_names=tool_names,
+                replay_mcp_calls=replay_mcp_calls,
             )
         if not isinstance(stored_response, dict) or not stored_response:
             return ()
@@ -869,7 +902,9 @@ class ResponsesSessionHandler:
             declared_tool_names,
         )
         chat_completion_messages: Final = tuple(
-            choice.message for choice in model_response.choices if hasattr(choice, "message")
+            _without_redacted_server_tool_calls(choice.message)
+            for choice in model_response.choices
+            if hasattr(choice, "message")
         )
         for message in chat_completion_messages:
             _normalize_redacted_tool_call_arguments(message)

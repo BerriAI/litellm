@@ -29,6 +29,7 @@ from litellm.responses.litellm_completion_transformation.compaction_trigger impo
     without_a_forced_tool,
 )
 from litellm.responses.litellm_completion_transformation.error_param import error_param_named_as_a_responses_field
+from litellm.responses.litellm_completion_transformation.mcp_calls import McpToolUse, requested_mcp_tool_uses
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler, StoredTurns
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -131,6 +132,7 @@ def _bridged_reply(
     litellm_metadata: dict[str, object] | None,  # mutable-ok: the iterator keeps the caller's metadata dict as sent
     tool_call_provider_fields: bool,
     summarizes_into_compaction: bool,
+    requested_mcp_calls: Mapping[str, McpToolUse],
 ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
     if isinstance(completion_response, ModelResponse):
         return LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
@@ -141,6 +143,7 @@ def _bridged_reply(
             ),
             request_input=request_input,
             responses_api_request=responses_api_request,
+            requested_mcp_calls=requested_mcp_calls,
         )
     if isinstance(completion_response, litellm.CustomStreamWrapper):
         return LiteLLMCompletionStreamingIterator(
@@ -151,6 +154,7 @@ def _bridged_reply(
             custom_llm_provider=custom_llm_provider,
             litellm_metadata=litellm_metadata,
             tool_call_provider_fields=tool_call_provider_fields,
+            requested_mcp_calls=requested_mcp_calls,
             compaction_summary=(
                 CompactionSummaryStream(llm_provider=custom_llm_provider) if summarizes_into_compaction else None
             ),
@@ -310,6 +314,7 @@ class LiteLLMCompletionTransformationHandler:
                 _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
             ),
             summarizes_into_compaction=summarizes,
+            requested_mcp_calls=requested_mcp_tool_uses(litellm_completion_request.get("messages")),
         )
 
     async def _async_response_api_handler_after_earlier_searches(
@@ -422,4 +427,5 @@ class LiteLLMCompletionTransformationHandler:
                 _REQUEST_KWARGS_ADAPTER.validate_python(kwargs)
             ),
             summarizes_into_compaction=summarizes_into_compaction,
+            requested_mcp_calls=requested_mcp_tool_uses(completion_request.get("messages")),
         )

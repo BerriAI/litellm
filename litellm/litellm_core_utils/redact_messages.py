@@ -625,6 +625,9 @@ def _drop_field_when_present(item: object, field: str) -> None:
         setattr(item, field, None)
 
 
+_MCP_CALL_CONTENT_FIELDS: Final = ("arguments", "output", "error")
+
+
 def _drop_prompt_derived_fields(response: object) -> None:
     for field in VLLM_PROMPT_DERIVED_FIELDS:
         if isinstance(response, dict) and field in response:
@@ -772,6 +775,9 @@ def _redact_responses_api_output(output_items: Iterable[object]) -> None:
             output_item.arguments = REDACTED_BY_LITELLM
         if output_type == "custom_tool_call" and has_attributes(output_item, _HasInput, "input"):
             output_item.input = REDACTED_BY_LITELLM
+        if output_type == "mcp_call":
+            for field in _MCP_CALL_CONTENT_FIELDS:
+                _redact_field_when_present(output_item, field)
         if (
             output_type == "web_search_call"
             and has_attributes(output_item, _HasAction, "action")
@@ -830,6 +836,11 @@ def _redacted_responses_api_output_item(item: object, redacted_str: str) -> obje
         **(
             {"input": redacted_str}
             if item_mapping.get("type") == "custom_tool_call" and "input" in item_mapping
+            else {}
+        ),
+        **(
+            {field: redacted_str for field in _MCP_CALL_CONTENT_FIELDS if item_mapping.get(field) is not None}
+            if item_mapping.get("type") == "mcp_call"
             else {}
         ),
         **(

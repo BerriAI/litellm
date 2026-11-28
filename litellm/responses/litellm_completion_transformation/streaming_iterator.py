@@ -5,6 +5,7 @@ from itertools import filterfalse
 from types import MappingProxyType
 from typing import Any, Final, Protocol, cast
 
+from openai.types.responses.response_output_item import McpCall
 from pydantic import TypeAdapter
 
 import litellm
@@ -17,7 +18,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.common_utils import anthropic_server_call_fields, anthropic_server_tool_calls
 from litellm.llms.anthropic.messages.native.utils import openai_chat_refusal_text
 from litellm.main import stream_chunk_builder
@@ -28,6 +29,15 @@ from litellm.responses.litellm_completion_transformation.custom_tools import (
     extract_custom_tool_names,
     is_custom_tool_call,
     serialize_tool_call_arguments,
+)
+from litellm.responses.litellm_completion_transformation.mcp_calls import (
+    McpToolResult,
+    McpToolUse,
+    anthropic_mcp_call_id,
+    build_deferred_mcp_call,
+    build_mcp_call,
+    mcp_tool_results_by_call_id,
+    mcp_tool_uses,
 )
 from litellm.responses.litellm_completion_transformation.reasoning_items import mint_reasoning_item_id
 from litellm.responses.litellm_completion_transformation.tool_search import (
@@ -58,6 +68,11 @@ from litellm.types.llms.openai import (
     ContentPartDonePartRefusal,
     FunctionCallArgumentsDeltaEvent,
     FunctionCallArgumentsDoneEvent,
+    MCPCallArgumentsDeltaEvent,
+    MCPCallArgumentsDoneEvent,
+    MCPCallCompletedEvent,
+    MCPCallFailedEvent,
+    MCPCallInProgressEvent,
     OutputItemAddedEvent,
     OutputItemDoneEvent,
     OutputTextAnnotationAddedEvent,
@@ -99,6 +114,30 @@ def _index_of_output_item_type(items: Sequence[object], item_type: str) -> int |
         (index for index, item in enumerate(items) if getattr(item, "type", None) == item_type),
         None,
     )
+
+
+def _mcp_call_status_events(item: McpCall, output_index: int) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
+    match item.status:
+        case "completed":
+            return (
+                MCPCallCompletedEvent(
+                    type=ResponsesAPIStreamEvents.MCP_CALL_COMPLETED,
+                    sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
+                    item_id=item.id,
+                    output_index=output_index,
+                ),
+            )
+        case "failed":
+            return (
+                MCPCallFailedEvent(
+                    type=ResponsesAPIStreamEvents.MCP_CALL_FAILED,
+                    sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
+                    item_id=item.id,
+                    output_index=output_index,
+                ),
+            )
+        case _:
+            return ()
 
 
 class _CopiesWithUpdate(Protocol):
@@ -203,6 +242,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         litellm_metadata: dict[str, object] | None = None,
         tool_call_provider_fields: bool = False,
         compaction_summary: CompactionSummaryStream | None = None,
+        requested_mcp_calls: Mapping[str, McpToolUse] = MappingProxyType({}),
     ):
         self.model: str = model
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = litellm_custom_stream_wrapper
@@ -212,6 +252,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.litellm_metadata: dict[str, object] | None = litellm_metadata or {}
         self.tool_call_provider_fields: Final = tool_call_provider_fields
         self._compaction_summary: Final = compaction_summary
+        self._requested_mcp_calls: Final = requested_mcp_calls
         # Store lightweight dict snapshots for stream_chunk_builder to reduce
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: list[dict[str, object]] = []
@@ -274,6 +315,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_search_executions: Mapping[str, ToolSearchExecution] = MappingProxyType({})
         self._tool_search_output_index_by_call_id: Mapping[str, int] = MappingProxyType({})
         self._done_tool_search_call_ids: frozenset[str] = frozenset()
+        self._mcp_calls: Mapping[str, McpToolUse] = MappingProxyType({})
+        self._done_mcp_call_ids: frozenset[str] = frozenset()
 
     def close(self) -> None:
         self.litellm_custom_stream_wrapper.close()
@@ -378,6 +421,95 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 call.id, self._get_or_assign_tool_output_index(call.id), call.function.arguments, execution
             )
 
+    def _queue_streamed_mcp_calls(self, chunk: ModelResponseStream) -> None:
+        if chunk.choices:
+            self._queue_new_mcp_calls(chunk.choices[0].delta)
+        self._queue_mcp_call_results(closing=False)
+        self._queue_deferred_mcp_calls()
+
+    def _queue_final_mcp_call_events(self, litellm_complete_object: ModelResponse) -> None:
+        if litellm_complete_object.choices:
+            self._queue_new_mcp_calls(message_field(litellm_complete_object.choices[0], "message"))
+        self._queue_mcp_call_results(closing=True)
+        self._queue_deferred_mcp_calls()
+
+    def _queue_deferred_mcp_calls(self) -> None:
+        if not self._requested_mcp_calls:
+            return
+        results: Final = mcp_tool_results_by_call_id((self._accumulated_provider_specific_fields,))
+        for call_id, result in results.items():
+            call = self._requested_mcp_calls.get(call_id)
+            if call is not None and call_id not in self._mcp_calls and call_id not in self._done_mcp_call_ids:
+                self._queue_deferred_mcp_call(call, result)
+
+    def _queue_deferred_mcp_call(self, call: McpToolUse, result: McpToolResult) -> None:
+        self._queue_mcp_call_opened(call.id, build_deferred_mcp_call(call, None))
+        self._queue_mcp_call_done(call.id, build_deferred_mcp_call(call, result))
+
+    def _queue_new_mcp_calls(self, holder: object) -> None:
+        for call in mcp_tool_uses(holder):
+            if call.id not in self._mcp_calls:
+                self._queue_mcp_call_added(call)
+
+    def _queue_mcp_call_added(self, call: McpToolUse) -> None:
+        self._mcp_calls = MappingProxyType({**self._mcp_calls, call.id: call})
+        self._queue_mcp_call_opened(call.id, build_mcp_call(call, None))
+
+    def _queue_mcp_call_opened(self, call_id: str, item: McpCall) -> None:
+        self._queue_held_annotations()
+        output_index: Final = self._get_or_assign_tool_output_index(call_id)
+        self._queue_output_item_added(
+            output_index, BaseLiteLLMOpenAIResponseObject(**item.model_copy(update={"arguments": ""}).model_dump())
+        )
+        self._pending_tool_events.extend(
+            (
+                MCPCallInProgressEvent(
+                    type=ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS,
+                    sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
+                    output_index=output_index,
+                    item_id=item.id,
+                ),
+                MCPCallArgumentsDeltaEvent(
+                    type=ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA,
+                    sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
+                    output_index=output_index,
+                    item_id=item.id,
+                    delta=item.arguments,
+                ),
+                MCPCallArgumentsDoneEvent(
+                    type=ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE,
+                    sequence_number=SEQUENCE_NUMBER_STAMPED_ON_EMISSION,
+                    output_index=output_index,
+                    item_id=item.id,
+                    arguments=item.arguments,
+                ),
+            )
+        )
+
+    def _queue_mcp_call_results(self, closing: bool) -> None:
+        open_calls: Final = tuple(call for call in self._mcp_calls.values() if call.id not in self._done_mcp_call_ids)
+        if not open_calls:
+            return
+        results: Final = mcp_tool_results_by_call_id((self._accumulated_provider_specific_fields,))
+        for call in open_calls:
+            result = results.get(call.id)
+            if closing or result is not None:
+                self._queue_mcp_call_done(call.id, build_mcp_call(call, result))
+
+    def _queue_mcp_call_done(self, call_id: str, item: McpCall) -> None:
+        self._done_mcp_call_ids = self._done_mcp_call_ids | {call_id}
+        output_index: Final = self._get_or_assign_tool_output_index(call_id)
+        self._pending_tool_events.extend(
+            (
+                *_mcp_call_status_events(item, output_index),
+                OutputItemDoneEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                    output_index=output_index,
+                    item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
+                ),
+            )
+        )
+
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing: Final = self._tool_output_index_by_call_id.get(call_id)
         if existing is not None:
@@ -411,6 +543,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 return self._compaction_output_index
             case "tool_search_output":
                 return self._tool_search_output_index_by_call_id.get(str(getattr(item, "call_id", None)))
+            case "mcp_call":
+                return self._tool_output_index_by_call_id.get(anthropic_mcp_call_id(str(getattr(item, "id", ""))))
             case _:
                 call_id: Final = getattr(item, "call_id", None) or str(getattr(item, "id", "")).removeprefix("ws_")
                 return self._tool_output_index_by_call_id.get(str(call_id))
@@ -610,6 +744,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self._final_tool_events_queued:
             return
         self._final_tool_events_queued = True
+        self._queue_final_mcp_call_events(litellm_complete_object)
 
         try:
             message: Final = litellm_complete_object.choices[0].message
@@ -1558,6 +1693,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _queue_chunk_events(self, chunk: ModelResponseStream) -> None:
         self._hold_chunk_annotations(chunk)
         self._queue_streamed_tool_search_calls(chunk)
+        self._queue_streamed_mcp_calls(chunk)
         response_api_chunk: Final = self._transform_chat_completion_chunk_to_response_api_chunk(chunk)
         if response_api_chunk:
             self._pending_response_events.append(response_api_chunk)
@@ -1767,6 +1903,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 request_input=self.request_input,
                 chat_completion_response=self._with_usage_of_every_streamed_chunk(built, messages),
                 responses_api_request=self.responses_api_request,
+                requested_mcp_calls=self._requested_mcp_calls,
             )
         )
         partial: Final = self._with_encoded_response_id(
@@ -1791,6 +1928,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     request_input=self.request_input,
                     chat_completion_response=litellm_model_response,
                     responses_api_request=self.responses_api_request,
+                    requested_mcp_calls=self._requested_mcp_calls,
                 )
             )
 

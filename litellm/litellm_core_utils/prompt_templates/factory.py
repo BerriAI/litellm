@@ -31,9 +31,15 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     require_attributes,
 )
+from litellm.litellm_core_utils.prompt_templates.anthropic_mcp_replay import (
+    is_mcp_block,
+    mcp_replay_plan,
+    mcp_server_name,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_messages,
     find_anthropic_server_tool_result,
+    is_anthropic_mcp_tool_use,
     is_anthropic_server_tool_use,
     is_anthropic_tool_search_use,
     message_field,
@@ -2350,19 +2356,32 @@ def _block_id(block: Mapping[str, object]) -> object:
     return block.get("id")
 
 
+def _is_replayed_server_tool_block(block: Mapping[str, object]) -> bool:
+    block_type: Final = block.get("type", "")
+    if not isinstance(block_type, str):
+        raise TypeError(f"content block type must be a string, got {type(block_type).__name__}")
+    return block_type in ("server_tool_use", "mcp_tool_use") or block_type.endswith("_tool_result")
+
+
 def _unrun_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozenset[object]:
     result_ids: Final = frozenset(block.get("tool_use_id") for block in blocks if _is_server_tool_result(block))
     return frozenset(
         _block_id(block)
         for block in blocks
-        if block.get("type") == "server_tool_use" and _block_id(block) not in result_ids
+        if block.get("type") in ("server_tool_use", "mcp_tool_use") and _block_id(block) not in result_ids
     )
 
 
-def _paused_server_tool_use_ids(blocks: Sequence[Mapping[str, object]]) -> frozenset[object]:
+def _paused_server_tool_use_ids(
+    blocks: Sequence[Mapping[str, object]], answered_later_ids: frozenset[str] = frozenset()
+) -> frozenset[object]:
     if any(block.get("type") == "tool_use" for block in blocks):
         return frozenset()
-    return _unrun_server_tool_use_ids(blocks)
+    return _unrun_server_tool_use_ids(blocks) - answered_later_ids
+
+
+def _is_or_answers(block: Mapping[str, object], ids: frozenset[str]) -> bool:
+    return _block_id(block) in ids or block.get("tool_use_id") in ids
 
 
 def _last_block_id_among(blocks: Sequence[Mapping[str, object]], ids: frozenset[object]) -> object:
@@ -2374,11 +2393,12 @@ def _paused_turn_replay(
     thinking_blocks: Sequence[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock],
     *,
     is_final_message: bool,
+    answered_later_ids: frozenset[str] = frozenset(),
 ) -> tuple[
     tuple[_AnthropicToolInvokeItem, ...],
     tuple[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock, ...],
 ]:
-    unrun_ids: Final = _paused_server_tool_use_ids(tool_invokes)
+    unrun_ids: Final = _paused_server_tool_use_ids(tool_invokes, answered_later_ids)
     if not unrun_ids:
         return tuple(tool_invokes), tuple(thinking_blocks)
     dropped_ids: Final = (
@@ -2585,7 +2605,24 @@ def convert_to_anthropic_tool_invoke(
             if tool_id in answered_tool_ids
             else find_anthropic_server_tool_result(tool_id, web_search_results, tool_results)
         )
-        if server_tool_result is not None:
+        mcp_server_name_of_tool = mcp_server_name(tool)
+        is_mcp_tool_result = server_tool_result is not None and server_tool_result.get("type") == "mcp_tool_result"
+        if mcp_server_name_of_tool is not None or is_mcp_tool_result or is_anthropic_mcp_tool_use(tool_id):
+            if mcp_server_name_of_tool is None:
+                continue
+            _reject_split_server_tool_call(tool_inputs, tool_name)
+            anthropic_tool_invoke.append(
+                {
+                    "type": "mcp_tool_use",
+                    "id": tool_id,
+                    "name": tool_name,
+                    "server_name": mcp_server_name_of_tool,
+                    "input": tool_inputs[0][1],
+                }
+            )
+            if server_tool_result is not None:
+                anthropic_tool_invoke.append(server_tool_result)
+        elif server_tool_result is not None:
             _reject_split_server_tool_call(tool_inputs, tool_name)
             anthropic_tool_invoke.append(
                 {
@@ -3514,6 +3551,8 @@ def anthropic_messages_pt(
     llm_provider: str,
     drop_params: bool = False,
     rewrites_tool_use_ids: bool = True,
+    *,
+    replays_mcp_calls: bool = True,
 ) -> _AnthropicMessageList:
     """
     format messages for anthropic
@@ -3540,6 +3579,7 @@ def anthropic_messages_pt(
     # (Cases A/B/D in `sanitize_messages_for_tool_calling`) remains gated on
     # `modify_params` because it actually mutates conversation structure.
     messages = [_sanitize_empty_text_content(m) for m in messages]
+    mcp_replay: Final = mcp_replay_plan(messages, replays_mcp_calls=replays_mcp_calls)
     replaced_server_tool_answers: Final = server_tool_answers_replaced_by_their_result(messages)
     client_answered_tool_ids: Final = _tool_call_ids_in_tool_messages(messages) - replaced_server_tool_answers
     rename_tool_use_id: Final = sanitize_anthropic_tool_use_id if rewrites_tool_use_ids else _callers_tool_use_id
@@ -3711,6 +3751,11 @@ def anthropic_messages_pt(
                 if _compaction_blocks and isinstance(_compaction_blocks, list):
                     # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
                     assistant_content.extend(_compaction_blocks)
+            assistant_content.extend(
+                cast(  # cast-ok: an mcp_tool_result block Claude returned goes back exactly as it arrived
+                    tuple[AnthropicMessagesAssistantMessageValues, ...], mcp_replay.lone_results_at(msg_i)
+                )
+            )
 
             _raw_thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             thinking_blocks = (
@@ -3724,13 +3769,6 @@ def anthropic_messages_pt(
             # to preserve the original content block ordering.
             # Fixes: https://github.com/BerriAI/litellm/issues/23047
             assistant_tool_calls = _assistant_tool_calls_with_server_tool_calls(assistant_content_block)
-            _has_server_tool_calls = False
-            if assistant_tool_calls is not None:
-                for _tc in assistant_tool_calls:
-                    _tc_id = _tc.get("id") if isinstance(_tc, dict) else getattr(_tc, "id", None)
-                    if _tc_id and isinstance(_tc_id, str) and _tc_id.startswith("srvtoolu_"):
-                        _has_server_tool_calls = True
-                        break
 
             # Get web_search_results and tool_results from provider_specific_fields
             # for server_tool_use reconstruction.
@@ -3741,22 +3779,32 @@ def anthropic_messages_pt(
                 if isinstance(_provider_specific_fields_raw, dict)
                 else None
             ) or {}
-            tool_invoke_results = (
-                convert_to_anthropic_tool_invoke(
-                    assistant_tool_calls,
-                    web_search_results=_provider_specific_fields.get("web_search_results"),
-                    tool_results=_provider_specific_fields.get("tool_results"),
-                    answered_tool_ids=client_answered_tool_ids,
-                    server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
-                    split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
-                    rename_tool_use_id=rename_tool_use_id,
+            tool_invoke_results = tuple(
+                block
+                for block in (
+                    convert_to_anthropic_tool_invoke(
+                        assistant_tool_calls,
+                        web_search_results=_provider_specific_fields.get("web_search_results"),
+                        tool_results=_provider_specific_fields.get("tool_results"),
+                        answered_tool_ids=client_answered_tool_ids,
+                        server_tool_call_ids=_server_tool_call_ids(assistant_content_block),
+                        split_tool_use_ids=_split_tool_use_ids_at(split_tool_use_ids_by_message, msg_i),
+                        rename_tool_use_id=rename_tool_use_id,
+                    )
+                    if assistant_tool_calls is not None
+                    else ()
                 )
-                if assistant_tool_calls is not None
-                else ()
+                if not _is_or_answers(block, mcp_replay.dropped_ids_at(msg_i))
             )
-            turn_paused = bool(_paused_server_tool_use_ids(tool_invoke_results))
+            turn_paused = bool(_paused_server_tool_use_ids(tool_invoke_results, mcp_replay.answered_later_ids))
             replayed_tool_invokes, replayed_thinking_blocks = _paused_turn_replay(
-                tool_invoke_results, thinking_blocks or (), is_final_message=msg_i == len(messages) - 1
+                tool_invoke_results,
+                thinking_blocks or (),
+                is_final_message=msg_i == len(messages) - 1,
+                answered_later_ids=mcp_replay.answered_later_ids,
+            )
+            _has_server_tool_calls = any(
+                message_field(item, "type") in ("server_tool_use", "mcp_tool_use") for item in replayed_tool_invokes
             )
 
             if (
@@ -3778,7 +3826,7 @@ def anthropic_messages_pt(
                 _current_group: list[_AnthropicToolInvokeItem] = []
                 for item in replayed_tool_invokes:
                     item_type = item.get("type", "") if isinstance(item, dict) else getattr(item, "type", "")
-                    if item_type == "server_tool_use":
+                    if item_type in ("server_tool_use", "mcp_tool_use"):
                         if _current_group:
                             server_tool_groups.append(_current_group)
                         _current_group = [item]
@@ -3900,7 +3948,7 @@ def anthropic_messages_pt(
                             assistant_content.append(cast(AnthropicMessagesTextParam, _cached_message))
                         # handle server_tool_use blocks (tool search, web search, etc.)
                         # Pass through as-is since these are Anthropic-native content types
-                        elif m.get("type", "") == "server_tool_use" or m.get("type", "").endswith("_tool_result"):
+                        elif _is_replayed_server_tool_block(m) and (replays_mcp_calls or not is_mcp_block(m)):
                             assistant_content.append(m)
                 elif (
                     "content" in assistant_content_block
