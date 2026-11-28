@@ -46,7 +46,7 @@ _LAX_INT: Final = TypeAdapter(int)
 
 
 class _FailureDetails(LiteLLMBaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     message: str | None = None
     code: str | int | None = None
@@ -80,7 +80,10 @@ class _FailureDetails(LiteLLMBaseModel):
 
     @classmethod
     def of_exception(cls, exception: Exception) -> "_FailureDetails":
-        return cls.model_validate({field: getattr(exception, field, None) for field in cls.model_fields})
+        try:
+            return cls.model_validate({field: getattr(exception, field, None) for field in cls.model_fields})
+        except ValidationError:
+            return cls()
 
 
 class _ErrorPayload(LiteLLMBaseModel):
@@ -175,18 +178,30 @@ def _original_failure(exception: Exception) -> Exception:
     return current
 
 
+def _failure_body_mapping(body: Mapping[str, object]) -> Mapping[str, object]:
+    error: Final = body.get("error")
+    if isinstance(error, Mapping):
+        return error
+    if isinstance(error, str):
+        return {"message": error}
+    return body
+
+
 def _failure_details(original: Exception) -> _FailureDetails:
     mapped: Final = _FailureDetails.of_exception(original)
     body: Final = getattr(original, "body", None)
     if not isinstance(body, Mapping):
         return mapped
-    upstream: Final = _FailureDetails.model_validate(body)
+    try:
+        upstream: Final = _FailureDetails.model_validate(_failure_body_mapping(body))
+    except ValidationError:
+        return mapped
     router_message: Final = mapped.message if mapped.message and carries_fallback_failure(mapped.message) else None
     return _FailureDetails(
         message=router_message or upstream.message or mapped.message,
         code=upstream.code if upstream.code is not None else mapped.code,
         type=upstream.type or mapped.type,
-        status_code=mapped.status_code,
+        status_code=mapped.status_code if mapped.status_code is not None else upstream.status_code,
     )
 
 
@@ -236,7 +251,10 @@ def _status_phrase(status_code: int | None) -> str:
 
 
 def responses_error_fields(error: Mapping[str, object]) -> Mapping[str, object]:
-    details: Final = _FailureDetails.model_validate(error)
+    try:
+        details: Final = _FailureDetails.model_validate(error)
+    except ValidationError:
+        details = _FailureDetails()
     status_code: Final = _status_of(details.code)
     return {
         "code": _response_error_code(details.model_copy(update={"status_code": status_code})),
