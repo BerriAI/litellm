@@ -40,6 +40,7 @@ from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAccessTokenError,
     get_copilot_default_headers,
+    get_copilot_initiator,
     pin_session_authorization,
 )
 from ..per_user_auth import require_github_copilot_user_session
@@ -140,6 +141,23 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         return dict(response_api_optional_params)
 
+    def transform_responses_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict[str, object],  # mutable-ok: matches the parent override signature
+        litellm_params: GenericLiteLLMParams,
+        headers: dict[str, object],  # mutable-ok: the handler sends this same dict, so the header is set in place
+    ) -> dict[str, object]:  # mutable-ok: matches the parent override signature
+        headers["X-Initiator"] = get_copilot_initiator(input)  # rebind-ok: the handler sends this headers dict as is
+        return super().transform_responses_api_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # parent returns a bare dict
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
     def transform_streaming_response(
         self,
         model: str,
@@ -210,7 +228,6 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Headers include:
         - Authorization with API key
         - Standard GitHub Copilot headers (editor-version, user-agent, etc.)
-        - X-Initiator based on input analysis
         - copilot-vision-request if vision content detected
         - User-provided extra_headers (merged with priority)
         """
@@ -241,16 +258,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             # Analyze input to determine additional headers
             input_param: Final = self._get_input_from_params(litellm_params)
 
-            # Add X-Initiator header based on input analysis
-            if input_param is not None:
-                initiator: Final = self._get_initiator(input_param)
-                merged_headers["X-Initiator"] = initiator
-                verbose_logger.debug("GitHub Copilot Responses API: Set X-Initiator=%s", initiator)
-
-                # Add vision header if input contains images
-                if self._has_vision_input(input_param):
-                    merged_headers["copilot-vision-request"] = "true"
-                    verbose_logger.debug("GitHub Copilot Responses API: Enabled vision request")
+            # Add vision header if input contains images
+            if input_param is not None and self._has_vision_input(input_param):
+                merged_headers["copilot-vision-request"] = "true"
+                verbose_logger.debug("GitHub Copilot Responses API: Enabled vision request")
 
             verbose_logger.debug("GitHub Copilot Responses API: Successfully configured headers for model %s", model)
 
@@ -342,42 +353,6 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # If not found, return None and let the API handle it
         return None
-
-    def _get_initiator(self, input_param: str | ResponseInputParam) -> str:
-        """
-        Determine X-Initiator header value based on input analysis.
-
-        Based on copilot-api's hasAgentInitiator logic:
-        - Returns "agent" if input contains assistant role or items without role
-        - Returns "user" otherwise
-
-        Args:
-            input_param: The input parameter (string or list of input items)
-
-        Returns:
-            "agent" or "user"
-        """
-        # If input is a string, it's user-initiated
-        if isinstance(input_param, str):
-            return "user"
-
-        # If input is a list, analyze items
-        if isinstance(input_param, list):  # pyright: ignore[reportUnnecessaryIsInstance]  # items arrive from untyped request params
-            for item in input_param:
-                if not isinstance(item, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # items arrive from untyped request params
-                    continue
-
-                # Check if item has no role (agent-initiated)
-                if "role" not in item or not item.get("role"):
-                    return "agent"
-
-                # Check if role is assistant (agent-initiated)
-                role = item.get("role")
-                if isinstance(role, str) and role.lower() == "assistant":  # pyright: ignore[reportUnnecessaryIsInstance]  # role arrives from untyped request params
-                    return "agent"
-
-        # Default to user-initiated
-        return "user"
 
     def _has_vision_input(self, input_param: str | ResponseInputParam) -> bool:
         """
