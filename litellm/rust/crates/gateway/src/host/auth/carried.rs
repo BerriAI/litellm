@@ -1,9 +1,13 @@
 //! Whether a field of a cached row holds something. The native host takes each row apart by name,
 //! and a field it neither honors nor leaves to a host step declines the row when it is carried.
 
+use std::collections::BTreeMap;
+
 use litellm_config::LitellmRole;
 use litellm_python_compat::{Value, datetime::IsoDateTime};
-use litellm_redis_store::auth_cache::{Bag, Lists, ModelRegion, ObjectPermissionEntry};
+use litellm_redis_store::auth_cache::{
+    Bag, BudgetEntry, Lists, ModelRegion, ModelTableEntry, ObjectPermissionEntry,
+};
 
 /// The name of the first of `fields` that holds something.
 macro_rules! carried {
@@ -45,10 +49,18 @@ carried_when_held!(
     IsoDateTime,
     LitellmRole,
     ModelRegion,
-    ObjectPermissionEntry
+    ObjectPermissionEntry,
+    ModelTableEntry,
+    BudgetEntry
 );
 
 impl<T> Carried for Vec<T> {
+    fn is_carried(&self) -> bool {
+        !self.is_empty()
+    }
+}
+
+impl<K, V> Carried for BTreeMap<K, V> {
     fn is_carried(&self) -> bool {
         !self.is_empty()
     }

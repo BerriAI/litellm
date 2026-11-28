@@ -141,6 +141,11 @@ impl ActiveTeams {
             caller,
         )
     }
+
+    /// Drops everything this process holds in memory and leaves Redis alone.
+    pub fn flush_local(&self) {
+        self.local.lock().clear();
+    }
 }
 
 #[cfg(test)]

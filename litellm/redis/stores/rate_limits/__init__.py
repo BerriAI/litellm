@@ -71,6 +71,10 @@ class RateLimitStore:
     def __init__(self, handle: RateLimitsHandle) -> None:
         self._handle: Final = handle
 
+    def flush_local(self) -> None:
+        """Drops everything this process holds in memory and leaves Redis alone, for test harnesses that reuse a process."""
+        self._handle.flush_local()
+
     @property
     def handle(self) -> object:
         return self._handle

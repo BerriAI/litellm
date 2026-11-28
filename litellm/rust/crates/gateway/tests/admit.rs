@@ -24,6 +24,22 @@ struct Scenario {
     /// The virtual keys the database holds, each token with the columns set on its row.
     #[serde(default)]
     keys: BTreeMap<String, Columns>,
+    /// The other rows the database holds, each under its table's name, stored in this order.
+    #[serde(default)]
+    rows: Vec<BTreeMap<String, serde_json::Value>>,
+    /// The teams the database holds, each id with the columns set on its row.
+    #[serde(default)]
+    teams: BTreeMap<String, Columns>,
+    /// The users the database holds, each id with the columns set on its row.
+    #[serde(default)]
+    users: BTreeMap<String, Columns>,
+    /// The projects the database holds, each id with the columns set on its row.
+    #[serde(default)]
+    projects: BTreeMap<String, Columns>,
+    /// Whether the config reads the database that holds the keys, as its
+    /// `general_settings.database_url`.
+    #[serde(default)]
+    database: bool,
     /// What boot read of the config the proxy stores in its database.
     #[serde(default)]
     stored: Stored,
@@ -96,14 +112,52 @@ fn stored_config(stored: Stored, held: Held) -> StoredConfig {
 
 type Columns = serde_json::Map<String, serde_json::Value>;
 
-/// The database holding each key of the scenario, a plain row with its columns set on it.
-async fn listed(keys: &BTreeMap<String, Columns>) -> keys::Held {
+/// The database holding each team, user, project and key of the scenario, in that order so a key
+/// can point at a project and a project at a team, a key as a plain row with its columns set on
+/// it, and each of its other rows.
+async fn listed(scenario: &Scenario) -> keys::Held {
     let held = keys::Held::start().await;
-    for (token, columns) in keys {
+    for (team_id, columns) in &scenario.teams {
+        let row = std::iter::once(("team_id".to_owned(), serde_json::json!(team_id)))
+            .chain(columns.clone())
+            .collect();
+        held.insert_named("LiteLLM_TeamTable", &serde_json::Value::Object(row))
+            .await;
+    }
+    for (user_id, columns) in &scenario.users {
+        let row = std::iter::once(("user_id".to_owned(), serde_json::json!(user_id)))
+            .chain(columns.clone())
+            .collect();
+        held.insert_named("LiteLLM_UserTable", &serde_json::Value::Object(row))
+            .await;
+    }
+    for (project_id, columns) in &scenario.projects {
+        let row = [
+            ("project_id", project_id.as_str()),
+            ("created_by", "test"),
+            ("updated_by", "test"),
+        ]
+        .into_iter()
+        .map(|(column, value)| (column.to_owned(), serde_json::json!(value)))
+        .chain(columns.clone())
+        .collect();
+        held.insert_named("LiteLLM_ProjectTable", &serde_json::Value::Object(row))
+            .await;
+    }
+    for (token, columns) in &scenario.keys {
         held.key(token, serde_json::Value::Object(columns.clone()))
             .await;
     }
+    for (table, row) in scenario.rows.iter().flatten() {
+        held.insert(table, row).await;
+    }
     held
+}
+
+/// `config` reading the database at `url`.
+fn with_database(mut config: serde_yaml_ng::Value, url: &str) -> serde_yaml_ng::Value {
+    config["general_settings"]["database_url"] = url.into();
+    config
 }
 
 #[derive(Deserialize)]
@@ -199,6 +253,22 @@ impl Sent {
     "request_timeout_beside_router_request_timeout"
 )]
 #[case::pre_call_checks("pre_call_checks")]
+#[case::claude_only_providers("claude_only_providers")]
+#[case::cloud_providers("cloud_providers")]
+#[case::budget_features("budget_features")]
+#[case::proxy_budget("proxy_budget")]
+#[case::budget_alerting("budget_alerting")]
+#[case::budget_throttle("budget_throttle")]
+#[case::budget_status_code("budget_status_code")]
+#[case::virtual_key_budgets("virtual_key_budgets")]
+#[case::virtual_key_budgets_reserved("virtual_key_budgets_reserved")]
+#[case::virtual_key_budgets_alerting("virtual_key_budgets_alerting")]
+#[case::virtual_key_budgets_without_database("virtual_key_budgets_without_database")]
+#[case::end_user("end_user")]
+#[case::end_user_token_database("end_user_token_database")]
+#[case::virtual_key_team("virtual_key_team")]
+#[case::virtual_key_owner("virtual_key_owner")]
+#[case::virtual_key_project("virtual_key_project")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
@@ -206,16 +276,25 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let text = std::fs::read_to_string(&path).unwrap();
     let scenario: Scenario =
         serde_yaml_ng::from_value(litellm_yaml::from_str(&text).unwrap()).unwrap();
-    let config = Config::from_value(scenario.config).unwrap();
+    let nothing_held = scenario.keys.is_empty()
+        && scenario.teams.is_empty()
+        && scenario.users.is_empty()
+        && scenario.projects.is_empty()
+        && scenario.rows.is_empty();
+    let held = match nothing_held {
+        true => None,
+        false => Some(listed(&scenario).await),
+    };
+    let config = match (&held, scenario.database) {
+        (Some(held), true) => with_database(scenario.config.clone(), held.url()),
+        _ => scenario.config.clone(),
+    };
+    let config = Config::from_value(config).unwrap();
     let resources =
         litellm_gateway::Resources::over(&config, Arc::new(|_: &str| None::<String>)).unwrap();
     let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
         .await
         .unwrap();
-    let held = match scenario.keys.is_empty() {
-        true => None,
-        false => Some(listed(&scenario.keys).await),
-    };
     let state = match &held {
         None => state,
         Some(held) => litellm_gateway::AppState {

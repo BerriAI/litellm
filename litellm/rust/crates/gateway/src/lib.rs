@@ -23,6 +23,7 @@ mod test_support;
 pub use admit::{Admit, Reason, Refused};
 pub use callbacks::{
     Callbacks, Registered, Unregistrable,
+    budget_check::BudgetCheck,
     model_capacity::{self, ModelCapacity},
     parallel_request_limiter::{self, KeyLimiter},
     spend_log::{SpendLog, SpendLogs},
@@ -93,7 +94,8 @@ pub struct Inference {
 const LICENSE: &str = "LITELLM_LICENSE";
 
 /// The inference routes of `config` with the callbacks the gateway runs around their calls, in
-/// the order the proxy registers them: the config's `callbacks`, of which only the dynamic rate
+/// the order the proxy runs them: with a `spend_log`, the caller's budget checks first, as Python
+/// runs them while it authenticates, then the config's `callbacks`, of which only the dynamic rate
 /// limiter is built, then the proxy's own key limiter. The keys' limits and the model groups'
 /// capacity are counted in `redis`'s coordination client when there is one, and in this process's
 /// memory otherwise. `variables` holds the config's `environment_variables` in front of the
@@ -130,6 +132,7 @@ pub(crate) async fn inference_over(
     let router = boot::router(config).await?;
     let deployments = router.registry().deployments(&DeploymentFilter::default());
     let windows = host::ContextWindows::read(&catalog, &deployments).await;
+    let free = Arc::new(host::FreeModels::read(&catalog, &router.registry()).await);
     let limits = parallel_request_limiter::Settings::read(config, variables);
     let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
     let licensed = resources.environment.get(LICENSE).is_some();
@@ -140,10 +143,12 @@ pub(crate) async fn inference_over(
         }));
         ModelCapacity::new(read, counters, active, router.clone())
     });
+    let budget_check = spend_log.map(|spend_log| spend_log.budget_check(free));
     let callbacks = Callbacks::new(
-        model_capacity
+        budget_check
             .iter()
-            .map(|capacity| capacity.registered())
+            .map(BudgetCheck::registered)
+            .chain(model_capacity.iter().map(|capacity| capacity.registered()))
             .chain([key_limiter.registered()])
             .chain(spend_log.map(SpendLog::registered))
             .collect(),
@@ -153,7 +158,7 @@ pub(crate) async fn inference_over(
         resources.http.clone(),
         resources.secrets.clone(),
         router,
-        boot::configured(&config.litellm_settings),
+        boot::configured(&config.litellm_settings, variables),
         routing,
         host::NativeHost::new(Arc::new(callbacks), Arc::new(windows)),
     )?
@@ -196,4 +201,99 @@ pub fn router(state: AppState, config: &Config) -> Router {
         middleware::request_allowlist::Settings::from_general(&config.general_settings),
     );
     middleware::inference(inference).merge(health::router(state))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+    use litellm_gateway_auth::Authenticated;
+    use litellm_gateway_auth_core::{
+        Affiliation, Caller, Credential, Token,
+        record::{Budget, EndUserRecord},
+    };
+    use litellm_gateway_inference::{
+        CallHooks, HookError, Host, RouterTiers,
+        record::{self, CallRecord},
+    };
+    use rstest::rstest;
+    use serde_json::{Map, Value, json};
+
+    use super::*;
+    use crate::{
+        callbacks::parallel_request_limiter::KeyLimits,
+        host::{Key, auth::keys::Held},
+    };
+
+    const TOKEN: &str = "sk-spent";
+    const MAX_BUDGET: f64 = 10.0;
+
+    /// A caller whose key's row holds its whole budget and whose key allows no request a minute
+    /// is refused by the budget check, before the key limiter counts the call.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_caller_over_its_budget_and_its_rate_limit_is_refused_over_its_budget() {
+        let held = Held::holding(
+            TOKEN,
+            json!({"spend": MAX_BUDGET, "max_budget": MAX_BUDGET}),
+        )
+        .await;
+        let config = Config::default();
+        let spend_log = SpendLog::start(
+            &held.database(),
+            &RedisClients::default(),
+            &Environment::default(),
+        );
+        let inference = build_inference(
+            &config,
+            &Environment::default(),
+            &Resources::build(&config).unwrap(),
+            RoutingCache::new(None, RouterTiers::default()),
+            &RedisClients::default(),
+            Some(&spend_log),
+        )
+        .await
+        .unwrap();
+        let hash = Token::new(TOKEN).hash().to_string();
+        let caller = Authenticated::from(Caller {
+            credential: Credential::Key {
+                key: Key::stored(&hash, Some("spent"))
+                    .with_budget(Budget {
+                        max: Some(MAX_BUDGET),
+                        spend: 0.0,
+                    })
+                    .with_limits(KeyLimits {
+                        rpm: Some(0),
+                        ..KeyLimits::default()
+                    }),
+            },
+            affiliation: Affiliation::nobody(),
+            end_user: EndUserRecord::default(),
+        });
+        let body: Map<String, Value> = Map::from_iter([("model".to_owned(), json!("held-model"))]);
+
+        let refused = record::scope(CallRecord::new(), async {
+            let call = inference.gateway.host().hooks(&caller);
+            match call.pre_call(body).await {
+                Ok(_) => None,
+                Err(HookError::Refused(refusal)) => Some((refusal.status, refusal.message)),
+                Err(HookError::Failed(error)) => panic!("the call failed: {error}"),
+            }
+        })
+        .await;
+
+        assert_eq!(
+            (
+                refused,
+                inference.key_limiter.counted("requests", "api_key", &hash)
+            ),
+            (
+                Some((
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "Budget has been exceeded! Key=spent Current cost: 10.0, Max budget: 10.0"
+                        .to_owned()
+                )),
+                None
+            )
+        );
+    }
 }

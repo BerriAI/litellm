@@ -16,18 +16,20 @@ use crate::{AuthzDenial, DeniedList};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layer<'a> {
     Key(ModelList<'a>),
+    Team(ModelList<'a>),
 }
 
 impl<'a> Layer<'a> {
     pub fn list(&self) -> ModelList<'a> {
         match *self {
-            Self::Key(list) => list,
+            Self::Key(list) | Self::Team(list) => list,
         }
     }
 
     fn denial(&self, ask: &ModelAsk<'_>) -> AuthzDenial {
         let list = match self {
             Self::Key(_) => DeniedList::Key,
+            Self::Team(_) => DeniedList::Team,
         };
         AuthzDenial::ModelAccess {
             list,
@@ -115,6 +117,38 @@ mod tests {
         assert_eq!(
             refused.to_string(),
             crate::ModelAccessDenied { model: "gpt" }.to_string()
+        );
+    }
+
+    #[rstest]
+    #[case::the_key_refuses(&["gpt"], &["claude"], DeniedList::Key)]
+    #[case::the_team_refuses(&["claude"], &["gpt"], DeniedList::Team)]
+    fn every_layer_has_to_reach_the_model(
+        #[case] key: &[&str],
+        #[case] team: &[&str],
+        #[case] denied: DeniedList,
+    ) {
+        let (key, team) = (owned(key), owned(team));
+        let ask = ModelAsk {
+            name: "claude",
+            candidates: &["claude"],
+            access_groups: &[],
+        };
+
+        let refused = authorize(
+            [
+                Layer::Key(ModelList::read(&key)),
+                Layer::Team(ModelList::read(&team)),
+            ],
+            &ask,
+        );
+
+        assert_eq!(
+            refused,
+            Err(AuthzDenial::ModelAccess {
+                list: denied,
+                model: "claude".to_owned(),
+            })
         );
     }
 
