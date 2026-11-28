@@ -95,6 +95,29 @@ fn unserved(admit: &Admit, reached: &Reached) -> Option<Box<str>> {
                 })
         })
         .or_else(|| {
+            admit
+                .router
+                .registry()
+                .deployments(&DeploymentFilter {
+                    model_name: Some(group),
+                    ..DeploymentFilter::default()
+                })
+                .iter()
+                .find(|deployment| {
+                    !litellm_inference_messages::serves(
+                        &deployment.params.model,
+                        deployment.params.custom_llm_provider.as_deref(),
+                    )
+                })
+                .map(|deployment| {
+                    format!(
+                        "model_list.litellm_params.model {} is bridged to chat completions",
+                        deployment.params.model
+                    )
+                    .into()
+                })
+        })
+        .or_else(|| {
             let cost_map = admit.inference.as_ref()?.cost_map();
             admit
                 .router
