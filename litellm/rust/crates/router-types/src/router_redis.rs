@@ -6,7 +6,7 @@ use veil::Redact;
 use crate::Spelled;
 
 /// The Redis a router's `redis_*` and `cache_kwargs` settings name for its routing state.
-#[derive(Clone, Default, Deserialize, Redact)]
+#[derive(Clone, Default, Deserialize, PartialEq, Redact)]
 #[serde(default)]
 pub struct RouterRedis {
     pub redis_url: Option<SecretValue>,

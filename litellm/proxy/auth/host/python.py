@@ -50,6 +50,7 @@ from litellm.proxy.auth.auth_checks import (
     get_object_permission,
     get_org_object,
     get_org_object_by_alias,
+    get_org_object_for_request,
     get_project_object,
     get_team_membership,
     get_team_object,
@@ -634,13 +635,15 @@ class PythonAuthHost:
                     raise
         return team_facts(team)
 
-    async def load_team_membership(self, user_id: str, team_id: str) -> LiteLLM_TeamMembership | None:
+    async def load_team_membership(
+        self, user_id: str, team_id: str, *, for_key: bool = False
+    ) -> LiteLLM_TeamMembership | None:
         return await get_team_membership(
             user_id=user_id,
             team_id=team_id,
             prisma_client=self.prisma_client,
             user_api_key_cache=self.user_api_key_cache,
-            parent_otel_span=self.parent_otel_span,
+            parent_otel_span=None if for_key else self.parent_otel_span,
             proxy_logging_obj=self.proxy_logging_obj,
         )
 
@@ -729,7 +732,19 @@ class PythonAuthHost:
             self._db(), self.user_api_key_cache, self.proxy_logging_obj, self.litellm_proxy_admin_name, user_id, team_id
         )
 
-    async def org(self, org_id: str) -> LiteLLM_OrganizationTable | None:
+    async def org(self, org_id: str, *, for_key: bool = False) -> LiteLLM_OrganizationTable | None:
+        if for_key:
+            return (
+                None
+                if self.prisma_client is None
+                else await get_org_object_for_request(
+                    org_id=org_id,
+                    prisma_client=self.prisma_client,
+                    user_api_key_cache=self.user_api_key_cache,
+                    parent_otel_span=self.parent_otel_span,
+                    proxy_logging_obj=self.proxy_logging_obj,
+                )
+            )
         return await get_org_object(
             org_id=org_id,
             prisma_client=self.prisma_client,

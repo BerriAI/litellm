@@ -37,6 +37,7 @@ pub(crate) fn key(stored: &str, is_proxy_admin: bool) -> Caller<Held> {
         },
         affiliation: Affiliation::nobody(),
         end_user: (),
+        customer_hierarchy: None,
     }
 }
 

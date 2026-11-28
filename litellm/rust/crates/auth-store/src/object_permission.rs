@@ -9,10 +9,10 @@ use litellm_repositories::{ObjectPermission, ObjectPermissionRepository, Side};
 use crate::{Error, column::nullable, error::within};
 
 /// The object permission an object points at, read as `get_object_permission` nests it.
-pub(crate) struct ObjectPermissions(Arc<ObjectPermissionRepository>);
+pub struct ObjectPermissions(Arc<ObjectPermissionRepository>);
 
 impl ObjectPermissions {
-    pub(crate) fn new(repository: Arc<ObjectPermissionRepository>) -> Self {
+    pub fn new(repository: Arc<ObjectPermissionRepository>) -> Self {
         Self(repository)
     }
 
@@ -40,7 +40,7 @@ impl ObjectPermissions {
         }
     }
 
-    async fn read(&self, id: &str, side: Side) -> Result<Option<ObjectPermissionEntry>, Error> {
+    pub async fn read(&self, id: &str, side: Side) -> Result<Option<ObjectPermissionEntry>, Error> {
         self.0
             .find_by_object_permission_id(id, side)
             .await?
@@ -51,8 +51,7 @@ impl ObjectPermissions {
 }
 
 /// What `LiteLLM_ObjectPermissionTable.model_dump(mode="json")` holds for `row`, or the column the
-/// model would refuse the row for. The repository reads leave out the `apps` column, so the model's
-/// default stands for it.
+/// model would refuse the row for.
 pub(crate) fn object_permission_entry(
     row: ObjectPermission,
 ) -> Result<ObjectPermissionEntry, Error> {
@@ -70,6 +69,7 @@ pub(crate) fn object_permission_entry(
         search_tools,
         mcp_tool_search_enabled,
         skills,
+        apps,
     } = row;
     Ok(ObjectPermissionEntry {
         object_permission_id,
@@ -85,7 +85,7 @@ pub(crate) fn object_permission_entry(
         search_tools: Some(search_tools),
         mcp_tool_search_enabled,
         skills: Some(skills),
-        apps: None,
+        apps: (!apps.is_empty()).then_some(apps),
         unread: Vec::new(),
     })
 }

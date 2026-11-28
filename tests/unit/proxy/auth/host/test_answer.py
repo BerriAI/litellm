@@ -12,6 +12,7 @@ from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustAuthStep
 _FIELD_VALUES: Final = {
     "upsert": True,
     "explicit_team": True,
+    "for_key": True,
     "ttl_seconds": 1.0,
     "add": ["a"],
     "remove": ["r"],
@@ -40,7 +41,7 @@ class _AskingHost:
     """Fails on the first method `answer` reaches for, naming it."""
 
     def __getattr__(self, method: str) -> object:
-        async def ask(*args: object) -> NoReturn:
+        async def ask(*args: object, **kwargs: object) -> NoReturn:
             raise _Asked(method)
 
         return ask

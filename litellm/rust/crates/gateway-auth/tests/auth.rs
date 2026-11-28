@@ -46,6 +46,7 @@ fn stored_key() -> Caller<Held> {
         },
         affiliation: Affiliation::nobody(),
         end_user: (),
+        customer_hierarchy: None,
     }
 }
 
@@ -54,6 +55,7 @@ fn master_key() -> Caller<Held> {
         credential: auth_core::Credential::MasterKey,
         affiliation: Affiliation::nobody(),
         end_user: (),
+        customer_hierarchy: None,
     }
 }
 

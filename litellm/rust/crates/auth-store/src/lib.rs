@@ -4,6 +4,7 @@
 mod budget;
 mod budget_limit;
 mod column;
+mod customer_hierarchy;
 mod end_user;
 mod error;
 mod key;
@@ -15,9 +16,12 @@ mod team;
 mod team_membership;
 mod user;
 
+pub use budget::BudgetDatabase;
+pub use customer_hierarchy::{CustomerHierarchyDatabase, LoadedCustomerMember};
 pub use end_user::EndUserDatabase;
 pub use error::Error;
 pub use key::KeyDatabase;
+pub use object_permission::ObjectPermissions;
 pub use organization::OrganizationDatabase;
 pub use project::ProjectDatabase;
 pub use team::{AliasMatch, CreatedTeam, TeamDatabase};

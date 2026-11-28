@@ -61,6 +61,7 @@ pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
                 project,
             },
         end_user,
+        customer_hierarchy: _,
     } = &**identity;
     let (key_hash, key_alias, user_id) = match credential {
         Credential::MasterKey => (

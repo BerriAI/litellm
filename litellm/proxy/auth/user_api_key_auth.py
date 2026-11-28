@@ -53,6 +53,7 @@ from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth.access_group_rules import access_group_ids_for_identity
 from litellm.proxy.auth.app_auth import resolve_app_hierarchy
 from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    KeyMembershipRead,
     TeamNotFoundError,
     _cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _can_object_call_model,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -2142,6 +2143,9 @@ async def user_api_key_auth_builder(
             denied_key = outcome.denied_key  # rebind-ok: see above
             auth_denial.raise_denial(outcome)
         authenticated: Final = await auth_identity.project(outcome, rust_host)
+        request.state.read_key_affiliations_in_common_checks = isinstance(  # rebind-ok: pass identity to common checks
+            outcome.identity, RustIdentity.VirtualKey
+        )
         actor_is_master_key: Final = _impersonation_actor_is_master_key(outcome, api_key, master_key)
         if actor_is_master_key is None:
             return authenticated
@@ -2408,9 +2412,18 @@ async def _inherit_org_identity(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
+    *,
+    host: "PythonAuthHost | None" = None,
 ) -> None:
-    if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
-        user_api_key_auth_obj.org_id = team_object.organization_id
+    team_org_id: Final = team_object.organization_id if team_object is not None else None
+    key_org_id: Final = user_api_key_auth_obj.org_id
+    org_id: Final = (
+        (key_org_id if key_org_id is not None else team_org_id)
+        if host is None
+        else RustAuth.key_organization_id(key_org_id, team_org_id)
+    )
+    if key_org_id is None and org_id is not None:
+        user_api_key_auth_obj.org_id = org_id  # rebind-ok: carry inherited organization on the auth result
     already_populated: Final = any(
         value is not None
         for value in (
@@ -2421,14 +2434,18 @@ async def _inherit_org_identity(
             user_api_key_auth_obj.organization_metadata,
         )
     )
-    if user_api_key_auth_obj.org_id is None or already_populated or prisma_client is None:
+    if org_id is None or already_populated or prisma_client is None:
         return
-    org_object: Final = await get_org_object_for_request(
-        org_id=user_api_key_auth_obj.org_id,
-        prisma_client=prisma_client,
-        user_api_key_cache=user_api_key_cache,
-        parent_otel_span=parent_otel_span,
-        proxy_logging_obj=proxy_logging_obj,
+    org_object: Final = (
+        await get_org_object_for_request(
+            org_id=org_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if host is None
+        else (await core.drive(RustAuth.read_key_organization(org_id), host)).key_organization
     )
     if org_object is None:
         return
@@ -2456,7 +2473,9 @@ async def _load_team_member_default_model_budget(
     user_api_key_cache: UserApiKeyCache,
     skip_budget_checks: bool,
     proxy_logging_obj: ProxyLogging | None,
-) -> None:
+    *,
+    host: "PythonAuthHost | None" = None,
+) -> KeyMembershipRead | None:
     team_metadata_value: Final[object] = getattr(team_object, "metadata", None) if team_object is not None else None
     team_metadata: Final[Mapping[str, object] | None] = (
         cast(  # cast-ok: team metadata is a string-keyed JSON object
@@ -2473,15 +2492,28 @@ async def _load_team_member_default_model_budget(
         or not isinstance(user_api_key_auth_obj.team_id, str)
         or prisma_client is None
     ):
-        return
+        return None
 
     try:
-        membership: Final = await get_team_membership(
-            user_id=user_api_key_auth_obj.user_id,
-            team_id=user_api_key_auth_obj.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            proxy_logging_obj=proxy_logging_obj,
+        membership: Final = (
+            await get_team_membership(
+                user_id=user_api_key_auth_obj.user_id,
+                team_id=user_api_key_auth_obj.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if host is None
+            else (
+                await core.drive(
+                    RustAuth.read_key_membership(user_api_key_auth_obj.user_id, user_api_key_auth_obj.team_id), host
+                )
+            ).key_membership
+        )
+        loaded: Final = (
+            None
+            if host is None
+            else KeyMembershipRead(user_api_key_auth_obj.user_id, user_api_key_auth_obj.team_id, membership)
         )
         member_budget_row: Final = membership.litellm_budget_table if membership is not None else None
         member_budget_value: Final[object] = (
@@ -2497,9 +2529,9 @@ async def _load_team_member_default_model_budget(
             user_api_key_auth_obj.team_member_model_max_budget = (  # rebind-ok: auth context carries member budget downstream
                 member_budget_value
             )
-            return
+            return loaded
         if not isinstance(team_member_budget_id, str):
-            return
+            return loaded
         team_member_default_budget: Final = await get_team_member_default_budget(
             budget_id=team_member_budget_id,
             prisma_client=prisma_client,
@@ -2510,7 +2542,7 @@ async def _load_team_member_default_model_budget(
         if not skip_budget_checks:
             raise
         verbose_proxy_logger.warning("Skipping team-member model budget lookup after a lookup error", exc_info=True)
-        return
+        return None
 
     default_budget_value: Final[object] = (
         getattr(team_member_default_budget, "model_max_budget", None)
@@ -2520,6 +2552,7 @@ async def _load_team_member_default_model_budget(
     user_api_key_auth_obj.team_member_model_max_budget = (  # rebind-ok: auth context carries default budget downstream
         default_budget_value if isinstance(default_budget_value, Mapping) else None
     )
+    return loaded
 
 
 @tracer.wrap()
@@ -2785,6 +2818,13 @@ async def run_centralized_common_checks(
         user_object=user_object,
     )
 
+    affiliation_host: Final = (
+        _python_host(
+            request, request_data, route, parent_otel_span, datetime.now(timezone.utc), user_api_key_auth_obj.api_key
+        )
+        if not sub_call and getattr(request.state, "read_key_affiliations_in_common_checks", False) is True
+        else None
+    )
     await _inherit_org_identity(
         user_api_key_auth_obj=user_api_key_auth_obj,
         team_object=team_object,
@@ -2792,6 +2832,7 @@ async def run_centralized_common_checks(
         user_api_key_cache=user_api_key_cache,
         parent_otel_span=parent_otel_span,
         proxy_logging_obj=proxy_logging_obj,
+        host=affiliation_host,
     )
 
     # common_checks identifies admin via user_object, not the token
@@ -2869,13 +2910,14 @@ async def run_centralized_common_checks(
     typed_team_object: Final[LiteLLM_TeamTable | None] = (
         team_object if isinstance(team_object, LiteLLM_TeamTable) else None
     )
-    await _load_team_member_default_model_budget(
+    key_membership: Final = await _load_team_member_default_model_budget(
         user_api_key_auth_obj=user_api_key_auth_obj,
         team_object=typed_team_object,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         skip_budget_checks=skip_budget_checks or route_skips_budget_checks(route=route),
         proxy_logging_obj=proxy_logging_obj,
+        host=affiliation_host,
     )
 
     # Pin the metadata variable name (litellm_metadata vs metadata) before
@@ -2913,6 +2955,7 @@ async def run_centralized_common_checks(
             valid_token=user_api_key_auth_obj,
             skip_budget_checks=skip_budget_checks,
             project_object=project_object,
+            key_membership=key_membership,
         )
         if not skip_budget_checks:
             models: Final = get_model_names_for_budget_checks(

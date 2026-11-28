@@ -5,30 +5,87 @@
 //! [`unserved`], [`unserved_user`], [`unserved_membership`], [`unserved_org`] and
 //! [`unserved_project`] name the first copied column the native app does not serve yet.
 
+use jiff::Timestamp;
 use litellm_gateway_auth_core::{
     AffiliationRead,
     authz::ModelList,
     identity::jwt::{Org, Team, User},
     record::{
-        Budget, MembershipRecord, MinuteLimits, OrgRecord, ProjectRecord, TeamRecord, UserRecord,
+        Budget, BudgetExtras, BudgetWindow, MembershipRecord, MinuteLimits, OrgRecord,
+        ProjectRecord, TeamModelAliasTable, TeamRecord, UserRecord,
     },
     routes::passthrough::PassthroughGrants,
 };
-use litellm_python_compat::Value;
+use litellm_python_compat::{Value, json};
 use litellm_redis_store::auth_cache::{
-    Bag, BudgetEntry, OrganizationEntry, ProjectEntry, TeamEntry, TeamMembershipEntry, UserEntry,
+    Bag, BudgetEntry, BudgetLimitEntry, ModelAliases, ModelTableEntry, OrganizationEntry,
+    ProjectEntry, TeamEntry, TeamMembershipEntry, UserEntry,
 };
+use serde::de::DeserializeOwned;
 
 use super::{
     carried::{Carried, carried, newer},
-    metadata::Metadata,
+    metadata::{self, TeamMetadata},
+    object_permission,
 };
 
 /// The `metadata` key SCIM sets to `False` on a user it deactivated.
 const SCIM_ACTIVE: &str = "scim_active";
 
-/// The team's record, or the first field it holds that no record field has a type for yet.
-pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
+fn read_bag<T: DeserializeOwned>(bag: &Bag) -> Option<T> {
+    serde_json::from_str(&json::dumps(&Value::Dict(bag.entries().to_vec())).ok()?).ok()
+}
+
+fn column<T: Default + DeserializeOwned>(
+    bag: Option<&Bag>,
+    field: &'static str,
+) -> Result<T, &'static str> {
+    bag.map_or_else(|| Ok(T::default()), |bag| read_bag(bag).ok_or(field))
+}
+
+pub(super) fn windows(
+    windows: Option<&[BudgetLimitEntry]>,
+) -> Result<Vec<BudgetWindow>, &'static str> {
+    windows
+        .unwrap_or_default()
+        .iter()
+        .map(|window| {
+            let timestamp = |time: litellm_python_compat::datetime::IsoDateTime| {
+                Timestamp::from_microsecond(time.utc_microseconds()).map_err(|_| "budget_limits")
+            };
+            Ok(BudgetWindow {
+                budget_duration: window.budget_duration.clone(),
+                max_budget: window.max_budget,
+                reset_at: window.reset_at.map(timestamp).transpose()?,
+                window_start: window.window_start.0.map(timestamp).transpose()?,
+            })
+        })
+        .collect()
+}
+
+fn model_table(table: &ModelTableEntry) -> Result<TeamModelAliasTable, &'static str> {
+    let model_aliases = match table.model_aliases.as_ref() {
+        Some(ModelAliases::Text(text)) => {
+            serde_json::from_str(text).map_err(|_| "litellm_model_table")?
+        }
+        Some(ModelAliases::Map(map)) => read_bag(map).ok_or("litellm_model_table")?,
+        None => Default::default(),
+    };
+    Ok(TeamModelAliasTable {
+        id: table.id,
+        model_aliases,
+    })
+}
+
+/// A team as the native app reads it: its record, and the budget row its metadata names as the
+/// default budget of a member whose membership sets none.
+pub(super) struct ReadTeam {
+    pub(super) team: Team<TeamRecord>,
+    pub(super) member_budget_id: Option<String>,
+}
+
+/// The team, or the first field it holds that no record field has a type for yet.
+pub(super) fn team(team: &TeamEntry) -> Result<ReadTeam, &'static str> {
     let TeamEntry {
         team_alias,
         team_id,
@@ -52,9 +109,9 @@ pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
         default_team_member_models,
         spend,
         max_parallel_requests,
-        budget_reset_at,
+        budget_reset_at: _,
         model_id,
-        model_spend: _,
+        model_spend,
         model_max_budget,
         policies,
         allow_team_guardrail_config,
@@ -68,33 +125,28 @@ pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
     } = team;
     let unread = &newer(unread);
     let unread_models = ModelList::read(models) == ModelList::Unread;
-    let held = unread_models.then_some("models").or_else(|| {
-        carried![
-            budget_limits,
-            router_settings,
-            budget_reset_at,
-            model_id,
-            model_max_budget,
-            litellm_model_table,
-            object_permission,
-            object_permission_id,
-            unread,
-        ]
-    });
+    let held = unread_models
+        .then_some("models")
+        .or_else(|| carried![unread]);
     if let Some(field) = held {
         return Err(field);
     }
-    let Some(Metadata {
+    if model_id.is_some() && litellm_model_table.is_none() {
+        return Err("model_id");
+    }
+    let Some(TeamMetadata {
         model_rpm_limit,
         model_tpm_limit,
         priority,
+        team_member_budget_id,
+        policies: policy_metadata,
     }) = metadata
         .as_ref()
-        .map_or(Some(Metadata::default()), Metadata::read)
+        .map_or(Some(TeamMetadata::default()), TeamMetadata::read)
     else {
         return Err("metadata");
     };
-    Ok(Team {
+    let team = Team {
         team_id: team_id.clone(),
         models: Some(models.clone()),
         passthrough: PassthroughGrants::default(),
@@ -104,6 +156,11 @@ pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
             .collect(),
         row: TeamRecord {
             team_id: team_id.clone(),
+            metadata: (policy_metadata != Default::default()).then(|| Box::new(policy_metadata)),
+            object_permission: object_permission::record(
+                object_permission_id.as_deref(),
+                object_permission.as_ref(),
+            )?,
             team_alias: team_alias.clone(),
             models: models.clone(),
             organization_id: organization_id.clone(),
@@ -119,6 +176,16 @@ pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
             },
             soft_budget: *soft_budget,
             budget_duration: budget_duration.clone(),
+            budget_limits: windows(budget_limits.as_deref())?,
+            model_max_budget: column(model_max_budget.as_ref(), "model_max_budget")?,
+            model_spend: column(model_spend.as_ref(), "model_spend")?,
+            model_id: *model_id,
+            litellm_model_table: litellm_model_table.as_ref().map(model_table).transpose()?,
+            router_settings: router_settings
+                .as_ref()
+                .filter(|bag| !bag.is_empty())
+                .map(|bag| read_bag(bag).ok_or("router_settings"))
+                .transpose()?,
             blocked: *blocked,
             access_group_ids: access_group_ids.clone().unwrap_or_default(),
             default_team_member_models: default_team_member_models.clone().unwrap_or_default(),
@@ -129,6 +196,10 @@ pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
             priority,
             ..TeamRecord::default()
         },
+    };
+    Ok(ReadTeam {
+        team,
+        member_budget_id: team_member_budget_id,
     })
 }
 
@@ -139,6 +210,8 @@ pub(super) fn team(team: &TeamEntry) -> Result<Team<TeamRecord>, &'static str> {
 pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
     let TeamRecord {
         team_id: _,
+        object_permission,
+        metadata,
         team_alias: _,
         models: _,
         organization_id,
@@ -154,6 +227,12 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         },
         soft_budget,
         budget_duration,
+        budget_limits,
+        model_max_budget,
+        model_spend: _,
+        model_id,
+        litellm_model_table,
+        router_settings,
         blocked,
         access_group_ids,
         default_team_member_models,
@@ -163,8 +242,15 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         model_tpm_limit,
         priority,
         member_max_budget,
+        member_budget_extras,
     } = team;
+    let litellm_model_table = &litellm_model_table.is_some();
+    let router_settings = &router_settings.is_some();
+    let object_permission = &object_permission.is_some();
+    let metadata = &metadata.is_some();
     carried![
+        object_permission,
+        metadata,
         organization_id,
         tpm_limit,
         rpm_limit,
@@ -173,6 +259,11 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         max_budget,
         soft_budget,
         budget_duration,
+        budget_limits,
+        model_max_budget,
+        model_id,
+        litellm_model_table,
+        router_settings,
         blocked,
         access_group_ids,
         default_team_member_models,
@@ -181,8 +272,9 @@ pub(crate) fn unserved(team: &TeamRecord) -> Option<&'static str> {
         model_rpm_limit,
         model_tpm_limit,
         priority,
-        member_max_budget,
     ]
+    .or_else(|| unserved_budget_extras(member_budget_extras))
+    .or_else(|| carried![member_max_budget])
 }
 
 /// The user's record, or the first field it holds that the native gateway cannot handle yet.
@@ -210,10 +302,10 @@ pub(super) fn user(user: &UserEntry) -> Result<User<UserRecord>, &'static str> {
         tpm_limit,
         rpm_limit,
         budget_duration,
-        budget_reset_at,
+        budget_reset_at: _,
         allowed_cache_controls,
         policies,
-        model_spend: _,
+        model_spend,
         model_max_budget,
         created_at: _,
         updated_at: _,
@@ -223,15 +315,7 @@ pub(super) fn user(user: &UserEntry) -> Result<User<UserRecord>, &'static str> {
     } = user;
     let unread = &newer(unread);
     let deactivated = scim_deactivated(metadata.as_ref()).ok_or("metadata")?;
-    let held = carried![
-        object_permission_id,
-        budget_limits,
-        budget_reset_at,
-        model_max_budget,
-        organization_memberships,
-        object_permission,
-        unread,
-    ];
+    let held = carried![organization_memberships, unread];
     if let Some(field) = held {
         return Err(field);
     }
@@ -243,6 +327,10 @@ pub(super) fn user(user: &UserEntry) -> Result<User<UserRecord>, &'static str> {
         deactivated,
         row: UserRecord {
             user_id: user_id.clone(),
+            object_permission: object_permission::record(
+                object_permission_id.as_deref(),
+                object_permission.as_ref(),
+            )?,
             user_alias: user_alias.clone(),
             user_email: user_email.clone(),
             user_role: user_role.clone(),
@@ -262,6 +350,9 @@ pub(super) fn user(user: &UserEntry) -> Result<User<UserRecord>, &'static str> {
             rollover_max_budget: rollover_max_budget.0,
             rollover_credit: rollover_credit.0,
             budget_duration: budget_duration.clone(),
+            budget_limits: windows(budget_limits.as_deref())?,
+            model_max_budget: column(model_max_budget.as_ref(), "model_max_budget")?,
+            model_spend: column(model_spend.as_ref(), "model_spend")?,
             allowed_cache_controls: allowed_cache_controls.clone(),
             policies: policies.clone(),
         },
@@ -287,6 +378,7 @@ fn scim_deactivated(metadata: Option<&Bag>) -> Option<bool> {
 pub(crate) fn unserved_user(user: &UserRecord) -> Option<&'static str> {
     let UserRecord {
         user_id: _,
+        object_permission,
         user_alias: _,
         user_email: _,
         user_role: _,
@@ -306,10 +398,15 @@ pub(crate) fn unserved_user(user: &UserRecord) -> Option<&'static str> {
         rollover_max_budget,
         rollover_credit,
         budget_duration,
+        budget_limits,
+        model_max_budget,
+        model_spend: _,
         allowed_cache_controls,
         policies,
     } = user;
+    let object_permission = &object_permission.is_some();
     carried![
+        object_permission,
         team_id,
         organization_id,
         models,
@@ -320,6 +417,8 @@ pub(crate) fn unserved_user(user: &UserRecord) -> Option<&'static str> {
         rollover_max_budget,
         rollover_credit,
         budget_duration,
+        budget_limits,
+        model_max_budget,
         allowed_cache_controls,
         policies,
     ]
@@ -362,13 +461,8 @@ pub(super) fn membership(
         tpd_limit,
         max_parallel_requests,
         budget_duration,
-    } = match litellm_budget_table {
-        Some(row) => budget_row(&row.budget, spend)?,
-        None => BudgetRow {
-            budget: Budget { max: None, spend },
-            ..BudgetRow::default()
-        },
-    };
+        budget_extras,
+    } = budget_row_or_spend(litellm_budget_table.as_ref().map(|row| &row.budget), spend)?;
     Ok(MembershipRecord {
         user_id: user_id.clone(),
         team_id: team_id.clone(),
@@ -379,6 +473,7 @@ pub(super) fn membership(
         tpd_limit,
         max_parallel_requests,
         budget_duration,
+        budget_extras,
     })
 }
 
@@ -401,17 +496,20 @@ pub(crate) fn unserved_membership(membership: &MembershipRecord) -> Option<&'sta
         tpd_limit,
         max_parallel_requests,
         budget_duration,
+        budget_extras,
     } = membership;
-    carried![
-        rollover_credit,
-        max_budget,
-        soft_budget,
-        rpm_limit,
-        tpm_limit,
-        tpd_limit,
-        max_parallel_requests,
-        budget_duration
-    ]
+    unserved_budget_extras(budget_extras).or_else(|| {
+        carried![
+            rollover_credit,
+            max_budget,
+            soft_budget,
+            rpm_limit,
+            tpm_limit,
+            tpd_limit,
+            max_parallel_requests,
+            budget_duration
+        ]
+    })
 }
 
 /// The organization's record, or the first field it or its budget row holds that no record field
@@ -424,7 +522,7 @@ pub(super) fn org(org: &OrganizationEntry) -> Result<Org<OrgRecord>, &'static st
         spend,
         metadata,
         models,
-        model_spend: _,
+        model_spend,
         created_by: _,
         updated_by: _,
         users: _,
@@ -434,7 +532,7 @@ pub(super) fn org(org: &OrganizationEntry) -> Result<Org<OrgRecord>, &'static st
         unread,
     } = org;
     let unread = &newer(unread);
-    if let Some(field) = carried![object_permission, object_permission_id, metadata, unread] {
+    if let Some(field) = carried![unread] {
         return Err(field);
     }
     let organization_id = organization_id.as_ref().ok_or("organization_id")?;
@@ -448,11 +546,17 @@ pub(super) fn org(org: &OrganizationEntry) -> Result<Org<OrgRecord>, &'static st
         tpd_limit,
         max_parallel_requests,
         budget_duration,
+        budget_extras,
     } = budget_row(limits, *spend)?;
     Ok(Org {
         organization_id: organization_id.clone(),
         row: OrgRecord {
             organization_id: organization_id.clone(),
+            metadata: metadata::policies(metadata.as_ref())?,
+            object_permission: object_permission::record(
+                object_permission_id.as_deref(),
+                object_permission.as_ref(),
+            )?,
             organization_alias: organization_alias.clone(),
             models: models.clone(),
             limits,
@@ -461,19 +565,36 @@ pub(super) fn org(org: &OrganizationEntry) -> Result<Org<OrgRecord>, &'static st
             tpd_limit,
             max_parallel_requests,
             budget_duration,
+            model_spend: column(model_spend.as_ref(), "model_spend")?,
+            budget_extras,
         },
     })
 }
 
 /// A budget row's plain values, which the record of whatever the row budgets copies.
 #[derive(Default)]
-struct BudgetRow {
-    limits: MinuteLimits,
-    budget: Budget,
-    soft_budget: Option<f64>,
-    tpd_limit: Option<i64>,
-    max_parallel_requests: Option<i64>,
-    budget_duration: Option<String>,
+pub(super) struct BudgetRow {
+    pub(super) limits: MinuteLimits,
+    pub(super) budget: Budget,
+    pub(super) soft_budget: Option<f64>,
+    pub(super) tpd_limit: Option<i64>,
+    pub(super) max_parallel_requests: Option<i64>,
+    pub(super) budget_duration: Option<String>,
+    pub(super) budget_extras: BudgetExtras,
+}
+
+/// [`budget_row`] when the row has a budget row, and otherwise only `spend`, with no budget.
+pub(super) fn budget_row_or_spend(
+    entry: Option<&BudgetEntry>,
+    spend: f64,
+) -> Result<BudgetRow, &'static str> {
+    match entry {
+        Some(entry) => budget_row(entry, spend),
+        None => Ok(BudgetRow {
+            budget: Budget { max: None, spend },
+            ..BudgetRow::default()
+        }),
+    }
 }
 
 /// The budget row's plain values with `spend` spent against it, or the first field it holds that
@@ -497,24 +618,8 @@ fn budget_row(entry: &BudgetEntry, spend: f64) -> Result<BudgetRow, &'static str
         temp_budget_expiry,
         unread,
     } = entry;
-    let rollover_max_budget = &rollover_max_budget.0;
-    let model_tpm_limit = &model_tpm_limit
-        .as_ref()
-        .is_some_and(|map| !map.0.is_empty());
-    let model_rpm_limit = &model_rpm_limit
-        .as_ref()
-        .is_some_and(|map| !map.0.is_empty());
     let unread = &newer(unread);
-    if let Some(field) = carried![
-        rollover_max_budget,
-        model_max_budget,
-        model_tpm_limit,
-        model_rpm_limit,
-        allowed_models,
-        temp_budget_increase,
-        temp_budget_expiry,
-        unread,
-    ] {
+    if let Some(field) = carried![unread] {
         return Err(field);
     }
     Ok(BudgetRow {
@@ -530,13 +635,58 @@ fn budget_row(entry: &BudgetEntry, spend: f64) -> Result<BudgetRow, &'static str
         tpd_limit: *tpd_limit,
         max_parallel_requests: *max_parallel_requests,
         budget_duration: budget_duration.clone(),
+        budget_extras: BudgetExtras {
+            model_max_budget: column(model_max_budget.as_ref(), "model_max_budget")?,
+            model_rpm_limit: model_rpm_limit
+                .as_ref()
+                .map(|map| map.0.iter().cloned().collect())
+                .unwrap_or_default(),
+            model_tpm_limit: model_tpm_limit
+                .as_ref()
+                .map(|map| map.0.iter().cloned().collect())
+                .unwrap_or_default(),
+            allowed_models: allowed_models.clone().unwrap_or_default(),
+            rollover_max_budget: rollover_max_budget.0,
+            temp_budget_increase: *temp_budget_increase,
+            temp_budget_expiry: temp_budget_expiry
+                .map(|time| {
+                    Timestamp::from_microsecond(time.utc_microseconds())
+                        .map_err(|_| "temp_budget_expiry")
+                })
+                .transpose()?,
+        },
     })
+}
+
+pub(super) fn unserved_budget_extras(extras: &BudgetExtras) -> Option<&'static str> {
+    let BudgetExtras {
+        model_max_budget,
+        model_rpm_limit,
+        model_tpm_limit,
+        allowed_models,
+        rollover_max_budget,
+        temp_budget_increase,
+        temp_budget_expiry,
+    } = extras;
+    let temp_budget_expiry = &temp_budget_expiry.is_some();
+    carried![
+        rollover_max_budget,
+        model_max_budget,
+        model_tpm_limit,
+        model_rpm_limit,
+        allowed_models,
+        temp_budget_increase,
+        temp_budget_expiry,
+    ]
 }
 
 /// The first column of `org` that holds something nothing in the native app reads yet, which
 /// sends its caller to Python, taken apart by name as [`unserved`] takes a team.
 pub(crate) fn unserved_org(org: &OrgRecord) -> Option<&'static str> {
     let OrgRecord {
+        object_permission,
+        metadata,
+        model_spend: _,
         organization_id: _,
         organization_alias: _,
         models,
@@ -552,17 +702,24 @@ pub(crate) fn unserved_org(org: &OrgRecord) -> Option<&'static str> {
         tpd_limit,
         max_parallel_requests,
         budget_duration,
+        budget_extras,
     } = org;
-    carried![
-        models,
-        max_budget,
-        soft_budget,
-        rpm_limit,
-        tpm_limit,
-        tpd_limit,
-        max_parallel_requests,
-        budget_duration
-    ]
+    let object_permission = &object_permission.is_some();
+    let metadata = &metadata.is_some();
+    carried![object_permission, metadata]
+        .or_else(|| unserved_budget_extras(budget_extras))
+        .or_else(|| {
+            carried![
+                models,
+                max_budget,
+                soft_budget,
+                rpm_limit,
+                tpm_limit,
+                tpd_limit,
+                max_parallel_requests,
+                budget_duration
+            ]
+        })
 }
 
 /// The project's record, or the first field it holds that no record field has a type for yet.
@@ -572,11 +729,11 @@ pub(super) fn project(project: &ProjectEntry) -> Result<ProjectRecord, &'static 
         project_alias,
         description: _,
         team_id,
-        budget_id,
+        budget_id: _,
         metadata,
         models,
-        spend: _,
-        model_spend: _,
+        spend,
+        model_spend,
         model_rpm_limit,
         model_tpm_limit,
         blocked,
@@ -591,26 +748,40 @@ pub(super) fn project(project: &ProjectEntry) -> Result<ProjectRecord, &'static 
         unread,
     } = project;
     let unread = &newer(unread);
-    let held = carried![
-        budget_id,
-        metadata,
-        model_rpm_limit,
-        model_tpm_limit,
-        object_permission_id,
-        litellm_budget_table,
-        object_permission,
-        unread,
-    ];
+    let held = carried![unread];
     if let Some(field) = held {
         return Err(field);
     }
+    let BudgetRow {
+        limits,
+        budget,
+        soft_budget,
+        tpd_limit,
+        max_parallel_requests,
+        budget_duration,
+        budget_extras,
+    } = budget_row_or_spend(litellm_budget_table.as_ref(), *spend)?;
     Ok(ProjectRecord {
         project_id: project_id.clone(),
+        metadata: metadata::policies(metadata.as_ref())?,
+        object_permission: object_permission::record(
+            object_permission_id.as_deref(),
+            object_permission.as_ref(),
+        )?,
         project_alias: project_alias.clone(),
         team_id: team_id.clone(),
         models: models.clone(),
         blocked: *blocked,
-        ..ProjectRecord::default()
+        limits,
+        budget,
+        soft_budget,
+        tpd_limit,
+        max_parallel_requests,
+        budget_duration,
+        budget_extras,
+        model_spend: column(model_spend.as_ref(), "model_spend")?,
+        model_rpm_limit: column(model_rpm_limit.as_ref(), "model_rpm_limit")?,
+        model_tpm_limit: column(model_tpm_limit.as_ref(), "model_tpm_limit")?,
     })
 }
 
@@ -618,17 +789,50 @@ pub(super) fn project(project: &ProjectEntry) -> Result<ProjectRecord, &'static 
 /// sends its caller to Python, taken apart by name as [`unserved`] takes a team.
 pub(crate) fn unserved_project(project: &ProjectRecord) -> Option<&'static str> {
     let ProjectRecord {
+        object_permission,
+        metadata,
+        model_spend: _,
+        model_rpm_limit,
+        model_tpm_limit,
         project_id: _,
         project_alias: _,
         team_id,
         models,
         blocked,
+        limits: MinuteLimits {
+            rpm: rpm_limit,
+            tpm: tpm_limit,
+        },
         budget: Budget {
             max: max_budget,
             spend: _,
         },
+        soft_budget,
+        tpd_limit,
+        max_parallel_requests,
+        budget_duration,
+        budget_extras,
     } = project;
-    carried![team_id, models, blocked, max_budget]
+    let object_permission = &object_permission.is_some();
+    let metadata = &metadata.is_some();
+    carried![object_permission, metadata]
+        .or_else(|| unserved_budget_extras(budget_extras))
+        .or_else(|| {
+            carried![
+                team_id,
+                models,
+                blocked,
+                max_budget,
+                soft_budget,
+                rpm_limit,
+                tpm_limit,
+                tpd_limit,
+                max_parallel_requests,
+                budget_duration,
+                model_rpm_limit,
+                model_tpm_limit,
+            ]
+        })
 }
 
 #[cfg(test)]
@@ -650,16 +854,40 @@ mod tests {
     }
 
     #[rstest]
+    #[case::missing("{}", None)]
+    #[case::null(
+        r#"{"model_max_budget":null,"allowed_models":null,"temp_budget_expiry":null}"#,
+        None
+    )]
+    #[case::model_budget(r#"{"model_max_budget":{"claude":2}}"#, Some("model_max_budget"))]
+    #[case::rpm(r#"{"model_rpm_limit":{"claude":2}}"#, Some("model_rpm_limit"))]
+    #[case::tpm(r#"{"model_tpm_limit":{"claude":100}}"#, Some("model_tpm_limit"))]
+    #[case::models(r#"{"allowed_models":["claude"]}"#, Some("allowed_models"))]
+    #[case::rollover(r#"{"rollover_max_budget":0}"#, Some("rollover_max_budget"))]
+    #[case::increase(r#"{"temp_budget_increase":2}"#, Some("temp_budget_increase"))]
+    #[case::expiry(
+        r#"{"temp_budget_expiry":"2100-01-01T00:00:00"}"#,
+        Some("temp_budget_expiry")
+    )]
+    fn budget_extras_are_read_and_named_unserved(#[case] input: &str, #[case] field: Option<&str>) {
+        let entry = BudgetEntry::from_value(&json::loads(input).unwrap()).unwrap();
+        let row = budget_row(&entry, 3.0).unwrap();
+        assert_eq!(unserved_budget_extras(&row.budget_extras), field);
+        assert_eq!(row.budget.spend, 3.0);
+    }
+
+    #[rstest]
+    fn a_malformed_model_budget_declines_the_budget_row() {
+        let input = json::loads(r#"{"model_max_budget":{"claude":[]}}"#).unwrap();
+        let entry = BudgetEntry::from_value(&input).unwrap();
+        assert_eq!(budget_row(&entry, 0.0).err(), Some("model_max_budget"));
+    }
+
+    #[rstest]
     #[case::object_permission_id(
         r#"{"object_permission_id": "permission"}"#,
         "object_permission_id"
     )]
-    #[case::budget_limits(
-        r#"{"budget_limits": [{"budget_duration": "30d", "max_budget": 5.0}]}"#,
-        "budget_limits"
-    )]
-    #[case::budget_reset_at(r#"{"budget_reset_at": "2100-01-01T00:00:00"}"#, "budget_reset_at")]
-    #[case::model_max_budget(r#"{"model_max_budget": {"claude": 1.0}}"#, "model_max_budget")]
     #[case::organization_memberships(
         r#"{"organization_memberships": [{
             "user_id": "user-1",
@@ -680,7 +908,117 @@ mod tests {
     ) {
         let entry = held.replacen('{', r#"{"user_id": "user-1", "#, 1);
 
-        assert_eq!(user(&cached_user(&entry)).err(), Some(field));
+        let result = user(&cached_user(&entry));
+        let unserved = result
+            .as_ref()
+            .map_or_else(|field| Some(*field), |user| unserved_user(&user.row));
+        assert_eq!(unserved, Some(field));
+    }
+
+    #[rstest]
+    #[case::budget_limits(
+        r#"{"budget_limits": [{"budget_duration": "30d", "max_budget": 5.0}]}"#,
+        "budget_limits"
+    )]
+    #[case::model_max_budget(r#"{"model_max_budget": {"claude": 1.0}}"#, "model_max_budget")]
+    fn a_users_budget_policies_are_copied_and_named_unserved(
+        #[case] held: &str,
+        #[case] field: &str,
+    ) {
+        let entry = held.replacen(
+            '{',
+            r#"{"user_id":"user-1","model_spend":{"claude":0.5},"#,
+            1,
+        );
+        let owner = user(&cached_user(&entry)).unwrap().row;
+        assert_eq!(owner.model_spend["claude"], 0.5);
+        assert_eq!(unserved_user(&owner), Some(field));
+    }
+
+    #[rstest]
+    #[case::limits(r#"{"model_rpm_limit":{"claude":2},"model_tpm_limit":{"claude":100}}"#, Ok((Some(2), Some(100))))]
+    #[case::absent(r#"{"model_rpm_limit":null}"#, Ok((None, None)))]
+    #[case::malformed(r#"{"model_tpm_limit":{"claude":[]}}"#, Err("model_tpm_limit"))]
+    fn a_projects_direct_limits_are_read_from_its_own_row(
+        #[case] held: &str,
+        #[case] expected: Result<(Option<i64>, Option<i64>), &str>,
+    ) {
+        let entry = held.replacen('{', r#"{"project_id":"project","#, 1);
+        let row = ProjectEntry::from_value(&json::loads(&entry).unwrap()).unwrap();
+        assert_eq!(
+            project(&row).map(|project| (
+                project.model_rpm_limit.get("claude").copied(),
+                project.model_tpm_limit.get("claude").copied(),
+            )),
+            expected
+        );
+    }
+
+    #[rstest]
+    fn a_teams_window_spend_and_routing_configuration_are_read() {
+        let team = team(&cached(r#"{
+            "team_id":"squad",
+            "budget_limits":[{"budget_duration":"30d","max_budget":5,"window_start":"2026-11-01T00:00:00Z"}],
+            "model_max_budget":{"claude":{"budget_limit":2,"time_period":"7d"}},
+            "model_spend":{"claude":1.5},
+            "model_id":7,
+            "litellm_model_table":{"id":7,"created_by":"admin","updated_by":"admin",
+                                  "model_aliases":"{\"friendly\":\"claude\"}"},
+            "router_settings":{"timeout":4,"future_setting":true}
+        }"#)).unwrap().team.row;
+        assert_eq!(
+            team.budget_limits,
+            vec![BudgetWindow {
+                budget_duration: "30d".to_owned(),
+                max_budget: 5.0,
+                reset_at: None,
+                window_start: Some("2026-11-01T00:00:00Z".parse().unwrap()),
+            }]
+        );
+        let expected_budget = litellm_gateway_auth_core::record::ModelBudgetConfig {
+            max_budget: Some(2.0),
+            budget_duration: Some("7d".to_owned()),
+            rpm_limit: None,
+            tpm_limit: None,
+        };
+        assert_eq!(
+            team.model_max_budget["claude"],
+            litellm_gateway_auth_core::record::ModelBudget::Config(expected_budget),
+        );
+        assert_eq!(team.model_spend["claude"], 1.5);
+        assert_eq!(team.model_id, Some(7));
+        let aliases = team.litellm_model_table.unwrap();
+        assert_eq!(aliases.id, Some(7));
+        assert_eq!(aliases.model_aliases["friendly"], "claude");
+        let router = team.router_settings.unwrap();
+        assert_eq!(router.timeout, Some(4.0));
+        assert_eq!(router.additional_fields["future_setting"], true);
+    }
+
+    #[rstest]
+    #[case::missing_target(r#"{"model_id":7}"#, Some("model_id"))]
+    #[case::bad_budget(r#"{"model_max_budget":{"claude":[1]}}"#, Some("model_max_budget"))]
+    #[case::bad_router(r#"{"router_settings":{"timeout":[]}}"#, Some("router_settings"))]
+    #[case::bad_aliases(r#"{"litellm_model_table":{"created_by":"admin","updated_by":"admin","model_aliases":{"a":0}}}"#, Some("litellm_model_table"))]
+    #[case::null(
+        r#"{"budget_limits":null,"model_spend":null,"model_max_budget":null,
+        "model_id":null,"litellm_model_table":null,"router_settings":null}"#,
+        None
+    )]
+    fn a_team_with_missing_or_malformed_policy_data(
+        #[case] fields: &str,
+        #[case] decline: Option<&str>,
+    ) {
+        let entry = fields.replacen('{', r#"{"team_id":"squad","#, 1);
+        let result = team(&cached(&entry));
+        assert_eq!(
+            result
+                .as_ref()
+                .err()
+                .copied()
+                .or_else(|| result.ok().and_then(|read| unserved(&read.team.row))),
+            decline,
+        );
     }
 
     #[rstest]
@@ -705,7 +1043,9 @@ mod tests {
 
     #[test]
     fn a_teams_organization_is_copied_and_named_unserved() {
-        let team = team(&cached(r#"{"team_id": "squad", "organization_id": "org"}"#)).unwrap();
+        let team = team(&cached(r#"{"team_id": "squad", "organization_id": "org"}"#))
+            .unwrap()
+            .team;
 
         assert_eq!(
             (team.row.organization_id.as_deref(), unserved(&team.row)),
@@ -718,7 +1058,8 @@ mod tests {
         let team = team(&cached(
             r#"{"team_id": "squad", "metadata": {"model_rpm_limit": {"claude": 2}, "model_tpm_limit": {"claude": 100}, "priority": "prod"}}"#,
         ))
-        .unwrap();
+        .unwrap()
+        .team;
 
         assert_eq!(
             (
@@ -732,6 +1073,118 @@ mod tests {
                 Some("prod".to_owned())
             )
         );
+    }
+
+    #[rstest]
+    fn a_teams_guardrails_and_callbacks_are_projected_without_serving_them() {
+        let team = team(&cached(
+            r#"{"team_id":"squad","metadata":{"guardrails":["pii"],"logging":[{"callback_name":"langfuse","callback_type":"failure","callback_vars":{"langfuse_secret_key":"test-only"}}]}}"#,
+        ))
+        .unwrap()
+        .team;
+        let metadata = team.row.metadata.as_ref().unwrap();
+        assert_eq!(
+            metadata.guardrails.as_deref(),
+            Some(["pii".to_owned()].as_slice())
+        );
+        let [callback] = metadata.logging.as_deref().unwrap() else {
+            panic!("expected one logging callback");
+        };
+        assert_eq!(callback.callback_name, "langfuse");
+        assert_eq!(
+            callback.callback_type,
+            Some(litellm_gateway_auth_core::record::LoggingCallbackType::Failure)
+        );
+        assert_eq!(
+            callback.callback_vars["langfuse_secret_key"].expose(),
+            "test-only"
+        );
+        let debug = format!("{metadata:?}");
+        assert!(!debug.contains("test-only"));
+        assert!(debug.contains("[REDACTED]"));
+        assert_eq!(unserved(&team.row), Some("metadata"));
+    }
+
+    #[rstest]
+    fn legacy_team_callbacks_preserve_redacted_settings_without_serving_them() {
+        let team = team(&cached(
+            r#"{"team_id":"squad","metadata":{"callback_settings":{"success_callback":["langfuse"],"callback_vars":{"langfuse_secret_key":"legacy-test-only"}}}}"#,
+        ))
+        .unwrap()
+        .team;
+        let metadata = team.row.metadata.as_ref().unwrap();
+        let settings = metadata.callback_settings.as_ref().unwrap();
+        assert_eq!(
+            settings.success_callback.as_deref(),
+            Some(["langfuse".to_owned()].as_slice())
+        );
+        let vars = settings.callback_vars.as_ref().unwrap();
+        assert_eq!(vars["langfuse_secret_key"].expose(), "legacy-test-only");
+        let debug = format!("{metadata:?}");
+        assert!(!debug.contains("legacy-test-only"));
+        assert!(debug.contains("[REDACTED]"));
+        assert_eq!(unserved(&team.row), Some("metadata"));
+    }
+
+    #[rstest]
+    #[case::null("null", Ok(None))]
+    #[case::empty("{}", Ok(None))]
+    #[case::populated(r#"{"model_rpm_limit":{"claude":5}}"#, Ok(Some(5)))]
+    #[case::malformed(r#"{"model_rpm_limit":{"claude":[]}}"#, Err("metadata"))]
+    #[case::tags(r#"{"tags":["internal"]}"#, Err("metadata"))]
+    fn organization_metadata_carries_only_known_policy(
+        #[case] metadata: &str,
+        #[case] expected: Result<Option<i64>, &str>,
+    ) {
+        let input = format!(
+            r#"{{"organization_id":"org","budget_id":"budget","created_by":"test","updated_by":"test","litellm_budget_table":{{"budget_id":"budget"}},"metadata":{metadata}}}"#
+        );
+        let entry = OrganizationEntry::from_value(&json::loads(&input).unwrap()).unwrap();
+        let row = org(&entry).map(|org| org.row);
+        let read = row.as_ref().map_err(|field| *field).map(|org| {
+            org.metadata
+                .as_ref()
+                .and_then(|metadata| metadata.model_rpm_limit.as_ref())
+                .and_then(|limit| limit.get("claude").copied())
+        });
+        assert_eq!(read, expected);
+        if let Ok(row) = &row {
+            assert_eq!(unserved_org(row), expected.unwrap().map(|_| "metadata"));
+        }
+    }
+
+    #[rstest]
+    fn project_metadata_keeps_provider_fallback_order_and_is_unserved() {
+        let value = json::loads(r#"{"project_id":"project","metadata":{"model_itpm_limit":{"claude":4},"model_config":{"defaultconfig":{"z-provider":{"litellm_credentials":"first"},"a-provider":{"litellm_credentials":"second"}}}}}"#).unwrap();
+        let entry = ProjectEntry::from_value(&value).unwrap();
+        let project = project(&entry).unwrap();
+        let metadata = project.metadata.as_ref().unwrap();
+        assert_eq!(metadata.model_itpm_limit.as_ref().unwrap()["claude"], 4);
+        let credentials = &metadata.model_config.as_ref().unwrap()["defaultconfig"].0;
+        let order = credentials
+            .iter()
+            .map(|(provider, credential)| {
+                (
+                    provider.as_str(),
+                    credential
+                        .litellm_credentials
+                        .as_ref()
+                        .map(|name| name.expose()),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            order,
+            [
+                ("z-provider", Some("first")),
+                ("a-provider", Some("second"))
+            ]
+        );
+        assert_eq!(unserved_project(&project), Some("metadata"));
+        let debug = format!("{metadata:?}");
+        assert!(!debug.contains("first"));
+        assert!(!debug.contains("second"));
+        assert!(debug.contains("[REDACTED]"));
     }
 
     #[rstest]

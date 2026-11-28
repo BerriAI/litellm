@@ -268,6 +268,7 @@ mod tests {
             },
             affiliation: Affiliation::nobody(),
             end_user: EndUserRecord::default(),
+            customer_hierarchy: None,
         });
         let body: Map<String, Value> = Map::from_iter([("model".to_owned(), json!("held-model"))]);
 

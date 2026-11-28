@@ -1,7 +1,8 @@
 # A virtual key in a project has its project read natively. Its key still goes to Python: over
 # the first column the project holds that nothing native reads yet, and otherwise over `project`,
-# since the native spend log charges no project yet. A project that holds metadata or a budget is
-# not native.
+# since the native spend log charges no project yet. A project's budget row is read with it, so a
+# project with a budget goes to Python over that column. A project that holds metadata, or a budget
+# row with per-model budgets, is not native.
 config:
   model_list:
     - model_name: claude
@@ -20,15 +21,53 @@ projects:
   listed: {models: [claude]}
   blocked: {blocked: true}
   tagged: {metadata: {tags: [a]}}
+  limited_by_metadata: {metadata: {model_itpm_limit: {claude: 4}}}
+  rpm_by_model: {model_rpm_limit: {claude: 2}}
+  tpm_by_model: {model_tpm_limit: {claude: 100}}
+
+rows:
+  - LiteLLM_BudgetTable: {budget_id: empty, created_by: test, updated_by: test}
+  - LiteLLM_BudgetTable: {budget_id: capped, max_budget: 10, created_by: test, updated_by: test}
+  - LiteLLM_BudgetTable: {budget_id: structured, model_max_budget: {claude: 10}, created_by: test, updated_by: test}
+  - LiteLLM_ProjectTable: {project_id: unbudgeted, budget_id: empty, spend: 3, created_by: test, updated_by: test}
+  - LiteLLM_ProjectTable: {project_id: capped, budget_id: capped, created_by: test, updated_by: test}
+  - LiteLLM_ProjectTable: {project_id: structured, budget_id: structured, created_by: test, updated_by: test}
 
 keys:
+  sk-unbudgeted: {project_id: unbudgeted}
+  sk-capped: {project_id: capped}
+  sk-structured: {project_id: structured}
   sk-plain: {project_id: plain}
   sk-owned: {project_id: owned}
   sk-listed: {project_id: listed}
   sk-blocked: {project_id: blocked}
   sk-tagged: {project_id: tagged}
+  sk-limited-by-metadata: {project_id: limited_by_metadata}
+  sk-rpm-by-model: {project_id: rpm_by_model}
+  sk-tpm-by-model: {project_id: tpm_by_model}
 
 requests:
+  - name: a project with a typed metadata limit still goes to Python
+    headers: {authorization: Bearer sk-limited-by-metadata}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: metadata
+
+  - name: a key in a project with a direct model RPM limit
+    headers: {authorization: Bearer sk-rpm-by-model}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: model_rpm_limit
+
+  - name: a key in a project with a direct model TPM limit
+    headers: {authorization: Bearer sk-tpm-by-model}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: model_tpm_limit
+
   - name: a key in a project that holds nothing else
     headers: {authorization: Bearer sk-plain}
     body: {model: claude, max_tokens: 16, messages: []}
@@ -63,3 +102,24 @@ requests:
     expect: python
     reason: credential
     over: not_native
+
+  - name: a key in a project whose budget row sets nothing
+    headers: {authorization: Bearer sk-unbudgeted}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: project
+
+  - name: a key in a project with a budget
+    headers: {authorization: Bearer sk-capped}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: max_budget
+
+  - name: a key in a project whose budget row holds per-model budgets
+    headers: {authorization: Bearer sk-structured}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: model_max_budget

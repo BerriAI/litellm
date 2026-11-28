@@ -42,7 +42,8 @@ FULL_ROW: Final = (
     r'"object_permission":{"object_permission_id":"permission","mcp_servers":["server"],'
     r'"mcp_access_groups":["group"],"mcp_tool_permissions":{"server": ["tool"]},"vector_stores":["store"],'
     r'"agents":["agent"],"agent_access_groups":["agents"],"models":["claude"],"blocked_tools":["shell"],'
-    r'"mcp_toolsets":["toolset"],"search_tools":["search"],"mcp_tool_search_enabled":true,"skills":["skill"]},'
+    r'"mcp_toolsets":["toolset"],"search_tools":["search"],"mcp_tool_search_enabled":true,"skills":["skill"],'
+    r'"apps":["app"]},'
     r'"blocked":true}'
 )
 FULL_ENTRY: Final = (
@@ -57,7 +58,7 @@ FULL_ENTRY: Final = (
     r' "mcp_servers": ["server"], "mcp_access_groups": ["group"], "mcp_tool_permissions": {"server": ["tool"]},'
     r' "vector_stores": ["store"], "agents": ["agent"], "agent_access_groups": ["agents"], "models": ["claude"],'
     r' "mcp_toolsets": ["toolset"], "blocked_tools": ["shell"], "search_tools": ["search"],'
-    r' "mcp_tool_search_enabled": true, "skills": ["skill"], "apps": null}}'
+    r' "mcp_tool_search_enabled": true, "skills": ["skill"], "apps": ["app"]}}'
 )
 BARE_PERMISSION_ROW: Final = (
     r'{"user_id":"bare_permission","alias":null,"spend":0.0,"allowed_model_region":null,'

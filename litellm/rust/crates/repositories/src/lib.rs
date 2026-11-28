@@ -19,6 +19,7 @@ mod audit_log;
 mod budget;
 mod config;
 mod credential;
+mod customer_hierarchy;
 mod database;
 mod end_user;
 mod gateway_request;
@@ -49,6 +50,9 @@ pub use audit_log::{AuditLogRepository, NewAuditLog};
 pub use budget::{Budget, BudgetRepository};
 pub use config::{ConfigParam, ConfigRepository};
 pub use credential::{Credential, CredentialRepository};
+pub use customer_hierarchy::{
+    CustomerHierarchyRepository, CustomerMemberRow, CustomerOrgRow, CustomerTeamRow,
+};
 pub use database::{Database, Side};
 pub use end_user::{EndUserRecord, EndUserRepository};
 pub use gateway_request::{GatewayRequestCount, GatewayRequestRepository};

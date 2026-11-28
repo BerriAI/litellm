@@ -12,8 +12,9 @@ use parking_lot::Mutex;
 pub use self::keys::AuthObject;
 pub use self::local::TeamRoster;
 pub use self::types::{
-    Bag, BudgetEntry, BudgetFullEntry, BudgetLimitEntry, Dict, EndUserEntry, ExcludedIfNone, Ints,
-    KeyEntry, Lists, MemberEntry, MemberRole, ModelAliases, ModelRegion, ModelTableEntry,
+    Bag, BudgetEntry, BudgetFullEntry, BudgetLimitEntry, CustomerCapPolicy, CustomerHierarchyEntry,
+    CustomerScopeEntry, CustomerScopeKey, Dict, EndUserEntry, ExcludedIfNone, Ints, KeyEntry,
+    Lists, MemberEntry, MemberRole, ModelAliases, ModelRegion, ModelTableEntry,
     ObjectPermissionEntry, OrganizationEntry, OrganizationMembershipEntry, ProjectEntry,
     RestrictedEndUsers, Settings, TeamEntry, TeamMembershipEntry, TeamMembershipReservation,
     UserEntry,

@@ -1314,6 +1314,10 @@ class RustDenial:
 @final
 class RustAuthOutcome:
     @property
+    def key_organization(self) -> LiteLLM_OrganizationTable | None: ...
+    @property
+    def key_membership(self) -> LiteLLM_TeamMembership | None: ...
+    @property
     def denied(self) -> bool: ...
     @property
     def identity(self) -> _AuthenticatedIdentity | None: ...
@@ -1622,12 +1626,18 @@ class RustAuthStep:
 
     @final
     class LoadTeamMembership(RustAuthStep):
-        __match_args__: tuple[Literal["user_id"], Literal["team_id"]] = ("user_id", "team_id")
-        def __new__(cls, user_id: str, team_id: str) -> RustAuthStep.LoadTeamMembership: ...
+        __match_args__: tuple[Literal["user_id"], Literal["team_id"], Literal["for_key"]] = (
+            "user_id",
+            "team_id",
+            "for_key",
+        )
+        def __new__(cls, user_id: str, team_id: str, for_key: bool) -> RustAuthStep.LoadTeamMembership: ...
         @property
         def user_id(self) -> str: ...
         @property
         def team_id(self) -> str: ...
+        @property
+        def for_key(self) -> bool: ...
 
     @final
     class TeamModelAccess(RustAuthStep):
@@ -1734,10 +1744,12 @@ class RustAuthStep:
 
     @final
     class Org(RustAuthStep):
-        __match_args__: tuple[Literal["org_id"]] = ("org_id",)
-        def __new__(cls, org_id: str) -> RustAuthStep.Org: ...
+        __match_args__: tuple[Literal["org_id"], Literal["for_key"]] = ("org_id", "for_key")
+        def __new__(cls, org_id: str, for_key: bool) -> RustAuthStep.Org: ...
         @property
         def org_id(self) -> str: ...
+        @property
+        def for_key(self) -> bool: ...
 
     @final
     class OrgByAlias(RustAuthStep):
@@ -1942,6 +1954,12 @@ class RustAuthStep:
 
 @final
 class RustAuth:
+    @staticmethod
+    def key_organization_id(key_org_id: str | None, team_org_id: str | None) -> str | None: ...
+    @staticmethod
+    def read_key_organization(org_id: str) -> RustAuth: ...
+    @staticmethod
+    def read_key_membership(user_id: str, team_id: str) -> RustAuth: ...
     @staticmethod
     def plan(request: _AuthRequest, settings: RustAuthSettings) -> RustPlan | RustDenial: ...
     @staticmethod

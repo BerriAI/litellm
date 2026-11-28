@@ -18,6 +18,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.models.team import LiteLLM_TeamTableCachedObj, Member
+from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
@@ -153,6 +154,61 @@ async def test_without_an_end_user_no_limits_are_stamped() -> None:
     end_user: Final = await _host().end_user(None)
 
     assert (end_user.end_user_id, end_user.end_user, dict(end_user.params)) == (None, None, {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_org", [None, "explicit-org"])
+async def test_key_affiliation_uses_the_request_org_reader(
+    rust_auth_stores: RustAuthStores, key_org: str | None
+) -> None:
+    chosen: Final = key_org or "team-org"
+    rust_auth_stores.organization.rows[chosen] = {
+        "organization_id": chosen,
+        "budget_id": "budget",
+        "created_by": "admin",
+        "updated_by": "admin",
+        "litellm_budget_table": {"budget_id": "budget", "max_budget": 3.0},
+    }
+    cache: Final = UserApiKeyCache()
+    host: Final = _host(cache=cache, prisma_client=MagicMock(spec=PrismaClient))
+    org_id: Final = RustAuth.key_organization_id(key_org, "team-org")
+    assert org_id is not None
+
+    outcome: Final = await core.drive(RustAuth.read_key_organization(org_id), host)
+
+    org: Final = outcome.key_organization
+    assert org is not None and org.litellm_budget_table is not None
+    assert (org.organization_id, org.litellm_budget_table.max_budget) == (chosen, 3.0)
+
+    outage: Final = ConnectionRefusedError("database unavailable")
+    rust_auth_stores.organization.rows[chosen] = outage
+    cached: Final = (await core.drive(RustAuth.read_key_organization(org_id), host)).key_organization
+    assert cached == org
+    assert rust_auth_stores.organization.lookups == [(chosen, True)]
+
+    await cache.async_delete_cache(AuthObject.org_with_budget(chosen).key)
+    last_known: Final = (await core.drive(RustAuth.read_key_organization(org_id), host)).key_organization
+    assert last_known == org
+    assert rust_auth_stores.organization.lookups == [(chosen, True), (chosen, True)]
+
+    absent: Final = (await core.drive(RustAuth.read_key_organization("missing-org"), host)).key_organization
+    assert absent is None
+
+
+@pytest.mark.asyncio
+async def test_key_membership_distinguishes_absence_from_a_read_error(rust_auth_stores: RustAuthStores) -> None:
+    host: Final = _host(prisma_client=MagicMock(spec=PrismaClient))
+    row: Final = LiteLLM_TeamMembership(user_id="user", team_id="team")
+    outage: Final = httpx.ConnectError("database service unavailable")
+    rust_auth_stores.team_membership.rows[("user", "member-team")] = row.model_copy(update={"team_id": "member-team"})
+    rust_auth_stores.team_membership.rows[("user", "unreadable-team")] = outage
+
+    found: Final = (await core.drive(RustAuth.read_key_membership("user", "member-team"), host)).key_membership
+    assert found is not None and found.team_id == "member-team"
+    assert (await core.drive(RustAuth.read_key_membership("user", "team"), host)).key_membership is None
+    with pytest.raises(httpx.ConnectError) as raised:
+        await core.drive(RustAuth.read_key_membership("user", "unreadable-team"), host)
+    assert raised.value is outage
 
 
 @pytest.mark.asyncio

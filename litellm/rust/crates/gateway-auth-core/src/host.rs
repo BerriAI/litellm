@@ -75,7 +75,7 @@ pub trait OperatorHooks: Send + Sync {
 /// A method that a second host could only answer by re-implementing a rule is a decision, however
 /// it is named, and carries a TODO naming what has to reach Rust first.
 pub trait AuthHost: Send + Sync {
-    const READ_KEY_AFFILIATIONS: bool = true;
+    const READ_KEY_AFFILIATIONS_IN_PRINCIPAL: bool = true;
     type Rows: Rows;
 
     // Credential: whether the presented credential is genuine and which key or claims it stands for.

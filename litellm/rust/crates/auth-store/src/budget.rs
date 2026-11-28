@@ -1,13 +1,38 @@
-//! A budget row as the auth cache holds it, nested in the object that names it.
+//! A budget row as the auth cache holds it, nested in the object that names it, or on its own for
+//! a team's default member budget.
+
+use std::sync::Arc;
 
 use litellm_python_compat::{json, truthy::truthy};
 use litellm_redis_store::auth_cache::{BudgetEntry, BudgetFullEntry, ExcludedIfNone};
-use litellm_repositories::{Budget, RawJson};
+use litellm_repositories::{Budget, BudgetRepository, RawJson, Side};
 
 use crate::{
     Error,
     column::{instant, nullable, time},
 };
+
+/// A budget row read by its id, in the shape the auth cache holds it.
+pub struct BudgetDatabase {
+    budgets: Arc<BudgetRepository>,
+}
+
+impl BudgetDatabase {
+    pub fn new(budgets: Arc<BudgetRepository>) -> Self {
+        Self { budgets }
+    }
+
+    /// The budget row a team's metadata names as `team_member_budget_id`, the shape
+    /// `get_team_member_default_budget` caches under `team_member_default_budget:{id}`, or `None`
+    /// when no row has that id.
+    pub async fn team_member_default(&self, budget_id: &str) -> Result<Option<BudgetEntry>, Error> {
+        self.budgets
+            .find_team_member_default(budget_id, Side::Read)
+            .await?
+            .map(budget_entry)
+            .transpose()
+    }
+}
 
 /// What `LiteLLM_BudgetTableFull.model_dump(mode="json")` holds for `budget`: [`budget_entry`]
 /// with the reset and creation times, refused for the same columns.

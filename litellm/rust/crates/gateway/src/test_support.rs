@@ -30,6 +30,7 @@ pub(crate) fn key(
         },
         affiliation,
         end_user,
+        customer_hierarchy: None,
     })
 }
 

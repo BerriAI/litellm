@@ -160,8 +160,8 @@ async def _jwt_reads(call: RustAuth, step: RustAuthStep, host: PythonAuthHost) -
             call.team(*_team_read(await host.granting_team(team_id)))
         case RustAuthStep.BindTeamMember(team=team, roster=roster, user_id=user_id):
             call.team(*_team_read(await host.bind_team_member(team, roster, user_id)))
-        case RustAuthStep.LoadTeamMembership(user_id=user_id, team_id=team_id):
-            call.found_row(await host.load_team_membership(user_id, team_id))
+        case RustAuthStep.LoadTeamMembership(user_id=user_id, team_id=team_id, for_key=for_key):
+            call.found_row(await host.load_team_membership(user_id, team_id, for_key=for_key))
         case RustAuthStep.User(
             user_id=user_id,
             user_email=user_email,
@@ -188,8 +188,12 @@ async def _jwt_reads(call: RustAuth, step: RustAuthStep, host: PythonAuthHost) -
                     call.user(user_facts(user), user, membership=membership)
                 case None:
                     call.user()
-        case RustAuthStep.Org(org_id=org_id):
-            _org(call, await host.org(org_id))
+        case RustAuthStep.Org(org_id=org_id, for_key=for_key):
+            org: Final = await host.org(org_id, for_key=for_key)
+            if for_key and org is not None:
+                call.org(org_id, org)
+            else:
+                _org(call, org)
         case RustAuthStep.OrgByAlias(alias=alias):
             _org(call, await host.org_by_alias(alias))
         case RustAuthStep.JwtEndUser(end_user_id=end_user_id):
