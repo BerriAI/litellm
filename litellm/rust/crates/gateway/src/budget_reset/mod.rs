@@ -116,9 +116,11 @@ pub(crate) fn start(
             wall_time,
         },
         rollover: lite.get("budget_rollover").and_then(Setting::as_bool) == Some(true),
-        default_end_user_tier: lite
-            .get("max_end_user_budget_id")
-            .and_then(Setting::as_str)
+        default_end_user_tier: config
+            .litellm_settings
+            .max_end_user_budget_id
+            .as_ref()
+            .and_then(litellm_config::EndUserBudgetId::as_str)
             .map(str::to_owned),
     });
     Some(PeriodicJob::start(

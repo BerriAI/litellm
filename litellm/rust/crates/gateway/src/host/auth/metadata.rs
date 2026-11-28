@@ -19,6 +19,7 @@ pub(super) struct Metadata {
     #[serde(default)]
     pub(super) model_tpm_limit: BTreeMap<String, i64>,
     pub(super) priority: Option<String>,
+    pub(super) end_user_budget_id: Option<String>,
 }
 
 impl Metadata {

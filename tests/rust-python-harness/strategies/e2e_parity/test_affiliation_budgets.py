@@ -27,6 +27,7 @@ from tests.test_litellm_rust.support.recording_server import RecordingServer, Re
 
 MODEL: Final = "claude-opus-4-8"
 MASTER_KEY: Final = "sk-affiliation-budget-parity"
+PROXY_END_USER_TIER: Final = "proxy-default-end-user"
 ROOT: Final = Path(__file__).resolve().parents[4]
 
 
@@ -198,7 +199,11 @@ def proxies(tmp_path_factory: pytest.TempPathFactory, request: pytest.FixtureReq
         pytest.skip("Live budget parity requires DATABASE_URL and a built litellm-gateway binary")
     directory: Final = tmp_path_factory.mktemp("affiliation-budget-parity")
     config: Final = directory / "proxy.yaml"
-    uses_redis: Final = getattr(request, "param", True) is True
+    variant: Final = getattr(request, "param", True)
+    uses_redis: Final = variant is not False
+    default_end_user: Final = (
+        f"  max_end_user_budget_id: {PROXY_END_USER_TIER}" if variant == "end-user-default" else ""
+    )
     remove_environment: Final = () if uses_redis else tuple(name for name in os.environ if name.startswith("REDIS_"))
     with recording_service() as upstream, private_state(directory, os.environ) as state, httpx.Client() as unused:
         upstream.expected_requests = None
@@ -235,6 +240,7 @@ general_settings:
 litellm_settings:
   enable_redis_auth_cache: {str(uses_redis).lower()}
   budget_rollover: true
+{default_end_user}
 """
         )
         environment: Final = {
@@ -260,7 +266,8 @@ litellm_settings:
             Redis(host=state.environment["REDIS_HOST"], port=int(state.environment["REDIS_PORT"])) as redis,
         ):
             # Cases insert end users directly, without the management write that invalidates the registry.
-            redis.set("end_user_restricted_registry", json.dumps(END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL))
+            registry: Final = [] if variant == "end-user-default" else END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL
+            redis.set("end_user_restricted_registry", json.dumps(registry))
             yield Proxies(
                 python.gateway.client,
                 python.process.pid,
@@ -541,6 +548,72 @@ def test_affiliation_lifetime_budgets(proxies: Proxies, actual_cost: float, scop
         python: Final = _affiliation_lifetime_outcome(proxies, proxies.python, scope, spend, cost)
     with _paused_between_sweeps(proxies.python_pid, proxies.redis):
         rust: Final = _affiliation_lifetime_outcome(proxies, proxies.rust, scope, spend, cost)
+    assert rust == python
+
+
+def _default_end_user_outcome(
+    proxies: Proxies, client: httpx.Client, tier: str, actual_cost: float
+) -> tuple[int, tuple[float, float | None]]:
+    identity: Final = _identity(proxies.database, Case(owner=True))
+    hashed: Final = hashlib.sha256(identity.token.encode()).hexdigest()
+    selected: Final = f"end-user-{identity.user}"
+    missing: Final = tier in ("unregistered", "unregistered-over")
+    allowed: Final = tier in ("key", "explicit", "unregistered")
+    spend: Final = 0.0 if tier == "unregistered" else 1.5
+    end_user_limit: Final = 1 if tier == "unregistered-over" else 2
+    counter: Final = f"spend:end_user:{identity.user}"
+    with psycopg.connect(proxies.database) as connection:
+        connection.execute(
+            """INSERT INTO "LiteLLM_BudgetTable" (budget_id, max_budget, created_by, updated_by, updated_at)
+               VALUES (%s, 1, 'parity', 'parity', NOW()), (%s, %s, 'parity', 'parity', NOW())
+               ON CONFLICT (budget_id) DO NOTHING""",
+            (PROXY_END_USER_TIER, selected, end_user_limit),
+        )
+        if not missing:
+            connection.execute(
+                'INSERT INTO "LiteLLM_EndUserTable" (user_id, budget_id, spend) VALUES (%s, %s, 1.5)',
+                (identity.user, selected if tier == "explicit" else None),
+            )
+        if tier != "proxy":
+            key_tier: Final = {
+                "explicit": PROXY_END_USER_TIER,
+                "key-fallback": f"missing-{selected}",
+            }.get(tier, selected)
+            connection.execute(
+                """UPDATE "LiteLLM_VerificationToken"
+                   SET metadata = jsonb_build_object('end_user_budget_id', %s::text) WHERE token = %s""",
+                (key_tier, hashed),
+            )
+    proxies.redis.set(counter, spend)
+    _provider_response(proxies, identity)
+    response: Final = _send(client, identity, identity.user)
+    assert response.status_code == (200 if allowed else 422), response.text
+
+    def settled() -> tuple[float, float | None]:
+        rows: Final = read_rows(
+            'SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id = %s',
+            (identity.user,),
+            database_url=proxies.database,
+        )
+        stored: Final = rows[0]["spend"] if rows else None
+        current: Final = proxies.redis.get(counter)
+        assert (stored is None or isinstance(stored, (int, float))) and isinstance(current, bytes)
+        return float(current), stored
+
+    total: Final = spend + (actual_cost if allowed else 0)
+    expected: Final = pytest.approx((total, None if tier == "unregistered-over" else total))
+    observed: Final = eventually(settled, lambda value: value == expected, seconds=30)
+    assert observed == expected
+    return response.status_code, observed
+
+
+@pytest.mark.parametrize("proxies", ["end-user-default"], indirect=True)
+@pytest.mark.parametrize("tier", ["proxy", "key", "key-fallback", "explicit", "unregistered", "unregistered-over"])
+def test_default_end_user_budget_tiers(proxies: Proxies, actual_cost: float, tier: str) -> None:
+    with _paused_between_sweeps(proxies.rust_pid, proxies.redis):
+        python: Final = _default_end_user_outcome(proxies, proxies.python, tier, actual_cost)
+    with _paused_between_sweeps(proxies.python_pid, proxies.redis):
+        rust: Final = _default_end_user_outcome(proxies, proxies.rust, tier, actual_cost)
     assert rust == python
 
 

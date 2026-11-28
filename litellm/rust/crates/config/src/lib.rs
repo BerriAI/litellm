@@ -36,7 +36,7 @@ pub use priority::{
 pub use redis::{CacheSettings, RedisSettings};
 pub use routes::{AddressList, RouteList};
 pub use settings::{
-    ClickHouseStoreSettings, GeneralSettings, LiteLlmSettings, TracingSettings,
+    ClickHouseStoreSettings, EndUserBudgetId, GeneralSettings, LiteLlmSettings, TracingSettings,
     TracingStoreSettings, UserHeaderMapping,
 };
 pub use value::{AdditionalFields, Object, Value};

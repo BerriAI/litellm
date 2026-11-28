@@ -306,8 +306,37 @@ pub struct LiteLlmSettings {
     #[serde_as(as = "Option<Map<_, _>>")]
     pub priority_reservation: Option<Vec<(String, PriorityReservation)>>,
     pub priority_reservation_settings: Option<PriorityReservationSettings>,
+    #[serde(deserialize_with = "end_user_budget_id")]
+    pub max_end_user_budget_id: Option<EndUserBudgetId>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
+}
+
+/// The ID of a proxy-wide end-user tier, or a setting the gateway cannot honor.
+#[derive(Clone, Debug)]
+pub enum EndUserBudgetId {
+    Id(String),
+    Malformed,
+}
+
+impl EndUserBudgetId {
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::Id(id) => Some(id),
+            Self::Malformed => None,
+        }
+    }
+}
+
+fn end_user_budget_id<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<EndUserBudgetId>, D::Error> {
+    Ok(
+        Option::<Value>::deserialize(deserializer)?.map(|value| match value {
+            Value::String(id) => EndUserBudgetId::Id(id),
+            _ => EndUserBudgetId::Malformed,
+        }),
+    )
 }
 
 #[cfg(test)]

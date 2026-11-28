@@ -47,6 +47,7 @@ pub struct Key {
     name: Option<Arc<str>>,
     /// The key's own budget, which its budget counter is planned from.
     own_budget: Budget,
+    end_user_budget_id: Option<Arc<str>>,
     budget_windows: Arc<[BudgetWindow]>,
     model_max_budget: Arc<BTreeMap<String, ModelBudget>>,
     budget_fallbacks: Arc<BTreeMap<String, Vec<String>>>,
@@ -91,6 +92,10 @@ impl Key {
         self.own_budget
     }
 
+    pub(crate) fn end_user_budget_id(&self) -> Option<&str> {
+        self.end_user_budget_id.as_deref()
+    }
+
     pub(crate) fn budget_windows(&self) -> &[BudgetWindow] {
         &self.budget_windows
     }
@@ -118,6 +123,7 @@ impl Key {
             alias: alias.map(Arc::from),
             name: None,
             own_budget: Budget::default(),
+            end_user_budget_id: None,
             budget_windows: Arc::default(),
             model_max_budget: Arc::default(),
             budget_fallbacks: Arc::default(),
@@ -399,6 +405,10 @@ pub(super) fn read(key: &KeyEntry) -> Result<Keyed<Key>, &'static str> {
                 max: key.max_budget,
                 spend: key.spend,
             },
+            end_user_budget_id: metadata
+                .end_user_budget_id
+                .filter(|id| !id.is_empty())
+                .map(Arc::from),
             budget: budget
                 .or(budget_windows.as_ref().err().copied())
                 .or_else(|| key.budget_id.is_carried().then_some("budget_id"))

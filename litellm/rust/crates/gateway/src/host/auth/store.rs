@@ -468,13 +468,17 @@ impl AuthStore {
     /// An id the restricted ids leave out has no row or a row that restricts nothing, so a request
     /// that names such an end user costs no database read. A missing row is not cached, so a row
     /// created later is read on that end user's next request.
-    pub async fn end_user(&self, end_user_id: &str) -> EndUserRead {
+    pub async fn end_user(&self, end_user_id: &str, has_default: bool) -> EndUserRead {
         let object = AuthObject::EndUser(end_user_id.to_owned());
         if let Some(end_user) = self.read::<EndUserEntry>(&object).await {
             return EndUserRead::Row(Box::new(end_user));
         }
-        let restricted = self.restricted_ids().await;
-        if restricted.is_some_and(|ids| !ids.iter().any(|id| id == end_user_id)) {
+        if !has_default
+            && self
+                .restricted_ids()
+                .await
+                .is_some_and(|ids| !ids.iter().any(|id| id == end_user_id))
+        {
             return EndUserRead::NoRow;
         }
         let row = self.end_users.end_user(end_user_id);
@@ -486,6 +490,23 @@ impl AuthStore {
             Some(None) => EndUserRead::NoRow,
             None => EndUserRead::Unread,
         }
+    }
+
+    pub(super) async fn end_user_default(
+        &self,
+        budget_id: &str,
+    ) -> Result<Option<BudgetEntry>, Error> {
+        let object = AuthObject::DefaultEndUserBudget(budget_id.to_owned());
+        if let Some(budget) = self.read(&object).await {
+            return Ok(Some(budget));
+        }
+        let read = self.budgets.end_user_default(budget_id);
+        let budget =
+            litellm_db::within(Some(self.lookup_deadline), async { Ok(read.await) }).await??;
+        if let Some(budget) = &budget {
+            self.write(&object, budget.clone(), None).await;
+        }
+        Ok(budget)
     }
 
     /// `_load_end_user_restricted_registry`: the ids of the end users whose row restricts
@@ -617,7 +638,7 @@ mod tests {
     /// The spend of the row `store` reads for `end_user_id`, `None` when it reads no row, and
     /// an error when the database did not give it.
     async fn spend(store: &AuthStore, end_user_id: &str) -> Result<Option<f64>, ()> {
-        match store.end_user(end_user_id).await {
+        match store.end_user(end_user_id, false).await {
             EndUserRead::Row(end_user) => Ok(Some(end_user.spend)),
             EndUserRead::NoRow => Ok(None),
             EndUserRead::Unread => Err(()),

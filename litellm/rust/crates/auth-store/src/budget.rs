@@ -32,6 +32,14 @@ impl BudgetDatabase {
             .map(budget_entry)
             .transpose()
     }
+
+    pub async fn end_user_default(&self, budget_id: &str) -> Result<Option<BudgetEntry>, Error> {
+        self.budgets
+            .find_end_user_default(budget_id)
+            .await?
+            .map(budget_entry)
+            .transpose()
+    }
 }
 
 /// What `LiteLLM_BudgetTableFull.model_dump(mode="json")` holds for `budget`: [`budget_entry`]

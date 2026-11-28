@@ -8,7 +8,9 @@ use litellm_gateway_auth_core::{
     Error,
     record::{EndUserRecord, MinuteLimits, ModelRegion},
 };
-use litellm_redis_store::auth_cache::{EndUserEntry, ModelRegion as StoredModelRegion};
+use litellm_redis_store::auth_cache::{
+    BudgetEntry, EndUserEntry, ModelRegion as StoredModelRegion,
+};
 
 use super::{
     AuthStore,
@@ -24,36 +26,88 @@ use super::{
 pub(crate) async fn end_user(
     store: Option<&AuthStore>,
     end_user_id: &str,
+    key_default: Option<&str>,
+    proxy_default: Option<&str>,
 ) -> Result<EndUserRecord, Error> {
-    let unrestricted = || EndUserRecord {
-        end_user_id: Some(end_user_id.to_owned()),
-        ..EndUserRecord::default()
-    };
     let Some(store) = store else {
-        return Ok(unrestricted());
+        return record(end_user_id, None, None).or_else(super::declined);
     };
-    match store.end_user(end_user_id).await {
-        EndUserRead::NoRow => Ok(unrestricted()),
-        EndUserRead::Row(end_user) => record(&end_user).or_else(super::declined),
-        EndUserRead::Unread => Err(Error::HostFailed),
+    let row = match store
+        .end_user(
+            end_user_id,
+            key_default.is_some() || proxy_default.is_some(),
+        )
+        .await
+    {
+        EndUserRead::NoRow => None,
+        EndUserRead::Row(row) => Some(row),
+        EndUserRead::Unread => return Err(Error::HostFailed),
+    };
+    if let Some(row) = row.as_deref()
+        && row.budget_id.is_some()
+        && row.litellm_budget_table.is_some()
+    {
+        return record(end_user_id, Some(row), row.litellm_budget_table.as_ref())
+            .or_else(super::declined);
     }
+    for id in [
+        key_default,
+        proxy_default.filter(|id| Some(*id) != key_default),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let budget =
+            super::unless_failed(store.end_user_default(id).await, "default_end_user_budget")?;
+        if let Some(budget) = budget {
+            return record(end_user_id, row.as_deref(), Some(&budget)).or_else(super::declined);
+        }
+    }
+    record(end_user_id, row.as_deref(), None).or_else(super::declined)
 }
 
 /// The entry is taken apart by name, so a field added to it does not compile here until it is
 /// copied onto the record, read for nothing or declined. The alias describes the end user. The
 /// block, the default model, the model list and the plain values of its budget row, with the spend
 /// against it, are copied onto the record.
-fn record(end_user: &EndUserEntry) -> Result<EndUserRecord, &'static str> {
+fn record(
+    end_user_id: &str,
+    end_user: Option<&EndUserEntry>,
+    budget_entry: Option<&BudgetEntry>,
+) -> Result<EndUserRecord, &'static str> {
+    let BudgetRow {
+        limits,
+        budget,
+        soft_budget,
+        tpd_limit,
+        max_parallel_requests,
+        budget_duration,
+        budget_extras,
+    } = budget_row_or_spend(budget_entry, end_user.map_or(0.0, |row| row.spend))?;
+    let record = EndUserRecord {
+        end_user_id: Some(end_user_id.to_owned()),
+        limits,
+        budget,
+        soft_budget,
+        tpd_limit,
+        max_parallel_requests,
+        budget_duration,
+        budget_extras,
+        ..EndUserRecord::default()
+    };
+    let Some(end_user) = end_user else {
+        return Ok(record);
+    };
     let EndUserEntry {
-        user_id,
+        user_id: _,
         blocked,
         alias: _,
-        spend,
+        spend: _,
         allowed_model_region,
         default_model,
         models,
         budget_id: _,
-        litellm_budget_table,
+        litellm_budget_table: _,
         object_permission_id,
         object_permission,
         unread,
@@ -63,17 +117,7 @@ fn record(end_user: &EndUserEntry) -> Result<EndUserRecord, &'static str> {
     if let Some(field) = held {
         return Err(field);
     }
-    let BudgetRow {
-        limits,
-        budget,
-        soft_budget,
-        tpd_limit,
-        max_parallel_requests,
-        budget_duration,
-        budget_extras,
-    } = budget_row_or_spend(litellm_budget_table.as_ref(), *spend)?;
     Ok(EndUserRecord {
-        end_user_id: Some(user_id.clone()),
         object_permission: object_permission::record(
             object_permission_id.as_deref(),
             object_permission.as_ref(),
@@ -82,17 +126,11 @@ fn record(end_user: &EndUserEntry) -> Result<EndUserRecord, &'static str> {
         blocked: *blocked,
         default_model: default_model.clone(),
         models: models.clone(),
-        limits,
-        budget,
-        soft_budget,
-        tpd_limit,
-        max_parallel_requests,
-        budget_duration,
-        budget_extras,
         allowed_model_region: allowed_model_region.map(|region| match region {
             StoredModelRegion::Eu => ModelRegion::Eu,
             StoredModelRegion::Us => ModelRegion::Us,
         }),
+        ..record
     })
 }
 
@@ -153,7 +191,10 @@ mod tests {
     async fn an_end_user_the_database_cannot_give_is_left_to_python() {
         let store = AuthStore::new(keys::memory_cache(), keys::unreachable());
 
-        assert_eq!(end_user(Some(&store), "eu-1").await, Err(Error::HostFailed));
+        assert_eq!(
+            end_user(Some(&store), "eu-1", None, None).await,
+            Err(Error::HostFailed)
+        );
     }
 
     fn stored(columns: Value) -> EndUserEntry {
@@ -164,12 +205,16 @@ mod tests {
         EndUserEntry::from_value(&litellm_python_compat::json::from_json(row)).unwrap()
     }
 
+    fn stored_record(row: &EndUserEntry) -> Result<EndUserRecord, &'static str> {
+        record(&row.user_id, Some(row), row.litellm_budget_table.as_ref())
+    }
+
     #[rstest]
     #[case::nothing_else(json!({}))]
     #[case::what_it_spent_and_is_called(json!({"spend": 12.5, "alias": "acme"}))]
     #[case::a_budget(json!({"litellm_budget_table": {"max_budget": 1.0}}))]
     fn a_row_that_only_describes_the_end_user_is_served(#[case] columns: Value) {
-        let record = record(&stored(columns)).unwrap();
+        let record = stored_record(&stored(columns)).unwrap();
 
         assert_eq!(
             (
@@ -190,7 +235,10 @@ mod tests {
         #[case] columns: Value,
         #[case] column: &str,
     ) {
-        assert_eq!(unserved(&record(&stored(columns)).unwrap()), Some(column));
+        assert_eq!(
+            unserved(&stored_record(&stored(columns)).unwrap()),
+            Some(column)
+        );
     }
 
     #[rstest]
@@ -201,7 +249,7 @@ mod tests {
         #[case] region: Option<ModelRegion>,
         #[case] field: Option<&str>,
     ) {
-        let end_user = record(&stored(columns)).unwrap();
+        let end_user = stored_record(&stored(columns)).unwrap();
         assert_eq!(
             (end_user.allowed_model_region, unserved(&end_user)),
             (region, field)
@@ -211,7 +259,7 @@ mod tests {
     #[rstest]
     fn an_end_users_per_model_budget_is_read_and_served() {
         let entry = stored(json!({"litellm_budget_table": {"model_max_budget": {"claude": 1.0}}}));
-        let row = record(&entry).unwrap();
+        let row = stored_record(&entry).unwrap();
         assert_eq!(
             row.budget_extras.model_max_budget["claude"],
             litellm_gateway_auth_core::record::ModelBudget::Amount(1.0),
@@ -233,7 +281,7 @@ mod tests {
         #[case] columns: Value,
         #[case] field: &str,
     ) {
-        let row = record(&stored(columns));
+        let row = stored_record(&stored(columns));
         assert_eq!(
             row.as_ref().map_or_else(|field| Some(*field), unserved),
             Some(field)

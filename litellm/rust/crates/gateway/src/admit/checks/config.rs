@@ -424,6 +424,7 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         anthropic_prompt_caching_ttl,
         model_cost_map_url,
         anthropic_beta_headers_url,
+        max_end_user_budget_id,
         additional_fields,
     } = &config.litellm_settings;
     set!(
@@ -441,7 +442,8 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             callbacks => other_callbacks,
             priority_reservation_settings => borrows,
             request_timeout => |_| unkept(config),
-            model_cost_map_url => |url: &Option<_>| url.is_some() && !set_by_its_variable(config)
+            model_cost_map_url => |url: &Option<_>| url.is_some() && !set_by_its_variable(config),
+            max_end_user_budget_id => |id: &Option<litellm_config::EndUserBudgetId>| id.as_ref().is_some_and(|id| id.as_str().is_none())
         ]
     )
     .chain(other(
@@ -557,8 +559,8 @@ mod tests {
         "router_settings:\n  optional_pre_call_checks: [enforce_model_rate_limits, prompt_caching]\n",
         "router_settings.optional_pre_call_checks"
     )]
-    #[case::a_default_end_user_budget(
-        "litellm_settings:\n  max_end_user_budget_id: b-1\n",
+    #[case::a_malformed_default_end_user_budget(
+        "litellm_settings:\n  max_end_user_budget_id: [b-1]\n",
         "litellm_settings.max_end_user_budget_id"
     )]
     #[case::end_users_checked_against_the_database(
@@ -597,6 +599,7 @@ mod tests {
     #[case::a_request_timeout("litellm_settings:\n  request_timeout: 30\n")]
     #[case::a_request_timeout_as_text("litellm_settings:\n  request_timeout: \"2.5\"\n")]
     #[case::the_routers_timeout_alone("router_settings:\n  timeout: 10\n")]
+    #[case::a_default_end_user_budget("litellm_settings:\n  max_end_user_budget_id: b-1\n")]
     #[case::a_request_timeout_beside_the_routers_timeout(
         "litellm_settings:\n  request_timeout: 30\nrouter_settings:\n  timeout: 10\n"
     )]

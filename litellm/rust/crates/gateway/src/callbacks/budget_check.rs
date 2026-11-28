@@ -329,7 +329,9 @@ fn entities(identity: &Authenticated<NativeRows>, counter: &SpendCounter) -> Vec
             }
         }
         SpendCounter::User(user_id) => vec![Entity::User(user_id)],
-        SpendCounter::EndUser(end_user_id) => vec![Entity::EndUser(end_user_id)],
+        SpendCounter::EndUser(end_user_id) if identity.end_user.found => {
+            vec![Entity::EndUser(end_user_id)]
+        }
         SpendCounter::Org(org_id) => vec![Entity::Organization(org_id)],
         SpendCounter::Project(project_id) => vec![Entity::Project(project_id)],
         _ => Vec::new(),

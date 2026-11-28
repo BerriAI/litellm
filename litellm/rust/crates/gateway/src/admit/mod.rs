@@ -322,7 +322,24 @@ impl Admit {
             EndUsers::NoDatabase => None,
             EndUsers::Unread => return Err(Reason::new(Refused::Body, "end_user")),
         };
-        let Ok(end_user) = Box::pin(host::auth::end_user(store, end_user_id)).await else {
+        let key_default = match &caller.credential {
+            Credential::Key { key } => key.end_user_budget_id(),
+            Credential::MasterKey => None,
+        };
+        let proxy_default = self
+            .config
+            .litellm_settings
+            .max_end_user_budget_id
+            .as_ref()
+            .and_then(litellm_config::EndUserBudgetId::as_str);
+        let Ok(end_user) = Box::pin(host::auth::end_user(
+            store,
+            end_user_id,
+            key_default,
+            proxy_default,
+        ))
+        .await
+        else {
             return Err(Reason::new(Refused::Body, "end_user"));
         };
         if let Some(column) = host::auth::unserved_end_user(&end_user) {
