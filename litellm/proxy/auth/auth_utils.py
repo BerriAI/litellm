@@ -2533,6 +2533,10 @@ _MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS: Final = (
     "/realtime/calls",
     "/live/sessions",
 )
+_MODEL_ROUTING_SVG_MODEL_ROUTE_MARKERS: Final = ("/images/",)
+# Multipart form bodies keep nested fields flat, so the forwardable SVG model
+# arrives as a literal ``svg[model]`` key instead of a nested object.
+_SVG_MODEL_FORM_KEY: Final = "svg[model]"
 _MODEL_ROUTING_ID_FIELDS: Final = (
     "file_id",
     "input_file_id",
@@ -2794,6 +2798,7 @@ def _extract_model_candidates_from_request(
     completion: Final = request_data.get("completion")
     if uses_completion_model_sources and isinstance(completion, Mapping):
         _append_model_candidates(candidates, completion.get("model"))
+    candidates.extend(_svg_model_candidates(request_data, route))
 
     if uses_model_routing_sources:
         if uses_header_or_query_model_sources:
@@ -2822,6 +2827,23 @@ def _extract_model_candidates_from_request(
             )
 
     return _dedupe_model_candidates(candidates)
+
+
+def _svg_model_candidates(request_data: Mapping[str, object], route: str) -> list[str]:
+    if not _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_SVG_MODEL_ROUTE_MARKERS):
+        return []
+    candidates: Final[list[str]] = []
+    svg: Final[Any] = request_data.get("svg")
+    if isinstance(svg, Mapping):
+        _append_model_candidates(candidates, svg.get("model"))
+    extra_body: Final[Any] = request_data.get("extra_body")
+    # extra_body is flattened into the provider form fields the same way a
+    # multipart body already arrives, so both shapes are read here.
+    extra_body_svg: Final = extra_body.get("svg") if isinstance(extra_body, Mapping) else None
+    if isinstance(extra_body_svg, Mapping):
+        _append_model_candidates(candidates, extra_body_svg.get("model"))
+    _append_model_candidates(candidates, request_data.get(_SVG_MODEL_FORM_KEY))
+    return candidates
 
 
 def _format_model_candidates(
@@ -2895,7 +2917,9 @@ def get_model_from_request(
     handler_path_params: Final = read_request_path_params(request) if request is not None else path_params
     handler_model: Final = _handler_selected_model(route, handler_request_data, handler_path_params)
     if handler_model is not None:
-        return handler_model
+        return _format_model_candidates(
+            _dedupe_model_candidates([handler_model, *_svg_model_candidates(request_data, route)])
+        )
 
     candidates: Final = _extract_model_candidates_from_request(
         request_data=request_data,

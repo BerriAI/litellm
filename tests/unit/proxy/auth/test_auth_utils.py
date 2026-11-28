@@ -2246,6 +2246,77 @@ def test_get_model_from_request_extracts_eval_completion_model():
     )
 
 
+@pytest.mark.parametrize(
+    "route", ["/v1/images/generations", "/images/edits", "/openai/deployments/image-model/images/generations"]
+)
+def test_get_model_from_request_includes_svg_model(route):
+    assert get_model_from_request(
+        request_data={"model": "image-model", "svg": {"model": "chat-model"}}, route=route
+    ) == ["image-model", "chat-model"]
+
+
+def test_get_model_from_request_ignores_svg_model_off_image_routes_and_without_svg():
+    assert (
+        get_model_from_request(
+            request_data={"model": "m", "svg": {"model": "chat-model"}}, route="/v1/chat/completions"
+        )
+        == "m"
+    )
+    assert (
+        get_model_from_request(request_data={"model": "image-model"}, route="/v1/images/generations") == "image-model"
+    )
+
+
+def test_get_model_from_request_includes_forwarded_svg_model_shapes():
+    assert get_model_from_request(
+        request_data={"model": "image-model", "extra_body": {"svg": {"model": "extra-body-model"}}},
+        route="/images/edits",
+    ) == ["image-model", "extra-body-model"]
+    assert get_model_from_request(
+        request_data={"model": "image-model", "svg[model]": "form-model"}, route="/images/edits"
+    ) == ["image-model", "form-model"]
+    assert (
+        get_model_from_request(request_data={"model": "m", "svg[model]": "form-model"}, route="/v1/chat/completions")
+        == "m"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("svg_field", ["svg", "extra_body", "svg[model]"])
+@pytest.mark.parametrize("svg_model, allowed", [("chat-model", False), ("image-model", True)])
+async def test_key_limited_to_image_model_cannot_name_other_model_in_svg(svg_model, allowed, svg_field):
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import enforce_key_and_fallback_model_access
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-fake"}}
+            for name in ("image-model", "chat-model")
+        ]
+    )
+    svg_fields = {
+        "svg": {"svg": {"model": svg_model}},
+        "extra_body": {"extra_body": {"svg": {"model": svg_model}}},
+        "svg[model]": {"svg[model]": svg_model},
+    }[svg_field]
+
+    async def enforce():
+        await enforce_key_and_fallback_model_access(
+            valid_token=UserAPIKeyAuth(models=["image-model"]),
+            request_data={"model": "image-model", "prompt": "a cat", **svg_fields},
+            route="/v1/images/generations",
+            request=None,
+            llm_model_list=router.model_list,
+            llm_router=router,
+        )
+
+    if allowed:
+        await enforce()
+    else:
+        with pytest.raises(ProxyException):
+            await enforce()
+
+
 def test_get_model_from_request_includes_fine_tuning_target_model_query():
     assert (
         get_model_from_request(
