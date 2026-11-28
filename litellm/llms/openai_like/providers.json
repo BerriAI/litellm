@@ -386,6 +386,16 @@
       "supports_reasoning": true
     }
   },
+  "weflayr": {
+    "base_url": "https://gateway.weflayr.com/v1",
+    "api_key_env": "WEFLAYR_API_KEY",
+    "api_base_env": "WEFLAYR_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses",
+      "/v1/embeddings"
+    ]
+  },
   "vispark": {
     "base_url": "https://api.lab.vispark.in/v1",
     "api_key_env": "VISPARK_LAB_API_KEY",
