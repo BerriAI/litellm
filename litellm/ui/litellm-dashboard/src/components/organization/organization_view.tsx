@@ -17,6 +17,7 @@ import { BadgeLink } from "@/components/shared/BadgeLink";
 import { ArrowLeft } from "lucide-react";
 import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import MemberTable, { type MemberTableColumn } from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
 import { toast } from "@/lib/toast";
@@ -56,6 +57,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
+  const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
+  const [isDeletingMember, setIsDeletingMember] = useState(false);
   const canEditOrg = is_org_admin || is_proxy_admin;
   const { data: teams } = useTeams();
   const [tab, setTab] = useUrlTab(ORGANIZATION_TABS, "overview", ORGANIZATION_TAB_URL_KEY);
@@ -110,17 +113,20 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     }
   };
 
-  const handleMemberDelete = async (values: any) => {
-    try {
-      if (!accessToken) return;
+  const handleMemberDeleteConfirm = async () => {
+    if (!accessToken || !memberToDelete?.user_id) return;
 
-      await organizationMemberDeleteCall(accessToken, organizationId, values.user_id);
+    setIsDeletingMember(true);
+    try {
+      await organizationMemberDeleteCall(accessToken, organizationId, memberToDelete.user_id);
       toast.success(t("organizations.view.toasts.memberDeleted"));
-      setIsEditMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
       toast.fromError(t("organizations.view.toasts.memberDeleteFailed"));
       console.error("Error deleting organization member:", error);
+    } finally {
+      setIsDeletingMember(false);
+      setMemberToDelete(null);
     }
   };
 
@@ -307,7 +313,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 setSelectedEditMember(member);
                 setIsEditMemberModalVisible(true);
               }}
-              onDelete={(member) => handleMemberDelete(member)}
+              onDelete={setMemberToDelete}
               onAddMember={() => setIsAddMemberModalVisible(true)}
               roleColumnTitle={t("organizations.view.members.roleColumn")}
               extraColumns={orgExtraColumns}
@@ -420,6 +426,22 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           },
         ]}
         defaultRole="internal_user"
+      />
+      <DeleteResourceModal
+        isOpen={memberToDelete !== null}
+        title={t("organizations.view.deleteMember.title")}
+        alertMessage={t("organizations.view.deleteMember.alert")}
+        message={t("organizations.view.deleteMember.message")}
+        resourceInformationTitle={t("organizations.view.deleteMember.informationTitle")}
+        resourceInformation={[
+          { label: t("organizations.view.deleteMember.userId"), value: memberToDelete?.user_id, code: true },
+          { label: t("organizations.view.deleteMember.email"), value: memberToDelete?.user_email },
+          { label: t("organizations.view.deleteMember.role"), value: memberToDelete?.role },
+        ]}
+        requiredConfirmation={memberToDelete?.user_email || memberToDelete?.user_id || undefined}
+        onCancel={() => setMemberToDelete(null)}
+        onOk={handleMemberDeleteConfirm}
+        confirmLoading={isDeletingMember}
       />
       <MemberModal
         visible={isEditMemberModalVisible}

@@ -16919,8 +16919,17 @@
         "memberAddFailed": "Failed to add organization member",
         "memberUpdated": "Organization member updated successfully",
         "memberUpdateFailed": "Failed to update organization member",
-        "memberDeleted": "Organization member deleted successfully",
+        "memberDeleted": "Organization member removed. Their memberships and keys on this organization's teams were deleted",
         "memberDeleteFailed": "Failed to delete organization member"
+      },
+      "deleteMember": {
+        "title": "Remove Organization Member",
+        "alert": "Removing this member also removes them from every team in this organization and deletes the keys they own on those teams.",
+        "message": "Are you sure you want to remove this member from the organization? This action cannot be undone.",
+        "informationTitle": "Organization Member Information",
+        "userId": "User ID",
+        "email": "Email",
+        "role": "Role"
       },
       "overview": {
         "detailsTitle": "Organization Details",
