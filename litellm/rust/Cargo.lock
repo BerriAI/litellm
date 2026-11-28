@@ -4303,6 +4303,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "jiff",
+ "jsonwebtoken",
  "litellm-config",
  "litellm-error",
  "litellm-gateway-auth-core",

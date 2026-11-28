@@ -19,7 +19,8 @@ mod store;
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use litellm_config::{Config, LitellmRole};
-use litellm_gateway_auth::{Auth, BearerOrXApiKey, KeyAuthenticator, SystemClock};
+use litellm_env::Lookup;
+use litellm_gateway_auth::{Auth, BearerOrXApiKey, CoreAuthenticator, SystemClock};
 use litellm_gateway_auth_core::{
     AffiliationRead, AgentIdentityFailure, AuthHost, Error, HostFacts, KeyHash, MasterKey,
     OperatorHooks, Refreshed, RouteGroups, Rows, Settings, Token,
@@ -137,16 +138,18 @@ fn master_key(config: &Config) -> Option<&litellm_secret_value::SecretValue> {
         .filter(|key| !key.expose().trim().is_empty())
 }
 
-/// What the core reads of this host beside `general_settings`. `database` is whether this host reads keys from one, and without one the core refuses every
-/// token but the master key before it asks for a key. The gateway guards its inference routes
-/// alone, so it names no route group, and it serves no UI login. The proxy budget, the license
-/// and the environment only shape steps and text this host does not answer with.
-fn settings(config: &Config, database: bool) -> Settings {
+/// What the core reads of this host beside `general_settings`. `database` is whether this host
+/// reads keys from one, and without one the core refuses every token but the master key before it
+/// asks for a key. `premium` is whether the proxy's license grants enterprise features such as
+/// JWT authentication, and `environment` reads the process and config environment variables that
+/// JWT settings consult (such as `JWT_PUBLIC_KEY_URL` and `OIDC_ISSUER`). The gateway guards its
+/// inference routes alone, so it names no route group, and it serves no UI login.
+fn settings(config: &Config, database: bool, premium: bool, environment: &dyn Lookup) -> Settings {
     Settings::new(
         &config.general_settings,
         HostFacts {
             master_key: master_key(config).map(|key| MasterKey::new(key.clone())),
-            premium: false,
+            premium,
             has_db: database,
             db_configured: database,
             ui_login: false,
@@ -154,7 +157,7 @@ fn settings(config: &Config, database: bool) -> Settings {
             metrics_require_auth: true,
             route_groups: RouteGroups::default(),
         },
-        &|_| None,
+        &|name| environment.get(name),
     )
 }
 
@@ -167,13 +170,24 @@ pub fn auth(
     store: Option<Arc<AuthStore>>,
     budgets_checked: bool,
 ) -> Auth<NativeRows> {
-    let settings = settings(config, store.is_some());
+    auth_over(config, store, budgets_checked, false, &|_: &str| None)
+}
+
+/// Like [`auth`], with the license entitlement and environment lookup from `AppState`.
+pub fn auth_over(
+    config: &Config,
+    store: Option<Arc<AuthStore>>,
+    budgets_checked: bool,
+    premium: bool,
+    environment: &dyn Lookup,
+) -> Auth<NativeRows> {
+    let settings = settings(config, store.is_some(), premium, environment);
     let host = NativeAuthHost {
         store,
         master: master_key(config).map(|key| Token::new(key.clone()).hash()),
         own_budget: budgets_checked && config.general_settings.disable_budget_reservation,
     };
-    let keys = KeyAuthenticator::new(host, settings, Arc::new(SystemClock));
+    let keys = CoreAuthenticator::new(host, settings, Arc::new(SystemClock));
     Auth::new(Arc::new(keys)).with_extractor(Arc::new(BearerOrXApiKey))
 }
 
@@ -719,6 +733,30 @@ mod tests {
             .await
             .err()
             .unwrap();
+
+        assert_eq!(<&'static str>::from(rejected), refused);
+    }
+
+    /// A token shaped like a JWT that names RS256, which nothing here verifies.
+    const UNVERIFIED_JWT: &str = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1In0.c2ln";
+
+    #[rstest]
+    #[case::licensed_it_reaches_the_jwks_the_environment_names(true, "not_native")]
+    #[case::unlicensed_it_is_refused(false, "forbidden")]
+    #[tokio::test]
+    async fn a_jwt_is_authenticated_under_the_license_and_environment_the_gateway_was_given(
+        #[case] premium: bool,
+        #[case] refused: &str,
+    ) {
+        let config = config(&format!(
+            "  master_key: {MASTER_KEY}\n  enable_jwt_auth: true\n"
+        ));
+        let environment = |name: &str| {
+            (name == "JWT_PUBLIC_KEY_URL").then(|| "https://idp.example/jwks.json".to_owned())
+        };
+        let gateway = auth_over(&config, None, false, premium, &environment);
+
+        let rejected = bearing(&gateway, UNVERIFIED_JWT).await.err().unwrap();
 
         assert_eq!(<&'static str>::from(rejected), refused);
     }

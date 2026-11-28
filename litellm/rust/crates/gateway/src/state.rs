@@ -174,7 +174,13 @@ impl AppState {
     /// host: the master key of `config`, and with a database a virtual key it holds. A key's own
     /// budget is checked only with the spend logs, whose counters the budget checks read.
     pub(crate) fn auth(&self, config: &Config) -> Auth<NativeRows> {
-        host::auth::auth(config, self.auth_store.clone(), self.spend_logs.is_some())
+        host::auth::auth_over(
+            config,
+            self.auth_store.clone(),
+            self.spend_logs.is_some(),
+            self.entitlements.is_enterprise(),
+            &*self.environment,
+        )
     }
 
     /// Drains the spend logs still queued, writes the gateway request counts still in memory,
