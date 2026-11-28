@@ -20,6 +20,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import flush_post_call_redis_batches
 from litellm.constants import AUTH_OBJECTS_TARGET
+from litellm.models.budget_schedule import is_scheduled_duration, window_counter_name
 from litellm.proxy.auth.customer_spend import customer_spend_counter
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.redis.stores._route import post_call_request
@@ -141,7 +142,9 @@ def _budget_window(window: object) -> _BudgetWindow | None:
     if not isinstance(duration, str):
         return None
     start: Final = get_budget_window_start(window)
-    return duration, None if start is None else start.isoformat()
+    if start is None and is_scheduled_duration(duration):
+        return None
+    return window_counter_name(duration, start), None if start is None else start.isoformat()
 
 
 def _budget_windows(budget_limits: object) -> tuple[_BudgetWindow, ...]:

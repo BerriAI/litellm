@@ -1,4 +1,5 @@
 from collections import Counter
+from datetime import datetime
 from collections.abc import Sequence
 from typing import Final
 from types import SimpleNamespace
@@ -383,3 +384,72 @@ async def test_a_budgeted_team_whose_id_names_a_window_keeps_its_charge_and_gets
     )
 
     assert store.snapshot() == {team_counter_key: 1.5}
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "started_at, morning_spend, accounted",
+    [
+        (datetime.fromisoformat("2026-11-25T11:59:00+00:00"), 2.0, {f"{scenarios._MORNING}@2026-11-25T07:00:00+00:00"}),
+        (datetime.fromisoformat("2026-11-25T19:00:00+00:00"), 0.0, set()),
+    ],
+    ids=["started_in_the_morning_period", "started_outside_every_period"],
+)
+async def test_scheduled_team_windows_charge_only_the_period_the_request_started_in(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    started_at: datetime,
+    morning_spend: float,
+    accounted: set[str],
+) -> None:
+    """A request that started at 12:59 Berlin and finishes after 13:00 is charged to the morning, never the afternoon."""
+    from litellm.models.budget_schedule import resolve_schedules_at
+
+    redis: Final = RespRedis(
+        values={"spend:team:t": 0.0, scenarios._MORNING_COUNTER: 0.0, scenarios._AFTERNOON_COUNTER: 0.0}
+    )
+    monkeypatch.setattr(ps, "user_api_key_cache", await scenarios._cache_scheduled_team())
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    with rust_redis_store(monkeypatch, redis), caplog.at_level("WARNING"):
+        await ps.increment_spend_counters(
+            token=None, team_id="t", user_id=None, response_cost=2.0, request_started_at=started_at
+        )
+
+    assert redis.values == {
+        "spend:team:t": 2.0,
+        scenarios._MORNING_COUNTER: morning_spend,
+        scenarios._AFTERNOON_COUNTER: 0.0,
+    }
+    assert "invalid budget window" not in caplog.text
+    with resolve_schedules_at(started_at):
+        windows: Final = await ps.accounting_window_keys(None, "t")
+    assert {str(window["window_duration"]) for window in windows} == accounted
+
+
+@pytest.mark.asyncio
+async def test_a_request_admitted_before_a_period_boundary_charges_the_period_that_admitted_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis: Final = RespRedis(
+        values={"spend:team:t": 0.0, scenarios._MORNING_COUNTER: 0.0, scenarios._AFTERNOON_COUNTER: 0.0}
+    )
+    monkeypatch.setattr(ps, "user_api_key_cache", await scenarios._cache_scheduled_team())
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    with rust_redis_store(monkeypatch, redis):
+        await ps.increment_spend_counters(
+            token=None,
+            team_id="t",
+            user_id=None,
+            response_cost=2.0,
+            request_started_at=datetime.fromisoformat("2026-11-25T12:01:00+00:00"),
+            admitted_at=datetime.fromisoformat("2026-11-25T11:59:00+00:00"),
+        )
+
+    assert redis.values == {
+        "spend:team:t": 2.0,
+        scenarios._MORNING_COUNTER: 2.0,
+        scenarios._AFTERNOON_COUNTER: 0.0,
+    }

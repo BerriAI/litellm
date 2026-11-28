@@ -48,7 +48,7 @@ from litellm.proxy.spend_tracking.input_tokens import count_input_tokens_for_mod
 from litellm.proxy.utils import ProxyLogging
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
-from litellm.redis.stores.spend_counters import SpendCounterStore, user_window_counter
+from litellm.redis.stores.spend_counters import SpendCounterStore, team_window_counter, user_window_counter
 from litellm.router import Router
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
@@ -285,6 +285,36 @@ async def test_user_reservation_includes_each_window_only_when_user_budget_appli
         {user_window_counter("u", "1h"), user_window_counter("u", "30d")} if expected else set()
     )
 
+
+
+@pytest.mark.asyncio
+async def test_team_reservation_holds_only_the_active_periods_counter(caplog: pytest.LogCaptureFixture) -> None:
+    from litellm.models.budget_schedule import resolve_schedules_at
+
+    weekdays: Final = ["mon", "tue", "wed", "thu", "fri"]
+    team: Final = LiteLLM_TeamTable.model_validate(
+        {
+            "team_id": "t",
+            "budget_limits": [
+                {"max_budget": 10.0, "schedule": {"timezone": "Europe/Berlin", "days": weekdays, "start": "08:00", "end": "13:00"}},
+                {"max_budget": 10.0, "schedule": {"timezone": "Europe/Berlin", "days": weekdays, "start": "13:00", "end": "18:00"}},
+            ],
+        }
+    )
+    with resolve_schedules_at(datetime(2026, 11, 25, 9, 0, tzinfo=timezone.utc)), caplog.at_level("WARNING"):
+        counters: Final = await _get_budget_counters(
+            request_body={},
+            valid_token=UserAPIKeyAuth(),
+            team_object=team,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        )
+    morning: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:08:00-13:00@2026-11-25T07:00:00+00:00"
+    assert {counter.counter_key for counter in counters} == {team_window_counter("t", morning)}
+    assert {counter.window_start for counter in counters} == {datetime(2026, 11, 25, 7, 0, tzinfo=timezone.utc)}
+    assert "invalid duration" not in caplog.text
 
 async def _reserve(route: str) -> dict | None:
     return await reserve_budget_for_request(

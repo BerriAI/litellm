@@ -24,6 +24,7 @@ from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.models.budget_schedule import is_scheduled_duration
 from litellm.proxy._types import Litellm_EntityType
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
 from litellm.proxy.management_helpers.customer_hierarchy import customer_row_reset_at
@@ -316,6 +317,8 @@ class SpendCounterReseed:
             _, separator, duration = counter_key.rpartition(":window:")
             if not separator or not duration:
                 return False
+            if is_scheduled_duration(duration):
+                return True
             try:
                 duration_in_seconds(duration)
             except Exception:

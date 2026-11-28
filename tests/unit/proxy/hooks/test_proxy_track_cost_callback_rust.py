@@ -21,6 +21,7 @@ from litellm.proxy.db.native_database import ServiceLoggingEvents
 from litellm.proxy.db.rust_spend_log_writer import install_rust_spend_log_writer, uninstall_rust_spend_log_writer
 from litellm.proxy.hooks.rust_spend_logger import (
     _SPEND_LOG_CALL,  # pyright: ignore[reportPrivateUsage]  # the host reads the call it serves from here
+    _request_admitted_at,  # pyright: ignore[reportPrivateUsage]  # the instant run_rust resolves schedules at
     SpendLogHost,
     bill_failure_in_rust,
     rust_spend_loggers,
@@ -596,3 +597,63 @@ def test_each_attempt_carries_the_current_metadata_retention(
 
     assert call is not None
     assert _SETTINGS.validate_python(call.document["settings"])["spend_logs_metadata_fields"] == sent
+
+
+@pytest.mark.asyncio
+async def test_spend_log_windows_resolve_schedules_at_the_request_start(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.models.budget_schedule import schedule_clock
+
+    seen: Final[list[datetime]] = []
+
+    async def window_keys(*args: object, **kwargs: object) -> tuple[()]:
+        seen.append(schedule_clock())
+        return ()
+
+    monkeypatch.setattr(ps, "accounting_window_keys", window_keys)
+    _ = await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hello there",
+        mock_delay=0.2,
+        metadata=dict(_KEYED),
+    )
+    rows: Final = await proxy.rows()
+
+    started: Final = datetime.fromisoformat(str(rows[0]["startTime"])).astimezone(timezone.utc)
+    assert len(seen) == 1
+    assert abs((seen[0] - started).total_seconds()) < 0.05
+
+
+@pytest.mark.asyncio
+async def test_spend_log_windows_resolve_schedules_at_the_instant_auth_admitted_the_request(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.models.budget_schedule import schedule_clock
+
+    seen: Final[list[datetime]] = []
+
+    async def window_keys(*args: object, **kwargs: object) -> tuple[()]:
+        seen.append(schedule_clock())
+        return ()
+
+    monkeypatch.setattr(ps, "accounting_window_keys", window_keys)
+    admitted: Final = datetime(2026, 11, 25, 11, 59, tzinfo=timezone.utc)
+    _ = await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hello there",
+        metadata={**_KEYED, "litellm_received_at": admitted},
+    )
+    _ = await proxy.rows()
+
+    assert seen == [admitted]
+
+
+def test_a_batch_mixing_a_receive_stamp_and_a_naive_start_resolves_at_the_earliest_instant() -> None:
+    admitted: Final = datetime(2026, 11, 25, 11, 59, tzinfo=timezone.utc)
+    stamped: Final = {"litellm_params": {"metadata": {"litellm_received_at": admitted}}}
+    unstamped: Final = {"start_time": datetime(2026, 11, 27, 12, 0)}
+
+    assert _request_admitted_at(SpendLogCall(document={}, rows=(stamped, unstamped), response=None)) == admitted

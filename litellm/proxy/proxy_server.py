@@ -142,6 +142,7 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     kimi_k3_template_tokens,
     kimi_k3_tokens,
 )
+from litellm.models.budget_schedule import resolve_schedules_at
 from litellm.proxy._types import (
     UI_TEAM_ID,
     AwsErrorTypeProxyException,
@@ -3900,6 +3901,7 @@ async def increment_spend_counters(
     windows_from_ledger: bool = False,
     customer_counters: Sequence[BudgetCounter] = (),
     customer_hierarchy: object = None,
+    admitted_at: datetime | None = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -3917,53 +3919,54 @@ async def increment_spend_counters(
     Deprecated: the ledger-off branch below is frozen and lives in
     ``legacy_spend_counters``. Delete it together with the ledger-off setting.
     """
-    if windows_from_ledger:
-        await charge_spend_counters(
-            token=token,
-            team_id=team_id,
-            user_id=user_id,
-            response_cost=response_cost,
-            org_id=org_id,
-            budget_reservation=budget_reservation,
-            end_user_id=end_user_id,
-            tags=tags,
-            model_access_groups=model_access_groups,
-            project_id=project_id,
-            committed_spend_scope=committed_spend_scope,
-            customer_counters=customer_counters,
-            customer_hierarchy=customer_hierarchy,
-        )
-        return
-    with spend_counter_batch_scope(
-        spend_counter_store,
-        counter_keys=post_call_counter_keys(
-            token=token,
-            team_id=team_id,
-            user_id=user_id,
-            org_id=org_id,
-            end_user_id=end_user_id,
-            tags=tags,
-            model_access_groups=model_access_groups,
-            project_id=project_id,
-        )
-        | frozenset(counter.counter_key for counter in customer_counters),
-    ):
-        await legacy_spend_counters.increment_spend_counters_batched(  # pyright: ignore[reportUnknownMemberType]  # the frozen ledger-off step, moved out unchanged
-            token=token,
-            team_id=team_id,
-            user_id=user_id,
-            response_cost=response_cost,
-            org_id=org_id,
-            budget_reservation=budget_reservation,
-            end_user_id=end_user_id,
-            tags=tags,
-            request_started_at=request_started_at,
-            model_access_groups=model_access_groups,
-            project_id=project_id,
-            committed_spend_scope=committed_spend_scope,
-            windows_from_ledger=windows_from_ledger,
-            customer_counters=customer_counters,
-        )
+    with resolve_schedules_at(admitted_at or request_started_at):
+        if windows_from_ledger:
+            await charge_spend_counters(
+                token=token,
+                team_id=team_id,
+                user_id=user_id,
+                response_cost=response_cost,
+                org_id=org_id,
+                budget_reservation=budget_reservation,
+                end_user_id=end_user_id,
+                tags=tags,
+                model_access_groups=model_access_groups,
+                project_id=project_id,
+                committed_spend_scope=committed_spend_scope,
+                customer_counters=customer_counters,
+                customer_hierarchy=customer_hierarchy,
+            )
+            return
+        with spend_counter_batch_scope(
+            spend_counter_store,
+            counter_keys=post_call_counter_keys(
+                token=token,
+                team_id=team_id,
+                user_id=user_id,
+                org_id=org_id,
+                end_user_id=end_user_id,
+                tags=tags,
+                model_access_groups=model_access_groups,
+                project_id=project_id,
+            )
+            | frozenset(counter.counter_key for counter in customer_counters),
+        ):
+            await legacy_spend_counters.increment_spend_counters_batched(  # pyright: ignore[reportUnknownMemberType]  # the frozen ledger-off step, moved out unchanged
+                token=token,
+                team_id=team_id,
+                user_id=user_id,
+                response_cost=response_cost,
+                org_id=org_id,
+                budget_reservation=budget_reservation,
+                end_user_id=end_user_id,
+                tags=tags,
+                request_started_at=request_started_at,
+                model_access_groups=model_access_groups,
+                project_id=project_id,
+                committed_spend_scope=committed_spend_scope,
+                windows_from_ledger=windows_from_ledger,
+                customer_counters=customer_counters,
+            )
 
 
 def _cached_budget_limits(cached: object) -> object:

@@ -50,6 +50,14 @@ async def test_only_a_users_own_counter_reseeds_from_the_user_row(counter_key: s
     assert await SpendCounterReseed.from_db(prisma, counter_key) == expected
 
 
+
+@pytest.mark.asyncio
+async def test_a_scheduled_team_window_never_reseeds_from_the_team_row() -> None:
+    teams: Final = _FakeFindUniqueTable(row=SimpleNamespace(spend=7.0))
+    prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_teamtable=teams))
+    counter: Final = "spend:team:t:window:sched:UTC:mon:08:00-13:00@2026-11-23T08:00:00+00:00"
+    assert await SpendCounterReseed.from_db(prisma, counter) is None
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "family,table_name,id_field",
