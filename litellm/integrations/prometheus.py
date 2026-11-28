@@ -4799,7 +4799,11 @@ class PrometheusLogger(CustomLogger):
         )
         if not budgeted:
             return
-        emails: Final = await io.fetch_emails(tuple(dict.fromkeys(membership.user_id for membership, _ in budgeted)))
+        emails: Final = (
+            await io.fetch_emails(tuple(dict.fromkeys(membership.user_id for membership, _ in budgeted)))
+            if self._team_member_gauges_label_email()
+            else MappingProxyType({})
+        )
         counters: Final = await io.read_counters(
             tuple(team_member_counter(membership.user_id, membership.team_id) for membership, _ in budgeted)
         )
@@ -5265,6 +5269,16 @@ class PrometheusLogger(CustomLogger):
             spend=carried.spend + response_cost,
             budget_reset_at=carried.budget_reset_at,
             now=datetime.now(timezone.utc),
+        )
+
+    def _team_member_gauges_label_email(self) -> bool:
+        return any(
+            UserAPIKeyLabelNames.USER_EMAIL.value in self.get_labels_for_metric(metric_name)
+            for metric_name in (
+                "litellm_remaining_team_member_budget_metric",
+                "litellm_team_member_max_budget_metric",
+                "litellm_team_member_budget_remaining_hours_metric",
+            )
         )
 
     def _team_member_labels(
