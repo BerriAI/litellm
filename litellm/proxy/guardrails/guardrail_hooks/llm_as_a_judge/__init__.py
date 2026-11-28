@@ -1,5 +1,6 @@
 """LLM-as-a-Judge guardrail: uses an LLM to score requests or responses against weighted criteria."""
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
@@ -178,6 +179,37 @@ def _build_judge_prompt(
     )
 
 
+def _finite_score(raw: object) -> float | None:
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        value: Final = float(raw)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _weighted_verdict_score(verdicts: object) -> float | None:
+    if not isinstance(verdicts, list) or not verdicts:
+        return None
+    scored: Final = tuple(
+        (_finite_score(v.get("score")), _finite_score(v.get("weight"))) for v in verdicts if isinstance(v, dict)
+    )
+    if len(scored) != len(verdicts) or any(score is None for score, _ in scored):
+        return None
+    weighted: Final = tuple((score or 0.0, 1.0 if weight is None else max(0.0, weight)) for score, weight in scored)
+    total_weight: Final = sum(weight for _, weight in weighted)
+    if total_weight <= 0:
+        return None
+    return sum(score * weight for score, weight in weighted) / total_weight
+
+
+def _overall_score(judge_result: Mapping[str, object]) -> float | None:
+    score: Final = _finite_score(judge_result.get("overall_score"))
+    resolved: Final = score if score is not None else _weighted_verdict_score(judge_result.get("verdicts"))
+    return None if resolved is None else max(0.0, min(100.0, resolved))
+
+
 class _CustomGuardrailOptions(TypedDict, total=False):
     """The ``CustomGuardrail`` options this guardrail accepts and forwards untouched."""
 
@@ -291,10 +323,12 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 status = "guardrail_failed_to_respond"
                 return inputs
 
-            try:
-                overall_score: Final = max(0.0, min(100.0, float(judge_result.get("overall_score", 100))))
-            except (TypeError, ValueError):
-                verbose_logger.warning("llm_as_a_judge: invalid overall_score from judge, failing open")
+            overall_score: Final = _overall_score(judge_result)
+            if overall_score is None:
+                verbose_logger.warning(
+                    "llm_as_a_judge: judge returned no usable overall_score or verdict scores, failing open"
+                )
+                status = "guardrail_failed_to_respond"  # rebind-ok: per-outcome status read in finally
                 return inputs
 
             passed: Final = overall_score >= self.overall_threshold

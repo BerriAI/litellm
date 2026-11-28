@@ -814,3 +814,70 @@ async def test_apply_guardrail_clamps_score(mock_completion):
     result = await guardrail.apply_guardrail(inputs, request_data, "response")
     assert result is inputs
     assert request_data["metadata"]["eval_information"]["overall_score"] == 100.0
+
+
+_FAILING_VERDICTS: Final = [
+    {"criterion_name": "Accuracy", "score": 5, "reasoning": "wrong", "passed": False, "weight": 60},
+    {"criterion_name": "Safety", "score": 5, "reasoning": "unsafe", "passed": False, "weight": 40},
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        pytest.param({"verdicts": _FAILING_VERDICTS}, id="overall_score-missing"),
+        pytest.param({"verdicts": _FAILING_VERDICTS, "overall_score": None}, id="overall_score-null"),
+        pytest.param({"verdicts": _FAILING_VERDICTS, "overall_score": "5/100"}, id="overall_score-text"),
+    ],
+)
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_apply_guardrail_unusable_overall_score_falls_back_to_verdicts(mock_completion, verdict):
+    mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content=json.dumps(verdict)))])
+    guardrail = _make_guardrail(overall_threshold=80.0, on_failure="block", router_provider=lambda: None)
+    request_data: dict = {"messages": [], "metadata": {}}
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail({"texts": ["response"]}, request_data, "response")
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["overall_score"] == 5.0
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_apply_guardrail_missing_overall_score_uses_verdict_weights(mock_completion):
+    verdict = {
+        "verdicts": [
+            {"criterion_name": "Accuracy", "score": 100, "passed": True, "weight": 60},
+            {"criterion_name": "Safety", "score": 50, "passed": False, "weight": 40},
+        ]
+    }
+    mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content=json.dumps(verdict)))])
+    guardrail = _make_guardrail(overall_threshold=80.0, on_failure="log", router_provider=lambda: None)
+    request_data: dict = {"messages": [], "metadata": {}}
+    await guardrail.apply_guardrail({"texts": ["response"]}, request_data, "response")
+    assert request_data["metadata"]["eval_information"]["overall_score"] == 80.0
+    assert request_data["metadata"]["eval_information"]["passed"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "judge_content",
+    [
+        pytest.param("", id="empty-judge-content"),
+        pytest.param("{}", id="empty-object"),
+        pytest.param('{"verdicts": [], "overall_score": NaN}', id="overall_score-nan"),
+        pytest.param(json.dumps({"result": {"verdicts": _FAILING_VERDICTS, "overall_score": 5}}), id="nested-verdict"),
+        pytest.param(json.dumps({"verdicts": [{"criterion_name": "Safety", "passed": False}]}), id="verdict-no-score"),
+    ],
+)
+@patch("litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge.litellm.acompletion")
+async def test_apply_guardrail_scoreless_verdict_fails_open_with_status(mock_completion, judge_content):
+    mock_completion.return_value = MagicMock(choices=[MagicMock(message=MagicMock(content=judge_content))])
+    guardrail = _make_guardrail(overall_threshold=80.0, on_failure="block", router_provider=lambda: None)
+    inputs = {"texts": ["response"]}
+    request_data: dict = {"messages": [], "metadata": {}}
+    result = await guardrail.apply_guardrail(inputs, request_data, "response")
+    assert result is inputs
+    assert "eval_information" not in request_data["metadata"]
+    logged = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert logged[0]["guardrail_status"] == "guardrail_failed_to_respond"
