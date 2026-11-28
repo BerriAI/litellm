@@ -4942,6 +4942,7 @@ class LlmProviders(str, Enum):
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
     RESETDATA = "resetdata"
+    OPENIMPACT = "openimpact"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     CORALBRICKS = "coralbricks"
