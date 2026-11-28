@@ -356,24 +356,24 @@ def invoked_handler_name(core: EndpointCore, plan: Plan) -> str | None:
     return name if isinstance(name, str) else None
 
 
-# The endpoints whose attempt helper runs inside `make_call`'s `endpoint_selection`, under the
-# name of its `original_function`.
+# The endpoints whose pick runs under the name of their attempt helper.
 _SELECTION_CALLS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "acompletion": "_acompletion",
         "completion": "_completion",
         "atext_completion": "_atext_completion",
+        "aadapter_completion": "_aadapter_completion",
     }
 )
 
 
 def selection_endpoint(core: EndpointCore, plan: Plan) -> str | None:
-    """The endpoint ``endpoint_selection`` names around the plan's pick. A sync generic call never
-    reaches ``make_call``, and a generic attempt reads the handler's name and module."""
+    """The endpoint ``endpoint_selection`` names around the plan's pick. A generic attempt, sync or
+    async, reads the handler's name and module."""
     call: Final = _SELECTION_CALLS.get(plan.endpoint)
     if call is not None:
         return endpoint_for_call(call)
-    if plan.kind != "generic":
+    if plan.kind not in ("generic", "generic_sync"):
         return None
     function: Final[object] = core.host.invoke(plan.host_op)  # pyright: ignore[reportUnknownMemberType]  # the core's host
     return endpoint_for_call(getattr(function, "__name__", None), getattr(function, "__module__", None))
