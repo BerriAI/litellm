@@ -141,6 +141,19 @@ class TestDeleteNestedValue:
         payload: Final = MappingProxyType({"tags": ["a"], "secret": ["s"]})
         assert delete_nested_value(payload, "secret") == {"tags": ["a"]}
 
+    def test_delete_addresses_keys_containing_dots_with_an_escaped_dot(self):
+        """A key holding a dot is dropped by the same path get_nested_value reads it with."""
+        jwt = {"kubernetes.io": {"namespace": "ns", "secret": "s"}, "sub": "x"}
+        expected = {"kubernetes.io": {"namespace": "ns"}, "sub": "x"}
+        assert delete_nested_value(jwt, "kubernetes\\.io.secret") == expected
+        assert delete_nested_values(jwt, ["kubernetes\\.io.secret"]) == expected
+        assert jwt == {"kubernetes.io": {"namespace": "ns", "secret": "s"}, "sub": "x"}
+
+        tools = {"tools": [{"name": "t1", "input.examples": ["ex"]}]}
+        assert delete_nested_value(tools, "tools[*].input\\.examples") == {
+            "tools": [{"name": "t1"}]
+        }
+
 
 def test_delete_nested_values_removes_every_path_and_leaves_the_input_untouched():
     payload: Final = MappingProxyType(
