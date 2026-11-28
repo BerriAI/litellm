@@ -57,12 +57,15 @@ def _best_effort(convert: Callable[[], JsonDict], fallback: JsonDict, *, label: 
 def normalize_jsonrpc_response(content: JsonDict, target: A2AVersion, *, method: str) -> JsonDict:
     """Convert a JSON-RPC response's ``result`` to ``target``.
 
-    Errors and non-dict results pass through untouched.
+    Errors pass through untouched, as do non-dict results for every method except
+    ``tasks/pushNotificationConfig/list``, whose 0.3 result is a bare array.
     """
     if content.get("error") is not None:
         return content
     result: Final = content.get("result")
-    if not isinstance(result, dict):
+    if not isinstance(result, dict) and not (
+        method == "tasks/pushNotificationConfig/list" and isinstance(result, list)
+    ):
         return content
 
     converted: Final = _convert_result(result, target, method=method, request_id=_as_request_id(content.get("id")))
@@ -135,19 +138,97 @@ def _as_request_id(value: object) -> RequestId:
 
 
 def _convert_result(
-    result: JsonDict,
+    result: JsonDict | list[object],
     target: A2AVersion,
     *,
     method: str,
     request_id: RequestId,
-) -> JsonDict:
+) -> JsonDict | list[object]:
     if method == "message/send":
-        return _convert_send_result(result, target, request_id=request_id)
+        return _convert_send_result(result, target, request_id=request_id)  # type: ignore[arg-type]
     if method in ("tasks/get", "tasks/cancel"):
-        return _convert_task(result, target)
+        return _convert_task(result, target)  # type: ignore[arg-type]
     if method == "tasks/list":
-        return _convert_list_tasks_result(result, target)
+        return _convert_list_tasks_result(result, target)  # type: ignore[arg-type]
+    if method in ("tasks/pushNotificationConfig/set", "tasks/pushNotificationConfig/get"):
+        return _convert_push_config_result(result, target)
+    if method == "tasks/pushNotificationConfig/list":
+        return _convert_push_config_list_result(result, target)
     return result
+
+
+def _detect_push_config_version(config: JsonDict) -> A2AVersion | None:
+    """Infer the wire version of a TaskPushNotificationConfig dict.
+
+    0.3 nests the config under ``pushNotificationConfig`` (``{"taskId": ...,
+    "pushNotificationConfig": {"id", "url", ...}}``); 1.0 is flat
+    (``{"id", "taskId", "url", ...}``). The nested key is the discriminator.
+    """
+    if "pushNotificationConfig" in config:
+        return "0.3"
+    if "url" in config:
+        return "1.0"
+    return None
+
+
+def _convert_push_config_result(result: JsonDict | list[object], target: A2AVersion) -> JsonDict | list[object]:
+    if not isinstance(result, dict):
+        return result
+    current: Final = _detect_push_config_version(result)
+    if current is None or current == target:
+        return result
+    return _best_effort(
+        lambda: _push_config_to(result, target),
+        result,
+        label="push notification config",
+    )
+
+
+def _convert_push_config_list_result(result: JsonDict | list[object], target: A2AVersion) -> JsonDict | list[object]:
+    if isinstance(result, list):
+        # 0.3 wire: the result is a bare array of configs.
+        if target == "0.3":
+            return result
+        return _best_effort(
+            lambda: {
+                "configs": [
+                    _push_config_to(item, "1.0") if isinstance(item, dict) else item for item in result
+                ]
+            },
+            result,
+            label="push notification config list",
+        )
+    configs: Final = result.get("configs")
+    if target == "1.0" or not isinstance(configs, list):
+        return result
+    # 1.0 -> 0.3 unwraps the envelope; 0.3 has no pagination, so a 1.0
+    # ``nextPageToken`` cannot be represented and is dropped.
+    return _best_effort(
+        lambda: [_push_config_to(item, "0.3") if isinstance(item, dict) else item for item in configs],
+        result,
+        label="push notification config list",
+    )
+
+
+def _push_config_to(config: JsonDict, target: A2AVersion) -> JsonDict:
+    from a2a.compat.v0_3.conversions import (
+        MessageToDict,
+        ParseDict,
+        pb2_v10,
+        to_compat_task_push_notification_config,
+        to_core_task_push_notification_config,
+        types_v03,
+    )
+
+    if target == "1.0":
+        core: Final = to_core_task_push_notification_config(
+            types_v03.TaskPushNotificationConfig.model_validate(config)
+        )
+        return MessageToDict(core, preserving_proto_field_name=False)
+
+    pb: Final = pb2_v10.TaskPushNotificationConfig()
+    ParseDict(config, pb, ignore_unknown_fields=True)
+    return _dump_03(to_compat_task_push_notification_config(pb))
 
 
 def _detect_send_version(result: JsonDict) -> A2AVersion | None:
