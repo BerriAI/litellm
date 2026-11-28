@@ -1,6 +1,10 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import i18next from "i18next";
 import type { ComponentProps } from "react";
+import { I18nextProvider } from "react-i18next";
 import { describe, expect, it, vi } from "vitest";
+import en from "@/i18n/locales/en.json";
+import zh from "@/i18n/locales/zh-CN.json";
 import MoyaiChatHome from "./MoyaiChatHome";
 
 function homeProps(overrides: Partial<ComponentProps<typeof MoyaiChatHome>> = {}) {
@@ -27,11 +31,17 @@ describe("MoyaiChatHome", () => {
     expect(screen.getByRole("heading", { level: 1, name: "What should we research?" })).toBeInTheDocument();
   });
 
-  it("should pass a starter prompt to the composer without submitting it", () => {
+  it("should fill the composer with the original prompt from a translated starter", async () => {
+    const i18n = i18next.createInstance();
+    await i18n.init({ lng: "zh-CN", resources: { en: { translation: en }, "zh-CN": { translation: zh } } });
     const props = homeProps();
-    render(<MoyaiChatHome {...props} />);
+    render(
+      <I18nextProvider i18n={i18n}>
+        <MoyaiChatHome {...props} />
+      </I18nextProvider>,
+    );
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /Review code/ }));
+      fireEvent.click(screen.getByRole("button", { name: zh.chat.moyaiHome.starters.review.label }));
     });
     expect(props.onPrompt).toHaveBeenCalledWith("Review my changes for bugs and improvements.");
   });

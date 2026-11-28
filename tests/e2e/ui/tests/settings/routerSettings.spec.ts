@@ -117,6 +117,97 @@ const ADMIN_AUTH = {
   Authorization: `Bearer ${users[Role.ProxyAdmin].password}`,
 };
 
+test.describe("Router Settings - Request contracts", () => {
+  test.use({ storageState: ADMIN_STORAGE_PATH });
+
+  test("saves only the explicit model retry override and leaves the global policy null", async ({ page, request }) => {
+    const config = await request.get("/get/config/callbacks", { headers: ADMIN_AUTH });
+    expect(config.ok()).toBe(true);
+    const { router_settings: router } = (await config.json()) as ConfigYAML;
+    const originalOverrides = router?.model_group_retry_policy ?? {};
+    await page.route("**/get/config/callbacks", async (route) => {
+      const response = await route.fetch();
+      if (!response.ok()) return route.fulfill({ response });
+      const data = (await response.json()) as ConfigYAML;
+      return route.fulfill({
+        response,
+        json: {
+          ...data,
+          router_settings: { ...data.router_settings, retry_policy: null, model_group_retry_policy: null },
+        },
+      });
+    });
+
+    try {
+      await page.goto("/ui/models-and-endpoints?tab=retry-settings");
+      const scope = page.getByRole("combobox", { name: "Retry Policy Scope:" });
+      await scope.click();
+      const option = page.getByRole("option").filter({ hasNotText: "Global Default" }).first();
+      const model = (await option.innerText()).trim();
+      await option.click();
+
+      const count = page.getByRole("spinbutton", { name: "BadRequestError (400) retry count", exact: true });
+      await expect(count).toHaveValue("");
+      await count.fill("0");
+      const saved = page.waitForResponse(
+        (response) => new URL(response.url()).pathname.endsWith("/config/update") && response.request().method() === "POST",
+      );
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      const response = await saved;
+      expect(response.request().postDataJSON()).toEqual({
+        router_settings: { retry_policy: null, model_group_retry_policy: { [model]: { BadRequestErrorRetries: 0 } } },
+      });
+      expect(response.status()).toBe(200);
+      await expect(page.getByText("Retry settings saved successfully", { exact: true })).toBeVisible();
+    } finally {
+      await patchRouterSettings(request, { model_group_retry_policy: originalOverrides });
+    }
+  });
+
+  test("clearing a General settings list deletes the configured field", async ({ page, request }) => {
+    const field = { config_type: "general_settings", field_name: "allowed_file_extensions" };
+    const config = await request.get("/config/list", {
+      headers: ADMIN_AUTH,
+      params: { config_type: field.config_type },
+    });
+    expect(config.ok()).toBe(true);
+    const rows = (await config.json()) as { field_name: string; field_value: unknown; stored_in_db: boolean | null }[];
+    const original = rows.find((row) => row.field_name === field.field_name);
+
+    try {
+      await navigateToPage(page, Page.RouterSettings);
+      await page.getByRole("tab", { name: "General", exact: true }).click();
+      const row = page.getByRole("row").filter({ has: page.getByText(field.field_name, { exact: true }) });
+      const input = row.getByRole("textbox");
+      const update = row.getByRole("button", { name: "Update", exact: true });
+      await input.fill("pdf, txt");
+      await update.click();
+      await expect(page.getByText("Successfully updated value!", { exact: true })).toBeVisible();
+
+      await input.clear();
+      const saved = page.waitForResponse(
+        (response) =>
+          /\/config\/field\/(update|delete)$/.test(new URL(response.url()).pathname) &&
+          response.request().method() === "POST",
+      );
+      await update.click();
+      const response = await saved;
+      expect(new URL(response.url()).pathname).toMatch(/\/config\/field\/delete$/);
+      expect(response.request().postDataJSON()).toEqual(field);
+      expect(response.status()).toBe(200);
+      await expect(page.getByText("Field reset on proxy", { exact: true })).toBeVisible();
+    } finally {
+      const cleanup = original?.stored_in_db
+        ? await request.post("/config/field/update", {
+            headers: ADMIN_AUTH,
+            data: { ...field, field_value: original.field_value },
+          })
+        : await request.post("/config/field/delete", { headers: ADMIN_AUTH, data: field });
+      expect(cleanup.ok() || (!original?.stored_in_db && cleanup.status() === 400)).toBe(true);
+    }
+  });
+});
+
 // Five probes 2s apart outlast the e2e stack's proxy_config_reload_interval_seconds of 7.
 const SETTLE_INTERVAL_MS = 2_000;
 const SETTLE_PROBES = 5;

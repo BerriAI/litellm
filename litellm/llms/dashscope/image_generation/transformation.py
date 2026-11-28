@@ -150,14 +150,14 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict[str, object],
         litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         headers["Authorization"] = f"Bearer {self._resolve_api_key(api_key)}"
         headers["Content-Type"] = "application/json"
         return headers

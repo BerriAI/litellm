@@ -36,6 +36,10 @@ describe("formatExpiryDate", () => {
     expect(formatExpiryDate("2026-07-31")).toBe("Jul 31, 2026");
   });
 
+  it("formats the same UTC expiration date in Chinese", () => {
+    expect(formatExpiryDate("2053-11-29", "zh-CN")).toBe("2053年11月29日");
+  });
+
   it("returns the input unchanged when unparseable", () => {
     expect(formatExpiryDate("bogus")).toBe("bogus");
   });

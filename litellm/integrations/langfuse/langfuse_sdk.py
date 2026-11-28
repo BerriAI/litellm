@@ -39,6 +39,7 @@ from pydantic import ConfigDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.langfuse.langfuse import PROMPT_CACHE_TTL_ENV, parse_langfuse_debug, whole_number
+from litellm.integrations.langfuse.langfuse_media import MediaField, MediaUpload, MediaUploader, extract_media
 from litellm.integrations.langfuse.langfuse_otel_attributes import serialize_langfuse_datetime
 from litellm.integrations.langfuse.trace_id import resolve_trace_id
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -86,6 +87,13 @@ _TRUNCATION_GROUPS: Final = (
     (LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT, LangfuseOtelSpanAttributes.TRACE_OUTPUT),
     _METADATA_PREFIXES,
 )
+_MEDIA_FIELDS: Final[tuple[MediaField, ...]] = ("input", "output", "metadata")
+_TRACE_LEVEL_KEYS: Final = (
+    LangfuseOtelSpanAttributes.TRACE_INPUT,
+    LangfuseOtelSpanAttributes.TRACE_OUTPUT,
+    LangfuseOtelSpanAttributes.TRACE_METADATA,
+)
+_SHUTDOWN_UPLOAD_MILLIS: Final = 5_000
 _SERVER_FLOOR_HINT: Final = (
     "; the OTLP traces route needs a self-hosted Langfuse server on 3.63.0 or newer "
     "(https://langfuse.com/self-hosting/upgrade/versioning#sdk-server)"
@@ -616,12 +624,16 @@ def _truncated(span: ReadableSpan) -> ReadableSpan | None:
         for prefix in largest
         if any(_in_group(key, (prefix,)) for key in attributes)
     }
+    return _with_attributes(span, {**kept, **marked})
+
+
+def _with_attributes(span: ReadableSpan, attributes: Mapping[str, AttributeValue]) -> ReadableSpan:
     return ReadableSpan(
         name=span.name,
         context=span.context,
         parent=span.parent,
         resource=span.resource,
-        attributes=MappingProxyType({**kept, **marked}),
+        attributes=MappingProxyType(dict(attributes)),
         events=span.events,
         links=span.links,
         kind=span.kind,
@@ -832,6 +844,88 @@ class _ExportLedger(SpanExporter):
         return self.exporter.force_flush(timeout_millis)
 
 
+def _media_field(key: str) -> MediaField | None:
+    return next((field for field, group in zip(_MEDIA_FIELDS, _TRUNCATION_GROUPS) if _in_group(key, group)), None)
+
+
+class _MediaExtractingExporter(SpanExporter):
+    """Replaces base64 media in each span's input, output and metadata with Langfuse media references and
+    queues the payloads for upload, which the v2 SDK did before ingestion."""
+
+    def __init__(self, exporter: SpanExporter, uploader: MediaUploader) -> None:
+        self.exporter: Final = exporter
+        self.uploader: Final = uploader
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        return self.exporter.export(tuple(self._without_media(span) for span in spans))
+
+    def _without_media(self, span: ReadableSpan) -> ReadableSpan:
+        try:
+            return self._extracted(span)
+        except Exception as error:  # noqa: BLE001  # a span the extraction cannot handle is exported as it is
+            verbose_logger.warning(
+                "Langfuse media extraction failed for span %r, exporting it unchanged: %s", span.name, error
+            )
+            return span
+
+    def _extracted(self, span: ReadableSpan) -> ReadableSpan:
+        if span.context is None:
+            return span
+        attributes: Final = span.attributes or MappingProxyType({})
+        trace_id: Final = format(span.context.trace_id, "032x")
+        observation_id: Final = format(span.context.span_id, "016x")
+        replaced: Final = {
+            key: reference
+            for key, value in attributes.items()
+            if (reference := self._with_references(key, value, trace_id, observation_id)) is not None
+        }
+        return _with_attributes(span, {**attributes, **replaced}) if replaced else span
+
+    def _with_references(self, key: str, value: AttributeValue, trace_id: str, observation_id: str) -> str | None:
+        """``None`` leaves the attribute as it is, because it holds no media."""
+        field: Final = _media_field(key)
+        if field is None or not isinstance(value, str):
+            return None
+        serialized, found = extract_media(value)
+        uploads: Final = tuple(
+            MediaUpload(
+                media=media,
+                trace_id=trace_id,
+                observation_id=None if _in_group(key, _TRACE_LEVEL_KEYS) else observation_id,
+                field=field,
+            )
+            for media in found
+        )
+        if not uploads:
+            return None
+        self.uploader.submit(uploads)
+        return serialized
+
+    def shutdown(self) -> None:
+        self.exporter.shutdown()
+        self.uploader.drain(_SHUTDOWN_UPLOAD_MILLIS)
+        self.uploader.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return self.exporter.force_flush(timeout_millis)
+
+
+def _build_media_uploader(*, public_key: str, secret_key: str, base_url: str) -> MediaUploader:
+    """Uploads go through litellm's HTTP handler, as v2's did, with the export channel's timeout and retry delays.
+
+    The client is read from the handler for every upload: litellm closes a pooled client once its cache entry
+    expires, and the handler then opens another."""
+    handler: Final = get_httpx_client()
+    return MediaUploader(
+        api=lambda client: _rest_api(
+            public_key=public_key, secret_key=secret_key, base_url=base_url, httpx_client=client
+        ),
+        client=lambda: handler.client,
+        timeout=configured_timeout(),
+        delays=tuple(2.0 ** min(attempt, _MAX_BACKOFF_EXPONENT) for attempt in range(configured_max_retries())),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class LangfuseTracing:
     """litellm's own export channel to one Langfuse project: a provider, its tracer and the exporter behind them.
@@ -843,11 +937,20 @@ class LangfuseTracing:
     provider: TracerProvider
     tracer: Tracer
     ledger: _ExportLedger
+    uploader: MediaUploader | None = None
 
     def flush(self, timeout_millis: int = 30_000) -> bool:
-        """``True`` only when the queue drained in time and every batch it held was accepted by the destination."""
+        """``True`` only when the queue drained in time, every batch it held was accepted by the destination and
+        the media those batches referenced was uploaded."""
+        deadline: Final = monotonic() + timeout_millis / 1000
         failed_before: Final = self.ledger.failed_batches
-        return self.provider.force_flush(timeout_millis) and self.ledger.failed_batches == failed_before
+        failed_uploads_before: Final = 0 if self.uploader is None else self.uploader.failed_uploads
+        exported: Final = self.provider.force_flush(timeout_millis)
+        uploaded: Final = self.uploader is None or (
+            self.uploader.drain(max(0, int((deadline - monotonic()) * 1000)))
+            and self.uploader.failed_uploads == failed_uploads_before
+        )
+        return exported and uploaded and self.ledger.failed_batches == failed_before
 
     def shutdown(self) -> None:
         self.provider.shutdown()
@@ -916,6 +1019,9 @@ def acquire_langfuse_tracing(
             exporter=DiscardingSpanExporter()
             if mock_mode
             else _build_span_exporter(public_key=public_key, secret_key=secret_key, base_url=base_url),
+            uploader=None
+            if mock_mode
+            else _build_media_uploader(public_key=public_key, secret_key=secret_key, base_url=base_url),
             environment=environment,
             release=release,
             sample_rate=key.sample_rate,
@@ -1001,6 +1107,7 @@ def build_langfuse_tracing(
     sample_rate: float,
     flush_interval_millis: int,
     flush_at: int = _DEFAULT_FLUSH_AT,
+    uploader: MediaUploader | None = None,
 ) -> LangfuseTracing:
     """Wire the provider from litellm's own settings so a host's ``OTEL_*`` variables do not steer it.
 
@@ -1019,7 +1126,7 @@ def build_langfuse_tracing(
         id_generator=_RequestedIdGenerator(),
         span_limits=_SPAN_LIMITS,
     )
-    ledger: Final = _ExportLedger(exporter)
+    ledger: Final = _ExportLedger(exporter if uploader is None else _MediaExtractingExporter(exporter, uploader))
     provider.add_span_processor(
         BatchSpanProcessor(
             ledger,
@@ -1028,7 +1135,9 @@ def build_langfuse_tracing(
             schedule_delay_millis=flush_interval_millis,
         )
     )
-    return LangfuseTracing(provider=provider, tracer=provider.get_tracer(_TRACER_NAME), ledger=ledger)
+    return LangfuseTracing(
+        provider=provider, tracer=provider.get_tracer(_TRACER_NAME), ledger=ledger, uploader=uploader
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1190,15 +1299,21 @@ def build_langfuse_client(
     ``auth_check`` reports as a failure rather than raising at construction.
     """
     return LangfuseApiClient(
-        LangfuseAPI(
-            base_url=base_url,
-            username=public_key,
-            password=secret_key,
-            x_langfuse_sdk_name="python",
-            x_langfuse_sdk_version=version("langfuse"),
-            x_langfuse_public_key=public_key,
-            httpx_client=httpx_client,
-            timeout=configured_timeout(),
-        ),
+        _rest_api(public_key=public_key, secret_key=secret_key, base_url=base_url, httpx_client=httpx_client),
         prompt_cache_ttl_seconds=configured_prompt_cache_ttl(),
+    )
+
+
+def _rest_api(
+    *, public_key: str | None, secret_key: str | None, base_url: str, httpx_client: httpx.Client | None
+) -> LangfuseAPI:
+    return LangfuseAPI(
+        base_url=base_url,
+        username=public_key,
+        password=secret_key,
+        x_langfuse_sdk_name="python",
+        x_langfuse_sdk_version=version("langfuse"),
+        x_langfuse_public_key=public_key,
+        httpx_client=httpx_client,
+        timeout=configured_timeout(),
     )

@@ -6582,8 +6582,11 @@ async def test_pass_through_request_propagates_active_trace_context(span_source:
     assert propagated.get_span_context().span_id == span.get_span_context().span_id
 
 
-async def _relay_with_trace_headers(inbound_headers: dict[str, str], forward_headers: bool):
+async def _relay_with_trace_headers(
+    inbound_headers: dict[str, str] | Headers, forward_headers: bool, *, preserve_trace_context: bool = False
+):
     from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
     captured: dict[str, httpx.Headers] = {}
 
@@ -6596,16 +6599,17 @@ async def _relay_with_trace_headers(inbound_headers: dict[str, str], forward_hea
     try:
         with ExitStack() as stack:
             _enter_relay_logging_mocks(stack, {})
-            span = tracer.start_span("litellm_request")
+            span = tracer.start_span("litellm_request", context=TraceContextTextMapPropagator().extract(inbound_headers))
             stack.callback(span.end)
             request = _relay_client_request(method="POST")
-            request.headers = Headers(inbound_headers)
+            request.headers = inbound_headers if isinstance(inbound_headers, Headers) else Headers(inbound_headers)
             response = await pass_through_request(
                 request=request,
                 target="http://internal-api.test/v1/generate",
                 custom_headers={},
                 user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", parent_otel_span=span),
                 forward_headers=forward_headers,
+                preserve_trace_context=preserve_trace_context,
             )
     finally:
         cleanup()
@@ -6627,6 +6631,44 @@ async def test_pass_through_request_keeps_x_pass_trace_headers_when_otel_span_is
     assert upstream_headers["traceparent"] == caller_traceparent
     assert upstream_headers["tracestate"] == "vendor=caller"
     assert format(span.get_span_context().trace_id, "032x") not in upstream_headers["traceparent"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward_headers", [False, True])
+async def test_pass_through_request_preserves_caller_trace_context_when_enabled(forward_headers: bool):
+    caller_traceparent = "00-11111111111111111111111111111111-2222222222222222-01"
+    upstream_headers, _ = await _relay_with_trace_headers(
+        {"traceparent": caller_traceparent, "tracestate": "vendor=caller", "baggage": "key=value"},
+        forward_headers=forward_headers,
+        preserve_trace_context=True,
+    )
+
+    assert upstream_headers["traceparent"] == caller_traceparent
+    assert upstream_headers["tracestate"] == "vendor=caller"
+    assert upstream_headers.get("baggage") == ("key=value" if forward_headers else None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward_headers", [False, True])
+async def test_pass_through_request_preserves_multiple_tracestate_values(forward_headers: bool):
+    upstream_headers, _ = await _relay_with_trace_headers(
+        Headers(raw=[(b"tracestate", b"first=value"), (b"tracestate", b"second=value")]),
+        forward_headers=forward_headers,
+        preserve_trace_context=True,
+    )
+
+    assert upstream_headers["tracestate"] == "first=value,second=value"
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_does_not_inject_proxy_trace_context_when_preserving():
+    upstream_headers, _ = await _relay_with_trace_headers(
+        {"x-pass-anthropic-beta": "beta-1"}, forward_headers=False, preserve_trace_context=True
+    )
+
+    assert "traceparent" not in upstream_headers
+    assert "tracestate" not in upstream_headers
+    assert upstream_headers["anthropic-beta"] == "beta-1"
 
 
 @pytest.mark.asyncio

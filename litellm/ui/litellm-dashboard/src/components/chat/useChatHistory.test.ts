@@ -1,5 +1,9 @@
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { createElement, type PropsWithChildren } from "react";
+import { I18nextProvider } from "react-i18next";
+import i18n from "@/i18n/i18n";
+import zh from "@/i18n/locales/zh-CN.json";
 import { useChatHistory } from "./useChatHistory";
 import { deleteChatImages, loadChatImages, persistChatImages } from "./chatImageStorage";
 import type { Conversation } from "./types";
@@ -95,6 +99,26 @@ describe("useChatHistory", () => {
     expect(stored[0].messages[0].attachments).toEqual([{ ...image, url: "" }]);
     expect(stored[0].title).toBe("design.png");
     expect(result.current.conversations[0].messages[0].attachments?.[0].url).toBe(image.url);
+  });
+
+  it("should persist a stable title for a nameless image prompt in Chinese", async () => {
+    const locale = i18n.cloneInstance({ forkResourceStore: true });
+    locale.addResourceBundle("zh-CN", "translation", zh);
+    await locale.changeLanguage("zh-CN");
+    const wrapper = ({ children }: PropsWithChildren) => createElement(I18nextProvider, { i18n: locale }, children);
+    const { result } = renderHook(() => useChatHistory(null, "alice"), { wrapper });
+    let id!: string;
+    act(() => {
+      id = result.current.createConversation("vision-model");
+    });
+    act(() => {
+      result.current.appendMessage(id, { role: "user", content: "", attachments: [{ ...image, name: "" }] });
+    });
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem(aliceStorageKey) ?? "[]");
+      expect(stored).toMatchObject([{ title: "Image conversation" }]);
+    });
   });
 
   it("should restore images from the current user's media store", async () => {

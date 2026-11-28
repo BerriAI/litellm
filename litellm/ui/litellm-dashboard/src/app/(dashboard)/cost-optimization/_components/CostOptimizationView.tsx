@@ -6,6 +6,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { Info, PiggyBank } from "lucide-react";
 
 import useCan from "@/app/(dashboard)/hooks/useCan";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { Alert, AlertDescription } from "@/components/shared/Alert";
 import { TabsContent } from "@/components/ui/tabs";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
@@ -14,6 +15,12 @@ import PromptCompressionTab from "./PromptCompressionTab";
 import PromptCachingTab from "./PromptCachingTab";
 import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
 import { useDailyActivityRange } from "./useDailyActivityRange";
+import { useVisitedUrlTabs } from "./useVisitedUrlTabs";
+import {
+  COST_OPTIMIZATION_TABS,
+  DEFAULT_COST_OPTIMIZATION_TAB,
+  visibleCostOptimizationTab,
+} from "./costOptimizationTabs";
 
 interface CostOptimizationViewProps {
   accessToken: string | null;
@@ -25,18 +32,17 @@ const CostOptimizationView: React.FC<CostOptimizationViewProps> = ({ accessToken
   const { t } = useTranslation();
   const activity = useDailyActivityRange(accessToken, userId, userRole);
   const canViewProxyWideCostData = useCan("viewProxyWideCostData");
-  const [visitedTabs, setVisitedTabs] = React.useState<readonly string[]>(["usage"]);
+  const [requestedTab, setRequestedTab] = useUrlTab(COST_OPTIMIZATION_TABS, DEFAULT_COST_OPTIMIZATION_TAB);
+  const activeTab = visibleCostOptimizationTab(requestedTab, canViewProxyWideCostData);
+  const visitedTabs = useVisitedUrlTabs(activeTab);
 
   const handleTabChange = (value: unknown) => {
-    if (typeof value !== "string") {
-      return;
-    }
-
-    setVisitedTabs((currentTabs) => (currentTabs.includes(value) ? currentTabs : [...currentTabs, value]));
+    const next = COST_OPTIMIZATION_TABS.find((tab) => tab === value);
+    if (next) setRequestedTab(next);
   };
 
   return (
-    <PageTabs defaultValue="usage" onValueChange={handleTabChange}>
+    <PageTabs value={activeTab} onValueChange={handleTabChange}>
       <PageHeader>
         <PageHeaderTitle>
           <PiggyBank />

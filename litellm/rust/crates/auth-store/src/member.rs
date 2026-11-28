@@ -28,3 +28,16 @@ pub(crate) fn member(field: &'static str, entry: &Value) -> Result<MemberEntry, 
         Err(_) => Err(Error::row(field)),
     }
 }
+
+/// The roster stored as `text`, each entry what `Member` dumps. The column's default is an empty
+/// object, which the model reads as no members.
+pub(crate) fn roster(text: &str) -> Result<Vec<MemberEntry>, Error> {
+    match json::loads(text) {
+        Ok(Value::List(entries)) => entries
+            .iter()
+            .map(|entry| member("members_with_roles", entry))
+            .collect(),
+        Ok(Value::Dict(fields)) if fields.is_empty() => Ok(Vec::new()),
+        _ => Err(Error::row("members_with_roles")),
+    }
+}

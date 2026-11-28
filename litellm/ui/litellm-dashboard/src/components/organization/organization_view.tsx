@@ -1,3 +1,4 @@
+import { displayDate, displayTimestamp } from "@/i18n/displayDate";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { organizationKeys, useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
@@ -48,7 +49,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   is_proxy_admin,
   userModels,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n: locale } = useTranslation();
   const queryClient = useQueryClient();
   const { data: orgData, isLoading: loading } = useOrganization(organizationId);
   const [isEditing, setIsEditing] = useState(false);
@@ -148,7 +149,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       sortValue: (record: Member) => orgMemberFor(record)?.created_at ?? null,
       render: (record: Member) => {
         const createdAt = orgMemberFor(record)?.created_at;
-        return <span>{createdAt ? new Date(createdAt).toLocaleString() : "-"}</span>;
+        return <span>{createdAt ? displayTimestamp(new Date(createdAt), locale.language) : "-"}</span>;
       },
     },
   ];
@@ -190,11 +191,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <div className="mt-2 text-sm text-foreground">
                   <p>
                     {t("organizations.view.overview.createdLabel")}
-                    {new Date(orgData.created_at).toLocaleDateString()}
+                    {displayDate(new Date(orgData.created_at), locale.language)}
                   </p>
                   <p>
                     {t("organizations.view.overview.updatedLabel")}
-                    {new Date(orgData.updated_at).toLocaleDateString()}
+                    {displayDate(new Date(orgData.updated_at), locale.language)}
                   </p>
                   <p>
                     {t("organizations.view.overview.createdByLabel")}
@@ -345,7 +346,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   </div>
                   <div>
                     <p className="font-medium text-foreground">{t("organizations.view.settings.createdAtLabel")}</p>
-                    <div>{new Date(orgData.created_at).toLocaleString()}</div>
+                    <div>{displayTimestamp(new Date(orgData.created_at), locale.language)}</div>
                   </div>
                   <div>
                     <p className="font-medium text-foreground">{t("organizations.view.settings.modelsLabel")}</p>

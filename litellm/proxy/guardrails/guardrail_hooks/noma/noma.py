@@ -59,7 +59,7 @@ _LEGACY_NOMA_DEPRECATION_WARNED = False
 _DECODED_JSON: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.noma import NomaGuardrailConfigModel
 
 
 class NomaBlockedMessage(HTTPException):
@@ -174,7 +174,7 @@ class NomaGuardrail(CustomGuardrail):
     ) -> str | None:
         """Shared logic for processing user message checks"""
         start_time: Final = datetime.now()
-        extra_data: Final = self.get_guardrail_dynamic_request_body_params(request_data)
+        extra_data: Final[dict[str, object]] = self.get_guardrail_dynamic_request_body_params(request_data)
 
         messages: Final = request_data.get("messages") or []
         if not messages:
@@ -284,7 +284,7 @@ class NomaGuardrail(CustomGuardrail):
         event_type: GuardrailEventHooks | None,
     ) -> str:
         start_time: Final = datetime.now()
-        extra_data: Final = self.get_guardrail_dynamic_request_body_params(request_data)
+        extra_data: Final[dict[str, object]] = self.get_guardrail_dynamic_request_body_params(request_data)
 
         payload: Final = {
             "input": [
@@ -749,7 +749,7 @@ class NomaGuardrail(CustomGuardrail):
         extra_data: Mapping[str, object],
     ) -> object:
         call_id: Final = request_data.get("litellm_call_id")
-        headers: Final = {
+        headers: Final[Mapping[str, object]] = {
             **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
             **({"X-Noma-Request-ID": call_id} if call_id else {}),
         }
@@ -809,7 +809,7 @@ class NomaGuardrail(CustomGuardrail):
                 verbose_proxy_logger.debug(msg)
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> "type[NomaGuardrailConfigModel]":
         from litellm.types.proxy.guardrails.guardrail_hooks.noma import (
             NomaGuardrailConfigModel,
         )

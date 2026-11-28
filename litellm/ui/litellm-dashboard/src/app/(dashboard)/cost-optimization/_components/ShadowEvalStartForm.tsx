@@ -3,6 +3,8 @@
 import React, { useMemo, useState } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
+import { useWatch } from "react-hook-form";
+import { useZodForm } from "@/lib/forms/useZodForm";
 
 import { useInfiniteKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
@@ -25,12 +27,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-import { useStartShadowEval, type ShadowEvalJob } from "./useShadowEval";
-
-type ShadowEvalDirection = ShadowEvalJob["direction"];
-
-const MAX_ROUTERS = 4;
-const MAX_MODELS = 100;
+import { useStartShadowEval } from "./useShadowEval";
+import { buildStartBody } from "./shadow-eval/mapper";
+import {
+  MAX_MODELS,
+  MAX_ROUTERS,
+  shadowEvalDefaults,
+  shadowEvalSchema,
+  parseStartNumbers,
+  type ShadowEvalDirection,
+} from "./shadow-eval/schema";
 const RECOMMENDED_JUDGE_MODELS = ["anthropic/claude-sonnet-5", "openai/gpt-4o", "gemini/gemini-2.5-pro"] as const;
 
 const DIRECTION_OPTIONS: readonly { value: ShadowEvalDirection; labelKey: ParseKeys }[] = [
@@ -167,81 +173,24 @@ const RouterField: React.FC<{
   );
 };
 
-interface StartFormValidityInputs {
-  accessToken: string | null | undefined;
-  apiKeyIds: string[];
-  teamIds: string[];
-  userIds: string[];
-  models: string[];
-  routerNames: string[];
-  direction: ShadowEvalDirection;
-  baselineModel: string | null;
-  judgeModel: string | null;
-  percentage: string;
-  maxBudget: string;
-}
-
-const startFormValidity = (inputs: StartFormValidityInputs) => {
-  const parsedPct = Number.parseFloat(inputs.percentage);
-  const percentageValid = parsedPct >= 0.1 && parsedPct <= 100;
-  const parsedMaxBudget = Number.parseFloat(inputs.maxBudget);
-  const maxBudgetValid = parsedMaxBudget >= 0.01 && parsedMaxBudget <= 10000;
-  const baselinePicked = inputs.direction === "forward" || Boolean(inputs.baselineModel);
-  const targetsPicked = inputs.apiKeyIds.length + inputs.teamIds.length + inputs.userIds.length > 0;
-  const routerCountValid = inputs.routerNames.length >= 1 && inputs.routerNames.length <= MAX_ROUTERS;
-  const routersMatchDirection = inputs.direction === "forward" || inputs.routerNames.length === 1;
-  const routersValid = routerCountValid && routersMatchDirection;
-  const scopeValid = routersValid && (inputs.direction === "reverse" || inputs.models.length <= MAX_MODELS);
-  const modelsPicked = scopeValid && Boolean(inputs.judgeModel) && baselinePicked;
-  const filled = targetsPicked && modelsPicked;
-  const boundsValid = percentageValid && maxBudgetValid;
-  const valid = Boolean(inputs.accessToken) && filled && boundsValid;
-  return { parsedPct, parsedMaxBudget, percentageValid, maxBudgetValid, valid };
-};
-
-interface StartBodyInputs {
-  apiKeyIds: string[];
-  teamIds: string[];
-  userIds: string[];
-  models: string[];
-  routerNames: string[];
-  direction: ShadowEvalDirection;
-  baselineModel: string | null;
-  shadowPercentage: number;
-  durationDays: number;
-  maxBudget: number;
-  judgeModel: string;
-}
-
-const buildStartBody = (inputs: StartBodyInputs) => ({
-  api_key_ids: inputs.apiKeyIds,
-  team_ids: inputs.teamIds,
-  user_ids: inputs.userIds,
-  models: inputs.direction === "forward" ? inputs.models : [],
-  router_names: inputs.routerNames,
-  direction: inputs.direction,
-  ...(inputs.direction === "reverse" ? { baseline_model: inputs.baselineModel ?? undefined } : {}),
-  shadow_percentage: inputs.shadowPercentage,
-  duration_days: inputs.durationDays,
-  max_budget: inputs.maxBudget,
-  judge_model: inputs.judgeModel,
-  skip_same_model: false,
-});
-
 export const StartForm: React.FC = () => {
   const { t } = useTranslation();
   const { accessToken } = useAuthorized();
-  const [apiKeyIds, setApiKeyIds] = useState<string[]>([]);
-  const [teamIds, setTeamIds] = useState<string[]>([]);
-  const [userIds, setUserIds] = useState<string[]>([]);
-  const [models, setModels] = useState<string[]>([]);
-  const [routerNames, setRouterNames] = useState<string[]>([]);
-  const [direction, setDirection] = useState<ShadowEvalDirection>("forward");
-  const [baselineModel, setBaselineModel] = useState<string | null>(null);
-  const [percentage, setPercentage] = useState("10");
-  const [durationDays, setDurationDays] = useState("7");
-  const [judgeModel, setJudgeModel] = useState<string | null>(null);
-  const [maxBudget, setMaxBudget] = useState("10");
+  const form = useZodForm(shadowEvalSchema, { defaultValues: shadowEvalDefaults });
+  const draft = { ...shadowEvalDefaults, ...useWatch({ control: form.control }) };
+  const {
+    apiKeyIds,
+    teamIds,
+    userIds,
+    models,
+    routerNames,
+    direction,
+    baselineModel,
+    percentage,
+    durationDays,
+    judgeModel,
+    maxBudget,
+  } = draft;
   const directionOption = DIRECTION_OPTIONS.find((o) => o.value === direction);
   const durationOption = DURATION_OPTIONS.find((o) => o.value === durationDays);
   const { data: autoRouters } = useAutoRouters();
@@ -282,36 +231,11 @@ export const StartForm: React.FC = () => {
     return [...names].toSorted().map((name) => ({ label: name, value: name }));
   }, [autoRouters]);
 
-  const validityInputs: StartFormValidityInputs = {
-    accessToken,
-    apiKeyIds,
-    teamIds,
-    userIds,
-    models,
-    routerNames,
-    direction,
-    baselineModel,
-    judgeModel,
-    percentage,
-    maxBudget,
-  };
-  const { parsedPct, parsedMaxBudget, percentageValid, maxBudgetValid, valid } = startFormValidity(validityInputs);
+  const { percentageValid, maxBudgetValid } = parseStartNumbers(draft);
+  const valid = Boolean(accessToken) && shadowEvalSchema.safeParse(draft).success;
   const handleStart = () => {
     if (!valid || !judgeModel) return;
-    const bodyInputs: StartBodyInputs = {
-      apiKeyIds,
-      teamIds,
-      userIds,
-      models,
-      routerNames,
-      direction,
-      baselineModel,
-      shadowPercentage: parsedPct,
-      durationDays: Number.parseInt(durationDays, 10),
-      maxBudget: parsedMaxBudget,
-      judgeModel,
-    };
-    start.mutate(buildStartBody(bodyInputs));
+    start.mutate(buildStartBody(draft, judgeModel));
   };
 
   return (
@@ -327,7 +251,7 @@ export const StartForm: React.FC = () => {
           <Field label={t("costOptimization.shadowEval.start.direction")}>
             <Select
               value={direction}
-              onValueChange={(v: string | null) => setDirection(v === "reverse" ? "reverse" : "forward")}
+              onValueChange={(v: string | null) => form.setValue("direction", v === "reverse" ? "reverse" : "forward")}
             >
               <SelectTrigger className="w-full">
                 <SelectValue>{directionOption && t(directionOption.labelKey)}</SelectValue>
@@ -342,24 +266,24 @@ export const StartForm: React.FC = () => {
             </Select>
           </Field>
           <Field label={t("costOptimization.shadowEval.start.keys.label")} htmlFor="shadow-eval-key">
-            <KeySelect value={apiKeyIds} onChange={setApiKeyIds} />
+            <KeySelect value={apiKeyIds} onChange={(value) => form.setValue("apiKeyIds", value)} />
           </Field>
           <Field label={t("costOptimization.shadowEval.start.teams.label")}>
             <TeamMultiSelect
               value={teamIds}
-              onChange={setTeamIds}
+              onChange={(value) => form.setValue("teamIds", value)}
               placeholder={t("costOptimization.shadowEval.start.teams.placeholder")}
             />
           </Field>
           <Field label={t("costOptimization.shadowEval.start.users.label")} htmlFor="shadow-eval-user">
-            <UserSelect value={userIds} onChange={setUserIds} />
+            <UserSelect value={userIds} onChange={(value) => form.setValue("userIds", value)} />
           </Field>
           {direction === "forward" && (
             <Field label={t("costOptimization.shadowEval.start.models.label")}>
               <MultiSelect
                 options={modelOptions}
                 value={models}
-                onValueChange={setModels}
+                onValueChange={(value) => form.setValue("models", value)}
                 placeholder={t("costOptimization.shadowEval.start.models.placeholder")}
                 emptyText={t("costOptimization.shadowEval.start.models.empty")}
               />
@@ -375,7 +299,7 @@ export const StartForm: React.FC = () => {
           <RouterField
             options={routerOptions}
             routerNames={routerNames}
-            onChange={setRouterNames}
+            onChange={(value) => form.setValue("routerNames", value)}
             direction={direction}
           />
           <Field label={t("costOptimization.shadowEval.start.percentage.label")} htmlFor="shadow-eval-pct">
@@ -388,7 +312,7 @@ export const StartForm: React.FC = () => {
                 step={0.1}
                 className="w-24"
                 value={percentage}
-                onChange={(e) => setPercentage(e.target.value)}
+                onChange={(e) => form.setValue("percentage", e.target.value)}
               />
               <span className="text-sm text-muted-foreground">
                 {t("costOptimization.shadowEval.start.percentage.suffix")}
@@ -401,7 +325,7 @@ export const StartForm: React.FC = () => {
             </div>
           </Field>
           <Field label={t("costOptimization.shadowEval.start.duration")}>
-            <Select value={durationDays} onValueChange={(v: string | null) => setDurationDays(v ?? "7")}>
+            <Select value={durationDays} onValueChange={(v: string | null) => form.setValue("durationDays", v ?? "7")}>
               <SelectTrigger className="w-full">
                 <SelectValue>
                   {durationOption &&
@@ -427,7 +351,7 @@ export const StartForm: React.FC = () => {
                 step={0.01}
                 className="w-24"
                 value={maxBudget}
-                onChange={(e) => setMaxBudget(e.target.value)}
+                onChange={(e) => form.setValue("maxBudget", e.target.value)}
               />
               <span className="text-sm text-muted-foreground">
                 {t("costOptimization.shadowEval.start.budget.suffix")}
@@ -442,7 +366,7 @@ export const StartForm: React.FC = () => {
               <SearchSelect
                 options={chatOptions}
                 value={baselineModel}
-                onValueChange={setBaselineModel}
+                onValueChange={(value) => form.setValue("baselineModel", value)}
                 placeholder={t("costOptimization.shadowEval.start.baseline.placeholder")}
                 emptyText={t("costOptimization.shadowEval.start.noChatModels")}
               />
@@ -452,7 +376,7 @@ export const StartForm: React.FC = () => {
             <SearchSelect
               options={judgeOptions}
               value={judgeModel}
-              onValueChange={setJudgeModel}
+              onValueChange={(value) => form.setValue("judgeModel", value)}
               placeholder={t("costOptimization.shadowEval.start.judge.placeholder")}
               emptyText={t("costOptimization.shadowEval.start.noChatModels")}
             />

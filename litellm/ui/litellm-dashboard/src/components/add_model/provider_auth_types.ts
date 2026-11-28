@@ -1,9 +1,9 @@
-import type { ParseKeys } from "i18next";
+import type { ParseKeys, TFunction } from "i18next";
 import { Providers } from "../provider_info_helpers";
 
 export interface ProviderAuthType {
   readonly id: string;
-  readonly labelKey: ParseKeys;
+  readonly label: (t: TFunction) => string;
   readonly descriptionKey: ParseKeys;
   readonly fieldKeys: readonly string[];
   readonly requiredFieldKeys: readonly string[];
@@ -21,14 +21,14 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
   GITHUB_COPILOT: [
     {
       id: "shared_device_login",
-      labelKey: "addModel.providerAuthTypes.sharedDeviceLogin.label",
+      label: (t) => t("addModel.providerAuthTypes.sharedDeviceLogin.label"),
       descriptionKey: "addModel.providerAuthTypes.sharedDeviceLogin.description",
       fieldKeys: ["api_base", "api_key"],
       requiredFieldKeys: [],
     },
     {
       id: GITHUB_COPILOT_PER_USER_AUTH_TYPE,
-      labelKey: "addModel.providerAuthTypes.perUserOauth.label",
+      label: (t) => t("addModel.providerAuthTypes.perUserOauth.label"),
       credentialOnly: true,
       descriptionKey: "addModel.providerAuthTypes.perUserOauth.description",
       fieldKeys: [GITHUB_COPILOT_AUTH_TYPE_KEY, GITHUB_COPILOT_HOST_KEY],
@@ -37,7 +37,7 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
     },
     {
       id: "github_app",
-      labelKey: "addModel.providerAuthTypes.githubApp.label",
+      label: () => "GitHub App",
       descriptionKey: "addModel.providerAuthTypes.githubApp.description",
       credentialOnly: true,
       fieldKeys: [
@@ -55,7 +55,7 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
   MICROSOFT_365_COPILOT: [
     {
       id: "oauth_token_exchange",
-      labelKey: "addModel.providerAuthTypes.oauthTokenExchange.label",
+      label: (t) => t("addModel.providerAuthTypes.oauthTokenExchange.label"),
       credentialOnly: true,
       descriptionKey: "addModel.providerAuthTypes.oauthTokenExchange.description",
       fieldKeys: [
@@ -70,7 +70,7 @@ export const PROVIDER_AUTH_TYPES: Partial<Record<keyof typeof Providers, readonl
     },
     {
       id: "static_token",
-      labelKey: "addModel.providerAuthTypes.staticToken.label",
+      label: (t) => t("addModel.providerAuthTypes.staticToken.label"),
       descriptionKey: "addModel.providerAuthTypes.staticToken.description",
       fieldKeys: ["api_key"],
       requiredFieldKeys: ["api_key"],

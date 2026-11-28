@@ -12,7 +12,7 @@ config:
     user_api_key_cache_max_size: 500
 
 keys:
-  sk-claude: [claude]
+  sk-claude: {models: [claude]}
 
 requests:
   - name: the master key

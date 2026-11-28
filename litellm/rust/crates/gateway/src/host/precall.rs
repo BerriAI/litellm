@@ -1,7 +1,7 @@
 //! The facts `enable_pre_call_checks` decides by (`litellm/router_rust/steps/precall.py`): each
 //! candidate's context window as `get_router_model_info` merges it, its own
 //! `model_info.max_input_tokens` over the cost map's, and the tokens of the prompt the route
-//! hands over, as [`prompt_estimate`](super::prompt_estimate) estimates them. router-core decides
+//! hands over, as [`prompt_estimate`](crate::prompt_estimate) estimates them. router-core decides
 //! with them, and a route that hands over no prompt is held to no window.
 //!
 //! The estimate is a stand-in for the provider's tokenizer, so router-core keeps a deployment it
@@ -32,7 +32,8 @@ use litellm_router_core::{
 use serde_json::Value;
 use tokio::sync::OnceCell;
 
-use super::{model_info::NativeModelInfoHost, prompt_estimate::Countable};
+use super::model_info::NativeModelInfoHost;
+use crate::prompt_estimate::Countable;
 
 /// A deployment's context window, and whether its own `model_info.max_input_tokens` caps it below
 /// the cost map's.
