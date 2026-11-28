@@ -8,7 +8,7 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import AliasedCostEntry
 from litellm.llms.databricks.cost_calculator import cost_per_token
-from litellm.types.utils import ModelInfo, Usage
+from litellm.types.utils import CachedTokensDetails, ModelInfo, PromptTokensDetailsWrapper, Usage
 
 REPO_ROOT: Final = Path(__file__).parents[4]
 MAIN_PRICES: Final = REPO_ROOT / "model_prices_and_context_window.json"
@@ -286,6 +286,26 @@ def test_cost_per_token_bills_the_served_priority_tier(
     prompt_cost, completion_cost = cost_per_token(model="databricks/dbrx-tiered-test", usage=usage)
     assert prompt_cost == pytest.approx(30 * 0.001)
     assert completion_cost == pytest.approx(40 * 0.002)
+
+
+def test_nano_banana_priority_bills_image_inputs_at_the_published_tier(local_model_cost_map: None) -> None:
+    model: Final = "databricks/databricks-gemini-nano-banana-2-1"
+    info: Final = _model_info(model)
+    input_rate: Final = info["input_cost_per_image_token_priority"]
+    cache_read_rate: Final = info["cache_read_input_image_token_cost_priority"]
+    assert input_rate is not None and cache_read_rate is not None
+    usage: Final = Usage(
+        prompt_tokens=100,
+        completion_tokens=0,
+        total_tokens=100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            image_tokens=100, cached_tokens=40, cached_tokens_details=CachedTokensDetails(image_tokens=40)
+        ),
+    )
+
+    prompt_cost, _ = cost_per_token(model=model, usage=usage, service_tier="priority")
+
+    assert prompt_cost == pytest.approx(60 * input_rate + 40 * cache_read_rate)
 
 
 RATES_WITHOUT_A_PRIORITY_FIELD: Final = frozenset({"input_cost_per_image_token"})

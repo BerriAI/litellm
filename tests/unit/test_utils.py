@@ -1061,6 +1061,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "cache_read_input_audio_token_cost": {"type": "number"},
             "cache_read_input_audio_token_cost_batches": {"type": "number"},
             "cache_read_input_image_token_cost_batches": {"type": "number"},
+            "cache_read_input_image_token_cost_priority": {"type": "number"},
             "cache_read_input_audio_token_cost_flex": {"type": "number"},
             "cache_read_input_audio_token_cost_priority": {"type": "number"},
             "cache_read_input_image_token_cost": {"type": "number"},

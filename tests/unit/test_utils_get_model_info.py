@@ -35,6 +35,22 @@ def test_get_model_info_simple_model_name():
     litellm.get_model_info(model)
 
 
+def test_gpt_62_sol_reports_its_minimum_reasoning_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    local_cost_map: Final = litellm.get_model_cost_map(url="")
+    monkeypatch.setattr(litellm, "model_cost", local_cost_map)
+    publish(local_cost_map)
+
+    model_info: Final = litellm.get_model_info("gpt-6.2-sol", custom_llm_provider="openai")
+
+    # OpenAI migration guide, verified 2026-11-27: https://developers.openai.com/api/docs/guides/latest-model#migration-quickstart
+    assert (
+        model_info["supports_none_reasoning_effort"],
+        model_info["supports_minimal_reasoning_effort"],
+        model_info["supports_low_reasoning_effort"],
+    ) == (False, False, True)
+
+
 def test_get_model_info_custom_llm_with_model_name():
     """
     Tests if {custom_llm_provider}/{model_name} name given, and model exists in model info, the object is returned
