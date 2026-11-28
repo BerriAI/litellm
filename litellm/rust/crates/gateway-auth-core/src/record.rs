@@ -1,7 +1,8 @@
 //! The rows a caller belongs to, as the core reads them: one record per entity, holding its id and
 //! what its stored row says, and nothing a request or another row adds. A host builds a record
 //! from the row it read and decides nothing while it does. A record grows a field with the first
-//! rule that reads it.
+//! rule that reads it, except a team's, which copies each column of its row that a plain value
+//! holds, read or not. The host refuses a caller whose team holds one nothing reads yet.
 
 use serde_json::{Map, Value};
 
@@ -21,8 +22,18 @@ pub struct TeamRecord {
     pub team_alias: Option<String>,
     /// The models the team may call, which the model rule reads as the team's layer.
     pub models: Vec<String>,
+    pub organization_id: Option<String>,
     pub limits: MinuteLimits,
+    pub tpd_limit: Option<i64>,
+    pub max_parallel_requests: Option<i64>,
     pub budget: Budget,
+    pub soft_budget: Option<f64>,
+    pub budget_duration: Option<String>,
+    pub blocked: bool,
+    pub access_group_ids: Vec<String>,
+    pub default_team_member_models: Vec<String>,
+    pub policies: Vec<String>,
+    pub allow_team_guardrail_config: bool,
     /// The `max_budget` of the budget `metadata.team_member_budget_id` names, which a member with
     /// no budget of its own is held to.
     pub member_max_budget: Option<f64>,
