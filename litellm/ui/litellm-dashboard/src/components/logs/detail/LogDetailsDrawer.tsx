@@ -243,9 +243,9 @@ export function LogDetailsDrawer({
     },
   });
 
-  // Lazy-load log details (messages/response) only when drawer is open.
-  // This fetches data for a single log on-demand instead of prefetching all 50.
-  const logDetails = useLogDetails(currentLog?.request_id, startTime, open && !!currentLog?.request_id);
+  // Request content stays in the source region. Keep imported rows out of the local detail query and cache.
+  const localRequestId = currentLog?.source_region ? undefined : currentLog?.request_id;
+  const logDetails = useLogDetails(localRequestId, startTime, open && !!localRequestId);
   const detailsData = logDetails.data as any;
   const isLoadingDetails = logDetails.isLoading;
   const { data: logUser } = useUserLookup(open && currentLog?.user ? currentLog.user : null);
@@ -265,9 +265,10 @@ export function LogDetailsDrawer({
 
   const metadata = currentLog?.metadata || {};
 
-  // Status display values
-  const statusLabel = metadata.status === "failure" ? t("logs.detail.drawer.failure") : t("logs.detail.drawer.success");
-  const statusColor = metadata.status === "failure" ? ("error" as const) : ("success" as const);
+  const status = currentLog?.status || readMetaString(metadata, "status");
+  const isFailure = status?.toLowerCase() === "failure";
+  const statusLabel = isFailure ? t("logs.detail.drawer.failure") : t("logs.detail.drawer.success");
+  const statusColor = isFailure ? "error" : "success";
   const environment = metadata?.user_api_key_team_alias || "default";
 
   const totalSessionCost = sessionLogs.reduce((sum, row) => sum + (row.spend || 0), 0);

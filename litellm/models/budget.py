@@ -157,6 +157,13 @@ class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
     created_at: datetime
 
 
+class EndUserBudget(LiteLLM_BudgetTable):
+    """An end-user budget with the server-managed reset time used for admission."""
+
+    model_config = ConfigDict(frozen=True)
+    budget_reset_at: datetime | None = Field(default=None, exclude_if=_is_none)
+
+
 class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
     """
     Used to track spend of a user_id within a team_id

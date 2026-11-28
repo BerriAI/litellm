@@ -17531,6 +17531,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/spend/logs/replication": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Spend Log Replication
+         * @description Return the regional request-log capture state, or null before a worker configures it.
+         */
+        get: operations["get_spend_log_replication_spend_logs_replication_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Set Spend Log Replication
+         * @description Pause or resume capture of new local request-log metadata.
+         */
+        patch: operations["set_spend_log_replication_spend_logs_replication_patch"];
+        trace?: never;
+    };
     "/spend/logs/session/ui": {
         parameters: {
             query?: never;
@@ -35706,6 +35730,50 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /**
+         * EndUserBudget
+         * @description An end-user budget with the server-managed reset time used for admission.
+         */
+        EndUserBudget: {
+            /** Allowed Models */
+            allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Rpm Limit */
+            model_rpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Model Tpm Limit */
+            model_tpm_limit?: {
+                [key: string]: number;
+            } | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
+            /** Rpm Limit */
+            rpm_limit?: number | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
+            /** Tpd Limit */
+            tpd_limit?: number | null;
+            /** Tpm Limit */
+            tpm_limit?: number | null;
+        };
         /** EndpointProvider */
         EndpointProvider: {
             /** Display Name */
@@ -38450,7 +38518,8 @@ export interface components {
             budget_id?: string | null;
             /** Default Model */
             default_model?: string | null;
-            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Litellm Budget Table */
+            litellm_budget_table?: components["schemas"]["EndUserBudget"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
             /** Models */
             models?: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
@@ -51180,6 +51249,18 @@ export interface components {
              * @default 0.9
              */
             threshold: number;
+        };
+        /** SpendLogReplicationStatus */
+        SpendLogReplicationStatus: {
+            /** Enabled */
+            enabled: boolean;
+            /** Region */
+            region: string;
+        };
+        /** SpendLogReplicationUpdate */
+        SpendLogReplicationUpdate: {
+            /** Enabled */
+            enabled: boolean;
         };
         /** SpendLogsMetadataFields */
         SpendLogsMetadataFields: {
@@ -82419,6 +82500,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LiteLLM_SpendLogs"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_spend_log_replication_spend_logs_replication_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendLogReplicationStatus"] | null;
+                };
+            };
+        };
+    };
+    set_spend_log_replication_spend_logs_replication_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpendLogReplicationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendLogReplicationStatus"];
                 };
             };
             /** @description Validation Error */

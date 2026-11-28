@@ -112,7 +112,7 @@ export function RequestLogsTable({
     <DataTable
       data={data}
       columns={columns}
-      getRowId={(row) => row.request_id}
+      getRowId={(row) => JSON.stringify([row.request_id, row.startTime, row.source_region ?? null])}
       fillHeight
       sortingMode="server"
       sorting={sorting}

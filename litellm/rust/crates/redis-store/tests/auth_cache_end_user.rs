@@ -25,7 +25,7 @@ const FULL_ENTRY: &str = concat!(
     r#" "model_max_budget": {"claude": {"max_budget": 1}}, "model_tpm_limit": {"gpt": 7,"#,
     r#" "claude": 100}, "model_rpm_limit": {"claude": 5}, "budget_duration": "30d","#,
     r#" "allowed_models": ["claude"], "temp_budget_increase": 1.5,"#,
-    r#" "temp_budget_expiry": "2026-11-20T12:30:00.250000Z"},"#,
+    r#" "temp_budget_expiry": "2026-11-20T12:30:00.250000Z", "budget_reset_at": "2026-12-01T00:00:00Z"},"#,
     r#" "object_permission_id": "permission","#,
     r#" "object_permission": {"object_permission_id": "permission", "mcp_servers": ["server"],"#,
     r#" "mcp_access_groups": ["group"], "mcp_tool_permissions": {"server": ["tool"]},"#,

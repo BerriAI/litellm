@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field, field_validator
 
-from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.budget import EndUserBudget, LiteLLM_BudgetTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -23,7 +23,7 @@ class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
     default_model: str | None = None
     models: list[str] = Field(default_factory=list)
     budget_id: str | None = None
-    litellm_budget_table: LiteLLM_BudgetTable | None = None
+    litellm_budget_table: EndUserBudget | LiteLLM_BudgetTable | None = None
     object_permission_id: str | None = None
     object_permission: LiteLLM_ObjectPermissionTable | None = None
 

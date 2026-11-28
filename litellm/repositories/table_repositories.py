@@ -136,6 +136,10 @@ class BudgetWindowSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_B
     table_name = "litellm_budgetwindowspend"
 
 
+class SpendLogReplicationRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogReplication"]):
+    table_name = "litellm_spendlogreplication"
+
+
 class ClaudeCodePluginRepository(PrismaTableRepository["prisma_models.LiteLLM_ClaudeCodePluginTable"]):
     table_name = "litellm_claudecodeplugintable"
 

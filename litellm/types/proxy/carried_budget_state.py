@@ -56,6 +56,7 @@ class TeamBudgetSnapshot(_BudgetSnapshot):
 
 
 class UserBudgetSnapshot(_BudgetSnapshot):
+    budget_duration: str | None = Field(default=None, exclude=True)
     budget_reset_at: datetime | None = Field(
         validation_alias="user_api_key_user_budget_reset_at", serialization_alias="user_api_key_user_budget_reset_at"
     )

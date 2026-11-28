@@ -13,6 +13,7 @@
 #   migrations  python litellm/runtime/migrations/run.py         prisma migrate deploy, then exit
 #   metrics     python -m litellm.proxy.prometheus_metrics_server ARGS
 #   collector   python -m litellm.proxy.collector ARGS
+#   spend-log-replication  python -m litellm.proxy.db.spend_log_replication
 #   --admin-agent  the bundled LiteAdmin Slack agent (litellm-admin-agent --web ARGS)
 #
 # gateway and backend get their host and port defaults first, so ARGS such as
@@ -32,7 +33,7 @@ usage() {
 
 component="${LITELLM_COMPONENT:-proxy}"
 case "${1:-}" in
-    proxy|gateway|backend|ui|migrations|metrics|collector)
+    proxy|gateway|backend|ui|migrations|metrics|collector|spend-log-replication)
         component="$1"
         shift
         ;;
@@ -115,6 +116,9 @@ os.execvp("litellm", ["litellm", *sys.argv[1:]])' "$@"
         ;;
     collector)
         set -- python -m litellm.proxy.collector "$@"
+        ;;
+    spend-log-replication)
+        set -- python -m litellm.proxy.db.spend_log_replication "$@"
         ;;
     *)
         echo "docker-entrypoint.sh: unknown LITELLM_COMPONENT '$component'" >&2

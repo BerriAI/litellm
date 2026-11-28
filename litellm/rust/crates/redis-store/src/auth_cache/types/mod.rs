@@ -17,7 +17,7 @@ mod user;
 pub(super) use self::record::decode;
 pub use self::{
     bag::{Bag, Dict, Ints, Lists},
-    budget::{BudgetEntry, BudgetFullEntry},
+    budget::{BudgetEntry, BudgetFullEntry, EndUserBudgetEntry},
     budget_limit::BudgetLimitEntry,
     end_user::{EndUserEntry, ModelRegion, RestrictedEndUsers},
     key::KeyEntry,

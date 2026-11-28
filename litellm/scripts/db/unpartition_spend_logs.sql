@@ -139,4 +139,19 @@ ON CONFLICT ("request_id") DO NOTHING;
 
 DROP TABLE "LiteLLM_SpendLogs_partitioned";
 
+DO $$
+BEGIN
+    IF to_regprocedure('litellm_capture_spend_log()') IS NOT NULL THEN
+        CREATE TRIGGER litellm_capture_spend_log_insert
+        AFTER INSERT ON "LiteLLM_SpendLogs" REFERENCING NEW TABLE AS changed_spend_logs
+        FOR EACH STATEMENT EXECUTE FUNCTION litellm_capture_spend_log();
+        CREATE TRIGGER litellm_capture_spend_log_update
+        AFTER UPDATE ON "LiteLLM_SpendLogs" REFERENCING NEW TABLE AS changed_spend_logs
+        FOR EACH STATEMENT EXECUTE FUNCTION litellm_capture_spend_log();
+        CREATE TRIGGER litellm_capture_spend_log_delete
+        AFTER DELETE ON "LiteLLM_SpendLogs" REFERENCING OLD TABLE AS changed_spend_logs
+        FOR EACH STATEMENT EXECUTE FUNCTION litellm_capture_spend_log();
+    END IF;
+END $$;
+
 COMMIT;

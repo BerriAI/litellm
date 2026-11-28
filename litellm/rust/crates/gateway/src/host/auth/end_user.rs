@@ -167,6 +167,10 @@ mod tests {
         json!({"litellm_budget_table": {"max_budget": 1.0}}),
         "litellm_budget_table"
     )]
+    #[case::a_budget_it_holds_with_a_reset(
+        json!({"litellm_budget_table": {"max_budget": 0.0, "budget_reset_at": "2026-12-01T00:00:00Z"}}),
+        "litellm_budget_table"
+    )]
     #[case::an_object_permission_it_names(
         json!({"object_permission_id": "p-1"}),
         "object_permission_id"

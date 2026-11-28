@@ -19,6 +19,7 @@ export type KubernetesPodRouting = {
 
 export type LogEntry = {
   request_id: string;
+  source_region?: string | null;
   litellm_call_id?: string | null;
   api_key: string;
   team_id: string;

@@ -9,8 +9,7 @@ const SERVER_MANAGED: [&str; 2] = ["budget_reset_at", "created_at"];
 
 record! {
     /// `LiteLLM_BudgetTable.model_dump(mode="json")`, nested under `litellm_budget_table` in
-    /// [`ProjectEntry`](super::ProjectEntry), [`EndUserEntry`](super::EndUserEntry),
-    /// [`OrganizationEntry`](super::OrganizationEntry) and
+    /// [`ProjectEntry`](super::ProjectEntry), [`OrganizationEntry`](super::OrganizationEntry) and
     /// [`OrganizationMembershipEntry`](super::OrganizationMembershipEntry), and the first fields of a
     /// [`BudgetFullEntry`].
     pub struct BudgetEntry {
@@ -29,6 +28,37 @@ record! {
         allowed_models: Option<Vec<String>>,
         temp_budget_increase: Option<f64>,
         temp_budget_expiry: Option<IsoDateTime>,
+    }
+}
+
+/// `EndUserBudget.model_dump(mode="json")`, including the reset time when present.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EndUserBudgetEntry {
+    pub budget: BudgetEntry,
+    pub budget_reset_at: Option<IsoDateTime>,
+}
+
+impl Field for EndUserBudgetEntry {
+    fn read(value: &Value) -> Option<Self> {
+        let mut budget = BudgetEntry::read(value)?;
+        let budget_reset_at = budget
+            .unread
+            .iter()
+            .find(|(name, _)| name == "budget_reset_at")
+            .and_then(|(_, value)| IsoDateTime::read(value));
+        budget.unread.retain(|(name, _)| name != "budget_reset_at");
+        Some(Self {
+            budget,
+            budget_reset_at,
+        })
+    }
+
+    fn write(self) -> Value {
+        let mut entries = self.budget.into_entries();
+        if let Some(reset_at) = self.budget_reset_at {
+            entries.push((Value::Str("budget_reset_at".into()), reset_at.write()));
+        }
+        Value::Dict(entries)
     }
 }
 

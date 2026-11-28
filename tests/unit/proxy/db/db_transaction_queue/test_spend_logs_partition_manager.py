@@ -3,8 +3,8 @@ Tests for SpendLogsPartitionManager: partition naming/bounds math, retention
 selection, the non-partitioned no-op safety path, and the drop/ensure SQL flow.
 """
 
-from contextlib import asynccontextmanager
 from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
@@ -172,16 +172,19 @@ async def test_drop_partitions_older_than_drops_expired_only():
     mgr = SpendLogsPartitionManager()
     client = MagicMock()
     client.db.query_raw = AsyncMock(
-        return_value=[
-            {
-                "name": "LiteLLM_SpendLogs_p20260601",
-                "bound": "FOR VALUES FROM ('2026-06-01 00:00:00') TO ('2026-06-02 00:00:00')",
-            },
-            {
-                "name": "LiteLLM_SpendLogs_p20260609",
-                "bound": "FOR VALUES FROM ('2026-06-09 00:00:00') TO ('2026-06-10 00:00:00')",
-            },
-            {"name": "LiteLLM_SpendLogs_pdefault", "bound": "DEFAULT"},
+        side_effect=[
+            [
+                {
+                    "name": "LiteLLM_SpendLogs_p20260601",
+                    "bound": "FOR VALUES FROM ('2026-06-01 00:00:00') TO ('2026-06-02 00:00:00')",
+                },
+                {
+                    "name": "LiteLLM_SpendLogs_p20260609",
+                    "bound": "FOR VALUES FROM ('2026-06-09 00:00:00') TO ('2026-06-10 00:00:00')",
+                },
+                {"name": "LiteLLM_SpendLogs_pdefault", "bound": "DEFAULT"},
+            ],
+            [{"available": False}],
         ]
     )
     client.db.execute_raw = AsyncMock(return_value=0)
@@ -193,8 +196,8 @@ async def test_drop_partitions_older_than_drops_expired_only():
     assert dropped == ["LiteLLM_SpendLogs_p20260601"]
     executed = " ".join(call.args[0] for call in client.db.execute_raw.call_args_list)
     assert 'DROP TABLE IF EXISTS "LiteLLM_SpendLogs_p20260601"' in executed
-    assert "p20260609" not in executed
-    assert "pdefault" not in executed
+    assert "LiteLLM_SpendLogs_p20260609" not in executed
+    assert "LiteLLM_SpendLogs_pdefault" not in executed
 
 
 @pytest.mark.asyncio
@@ -225,11 +228,14 @@ async def test_partition_ddl_carries_a_statement_and_lock_timeout():
     client = MagicMock()
     client.db.execute_raw = AsyncMock(return_value=0)
     client.db.query_raw = AsyncMock(
-        return_value=[
-            {
-                "name": "LiteLLM_SpendLogs_p20260601",
-                "bound": "FOR VALUES FROM ('2026-06-01 00:00:00') TO ('2026-06-02 00:00:00')",
-            }
+        side_effect=[
+            [
+                {
+                    "name": "LiteLLM_SpendLogs_p20260601",
+                    "bound": "FOR VALUES FROM ('2026-06-01 00:00:00') TO ('2026-06-02 00:00:00')",
+                }
+            ],
+            [{"available": False}],
         ]
     )
     session_settings, _ = _wire_tx(client.db)
@@ -400,15 +406,19 @@ async def test_drop_partitions_continues_when_one_drop_fails():
     mgr = SpendLogsPartitionManager()
     client = MagicMock()
     client.db.query_raw = AsyncMock(
-        return_value=[
-            {
-                "name": "LiteLLM_SpendLogs_p20260601",
-                "bound": "FOR VALUES FROM ('2026-06-01 00:00:00') TO ('2026-06-02 00:00:00')",
-            },
-            {
-                "name": "LiteLLM_SpendLogs_p20260602",
-                "bound": "FOR VALUES FROM ('2026-06-02 00:00:00') TO ('2026-06-03 00:00:00')",
-            },
+        side_effect=[
+            [
+                {
+                    "name": "LiteLLM_SpendLogs_p20260601",
+                    "bound": "FOR VALUES FROM ('2026-06-01 00:00:00') TO ('2026-06-02 00:00:00')",
+                },
+                {
+                    "name": "LiteLLM_SpendLogs_p20260602",
+                    "bound": "FOR VALUES FROM ('2026-06-02 00:00:00') TO ('2026-06-03 00:00:00')",
+                },
+            ],
+            [{"available": False}],
+            [{"available": False}],
         ]
     )
     client.db.execute_raw = AsyncMock(side_effect=[Exception("locked"), 0])

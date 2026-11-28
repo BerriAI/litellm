@@ -16,6 +16,7 @@ keeps the batched-DELETE path, so existing deployments are untouched.
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from datetime import date, datetime, timedelta, timezone
+from time import monotonic
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -25,6 +26,7 @@ from typing import (
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    SPEND_LOG_CLEANUP_BATCH_SIZE,
     SPEND_LOG_PARTITION_INTERVAL,
     SPEND_LOG_PARTITION_PRECREATE_AHEAD,
 )
@@ -336,7 +338,7 @@ class SpendLogsPartitionManager:
                 verbose_proxy_logger.info("Run budget spent, leaving the remaining partitions for the next run")
                 return
             try:
-                await self._execute_bounded_ddl(prisma_client, f'DROP TABLE IF EXISTS "{name}"', budget_ms)
+                await self._drop_partition(prisma_client, name, budget_ms)
             except Exception as e:  # noqa: BLE001  # a partition this run cannot drop is left for the next one
                 verbose_proxy_logger.warning("Failed to drop spend-log partition %s: %s", name, e)
                 return
@@ -361,8 +363,39 @@ class SpendLogsPartitionManager:
                 verbose_proxy_logger.info("Run budget spent, leaving the remaining partitions for the next run")
                 break
             try:
-                await self._execute_bounded_ddl(prisma_client, f'DROP TABLE IF EXISTS "{name}"', budget_ms)
+                await self._drop_partition(prisma_client, name, budget_ms)
                 dropped.append(name)
             except Exception as e:
                 verbose_proxy_logger.warning("Failed to drop spend-log partition %s: %s", name, e)
         return dropped
+
+    async def _drop_partition(self, prisma_client: "PrismaClient", name: str, timeout_ms: int) -> None:
+        deadline: Final = monotonic() + timeout_ms / 1000
+        remaining_ms: int = timeout_ms  # rebind-ok: each transaction uses the remaining time
+        has_drop_function: bool = False  # rebind-ok: remember whether the migration is installed
+        while remaining_ms > 0:
+            async with (
+                db_span("drop_spend_log_partition", SPEND_LOGS_TABLE),
+                bounded_tx(prisma_client, remaining_ms) as tx,
+            ):
+                await tx.execute_raw(trusted_sql(f"SET LOCAL statement_timeout = {remaining_ms}"))
+                await tx.execute_raw(trusted_sql(f"SET LOCAL lock_timeout = {remaining_ms}"))
+                if not has_drop_function:
+                    rows = await tx.query_raw(
+                        "SELECT to_regprocedure('litellm_drop_spend_log_partition(text,integer)') IS NOT NULL AS available"
+                    )
+                    has_drop_function = rows[0]["available"] is True
+                    if not has_drop_function:
+                        # Quote the catalog identifier for databases awaiting the migration.
+                        partition_identifier = name.replace('"', '""')
+                        await tx.execute_raw(trusted_sql(f'DROP TABLE IF EXISTS "{partition_identifier}"'))
+                        return
+                result = await tx.query_raw(
+                    "SELECT litellm_drop_spend_log_partition($1, $2::integer) AS dropped",
+                    name,
+                    max(1, SPEND_LOG_CLEANUP_BATCH_SIZE),
+                )
+            if result[0]["dropped"]:
+                return
+            remaining_ms = int((deadline - monotonic()) * 1000)
+        raise TimeoutError("Spend log partition drop exceeded its time budget")

@@ -5,24 +5,28 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
 import pytest
 from integration._support.database import read_rows
-from prisma import Prisma
 from psycopg import sql
 
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 
+if TYPE_CHECKING:
+    from prisma import Prisma
+
 
 @dataclass(frozen=True)
 class PartitionConnection:
-    db: Prisma
+    db: "Prisma"
 
 
 async def test_delete_batch_survives_witnessed_lock_past_transaction_default(caplog: pytest.LogCaptureFixture) -> None:
+    from prisma import Prisma
+
     caplog.set_level(logging.ERROR)
     schema: Final = f"integration_{uuid.uuid4().hex}"
     url: Final = os.environ["DATABASE_URL"]
@@ -107,8 +111,15 @@ async def test_delete_batch_survives_witnessed_lock_past_transaction_default(cap
             setup.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 
 
+@pytest.mark.parametrize(
+    ("imported", "partitioned"),
+    [(False, False), (True, False), (True, True)],
+    ids=["local-logs", "replicas-only", "older-replicas-with-local-partition"],
+)
 async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does_not_refire_after_vacuum(
     caplog: pytest.LogCaptureFixture,
+    imported: bool,
+    partitioned: bool,
 ) -> None:
     """
     Deleting rows never shrinks the table file, so the size pass must stop on live bytes, not on
@@ -117,6 +128,8 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
     files still measure the same; the next check must read what the last run freed from its saved count and
     leave the table alone instead of calling the whole file live again.
     """
+    from prisma import Prisma
+
     caplog.set_level(logging.INFO, logger="LiteLLM Proxy")
     schema: Final = f"integration_{uuid.uuid4().hex}"
     url: Final = os.environ["DATABASE_URL"]
@@ -124,15 +137,19 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
     scoped_url: Final = urlunsplit(
         parsed._replace(query=urlencode({**dict(parse_qsl(parsed.query)), "schema": schema}))
     )
-    logs: Final = sql.Identifier(schema, "LiteLLM_SpendLogs")
+    local_logs: Final = sql.Identifier(schema, "LiteLLM_SpendLogs")
+    local_partition: Final = sql.Identifier(schema, "LiteLLM_SpendLogs_older")
+    log_table: Final = "LiteLLM_ReplicatedSpendLogs" if imported else "LiteLLM_SpendLogs"
+    logs: Final = sql.Identifier(schema, log_table)
     index: Final = sql.Identifier(schema, "LiteLLM_SpendLogToolIndex")
     config: Final = sql.Identifier(schema, "LiteLLM_Config")
     seeded: Final = 6000
     now: Final = datetime.now(timezone.utc).replace(tzinfo=None)
+    local_day: Final = now.date() - timedelta(days=4)
     stats_sql: Final = (
         "SELECT sum(n_live_tup)::int AS live, sum(n_dead_tup)::int AS dead, sum(n_tup_ins)::int AS inserted "
         "FROM pg_stat_user_tables "
-        "WHERE schemaname = %s AND relname IN ('LiteLLM_SpendLogs', 'LiteLLM_SpendLogToolIndex')"
+        "WHERE schemaname = %s AND relname IN (%s, 'LiteLLM_SpendLogToolIndex')"
     )
     with psycopg.connect(url, autocommit=True) as setup:
         setup.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
@@ -141,9 +158,33 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
                 sql.SQL(
                     'CREATE TABLE {} (request_id text, "startTime" timestamp NOT NULL, payload text, '
                     'PRIMARY KEY (request_id, "startTime")) '
-                    'WITH (autovacuum_enabled = false, toast.autovacuum_enabled = false)'
-                ).format(logs)
+                    "{}"
+                ).format(
+                    local_logs,
+                    sql.SQL('PARTITION BY RANGE ("startTime")')
+                    if partitioned
+                    else sql.SQL("WITH (autovacuum_enabled = false, toast.autovacuum_enabled = false)"),
+                )
             )
+            if partitioned:
+                setup.execute(
+                    sql.SQL("CREATE TABLE {} PARTITION OF {} FOR VALUES FROM ({}) TO ({})").format(
+                        local_partition, local_logs, sql.Literal(local_day), sql.Literal(local_day + timedelta(days=1))
+                    )
+                )
+                setup.execute(
+                    sql.SQL("INSERT INTO {} VALUES ('newer-local', %s, 'local')").format(local_logs),
+                    (local_day,),
+                )
+            if imported:
+                setup.execute(
+                    sql.SQL(
+                        'CREATE TABLE {} (request_id text, "startTime" timestamp NOT NULL, payload text, '
+                        "source_region text DEFAULT 'us', "
+                        'PRIMARY KEY (request_id, "startTime", source_region)) '
+                        "WITH (autovacuum_enabled = false, toast.autovacuum_enabled = false)"
+                    ).format(logs)
+                )
             setup.execute(
                 sql.SQL(
                     "CREATE TABLE {} (request_id text, tool_name text, start_time timestamp NOT NULL, "
@@ -154,24 +195,25 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
             setup.execute(sql.SQL("CREATE TABLE {} (param_name text PRIMARY KEY, param_value jsonb)").format(config))
             setup.execute(
                 sql.SQL(
-                    "INSERT INTO {} SELECT 'req-' || lpad(i::text, 6, '0'), %s - (%s - i) * interval '1 minute', "
+                    'INSERT INTO {} (request_id, "startTime", payload) '
+                    "SELECT 'req-' || lpad(i::text, 6, '0'), %s - (%s - i) * interval '1 minute', "
                     "repeat('x', 1000) FROM generate_series(1, %s) AS i"
                 ).format(logs),
-                (now, seeded, seeded),
+                (local_day - timedelta(days=1) if partitioned else now, seeded, seeded),
             )
             setup.execute(
                 sql.SQL(
                     "INSERT INTO {} SELECT request_id, 'tool', \"startTime\" FROM {} WHERE right(request_id, 1) = '0'"
-                ).format(index, logs)
+                ).format(index, local_logs)
             )
-            index_rows: Final = seeded // 10
+            index_rows: Final = 0 if imported else seeded // 10
             inserts_deadline: Final = time.monotonic() + 10
             while True:
                 # a backend only ships its pending row counters when it runs another command, so give the
                 # seeding connection one; the size rule rolls its count forward from n_tup_ins, which must
                 # show the seed inserts before ANALYZE sets the live estimate or the two add up to double
                 setup.execute("SELECT 1")
-                (inserts,) = read_rows(stats_sql, (schema,))
+                (inserts,) = read_rows(stats_sql, (schema, log_table))
                 if inserts["inserted"] == seeded + index_rows:
                     break
                 assert time.monotonic() < inserts_deadline, f"row statistics never saw the seed inserts: {inserts}"
@@ -181,15 +223,21 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
             stats_deadline: Final = time.monotonic() + 10
             while True:
                 setup.execute("SELECT 1")
-                (stats,) = read_rows(stats_sql, (schema,))
+                (stats,) = read_rows(stats_sql, (schema, log_table))
                 if stats["live"] == seeded + index_rows:
                     break
                 assert time.monotonic() < stats_deadline, f"row statistics never caught up with ANALYZE: {stats}"
                 await asyncio.sleep(0.1)
             (allocated,) = read_rows(
-                "SELECT (pg_total_relation_size(%s::regclass) + pg_total_relation_size(%s::regclass))::bigint "
+                "SELECT (pg_total_relation_size(%s::regclass) + pg_total_relation_size(%s::regclass) "
+                "+ CASE WHEN %s THEN pg_total_relation_size(%s::regclass) ELSE 0 END)::bigint "
                 "AS allocated",
-                (logs.as_string(setup), index.as_string(setup)),
+                (
+                    logs.as_string(setup),
+                    index.as_string(setup),
+                    imported,
+                    (local_partition if partitioned else local_logs).as_string(setup),
+                ),
             )
             allocated_before: Final = int(str(allocated["allocated"]))
             assert allocated_before > 0
@@ -200,6 +248,7 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
                     "maximum_spend_logs_size": str(allocated_before * 3 // 4),
                     "maximum_spend_logs_cleanup_target_size": str(allocated_before // 2),
                     "maximum_spend_logs_cleanup_batch_size": 100,
+                    "use_spend_logs_partitioning": partitioned,
                 }
             )
 
@@ -213,6 +262,10 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
 
             await size_check()
 
+            local_rows: Final = (
+                read_rows(f"SELECT request_id FROM {local_logs.as_string(setup)}", ()) if partitioned else []
+            )
+            assert local_rows == ([{"request_id": "newer-local"}] if partitioned else [])
             remaining: Final = read_rows(
                 f'SELECT request_id FROM {logs.as_string(setup)} ORDER BY "startTime"',
                 (),
@@ -230,7 +283,7 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
             )
             assert orphans["n"] == 0
             (kept_index,) = read_rows(f"SELECT count(*)::int AS n FROM {index.as_string(setup)}", ())
-            assert kept_index["n"] == len(remaining) // 10
+            assert kept_index["n"] == (0 if imported else len(remaining) // 10)
             summary: Final = next(
                 record.getMessage()
                 for record in caplog.records
@@ -238,14 +291,15 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
             )
             assert "target_reached=true" in summary
             assert f"allocated_before={allocated_before}" in summary
-            # the file did not shrink: that is the whole reason the reclaimable count exists
-            assert f"allocated_after={allocated_before}" in summary
+            if not partitioned:
+                # The partitioned case also precreates empty partitions, which adds allocated bytes.
+                assert f"allocated_after={allocated_before}" in summary
             assert "VACUUM FULL or pg_repack" in summary
 
             deletes_deadline: Final = time.monotonic() + 10
             while True:
-                (after_deletes,) = read_rows(stats_sql, (schema,))
-                if after_deletes["dead"] == 3300:
+                (after_deletes,) = read_rows(stats_sql, (schema, log_table))
+                if after_deletes["dead"] == seeded - len(remaining) + index_rows - kept_index["n"]:
                     break
                 assert time.monotonic() < deletes_deadline, f"row statistics never saw the deletes: {after_deletes}"
                 await asyncio.sleep(0.1)
@@ -253,7 +307,7 @@ async def test_size_rule_deletes_the_oldest_rows_until_under_the_target_and_does
             setup.execute(sql.SQL("VACUUM (ANALYZE) {}").format(index))
             vacuum_deadline: Final = time.monotonic() + 10
             while True:
-                (after_vacuum,) = read_rows(stats_sql, (schema,))
+                (after_vacuum,) = read_rows(stats_sql, (schema, log_table))
                 if after_vacuum["dead"] == 0:
                     break
                 assert time.monotonic() < vacuum_deadline, f"row statistics never caught up with VACUUM: {after_vacuum}"

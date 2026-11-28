@@ -208,22 +208,23 @@ def _spend_log_reads(mock_prisma: MagicMock) -> AsyncMock:
     return mock_prisma.read_db.tx.return_value.query_raw
 
 
-def _make_ui_spend_logs_mock(count_total, page_rows):
-    """
-    Build a prisma mock whose first statement-timeout read (the bounded count) returns
-    `count_total` and whose second read (the page data) returns
-    `page_rows`.
-    """
+def _make_ui_spend_logs_mock(count_total, page_rows, *, reporting_available: bool = False):
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
-    statement_timeout_reads(mock_prisma, AsyncMock(side_effect=[[{"total_count": count_total}], page_rows]))
+    statement_timeout_reads(
+        mock_prisma,
+        AsyncMock(
+            side_effect=[[{"reporting_available": reporting_available}], [{"total_count": count_total}], page_rows]
+        ),
+    )
     mock_prisma.db.litellm_spendlogs = MagicMock()
     mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
     return mock_prisma
 
 
 @pytest.mark.asyncio
-async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
+@pytest.mark.parametrize("reporting_available", (False, True))
+async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch, reporting_available: bool):
     """
     /spend/logs/ui must compute its pagination total with a bounded
     `SELECT COUNT(*) FROM (SELECT 1 ... LIMIT $cap+1)` so it never scans the
@@ -241,7 +242,9 @@ async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
         {"request_id": "req-1", "metadata": "{}", "session_id": None},
         {"request_id": "req-2", "metadata": "{}", "session_id": None},
     ]
-    mock_prisma = _make_ui_spend_logs_mock(count_total=137, page_rows=page_rows)
+    mock_prisma = _make_ui_spend_logs_mock(
+        count_total=137, page_rows=page_rows, reporting_available=reporting_available
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
@@ -266,15 +269,18 @@ async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
 
     mock_prisma.db.litellm_spendlogs.count.assert_not_called()
 
-    count_call = _spend_log_reads(mock_prisma).call_args_list[0]
+    _, count_call, page_call = _spend_log_reads(mock_prisma).call_args_list
     count_sql = count_call[0][0]
+    table: Final = '"LiteLLM_SpendLogReporting"' if reporting_available else '"LiteLLM_SpendLogs"'
+    assert f"FROM {table}" in count_sql
     assert "COUNT(*) OVER ()" not in count_sql
     assert "LIMIT" in count_sql and "FROM (" in count_sql, (
         f"the total must come from a bounded subquery count, not a full-window scan. SQL was:\n{count_sql}"
     )
     assert count_call[0][-1] == SPEND_LOGS_PAGINATION_COUNT_CAP + 1, "the bounded count must probe at most cap+1 rows"
 
-    page_sql = _spend_log_reads(mock_prisma).call_args_list[1][0][0]
+    page_sql = page_call[0][0]
+    assert f"FROM {table}" in page_sql
     assert "COUNT(*) OVER ()" not in page_sql, (
         f"the page query must not carry a window count that forces a full-window scan. SQL was:\n{page_sql}"
     )
@@ -344,13 +350,7 @@ async def test_spend_logs_ui_empty_page_reports_zero_total(monkeypatch):
         ui_view_spend_logs,
     )
 
-    # First query_raw call is the bounded count (0 matches), second is the empty
-    # page.
-    mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    statement_timeout_reads(mock_prisma, AsyncMock(side_effect=[[{"total_count": 0}], []]))
-    mock_prisma.db.litellm_spendlogs = MagicMock()
-    mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
+    mock_prisma = _make_ui_spend_logs_mock(count_total=0, page_rows=[])
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
@@ -393,13 +393,7 @@ async def test_spend_logs_ui_out_of_range_page_keeps_total(monkeypatch):
         ui_view_spend_logs,
     )
 
-    # First query_raw call is the bounded count (7 matches), second is the
-    # out-of-range page (empty).
-    mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    statement_timeout_reads(mock_prisma, AsyncMock(side_effect=[[{"total_count": 7}], []]))
-    mock_prisma.db.litellm_spendlogs = MagicMock()
-    mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
+    mock_prisma = _make_ui_spend_logs_mock(count_total=7, page_rows=[])
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
@@ -529,6 +523,8 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
     ]
 
     async def mock_query_raw(sql_query: str, *params: object) -> Sequence[Mapping[str, object]]:
+        if "reporting_available" in sql_query:
+            return [{"reporting_available": False}]
         if "rows_read" in sql_query:
             return [{**row, "settled": True, "rows_read": 0, "session_count": 60} for row in session_rows]
         if "AS session_representatives" in sql_query:
@@ -563,13 +559,13 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
         status_filter=None,
     )
 
-    emitted = [call[0] for call in _spend_log_reads(mock_prisma).call_args_list]
-    page_sql = emitted[0][0]
+    _, page_call, rep_call = _spend_log_reads(mock_prisma).call_args_list
+    page_sql = page_call[0][0]
     assert "GROUP BY session_key, api_key" in page_sql, f"page must select sessions, not calls. SQL was:\n{page_sql}"
     assert "OFFSET" not in page_sql, "the startTime page must be keyset-selected, not offset-selected"
     assert "LIMIT 51 " in page_sql, "the page read fetches page_size + 1 sessions to detect has_more"
 
-    rep_sql: Final = emitted[1][0]
+    rep_sql: Final = rep_call[0][0]
     assert f"DISTINCT ON ({group_key})" in rep_sql, f"page must return one row per session. SQL was:\n{rep_sql}"
     assert (
         f"ORDER BY {group_key}, (call_type = 'asend_message') DESC, "
@@ -624,15 +620,16 @@ async def test_spend_logs_ui_group_by_session_offset_pages_for_other_sorts(monke
     )
 
     group_key = "COALESCE(NULLIF(session_id, ''), request_id), api_key"
-    count_sql = _spend_log_reads(mock_prisma).call_args_list[0][0][0]
+    _, count_call, page_call = _spend_log_reads(mock_prisma).call_args_list
+    count_sql = count_call[0][0]
     assert f"GROUP BY {group_key}" in count_sql
 
-    page_call = _spend_log_reads(mock_prisma).call_args_list[1][0]
-    page_sql = page_call[0]
+    page_args = page_call[0]
+    page_sql = page_args[0]
     assert f"DISTINCT ON ({group_key})" in page_sql
     assert "ORDER BY spend DESC" in page_sql
     assert "OFFSET" in page_sql
-    assert page_call[-2:] == (50, 50), "page 2 of 50 skips the first 50 sessions"
+    assert page_args[-2:] == (50, 50), "page 2 of 50 skips the first 50 sessions"
 
     assert response["total"] == 12
     assert "next_session_cursor" not in response
@@ -673,7 +670,7 @@ async def test_spend_logs_ui_request_id_lookup_with_grouping_returns_exact_row(m
         group_by_session=True,
     )
 
-    page_call = _spend_log_reads(mock_prisma).call_args_list[1]
+    page_call = _spend_log_reads(mock_prisma).call_args_list[2]
     assert "request_id = $" in page_call[0][0], "the request_id equality filter must survive grouping"
     assert "req-deep-link" in page_call[0]
     assert [row["request_id"] for row in response["data"]] == ["req-deep-link"]
@@ -708,11 +705,13 @@ async def _spend_logs_ui_page(mock_prisma: MagicMock, monkeypatch: pytest.Monkey
 async def test_spend_logs_ui_reads_are_cancelled_by_postgres_after_30s(monkeypatch: pytest.MonkeyPatch):
     """Prisma's HTTP client gives up at 30s either way; without SET LOCAL statement_timeout the scan kept running."""
     mock_prisma = MagicMock()
-    transaction = statement_timeout_reads(mock_prisma, AsyncMock(side_effect=[[{"total_count": 0}], []]))
+    transaction = statement_timeout_reads(
+        mock_prisma, AsyncMock(side_effect=[[{"reporting_available": False}], [{"total_count": 0}], []])
+    )
 
     await _spend_logs_ui_page(mock_prisma, monkeypatch)
 
-    assert transaction.statements == ("SET LOCAL statement_timeout = 30000",) * 2
+    assert transaction.statements == ("SET LOCAL statement_timeout = 30000",) * 3
     assert mock_prisma.read_db.tx.call_args.kwargs["timeout"] > datetime.timedelta(seconds=30)
 
 
@@ -721,7 +720,9 @@ async def test_spend_logs_ui_cancelled_read_is_reported_as_503_with_a_date_range
     from litellm.proxy._types import ProxyException
 
     mock_prisma = MagicMock()
-    statement_timeout_reads(mock_prisma, AsyncMock(side_effect=statement_timeout_error()))
+    statement_timeout_reads(
+        mock_prisma, AsyncMock(side_effect=[[{"reporting_available": False}], statement_timeout_error()])
+    )
 
     with pytest.raises(ProxyException) as exc_info:
         await _spend_logs_ui_page(mock_prisma, monkeypatch)

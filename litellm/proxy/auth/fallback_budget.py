@@ -33,6 +33,7 @@ Two known limitations of that narrow scope, both shared with `fallback_model_acc
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Final, Protocol
 
 from pydantic import ValidationError
@@ -44,6 +45,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     _is_model_cost_zero,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     is_model_cost_zero,  # pyright: ignore[reportPrivateUsage]  # the zero-cost predicate the auth-time budget checks use; no public equivalent
 )
+from litellm.proxy.db.fleet_budget_spend import primary_budget_window_start
 from litellm.redis.stores.spend_counters import (
     key_counter,
     user_counter,
@@ -100,7 +102,9 @@ def _applies_user_budget_to_team_keys() -> bool:
     return general_settings.get("apply_user_budget_to_team_keys") is True
 
 
-async def _counter_spend(counter_key: str, fallback_spend: float, max_budget: float) -> float:
+async def _counter_spend(
+    counter_key: str, fallback_spend: float, max_budget: float, replica_window_start: datetime | None
+) -> float:
     """
     Read a spend counter the same way the auth-time budget checks do.
 
@@ -115,6 +119,7 @@ async def _counter_spend(counter_key: str, fallback_spend: float, max_budget: fl
         counter_key=counter_key,
         fallback_spend=fallback_spend,
         max_budget=max_budget,
+        replica_window_start=replica_window_start,
     )
 
 
@@ -140,6 +145,7 @@ async def is_token_within_budget_for_model(
             counter_key=key_counter(valid_token.token),
             fallback_spend=valid_token.spend or 0.0,
             max_budget=key_budget,
+            replica_window_start=primary_budget_window_start(valid_token.budget_duration, valid_token.budget_reset_at),
         )
         if key_spend >= key_budget:
             return False
@@ -152,10 +158,16 @@ async def is_token_within_budget_for_model(
         and valid_token.user_id is not None
         and (valid_token.team_id is None or _applies_user_budget_to_team_keys())
     ):
+        snapshot: Final = valid_token.user_budget_snapshot
         user_spend: Final = await _counter_spend(
             counter_key=user_counter(valid_token.user_id),
             fallback_spend=valid_token.user_spend or 0.0,
             max_budget=user_budget,
+            replica_window_start=(
+                primary_budget_window_start(snapshot.budget_duration, snapshot.budget_reset_at)
+                if snapshot is not None
+                else None
+            ),
         )
         if user_spend >= user_budget:
             return False

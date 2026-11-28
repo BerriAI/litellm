@@ -134,7 +134,9 @@ def _planned_counters(plan: BudgetPlan) -> tuple[tuple[str, float], ...]:
     )
 
 
-async def observed_counter_spend(plan: BudgetPlan) -> tuple[Mapping[str, object], ...]:
+async def observed_counter_spend(
+    plan: BudgetPlan, replica_spend: Mapping[str, float] | None = None
+) -> tuple[Mapping[str, object], ...]:
     from litellm.proxy.proxy_server import get_current_spend, spend_counter_store
 
     counters: Final = _planned_counters(plan)
@@ -144,6 +146,7 @@ async def observed_counter_spend(plan: BudgetPlan) -> tuple[Mapping[str, object]
                 {
                     "counter_key": counter_key,
                     "spend": await get_current_spend(counter_key=counter_key, fallback_spend=fallback_spend),
+                    "replica_spend": replica_spend.get(counter_key, 0.0) if replica_spend is not None else 0.0,
                 }
                 for counter_key, fallback_spend in counters
             ]
@@ -172,12 +175,16 @@ async def reserve_native(
     plan: Mapping[str, object],
     identity: UserAPIKeyAuth,
     window_resets: Mapping[str, str],
+    *,
+    replica_spend: Mapping[str, float] | None = None,
 ) -> dict[str, object] | None:  # mutable-ok: settlement stamps the reservation it returns
     budgets: Final = native_budgets()
     if budgets is None:
         return None
     record: Final = coerce_record(BudgetPlan, plan)
-    admission: Final = _ADMISSION.validate_python(await budgets.reserve(record, await observed_counter_spend(record)))
+    admission: Final = _ADMISSION.validate_python(
+        await budgets.reserve(record, await observed_counter_spend(record, replica_spend))
+    )
     if isinstance(admission, _Refused):
         raise _refusal(admission)
     if isinstance(admission, _Skipped):
