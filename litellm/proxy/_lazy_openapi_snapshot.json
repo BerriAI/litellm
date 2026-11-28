@@ -16708,8 +16708,15 @@
               "title": "Entities"
             },
             "guardrail_name": {
-              "title": "Guardrail Name",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Guardrail Name"
             },
             "images": {
               "anyOf": [
@@ -16770,6 +16777,17 @@
               ],
               "title": "Metadata"
             },
+            "policy_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Policy Name"
+            },
             "response_format": {
               "$ref": "#/components/schemas/GuardrailResponseFormat",
               "default": "standard"
@@ -16780,9 +16798,6 @@
               "type": "string"
             }
           },
-          "required": [
-            "guardrail_name"
-          ],
           "title": "ApplyGuardrailRequest",
           "type": "object"
         },
@@ -21859,7 +21874,7 @@
     "paths": {
       "/apply_guardrail": {
         "post": {
-          "description": "Apply a guardrail to text input and return the processed result.\n\nThis endpoint allows testing guardrails by applying them to custom text inputs.",
+          "description": "Apply a guardrail to text input and return the processed result.\n\nThis endpoint allows testing guardrails by applying them to custom text inputs.\nWith policy_name, every guardrail the policy resolves to runs in turn, ignoring model conditions.",
           "operationId": "apply_guardrail_apply_guardrail_post",
           "requestBody": {
             "content": {
@@ -21968,7 +21983,7 @@
       },
       "/guardrails/apply_guardrail": {
         "post": {
-          "description": "Apply a guardrail to text input and return the processed result.\n\nThis endpoint allows testing guardrails by applying them to custom text inputs.",
+          "description": "Apply a guardrail to text input and return the processed result.\n\nThis endpoint allows testing guardrails by applying them to custom text inputs.\nWith policy_name, every guardrail the policy resolves to runs in turn, ignoring model conditions.",
           "operationId": "apply_guardrail_guardrails_apply_guardrail_post",
           "requestBody": {
             "content": {

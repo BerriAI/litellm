@@ -1201,6 +1201,7 @@ export interface paths {
          * @description Apply a guardrail to text input and return the processed result.
          *
          *     This endpoint allows testing guardrails by applying them to custom text inputs.
+         *     With policy_name, every guardrail the policy resolves to runs in turn, ignoring model conditions.
          */
         post: operations["apply_guardrail_apply_guardrail_post"];
         delete?: never;
@@ -7168,6 +7169,7 @@ export interface paths {
          * @description Apply a guardrail to text input and return the processed result.
          *
          *     This endpoint allows testing guardrails by applying them to custom text inputs.
+         *     With policy_name, every guardrail the policy resolves to runs in turn, ignoring model conditions.
          */
         post: operations["apply_guardrail_guardrails_apply_guardrail_post"];
         delete?: never;
@@ -29052,7 +29054,7 @@ export interface components {
             /** Entities */
             entities?: components["schemas"]["PiiEntityType"][] | null;
             /** Guardrail Name */
-            guardrail_name: string;
+            guardrail_name?: string | null;
             /**
              * Images
              * @description One image to scan, as a base64 data URI. Only Bedrock guardrails scan images.
@@ -29073,6 +29075,8 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
+            /** Policy Name */
+            policy_name?: string | null;
             /** @default standard */
             response_format: components["schemas"]["GuardrailResponseFormat"];
             /**
